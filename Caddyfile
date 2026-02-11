@@ -1,0 +1,30 @@
+mail.mcchord.net {
+    # Security headers
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        -Server
+    }
+
+    # API proxy to FastAPI
+    handle /api/* {
+        reverse_proxy localhost:8000
+    }
+
+    # Serve frontend static files
+    handle {
+        root * /opt/mail/frontend/dist
+        try_files {path} /index.html
+        file_server
+    }
+
+    # Logging
+    log {
+        output file /var/log/caddy/mail.log
+        format console
+    }
+}
