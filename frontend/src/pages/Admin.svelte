@@ -1,15 +1,16 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { showToast } from '../lib/stores.js';
+  import { user, showToast } from '../lib/stores.js';
   import Button from '../components/common/Button.svelte';
   import Input from '../components/common/Input.svelte';
 
-  let activeTab = $state('dashboard');
+  let activeTab = $state('accounts');
   let dashboard = $state(null);
   let settings = $state([]);
   let adminAccounts = $state([]);
   let loading = $state(true);
+  let isAdmin = $derived($user?.is_admin || false);
 
   // New setting form
   let newKey = $state('');
@@ -17,12 +18,14 @@
   let newIsSecret = $state(false);
   let newDescription = $state('');
 
-  const tabs = [
-    { id: 'dashboard', label: 'Dashboard' },
-    { id: 'apikeys', label: 'API Keys' },
-    { id: 'accounts', label: 'Google Accounts' },
-    { id: 'settings', label: 'Settings' },
+  let allTabs = [
+    { id: 'accounts', label: 'My Accounts', adminOnly: false },
+    { id: 'dashboard', label: 'Dashboard', adminOnly: true },
+    { id: 'apikeys', label: 'API Keys', adminOnly: true },
+    { id: 'settings', label: 'Settings', adminOnly: true },
   ];
+
+  let tabs = $derived(allTabs.filter(t => !t.adminOnly || isAdmin));
 
   onMount(async () => {
     await loadData();
@@ -31,23 +34,54 @@
     if (params.get('tab')) {
       activeTab = params.get('tab');
     }
+    if (params.get('error') === 'not_allowed') {
+      showToast('That Google account is not on the allowed list', 'error', 5000);
+      window.history.replaceState({}, '', '/?page=admin');
+    }
+    if (params.get('error') === 'account_taken') {
+      showToast('That Google account is already connected to another user', 'error', 5000);
+      window.history.replaceState({}, '', '/?page=admin');
+    }
   });
 
   async function loadData() {
     loading = true;
     try {
-      const [dash, sets, accts] = await Promise.all([
-        api.getDashboard(),
-        api.getSettings(),
-        api.getAdminAccounts(),
-      ]);
+      // Always load user's own accounts
+      const userAccounts = await api.listAccounts();
+      adminAccounts = userAccounts;
+
+      // Load admin-only data if admin
+      let dash = null;
+      let sets = [];
+      let allowed = { allowed_accounts: '' };
+      if ($user?.is_admin) {
+        const results = await Promise.all([
+          api.getDashboard(),
+          api.getSettings(),
+          api.get('/accounts/allowed'),
+        ]);
+        dash = results[0];
+        sets = results[1];
+        allowed = results[2];
+      }
       dashboard = dash;
       settings = sets;
-      adminAccounts = accts;
+      allowedAccounts = allowed.allowed_accounts || '';
+      allowedLoaded = true;
     } catch (err) {
       showToast(err.message, 'error');
     }
     loading = false;
+  }
+
+  async function saveAllowedAccounts() {
+    try {
+      await api.put('/accounts/allowed', { allowed_accounts: allowedAccounts });
+      showToast('Allowed accounts saved', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
   }
 
   async function saveSetting() {
@@ -106,9 +140,9 @@
 
   async function removeAccount(id) {
     try {
-      await api.removeAccount(id);
+      await api.delete(`/accounts/${id}`);
       showToast('Account removed', 'success');
-      adminAccounts = await api.getAdminAccounts();
+      adminAccounts = await api.listAccounts();
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -127,6 +161,10 @@
   let claudeKey = $state('');
   let googleClientId = $state('');
   let googleClientSecret = $state('');
+
+  // Allowed accounts
+  let allowedAccounts = $state('');
+  let allowedLoaded = $state(false);
 </script>
 
 <div class="h-full overflow-y-auto" style="background: var(--bg-primary)">
@@ -229,14 +267,56 @@
           </div>
           <p class="text-xs mt-2" style="color: var(--text-tertiary)">
             Create credentials at <a href="https://console.cloud.google.com/apis/credentials" target="_blank" class="underline" style="color: var(--color-accent-600)">Google Cloud Console</a>.
-            Enable Gmail API and set redirect URI.
+            Enable the Gmail API and add the redirect URI below as an authorized redirect URI.
           </p>
+          <div class="mt-3 space-y-2">
+            <p class="text-[11px] font-semibold tracking-wider uppercase" style="color: var(--text-tertiary)">Add both redirect URIs to Google Cloud Console:</p>
+            {#each [
+              { label: 'Login', uri: `${window.location.origin}/api/auth/google/callback` },
+              { label: 'Connect', uri: `${window.location.origin}/api/accounts/oauth/callback` },
+            ] as item}
+              <div class="flex items-center gap-2 px-3 py-2 rounded-lg border" style="background: var(--bg-primary); border-color: var(--border-color)">
+                <span class="text-[10px] font-bold tracking-wider uppercase w-16 shrink-0" style="color: var(--text-tertiary)">{item.label}</span>
+                <code class="flex-1 text-xs font-mono select-all" style="color: var(--text-primary)">{item.uri}</code>
+                <button
+                  onclick={() => { navigator.clipboard.writeText(item.uri); showToast('Copied to clipboard', 'success'); }}
+                  class="p-1 rounded transition-fast shrink-0"
+                  style="color: var(--text-tertiary)"
+                  title="Copy to clipboard"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.75a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" />
+                  </svg>
+                </button>
+              </div>
+            {/each}
+          </div>
         </div>
       </div>
 
     {:else if activeTab === 'accounts'}
       <!-- Google Accounts -->
       <div class="space-y-4">
+        <!-- Allowed Accounts -->
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Allowed Accounts</h3>
+          <p class="text-xs mb-3" style="color: var(--text-tertiary)">
+            Only these emails and domains can connect via Google OAuth. Use full emails (<code style="color: var(--text-secondary)">user@example.com</code>) or domains with @ prefix (<code style="color: var(--text-secondary)">@example.com</code>). Comma-separated. Leave empty to allow any account.
+          </p>
+          <div class="flex gap-3">
+            <input
+              type="text"
+              bind:value={allowedAccounts}
+              placeholder="user@company.com, @company.com, other@gmail.com"
+              class="flex-1 h-9 px-3 rounded-lg text-sm outline-none border font-mono"
+              style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+            />
+            <Button variant="primary" size="sm" onclick={saveAllowedAccounts}>
+              Save
+            </Button>
+          </div>
+        </div>
+
         <div class="flex justify-between items-center">
           <h3 class="text-sm font-semibold" style="color: var(--text-primary)">Connected Google Accounts</h3>
           <Button variant="primary" size="sm" onclick={connectGoogle}>

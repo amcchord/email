@@ -136,8 +136,11 @@ async def list_accounts(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_admin),
 ):
+    from sqlalchemy.orm import selectinload
     result = await db.execute(
-        select(GoogleAccount).order_by(GoogleAccount.email)
+        select(GoogleAccount)
+        .options(selectinload(GoogleAccount.sync_status))
+        .order_by(GoogleAccount.email)
     )
     accounts = result.scalars().all()
     response = []

@@ -1,8 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, asc, or_, text, update
+from sqlalchemy.orm import selectinload
+from sqlalchemy import select, func, desc, asc, or_, text, update, literal_column
 from typing import Optional
 from backend.database import get_db
+
+
+def jsonb_contains(column, value: str):
+    """JSONB @> operator with proper PostgreSQL casting."""
+    return column.op("@>")(literal_column(f"'{value}'::jsonb"))
 from backend.models.user import User
 from backend.models.email import Email, Attachment, EmailLabel
 from backend.models.account import GoogleAccount
@@ -52,7 +58,7 @@ async def list_emails(
     if not user_accounts:
         return EmailListResponse(emails=[], total=0, page=page, page_size=page_size, total_pages=0)
 
-    query = select(Email)
+    query = select(Email).options(selectinload(Email.ai_analysis))
 
     # Filter by account
     if account_id and account_id in user_accounts:
@@ -79,12 +85,12 @@ async def list_emails(
         # INBOX: has INBOX label, not trash/spam
         gmail_label = MAILBOX_LABEL_MAP.get(mailbox, mailbox)
         if gmail_label:
-            query = query.where(Email.labels.op("@>")(f'["{gmail_label}"]'))
+            query = query.where(jsonb_contains(Email.labels, f'["{gmail_label}"]'))
         query = query.where(Email.is_trash == False)
         query = query.where(Email.is_spam == False)
 
     if label:
-        query = query.where(Email.labels.op("@>")(f'["{label}"]'))
+        query = query.where(jsonb_contains(Email.labels, f'["{label}"]'))
 
     if is_read is not None:
         query = query.where(Email.is_read == is_read)
@@ -165,7 +171,9 @@ async def get_email(
     user: User = Depends(get_current_user),
 ):
     result = await db.execute(
-        select(Email).where(Email.id == email_id)
+        select(Email)
+        .options(selectinload(Email.attachments), selectinload(Email.ai_analysis))
+        .where(Email.id == email_id)
     )
     email = result.scalar_one_or_none()
     if not email:
@@ -245,7 +253,9 @@ async def get_thread(
     account_ids = [r[0] for r in acct_result.all()]
 
     result = await db.execute(
-        select(Email).where(
+        select(Email)
+        .options(selectinload(Email.attachments), selectinload(Email.ai_analysis))
+        .where(
             Email.gmail_thread_id == thread_id,
             Email.account_id.in_(account_ids),
         ).order_by(asc(Email.date))

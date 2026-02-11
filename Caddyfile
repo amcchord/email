@@ -1,4 +1,4 @@
-mail.mcchord.net {
+email.mcchord.net {
     # Security headers
     header {
         X-Content-Type-Options "nosniff"

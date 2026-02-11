@@ -12,11 +12,18 @@
   let selectedEmail = $state(null);
   let emailLoading = $state(false);
   let pageSize = 50;
+  let mounted = $state(false);
+
+  onMount(() => {
+    mounted = true;
+    loadEmails();
+  });
 
   $effect(() => {
     void $currentMailbox;
     void $selectedAccountId;
     void $searchQuery;
+    if (!mounted) return;
     currentPageNum.set(1);
     selectedEmailId.set(null);
     selectedEmail = null;

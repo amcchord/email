@@ -82,29 +82,37 @@ class GmailService:
             raise
 
     async def batch_get_messages(self, message_ids: list[str], format_type: str = "full") -> list[dict]:
-        """Batch get messages (up to 100 per request)."""
+        """Batch get messages with rate limit handling."""
+        import asyncio
+        import time
         service = self._get_service()
         results = []
 
-        # Process in batches of 50 to avoid rate limits
-        batch_size = 50
+        batch_size = 20  # Conservative batch size to avoid rate limits
         for i in range(0, len(message_ids), batch_size):
             batch_ids = message_ids[i:i + batch_size]
             batch = service.new_batch_http_request()
             batch_results = {}
+            retry_ids = []
 
-            def callback(request_id, response, exception):
-                if exception:
-                    logger.error(f"Batch get error for {request_id}: {exception}")
-                    batch_results[request_id] = None
-                else:
-                    batch_results[request_id] = response
+            def make_callback(req_id):
+                def callback(request_id, response, exception):
+                    if exception:
+                        status = getattr(exception, 'status_code', None) or getattr(getattr(exception, 'resp', None), 'status', 0)
+                        if status in (429, 403):
+                            retry_ids.append(req_id)
+                        else:
+                            logger.error(f"Batch get error for {req_id}: {exception}")
+                        batch_results[req_id] = None
+                    else:
+                        batch_results[req_id] = response
+                return callback
 
             for mid in batch_ids:
                 batch.add(
                     service.users().messages().get(userId="me", id=mid, format=format_type),
                     request_id=mid,
-                    callback=callback,
+                    callback=make_callback(mid),
                 )
 
             batch.execute()
@@ -112,6 +120,30 @@ class GmailService:
                 batch_results[mid] for mid in batch_ids
                 if batch_results.get(mid) is not None
             ])
+
+            # Retry rate-limited messages one at a time with delay
+            for mid in retry_ids:
+                await asyncio.sleep(1)
+                try:
+                    msg = service.users().messages().get(
+                        userId="me", id=mid, format=format_type
+                    ).execute()
+                    results.append(msg)
+                except HttpError as e:
+                    if e.resp.status in (429, 403):
+                        await asyncio.sleep(5)
+                        try:
+                            msg = service.users().messages().get(
+                                userId="me", id=mid, format=format_type
+                            ).execute()
+                            results.append(msg)
+                        except Exception:
+                            logger.error(f"Retry failed for {mid}")
+                    else:
+                        logger.error(f"Get error for {mid}: {e}")
+
+            # Pace between batches to stay under rate limits
+            await asyncio.sleep(0.5)
 
         return results
 
