@@ -3,16 +3,18 @@
   import { api } from '../lib/api.js';
   import { currentPage, composeData, accounts, showToast } from '../lib/stores.js';
   import Button from '../components/common/Button.svelte';
+  import RichEditor from '../components/email/RichEditor.svelte';
 
   let to = $state('');
   let cc = $state('');
   let bcc = $state('');
   let subject = $state('');
-  let body = $state('');
+  let bodyHtml = $state('');
   let showCcBcc = $state(false);
   let sending = $state(false);
   let selectedAccountId = $state(null);
   let accountList = $state([]);
+  let initialContent = $state('');
 
   onMount(() => {
     accounts.subscribe(v => {
@@ -28,7 +30,10 @@
         if (data.to) to = data.to.join(', ');
         if (data.cc) cc = data.cc.join(', ');
         if (data.subject) subject = data.subject;
-        if (data.body_html) body = data.body_html;
+        if (data.body_html) {
+          initialContent = data.body_html;
+          bodyHtml = data.body_html;
+        }
         if (data.account_id) selectedAccountId = data.account_id;
       }
     });
@@ -38,6 +43,10 @@
       composeData.set(null);
     };
   });
+
+  function handleEditorUpdate(html) {
+    bodyHtml = html;
+  }
 
   async function handleSend() {
     if (!to.trim()) {
@@ -57,8 +66,8 @@
         cc: cc ? cc.split(',').map(s => s.trim()).filter(Boolean) : [],
         bcc: bcc ? bcc.split(',').map(s => s.trim()).filter(Boolean) : [],
         subject: subject,
-        body_html: body.includes('<') ? body : `<p>${body.replace(/\n/g, '<br>')}</p>`,
-        body_text: body.replace(/<[^>]*>/g, ''),
+        body_html: bodyHtml,
+        body_text: bodyHtml.replace(/<[^>]*>/g, ''),
       };
 
       // Include reply metadata if present
@@ -88,8 +97,8 @@
         cc: cc ? cc.split(',').map(s => s.trim()).filter(Boolean) : [],
         bcc: bcc ? bcc.split(',').map(s => s.trim()).filter(Boolean) : [],
         subject: subject,
-        body_html: body,
-        body_text: body.replace(/<[^>]*>/g, ''),
+        body_html: bodyHtml,
+        body_text: bodyHtml.replace(/<[^>]*>/g, ''),
         is_draft: true,
       });
       showToast('Draft saved', 'success');
@@ -127,8 +136,8 @@
   </div>
 
   <!-- Form -->
-  <div class="flex-1 overflow-y-auto">
-    <div class="border-b" style="border-color: var(--border-color)">
+  <div class="flex-1 overflow-y-auto flex flex-col">
+    <div class="border-b shrink-0" style="border-color: var(--border-color)">
       <!-- From -->
       {#if accountList.length > 0}
         <div class="flex items-center px-6 h-10 border-b" style="border-color: var(--border-subtle)">
@@ -199,14 +208,11 @@
       </div>
     </div>
 
-    <!-- Body -->
-    <div class="p-6">
-      <textarea
-        bind:value={body}
-        placeholder="Write your message..."
-        class="w-full min-h-[400px] text-sm outline-none resize-none"
-        style="background: transparent; color: var(--text-primary)"
-      ></textarea>
-    </div>
+    <!-- Rich Editor Body -->
+    <RichEditor
+      content={initialContent}
+      onUpdate={handleEditorUpdate}
+      placeholder="Write your message..."
+    />
   </div>
 </div>

@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
     attachment_storage_path: str = "/opt/mail/data/attachments"
+    brave_search_api_key: str = ""
     sync_interval_seconds: int = 60
 
     model_config = {"env_file": "/opt/mail/.env", "extra": "ignore"}

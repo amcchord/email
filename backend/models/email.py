@@ -18,12 +18,12 @@ class Email(Base):
     gmail_history_id: Mapped[str] = mapped_column(String(100), nullable=True)
 
     subject: Mapped[str] = mapped_column(Text, nullable=True, default="")
-    from_address: Mapped[str] = mapped_column(String(255), nullable=True)
-    from_name: Mapped[str] = mapped_column(String(255), nullable=True)
+    from_address: Mapped[str] = mapped_column(Text, nullable=True)
+    from_name: Mapped[str] = mapped_column(Text, nullable=True)
     to_addresses = mapped_column(JSONB, default=list)
     cc_addresses = mapped_column(JSONB, default=list)
     bcc_addresses = mapped_column(JSONB, default=list)
-    reply_to: Mapped[str] = mapped_column(String(255), nullable=True)
+    reply_to: Mapped[str] = mapped_column(Text, nullable=True)
 
     date: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
     snippet: Mapped[str] = mapped_column(Text, nullable=True)
@@ -41,8 +41,8 @@ class Email(Base):
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=True)
     has_attachments: Mapped[bool] = mapped_column(Boolean, default=False)
     raw_headers = mapped_column(JSONB, nullable=True)
-    message_id_header: Mapped[str] = mapped_column(String(500), nullable=True)
-    in_reply_to: Mapped[str] = mapped_column(String(500), nullable=True)
+    message_id_header: Mapped[str] = mapped_column(Text, nullable=True)
+    in_reply_to: Mapped[str] = mapped_column(Text, nullable=True)
     references_header: Mapped[str] = mapped_column(Text, nullable=True)
 
     search_vector = Column(TSVECTOR)
@@ -67,13 +67,13 @@ class Attachment(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     email_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("emails.id", ondelete="CASCADE"))
-    gmail_attachment_id: Mapped[str] = mapped_column(String(500), nullable=True)
-    filename: Mapped[str] = mapped_column(String(500), nullable=True)
+    gmail_attachment_id: Mapped[str] = mapped_column(Text, nullable=True)
+    filename: Mapped[str] = mapped_column(Text, nullable=True)
     content_type: Mapped[str] = mapped_column(String(255), nullable=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=True)
     storage_path: Mapped[str] = mapped_column(String(1000), nullable=True)
     is_inline: Mapped[bool] = mapped_column(Boolean, default=False)
-    content_id: Mapped[str] = mapped_column(String(255), nullable=True)
+    content_id: Mapped[str] = mapped_column(Text, nullable=True)
 
     email = relationship("Email", back_populates="attachments")
 

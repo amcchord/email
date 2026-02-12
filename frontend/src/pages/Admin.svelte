@@ -1,16 +1,18 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { user, showToast } from '../lib/stores.js';
+  import { user, showToast, syncStatus, forceSyncPoll } from '../lib/stores.js';
   import Button from '../components/common/Button.svelte';
   import Input from '../components/common/Input.svelte';
 
   let activeTab = $state('accounts');
   let dashboard = $state(null);
   let settings = $state([]);
-  let adminAccounts = $state([]);
   let loading = $state(true);
   let isAdmin = $derived($user?.is_admin || false);
+
+  // Use the live syncStatus store for real-time updates
+  let adminAccounts = $derived($syncStatus.length > 0 ? $syncStatus : []);
 
   // New setting form
   let newKey = $state('');
@@ -20,6 +22,7 @@
 
   let allTabs = [
     { id: 'accounts', label: 'My Accounts', adminOnly: false },
+    { id: 'ai-models', label: 'AI Models', adminOnly: false },
     { id: 'dashboard', label: 'Dashboard', adminOnly: true },
     { id: 'apikeys', label: 'API Keys', adminOnly: true },
     { id: 'settings', label: 'Settings', adminOnly: true },
@@ -47,9 +50,8 @@
   async function loadData() {
     loading = true;
     try {
-      // Always load user's own accounts
-      const userAccounts = await api.listAccounts();
-      adminAccounts = userAccounts;
+      // Trigger a fresh poll so syncStatus store is up to date
+      forceSyncPoll();
 
       // Load admin-only data if admin
       let dash = null;
@@ -69,6 +71,9 @@
       settings = sets;
       allowedAccounts = allowed.allowed_accounts || '';
       allowedLoaded = true;
+
+      // Always load AI preferences (available to all users)
+      await loadAIPreferences();
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -142,7 +147,7 @@
     try {
       await api.delete(`/accounts/${id}`);
       showToast('Account removed', 'success');
-      adminAccounts = await api.listAccounts();
+      setTimeout(forceSyncPoll, 500);
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -152,6 +157,8 @@
     try {
       await api.triggerSync(accountId);
       showToast('Sync started', 'success');
+      // Force immediate poll to pick up the syncing state, then adaptive polling kicks in
+      setTimeout(forceSyncPoll, 500);
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -165,6 +172,72 @@
   // Allowed accounts
   let allowedAccounts = $state('');
   let allowedLoaded = $state(false);
+
+  // AI model preferences
+  let aiPrefs = $state({
+    chat_plan_model: 'claude-opus-4-6',
+    chat_execute_model: 'claude-opus-4-6',
+    chat_verify_model: 'claude-opus-4-6',
+    agentic_model: 'claude-sonnet-4-5-20250929',
+  });
+  let aiPrefsAllowedModels = $state([]);
+  let aiPrefsLoaded = $state(false);
+  let aiPrefsSaving = $state(false);
+  let reprocessing = $state(false);
+
+  const modelLabels = {
+    'claude-opus-4-6': 'Opus — Most capable',
+    'claude-sonnet-4-5-20250929': 'Sonnet — Balanced',
+    'claude-haiku-4-5-20251001': 'Haiku — Fastest',
+  };
+
+  async function loadAIPreferences() {
+    try {
+      const data = await api.getAIPreferences();
+      aiPrefs = {
+        chat_plan_model: data.chat_plan_model,
+        chat_execute_model: data.chat_execute_model,
+        chat_verify_model: data.chat_verify_model,
+        agentic_model: data.agentic_model,
+      };
+      aiPrefsAllowedModels = data.allowed_models || [];
+      aiPrefsLoaded = true;
+    } catch (err) {
+      showToast('Failed to load AI preferences', 'error');
+    }
+  }
+
+  async function saveAIPreferences() {
+    aiPrefsSaving = true;
+    try {
+      const data = await api.updateAIPreferences(aiPrefs);
+      aiPrefs = {
+        chat_plan_model: data.chat_plan_model,
+        chat_execute_model: data.chat_execute_model,
+        chat_verify_model: data.chat_verify_model,
+        agentic_model: data.agentic_model,
+      };
+      showToast('AI model preferences saved', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    aiPrefsSaving = false;
+  }
+
+  async function reprocessWithModel() {
+    reprocessing = true;
+    try {
+      const result = await api.reprocessEmails(aiPrefs.agentic_model);
+      if (result.queued > 0) {
+        showToast(result.message, 'success');
+      } else {
+        showToast(result.message, 'info');
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    reprocessing = false;
+  }
 </script>
 
 <div class="h-full overflow-y-auto" style="background: var(--bg-primary)">
@@ -326,7 +399,6 @@
 
         {#if adminAccounts.length === 0}
           <div class="rounded-xl border p-8 text-center" style="background: var(--bg-secondary); border-color: var(--border-color)">
-            <div class="text-4xl mb-3">📧</div>
             <p class="text-sm font-medium" style="color: var(--text-primary)">No accounts connected</p>
             <p class="text-xs mt-1" style="color: var(--text-secondary)">
               First configure Google OAuth credentials in API Keys, then connect an account.
@@ -334,36 +406,252 @@
           </div>
         {:else}
           {#each adminAccounts as acct}
-            <div class="rounded-xl border p-4 flex items-center gap-4" style="background: var(--bg-secondary); border-color: var(--border-color)">
-              <div class="w-10 h-10 rounded-full bg-accent-500/20 flex items-center justify-center text-lg font-bold" style="color: var(--color-accent-600)">
-                {acct.email[0].toUpperCase()}
-              </div>
-              <div class="flex-1 min-w-0">
-                <div class="text-sm font-medium truncate" style="color: var(--text-primary)">{acct.email}</div>
-                <div class="text-xs" style="color: var(--text-secondary)">
-                  {#if acct.sync_status}
-                    {acct.sync_status.status}
-                    {#if acct.sync_status.status === 'syncing'}
-                      — {acct.sync_status.messages_synced?.toLocaleString() || 0} / {acct.sync_status.total_messages?.toLocaleString() || '?'} messages
-                    {:else if acct.sync_status.messages_synced}
-                      — {acct.sync_status.messages_synced.toLocaleString()} messages synced
+            <div class="rounded-xl border p-4" style="background: var(--bg-secondary); border-color: var(--border-color)">
+              <div class="flex items-center gap-4">
+                <div class="w-10 h-10 rounded-full bg-accent-500/20 flex items-center justify-center text-lg font-bold shrink-0" style="color: var(--color-accent-600)">
+                  {acct.email[0].toUpperCase()}
+                </div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm font-medium truncate" style="color: var(--text-primary)">{acct.email}</div>
+                  <div class="text-xs" style="color: var(--text-secondary)">
+                    {#if !acct.sync_status}
+                      Not synced
+                    {:else if acct.sync_status.status === 'syncing'}
+                      <span style="color: var(--color-accent-500)">
+                        {#if acct.sync_status.current_phase}
+                          {acct.sync_status.current_phase}
+                        {:else}
+                          Syncing...
+                        {/if}
+                      </span>
+                    {:else if acct.sync_status.status === 'error'}
+                      <span style="color: #ef4444">Error: {acct.sync_status.error_message || 'Unknown error'}</span>
+                    {:else if acct.sync_status.status === 'completed'}
+                      {acct.sync_status.messages_synced ? acct.sync_status.messages_synced.toLocaleString() + ' messages synced' : 'Completed'}
+                    {:else}
+                      {acct.sync_status.status || 'Idle'}
+                      {#if acct.sync_status.messages_synced}
+                        -- {acct.sync_status.messages_synced.toLocaleString()} messages
+                      {/if}
                     {/if}
-                  {:else}
-                    Not synced
-                  {/if}
+                  </div>
+                </div>
+                <div class="flex gap-2 shrink-0">
+                  <Button size="sm" onclick={() => triggerSync(acct.id)}>
+                    {#if acct.sync_status && acct.sync_status.status === 'syncing'}
+                      Syncing...
+                    {:else}
+                      Sync
+                    {/if}
+                  </Button>
+                  <Button size="sm" variant="danger" onclick={() => removeAccount(acct.id)}>
+                    Remove
+                  </Button>
                 </div>
               </div>
-              <div class="flex gap-2">
-                <Button size="sm" onclick={() => triggerSync(acct.id)}>
-                  Sync
-                </Button>
-                <Button size="sm" variant="danger" onclick={() => removeAccount(acct.id)}>
-                  Remove
-                </Button>
-              </div>
+
+              <!-- Progress bar during sync -->
+              {#if acct.sync_status && acct.sync_status.status === 'syncing' && acct.sync_status.total_messages > 0}
+                <div class="mt-3">
+                  <div class="flex justify-between text-[10px] mb-1" style="color: var(--text-tertiary)">
+                    <span>{(acct.sync_status.messages_synced || 0).toLocaleString()} of {acct.sync_status.total_messages.toLocaleString()} messages</span>
+                    <span>{Math.round((acct.sync_status.messages_synced || 0) / acct.sync_status.total_messages * 100)}%</span>
+                  </div>
+                  <div class="h-1.5 rounded-full overflow-hidden" style="background: var(--border-color)">
+                    <div
+                      class="h-full rounded-full transition-all duration-700 ease-out"
+                      style="background: var(--color-accent-500); width: {Math.min(100, Math.round((acct.sync_status.messages_synced || 0) / acct.sync_status.total_messages * 100))}%"
+                    ></div>
+                  </div>
+                </div>
+              {/if}
+
+              <!-- Error detail -->
+              {#if acct.sync_status && acct.sync_status.status === 'error' && acct.sync_status.error_message}
+                <div class="mt-2 px-3 py-2 rounded-lg text-xs" style="background: #ef444410; color: #ef4444; border: 1px solid #ef444430">
+                  {acct.sync_status.error_message}
+                </div>
+              {/if}
+
+              <!-- Last sync info -->
+              {#if acct.sync_status && acct.sync_status.status !== 'syncing'}
+                <div class="mt-2 flex gap-4 text-[10px]" style="color: var(--text-tertiary)">
+                  {#if acct.sync_status.last_full_sync}
+                    <span>Full sync: {new Date(acct.sync_status.last_full_sync).toLocaleString()}</span>
+                  {/if}
+                  {#if acct.sync_status.last_incremental_sync}
+                    <span>Last update: {new Date(acct.sync_status.last_incremental_sync).toLocaleString()}</span>
+                  {/if}
+                </div>
+              {/if}
             </div>
           {/each}
         {/if}
+      </div>
+
+    {:else if activeTab === 'ai-models'}
+      <!-- AI Model Preferences -->
+      <div class="space-y-6">
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Chat AI Models</h3>
+          <p class="text-xs mb-5" style="color: var(--text-tertiary)">
+            Choose which Claude model to use for each phase of the "Talk to your Emails" chat feature.
+            Opus gives the best quality, Haiku is fastest and cheapest.
+          </p>
+
+          <div class="space-y-5">
+            <!-- Plan model -->
+            <div>
+              <label for="ai-plan-model" class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color: var(--text-tertiary)">
+                Plan
+              </label>
+              <p class="text-[11px] mb-2" style="color: var(--text-tertiary)">
+                Analyzes your question and builds a research task list.
+              </p>
+              <select
+                id="ai-plan-model"
+                bind:value={aiPrefs.chat_plan_model}
+                class="w-full h-9 px-3 rounded-lg text-sm outline-none border appearance-none cursor-pointer"
+                style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+              >
+                {#each aiPrefsAllowedModels as model}
+                  <option value={model}>{modelLabels[model] || model}</option>
+                {/each}
+              </select>
+            </div>
+
+            <!-- Execute model -->
+            <div>
+              <label for="ai-execute-model" class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color: var(--text-tertiary)">
+                Research
+              </label>
+              <p class="text-[11px] mb-2" style="color: var(--text-tertiary)">
+                Searches and reads your emails to complete each task in the plan.
+              </p>
+              <select
+                id="ai-execute-model"
+                bind:value={aiPrefs.chat_execute_model}
+                class="w-full h-9 px-3 rounded-lg text-sm outline-none border appearance-none cursor-pointer"
+                style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+              >
+                {#each aiPrefsAllowedModels as model}
+                  <option value={model}>{modelLabels[model] || model}</option>
+                {/each}
+              </select>
+            </div>
+
+            <!-- Verify model -->
+            <div>
+              <label for="ai-verify-model" class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color: var(--text-tertiary)">
+                Answer
+              </label>
+              <p class="text-[11px] mb-2" style="color: var(--text-tertiary)">
+                Verifies completeness and writes the final formatted answer.
+              </p>
+              <select
+                id="ai-verify-model"
+                bind:value={aiPrefs.chat_verify_model}
+                class="w-full h-9 px-3 rounded-lg text-sm outline-none border appearance-none cursor-pointer"
+                style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+              >
+                {#each aiPrefsAllowedModels as model}
+                  <option value={model}>{modelLabels[model] || model}</option>
+                {/each}
+              </select>
+            </div>
+          </div>
+
+          <div class="mt-5 flex items-center gap-3">
+            <Button variant="primary" size="sm" onclick={saveAIPreferences} disabled={aiPrefsSaving}>
+              {aiPrefsSaving ? 'Saving...' : 'Save Preferences'}
+            </Button>
+            <span class="text-[10px]" style="color: var(--text-tertiary)">
+              Changes take effect on the next chat conversation.
+            </span>
+          </div>
+        </div>
+
+        <!-- Email Processing Model -->
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Email Processing Model</h3>
+          <p class="text-xs mb-5" style="color: var(--text-tertiary)">
+            Used for email categorization, summarization, action items, and suggested replies.
+            Changing this model affects new analyses. Use "Reprocess" to re-analyze emails with the new model.
+          </p>
+
+          <div>
+            <label for="ai-agentic-model" class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color: var(--text-tertiary)">
+              Model
+            </label>
+            <select
+              id="ai-agentic-model"
+              bind:value={aiPrefs.agentic_model}
+              class="w-full h-9 px-3 rounded-lg text-sm outline-none border appearance-none cursor-pointer"
+              style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+            >
+              {#each aiPrefsAllowedModels as model}
+                <option value={model}>{modelLabels[model] || model}</option>
+              {/each}
+            </select>
+          </div>
+
+          <div class="mt-5 flex items-center gap-3">
+            <Button variant="primary" size="sm" onclick={saveAIPreferences} disabled={aiPrefsSaving}>
+              {aiPrefsSaving ? 'Saving...' : 'Save'}
+            </Button>
+            <button
+              onclick={reprocessWithModel}
+              disabled={reprocessing}
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-fast disabled:opacity-50"
+              style="background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color)"
+            >
+              {#if reprocessing}
+                <div class="w-3.5 h-3.5 border-2 rounded-full animate-spin" style="border-color: var(--border-color); border-top-color: var(--color-accent-500)"></div>
+                Reprocessing...
+              {:else}
+                Reprocess with this model
+              {/if}
+            </button>
+            <span class="text-[10px]" style="color: var(--text-tertiary)">
+              Re-analyzes emails previously processed with a different model.
+            </span>
+          </div>
+        </div>
+
+        <!-- Model comparison info -->
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-3" style="color: var(--text-primary)">Model Comparison</h3>
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b" style="border-color: var(--border-color)">
+                <th class="text-left py-2 text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Model</th>
+                <th class="text-left py-2 text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Quality</th>
+                <th class="text-left py-2 text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Speed</th>
+                <th class="text-left py-2 text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="border-b" style="border-color: var(--border-color)">
+                <td class="py-2 font-medium" style="color: var(--text-primary)">Opus</td>
+                <td class="py-2" style="color: #22c55e">Highest</td>
+                <td class="py-2" style="color: var(--text-secondary)">Slower</td>
+                <td class="py-2" style="color: var(--text-secondary)">$$$</td>
+              </tr>
+              <tr class="border-b" style="border-color: var(--border-color)">
+                <td class="py-2 font-medium" style="color: var(--text-primary)">Sonnet</td>
+                <td class="py-2" style="color: var(--color-accent-600)">High</td>
+                <td class="py-2" style="color: var(--color-accent-600)">Balanced</td>
+                <td class="py-2" style="color: var(--text-secondary)">$$</td>
+              </tr>
+              <tr>
+                <td class="py-2 font-medium" style="color: var(--text-primary)">Haiku</td>
+                <td class="py-2" style="color: var(--text-secondary)">Good</td>
+                <td class="py-2" style="color: #22c55e">Fastest</td>
+                <td class="py-2" style="color: #22c55e">$</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
     {:else if activeTab === 'settings'}

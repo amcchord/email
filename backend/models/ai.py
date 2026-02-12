@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, BigInteger, ForeignKey, Text, Float
+from sqlalchemy import String, Boolean, DateTime, BigInteger, ForeignKey, Text, Float
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from backend.database import Base
@@ -24,5 +24,11 @@ class AIAnalysis(Base):
     )
     model_used: Mapped[str] = mapped_column(String(100), nullable=True)
     tokens_used: Mapped[int] = mapped_column(default=0)
+
+    # Agentic features
+    is_subscription: Mapped[bool] = mapped_column(Boolean, default=False)
+    needs_reply: Mapped[bool] = mapped_column(Boolean, default=False)
+    unsubscribe_info = mapped_column(JSONB, nullable=True)
+    # unsubscribe_info format: {"method": "email"|"url"|"both", "email": "...", "url": "...", "mailto_subject": "...", "mailto_body": "..."}
 
     email = relationship("Email", back_populates="ai_analysis")

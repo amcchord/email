@@ -26,6 +26,9 @@ class EmailSummary(BaseModel):
     account_email: Optional[str] = None
     ai_category: Optional[str] = None
     ai_priority: Optional[int] = None
+    is_subscription: Optional[bool] = None
+    needs_reply: Optional[bool] = None
+    unsubscribe_info: Optional[dict] = None
 
     model_config = {"from_attributes": True}
 
@@ -42,6 +45,7 @@ class EmailDetail(EmailSummary):
     attachments: list["AttachmentResponse"] = []
     ai_summary: Optional[str] = None
     ai_action_items: Optional[list] = None
+    ai_model_used: Optional[str] = None
 
 
 class AttachmentResponse(BaseModel):

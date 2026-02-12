@@ -9,7 +9,11 @@ from sqlalchemy import select
 from backend.database import get_db
 from backend.models.user import User
 from backend.models.settings import Setting
-from backend.schemas.auth import LoginRequest, TokenResponse, UserResponse, RefreshRequest
+from backend.schemas.auth import (
+    LoginRequest, TokenResponse, UserResponse, RefreshRequest,
+    AIPreferencesResponse, AIPreferencesUpdate,
+    DEFAULT_AI_PREFERENCES,
+)
 from backend.utils.security import (
     verify_password, hash_password, create_access_token,
     create_refresh_token, decode_token,
@@ -280,8 +284,25 @@ async def google_login_callback(
 # ── Token refresh / logout / me ─────────────────────────────────────
 
 @router.post("/refresh", response_model=TokenResponse)
-async def refresh(request: RefreshRequest, response: Response, db: AsyncSession = Depends(get_db)):
-    payload = decode_token(request.refresh_token)
+async def refresh(
+    request_obj: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
+    # Read refresh token from cookie first, fall back to request body
+    token = request_obj.cookies.get("refresh_token")
+    if not token:
+        # Try to parse from JSON body
+        try:
+            body_json = await request_obj.json()
+            if isinstance(body_json, dict):
+                token = body_json.get("refresh_token")
+        except Exception:
+            pass
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No refresh token provided")
+
+    payload = decode_token(token)
     if not payload or payload.get("type") != "refresh":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token")
 
@@ -313,3 +334,49 @@ async def logout(response: Response):
 @router.get("/me", response_model=UserResponse)
 async def get_me(user: User = Depends(get_current_user)):
     return UserResponse.model_validate(user)
+
+
+# ── AI Preferences ──────────────────────────────────────────────────
+
+@router.get("/ai-preferences", response_model=AIPreferencesResponse)
+async def get_ai_preferences(user: User = Depends(get_current_user)):
+    """Return the current user's AI model preferences with defaults filled in."""
+    prefs = user.ai_preferences or {}
+    return AIPreferencesResponse(
+        chat_plan_model=prefs.get("chat_plan_model", DEFAULT_AI_PREFERENCES["chat_plan_model"]),
+        chat_execute_model=prefs.get("chat_execute_model", DEFAULT_AI_PREFERENCES["chat_execute_model"]),
+        chat_verify_model=prefs.get("chat_verify_model", DEFAULT_AI_PREFERENCES["chat_verify_model"]),
+        agentic_model=prefs.get("agentic_model", DEFAULT_AI_PREFERENCES["agentic_model"]),
+    )
+
+
+@router.put("/ai-preferences", response_model=AIPreferencesResponse)
+async def update_ai_preferences(
+    body: AIPreferencesUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Update the current user's AI model preferences."""
+    current = user.ai_preferences or {}
+    if body.chat_plan_model is not None:
+        current["chat_plan_model"] = body.chat_plan_model
+    if body.chat_execute_model is not None:
+        current["chat_execute_model"] = body.chat_execute_model
+    if body.chat_verify_model is not None:
+        current["chat_verify_model"] = body.chat_verify_model
+    if body.agentic_model is not None:
+        current["agentic_model"] = body.agentic_model
+    user.ai_preferences = current
+    # Force SQLAlchemy to detect JSONB mutation
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(user, "ai_preferences")
+    await db.commit()
+    await db.refresh(user)
+
+    prefs = user.ai_preferences or {}
+    return AIPreferencesResponse(
+        chat_plan_model=prefs.get("chat_plan_model", DEFAULT_AI_PREFERENCES["chat_plan_model"]),
+        chat_execute_model=prefs.get("chat_execute_model", DEFAULT_AI_PREFERENCES["chat_execute_model"]),
+        chat_verify_model=prefs.get("chat_verify_model", DEFAULT_AI_PREFERENCES["chat_verify_model"]),
+        agentic_model=prefs.get("agentic_model", DEFAULT_AI_PREFERENCES["agentic_model"]),
+    )

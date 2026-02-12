@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from arq import create_pool
+from arq import create_pool, cron
 from arq.connections import RedisSettings
 from backend.config import get_settings
 from backend.services.sync import EmailSyncService
@@ -44,7 +44,15 @@ async def sync_account_incremental(ctx, account_id: int):
 
 
 async def sync_all_accounts(ctx):
-    """Incremental sync for all active accounts."""
+    """Incremental sync for all active accounts.
+
+    Skips accounts that are already syncing or recently errored (10 min cooldown).
+    """
+    from backend.models.account import SyncStatus
+    from datetime import datetime, timezone, timedelta
+
+    ERROR_COOLDOWN = timedelta(minutes=10)
+
     async with async_session() as db:
         result = await db.execute(
             select(GoogleAccount).where(GoogleAccount.is_active == True)
@@ -52,6 +60,25 @@ async def sync_all_accounts(ctx):
         accounts = result.scalars().all()
 
     for account in accounts:
+        async with async_session() as db:
+            result = await db.execute(
+                select(SyncStatus).where(SyncStatus.account_id == account.id)
+            )
+            sync = result.scalar_one_or_none()
+
+            # Skip if already syncing
+            if sync and sync.status == "syncing":
+                logger.debug(f"Skipping account {account.id} - already syncing")
+                continue
+
+            # Skip if recently errored (cooldown to avoid hammering rate limits)
+            if sync and sync.status == "error" and sync.completed_at:
+                age = datetime.now(timezone.utc) - sync.completed_at
+                if age < ERROR_COOLDOWN:
+                    remaining = int((ERROR_COOLDOWN - age).total_seconds())
+                    logger.debug(f"Skipping account {account.id} - error cooldown ({remaining}s remaining)")
+                    continue
+
         try:
             sync_service = EmailSyncService(account.id)
             await sync_service.incremental_sync()
@@ -59,9 +86,51 @@ async def sync_all_accounts(ctx):
             logger.error(f"Sync error for account {account.id}: {e}")
 
 
+async def _resolve_model_for_account(account_id: int) -> str:
+    """Look up the agentic model for the user who owns this account."""
+    from backend.services.ai import get_model_for_user
+
+    async with async_session() as db:
+        result = await db.execute(
+            select(GoogleAccount.user_id).where(GoogleAccount.id == account_id)
+        )
+        row = result.first()
+        if row:
+            return await get_model_for_user(row[0])
+
+    from backend.schemas.auth import DEFAULT_AI_PREFERENCES
+    return DEFAULT_AI_PREFERENCES["agentic_model"]
+
+
+async def _resolve_model_for_emails(email_ids: list[int]) -> str:
+    """Look up the agentic model from the owner of the first email's account."""
+    from backend.services.ai import get_model_for_user
+
+    if not email_ids:
+        from backend.schemas.auth import DEFAULT_AI_PREFERENCES
+        return DEFAULT_AI_PREFERENCES["agentic_model"]
+
+    async with async_session() as db:
+        result = await db.execute(
+            select(Email.account_id).where(Email.id == email_ids[0])
+        )
+        row = result.first()
+        if row:
+            acct_result = await db.execute(
+                select(GoogleAccount.user_id).where(GoogleAccount.id == row[0])
+            )
+            acct_row = acct_result.first()
+            if acct_row:
+                return await get_model_for_user(acct_row[0])
+
+    from backend.schemas.auth import DEFAULT_AI_PREFERENCES
+    return DEFAULT_AI_PREFERENCES["agentic_model"]
+
+
 async def analyze_emails_batch(ctx, email_ids: list[int]):
     """Batch AI analysis of emails."""
-    ai_service = AIService()
+    model = await _resolve_model_for_emails(email_ids)
+    ai_service = AIService(model=model)
     await ai_service.batch_categorize(email_ids)
 
 
@@ -81,9 +150,19 @@ async def analyze_recent_unanalyzed(ctx, account_id: int, limit: int = 50):
         email_ids = [r[0] for r in result.all()]
 
     if email_ids:
-        ai_service = AIService()
+        model = await _resolve_model_for_account(account_id)
+        ai_service = AIService(model=model)
         await ai_service.batch_categorize(email_ids)
         logger.info(f"Analyzed {len(email_ids)} emails for account {account_id}")
+
+
+async def auto_categorize_account(ctx, account_id: int, limit: int = 1000):
+    """Auto-categorize the newest `limit` emails for an account."""
+    model = await _resolve_model_for_account(account_id)
+    logger.info(f"Starting auto-categorization for account {account_id} (limit={limit}, model={model})")
+    ai_service = AIService(model=model)
+    analyzed = await ai_service.auto_categorize_newest(account_id, limit=limit)
+    logger.info(f"Auto-categorization complete for account {account_id}: {analyzed} emails analyzed")
 
 
 async def startup(ctx):
@@ -105,6 +184,11 @@ class WorkerSettings:
         sync_all_accounts,
         analyze_emails_batch,
         analyze_recent_unanalyzed,
+        auto_categorize_account,
+    ]
+    # Schedule periodic incremental sync for all accounts every 2 minutes
+    cron_jobs = [
+        cron(sync_all_accounts, minute={i for i in range(0, 60, 2)}, run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown
@@ -126,4 +210,11 @@ async def queue_analysis(email_ids: list[int]):
     """Queue an analysis job."""
     redis = await create_pool(parse_redis_url(settings.redis_url))
     await redis.enqueue_job("analyze_emails_batch", email_ids)
+    await redis.close()
+
+
+async def queue_auto_categorize(account_id: int, limit: int = 1000):
+    """Queue an auto-categorize job for an account."""
+    redis = await create_pool(parse_redis_url(settings.redis_url))
+    await redis.enqueue_job("auto_categorize_account", account_id, limit)
     await redis.close()

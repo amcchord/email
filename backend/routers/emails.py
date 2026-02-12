@@ -46,6 +46,7 @@ async def list_emails(
     is_read: Optional[bool] = None,
     is_starred: Optional[bool] = None,
     ai_category: Optional[str] = None,
+    needs_reply: Optional[bool] = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -82,7 +83,7 @@ async def list_emails(
         query = query.where(Email.is_trash == False)
         query = query.where(Email.is_spam == False)
     else:
-        # INBOX: has INBOX label, not trash/spam
+        # INBOX or custom label/category: has the label, not trash/spam
         gmail_label = MAILBOX_LABEL_MAP.get(mailbox, mailbox)
         if gmail_label:
             query = query.where(jsonb_contains(Email.labels, f'["{gmail_label}"]'))
@@ -98,14 +99,33 @@ async def list_emails(
         query = query.where(Email.is_starred == is_starred)
 
     # AI category filter
+    ai_joined = False
     if ai_category:
         query = query.join(AIAnalysis, AIAnalysis.email_id == Email.id)
         query = query.where(AIAnalysis.category == ai_category)
+        ai_joined = True
 
-    # Full-text search
+    # Needs reply filter
+    if needs_reply is not None:
+        if not ai_joined:
+            query = query.join(AIAnalysis, AIAnalysis.email_id == Email.id)
+        query = query.where(AIAnalysis.needs_reply == needs_reply)
+
+    # Full-text search with ILIKE fallback
     if search:
-        ts_query = func.plainto_tsquery("english", search)
-        query = query.where(Email.search_vector.op("@@")(ts_query))
+        search_stripped = search.strip()
+        if search_stripped:
+            ts_query = func.plainto_tsquery("english", search_stripped)
+            # Use full-text search when vectors exist, with ILIKE fallback
+            search_pattern = f"%{search_stripped}%"
+            query = query.where(
+                or_(
+                    Email.search_vector.op("@@")(ts_query),
+                    Email.subject.ilike(search_pattern),
+                    Email.from_address.ilike(search_pattern),
+                    Email.from_name.ilike(search_pattern),
+                )
+            )
 
     # Count total
     count_query = select(func.count()).select_from(query.subquery())
@@ -130,9 +150,15 @@ async def list_emails(
     for e in emails:
         ai_cat = None
         ai_pri = None
+        is_sub = None
+        needs_rpl = None
+        unsub_info = None
         if e.ai_analysis:
             ai_cat = e.ai_analysis.category
             ai_pri = e.ai_analysis.priority
+            is_sub = e.ai_analysis.is_subscription
+            needs_rpl = e.ai_analysis.needs_reply
+            unsub_info = e.ai_analysis.unsubscribe_info
         email_summaries.append(EmailSummary(
             id=e.id,
             gmail_message_id=e.gmail_message_id,
@@ -151,6 +177,9 @@ async def list_emails(
             account_email=user_accounts.get(e.account_id),
             ai_category=ai_cat,
             ai_priority=ai_pri,
+            is_subscription=is_sub,
+            needs_reply=needs_rpl,
+            unsubscribe_info=unsub_info,
         ))
 
     total_pages = (total + page_size - 1) // page_size if total else 0
@@ -203,11 +232,19 @@ async def get_email(
     ai_actions = None
     ai_cat = None
     ai_pri = None
+    is_sub = None
+    needs_rpl = None
+    unsub_info = None
+    ai_model = None
     if email.ai_analysis:
         ai_summary = email.ai_analysis.summary
         ai_actions = email.ai_analysis.action_items
         ai_cat = email.ai_analysis.category
         ai_pri = email.ai_analysis.priority
+        is_sub = email.ai_analysis.is_subscription
+        needs_rpl = email.ai_analysis.needs_reply
+        unsub_info = email.ai_analysis.unsubscribe_info
+        ai_model = email.ai_analysis.model_used
 
     return EmailDetail(
         id=email.id,
@@ -237,6 +274,10 @@ async def get_email(
         ai_action_items=ai_actions,
         ai_category=ai_cat,
         ai_priority=ai_pri,
+        is_subscription=is_sub,
+        needs_reply=needs_rpl,
+        unsubscribe_info=unsub_info,
+        ai_model_used=ai_model,
     )
 
 
@@ -329,6 +370,8 @@ async def email_actions(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    from backend.services.gmail import GmailService
+
     # Verify user owns these emails
     acct_result = await db.execute(
         select(GoogleAccount.id).where(GoogleAccount.user_id == user.id)
@@ -341,6 +384,21 @@ async def email_actions(
     ]
 
     action = request.action
+
+    # Gmail label sync mapping
+    gmail_sync = {
+        "mark_read": {"remove": ["UNREAD"]},
+        "mark_unread": {"add": ["UNREAD"]},
+        "star": {"add": ["STARRED"]},
+        "unstar": {"remove": ["STARRED"]},
+        "trash": {"add": ["TRASH"]},
+        "untrash": {"remove": ["TRASH"]},
+        "spam": {"add": ["SPAM"], "remove": ["INBOX"]},
+        "unspam": {"remove": ["SPAM"], "add": ["INBOX"]},
+        "archive": {"remove": ["INBOX"]},
+    }
+
+    # Apply local DB changes
     if action == "mark_read":
         await db.execute(update(Email).where(*base_filter).values(is_read=True))
     elif action == "mark_unread":
@@ -358,19 +416,61 @@ async def email_actions(
     elif action == "unspam":
         await db.execute(update(Email).where(*base_filter).values(is_spam=False))
     elif action == "archive":
-        # Remove INBOX label
         for eid in request.email_ids:
             result = await db.execute(
                 select(Email).where(Email.id == eid, Email.account_id.in_(account_ids))
             )
-            email = result.scalar_one_or_none()
-            if email and email.labels:
-                new_labels = [l for l in email.labels if l != "INBOX"]
-                email.labels = new_labels
+            email_obj = result.scalar_one_or_none()
+            if email_obj and email_obj.labels:
+                new_labels = [l for l in email_obj.labels if l != "INBOX"]
+                email_obj.labels = new_labels
     else:
         raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
 
     await db.commit()
+
+    # Sync to Gmail in background (best-effort)
+    sync_info = gmail_sync.get(action)
+    if sync_info:
+        # Fetch emails with their gmail_message_id and account
+        email_result = await db.execute(
+            select(Email.gmail_message_id, Email.account_id).where(
+                Email.id.in_(request.email_ids),
+                Email.account_id.in_(account_ids),
+            )
+        )
+        email_rows = email_result.all()
+
+        # Group by account
+        by_account = {}
+        for gmail_msg_id, acct_id in email_rows:
+            if acct_id not in by_account:
+                by_account[acct_id] = []
+            by_account[acct_id].append(gmail_msg_id)
+
+        for acct_id, msg_ids in by_account.items():
+            try:
+                acct_obj = await db.execute(
+                    select(GoogleAccount).where(GoogleAccount.id == acct_id)
+                )
+                account = acct_obj.scalar_one_or_none()
+                if account:
+                    gmail_svc = GmailService(account)
+                    for msg_id in msg_ids:
+                        try:
+                            await gmail_svc.modify_labels(
+                                msg_id,
+                                add_labels=sync_info.get("add"),
+                                remove_labels=sync_info.get("remove"),
+                            )
+                        except Exception as sync_err:
+                            import logging
+                            logging.getLogger(__name__).warning(
+                                f"Gmail sync failed for {msg_id}: {sync_err}"
+                            )
+            except Exception:
+                pass
+
     return {"message": f"Action '{action}' applied to {len(request.email_ids)} emails"}
 
 

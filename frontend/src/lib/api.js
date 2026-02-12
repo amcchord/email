@@ -1,9 +1,38 @@
 const BASE = '/api';
 
 let onUnauthorized = null;
+let isRefreshing = false;
+let refreshPromise = null;
 
 export function setUnauthorizedHandler(handler) {
   onUnauthorized = handler;
+}
+
+async function attemptTokenRefresh() {
+  // If already refreshing, wait for the existing attempt
+  if (isRefreshing && refreshPromise) {
+    return refreshPromise;
+  }
+
+  isRefreshing = true;
+  refreshPromise = fetch(`${BASE}/auth/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({}),
+  }).then(resp => {
+    if (resp.ok) {
+      return true;
+    }
+    return false;
+  }).catch(() => {
+    return false;
+  }).finally(() => {
+    isRefreshing = false;
+    refreshPromise = null;
+  });
+
+  return refreshPromise;
 }
 
 async function request(method, path, body = null, options = {}) {
@@ -23,13 +52,34 @@ async function request(method, path, body = null, options = {}) {
     config.body = body instanceof FormData ? body : JSON.stringify(body);
   }
 
-  const response = await fetch(`${BASE}${path}`, config);
+  let response = await fetch(`${BASE}${path}`, config);
 
-  if (response.status === 401) {
-    if (onUnauthorized) {
-      onUnauthorized();
+  // On 401, try to refresh the token and retry once
+  if (response.status === 401 && !path.includes('/auth/refresh')) {
+    const refreshed = await attemptTokenRefresh();
+    if (refreshed) {
+      // Rebuild config for retry (body may be consumed)
+      const retryConfig = {
+        method,
+        headers: { ...options.headers },
+        credentials: 'include',
+        ...options,
+      };
+      if (body && !(body instanceof FormData)) {
+        retryConfig.headers['Content-Type'] = 'application/json';
+      }
+      if (body) {
+        retryConfig.body = body instanceof FormData ? body : JSON.stringify(body);
+      }
+      response = await fetch(`${BASE}${path}`, retryConfig);
     }
-    throw new Error('Unauthorized');
+
+    if (response.status === 401) {
+      if (onUnauthorized) {
+        onUnauthorized();
+      }
+      throw new Error('Unauthorized');
+    }
   }
 
   if (!response.ok) {
@@ -51,7 +101,7 @@ export const api = {
   login: (username, password) => request('POST', '/auth/login', { username, password }),
   logout: () => request('POST', '/auth/logout'),
   me: () => request('GET', '/auth/me'),
-  refresh: (refresh_token) => request('POST', '/auth/refresh', { refresh_token }),
+  refresh: () => request('POST', '/auth/refresh', {}),
 
   // Emails
   listEmails: (params = {}) => {
@@ -84,6 +134,7 @@ export const api = {
 
   // Admin
   getDashboard: () => request('GET', '/admin/dashboard'),
+  getStats: () => request('GET', '/admin/stats'),
   getSettings: () => request('GET', '/admin/settings'),
   updateSetting: (data) => request('PUT', '/admin/settings', data),
   deleteSetting: (key) => request('DELETE', `/admin/settings/${key}`),
@@ -93,6 +144,74 @@ export const api = {
   // AI
   analyzeEmail: (emailId) => request('POST', `/ai/analyze/${emailId}`),
   analyzeThread: (threadId) => request('POST', `/ai/analyze/thread/${threadId}`),
+  getAITrends: () => request('GET', '/ai/trends'),
+  triggerAutoCategorize: () => request('POST', '/ai/auto-categorize'),
+  getNeedsReply: (params = {}) => {
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== null && value !== undefined && value !== '') {
+        searchParams.set(key, value);
+      }
+    }
+    return request('GET', `/ai/needs-reply?${searchParams.toString()}`);
+  },
+  getSubscriptions: (params = {}) => {
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== null && value !== undefined && value !== '') {
+        searchParams.set(key, value);
+      }
+    }
+    return request('GET', `/ai/subscriptions?${searchParams.toString()}`);
+  },
+  unsubscribe: (emailId) => request('POST', `/ai/unsubscribe/${emailId}`),
+  getThreadSummaries: (params = {}) => {
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== null && value !== undefined && value !== '') {
+        searchParams.set(key, value);
+      }
+    }
+    return request('GET', `/ai/threads?${searchParams.toString()}`);
+  },
+
+  // Todos
+  getTodos: (params = {}) => {
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== null && value !== undefined && value !== '') {
+        searchParams.set(key, value);
+      }
+    }
+    return request('GET', `/todos/?${searchParams.toString()}`);
+  },
+  createTodo: (data) => request('POST', '/todos/', data),
+  createTodosFromEmail: (emailId) => request('POST', `/todos/from-email/${emailId}`),
+  updateTodo: (id, data) => request('PATCH', `/todos/${id}`, data),
+  deleteTodo: (id) => request('DELETE', `/todos/${id}`),
+
+  // AI Actions
+  draftAction: (todoId) => request('POST', '/ai/draft-action', { todo_id: todoId }),
+  approveAction: (todoId) => request('POST', `/ai/approve-action/${todoId}`),
+  reprocessEmails: (model) => request('POST', '/ai/reprocess', { model }),
+
+  // Chat
+  chatStream: (message, conversationId = null) => {
+    // Returns the raw Response for SSE streaming -- caller reads the stream
+    return fetch(`${BASE}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ message, conversation_id: conversationId }),
+    });
+  },
+  getConversations: () => request('GET', '/chat/conversations'),
+  getConversation: (id) => request('GET', `/chat/conversations/${id}`),
+  deleteConversation: (id) => request('DELETE', `/chat/conversations/${id}`),
+
+  // AI Preferences
+  getAIPreferences: () => request('GET', '/auth/ai-preferences'),
+  updateAIPreferences: (prefs) => request('PUT', '/auth/ai-preferences', prefs),
 
   // Health
   health: () => request('GET', '/health'),

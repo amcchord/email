@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -5,6 +6,8 @@ from sqlalchemy import select, text
 from backend.models.email import Email, Attachment, EmailLabel
 from backend.models.account import GoogleAccount, SyncStatus
 from backend.services.gmail import GmailService
+from backend.services.credentials import get_google_credentials
+from backend.utils.security import encrypt_value
 from backend.database import async_session
 
 logger = logging.getLogger(__name__)
@@ -23,6 +26,21 @@ class EmailSyncService:
             raise ValueError(f"Account {self.account_id} not found")
         return account
 
+    async def _create_gmail_service(self, db: AsyncSession, account: GoogleAccount) -> GmailService:
+        """Create a GmailService with credentials resolved from the DB."""
+        client_id, client_secret = await get_google_credentials(db)
+        return GmailService(account, client_id=client_id, client_secret=client_secret)
+
+    async def _persist_refreshed_token(self, gmail: GmailService):
+        """Save refreshed access token back to the DB if it changed."""
+        new_token = gmail.get_refreshed_token()
+        if new_token:
+            async with async_session() as db:
+                account = await self._get_account(db)
+                account.encrypted_access_token = encrypt_value(new_token)
+                await db.commit()
+                logger.debug(f"Persisted refreshed token for account {self.account_id}")
+
     async def _update_sync_status(self, db: AsyncSession, **kwargs):
         result = await db.execute(
             select(SyncStatus).where(SyncStatus.account_id == self.account_id)
@@ -40,10 +58,11 @@ class EmailSyncService:
         """Sync labels from Gmail."""
         async with async_session() as db:
             account = await self._get_account(db)
-            gmail = GmailService(account)
+            gmail = await self._create_gmail_service(db, account)
 
             try:
                 gmail_labels = await gmail.list_labels()
+                await self._persist_refreshed_token(gmail)
 
                 for gl in gmail_labels:
                     label_id = gl.get("id", "")
@@ -83,10 +102,9 @@ class EmailSyncService:
                 raise
 
     async def full_sync(self):
-        """Perform a full email sync."""
+        """Perform a full email sync, skipping messages already in the DB."""
         async with async_session() as db:
             account = await self._get_account(db)
-            gmail = GmailService(account)
 
             await self._update_sync_status(
                 db,
@@ -97,7 +115,7 @@ class EmailSyncService:
             )
 
         try:
-            # Phase 1: Collect all message IDs
+            # Phase 1: Collect all message IDs from Gmail
             all_message_ids = []
             page_token = None
             total_estimate = 0
@@ -107,10 +125,11 @@ class EmailSyncService:
             while True:
                 async with async_session() as db:
                     account = await self._get_account(db)
-                    gmail = GmailService(account)
+                    gmail = await self._create_gmail_service(db, account)
                     messages, next_page, estimate = await gmail.list_message_ids(
                         page_token=page_token
                     )
+                    await self._persist_refreshed_token(gmail)
 
                 all_message_ids.extend([m["id"] for m in messages])
                 if total_estimate == 0:
@@ -120,46 +139,83 @@ class EmailSyncService:
                 async with async_session() as db:
                     await self._update_sync_status(
                         db,
-                        total_messages=len(all_message_ids),
                         current_phase=f"Collecting IDs: {len(all_message_ids)} found",
                     )
 
                 if not page_token:
                     break
 
-            logger.info(f"Found {len(all_message_ids)} messages to sync")
+                # Pace between list pages to respect quota
+                await asyncio.sleep(1)
 
-            # Phase 2: Fetch messages in batches
+            logger.info(f"Found {len(all_message_ids)} total messages in Gmail for account {self.account_id}")
+
+            # Phase 1.5: Filter out messages we already have in the DB
+            async with async_session() as db:
+                result = await db.execute(
+                    select(Email.gmail_message_id).where(
+                        Email.account_id == self.account_id
+                    )
+                )
+                existing_ids = set(r[0] for r in result.all())
+
+            new_message_ids = [mid for mid in all_message_ids if mid not in existing_ids]
+            skipped_count = len(all_message_ids) - len(new_message_ids)
+            total_to_fetch = len(new_message_ids)
+
+            logger.info(f"Skipping {skipped_count} already-synced messages, "
+                         f"fetching {total_to_fetch} new messages")
+
+            async with async_session() as db:
+                await self._update_sync_status(
+                    db,
+                    total_messages=total_to_fetch,
+                    messages_synced=0,
+                    current_phase=f"Fetching {total_to_fetch} new emails (skipped {skipped_count} existing)",
+                )
+
+            # Phase 2: Fetch only new messages in batches
             synced_count = 0
-            batch_size = 50
+            batch_size = 25
             latest_history_id = None
 
-            for i in range(0, len(all_message_ids), batch_size):
-                batch_ids = all_message_ids[i:i + batch_size]
+            for i in range(0, len(new_message_ids), batch_size):
+                batch_ids = new_message_ids[i:i + batch_size]
 
                 async with async_session() as db:
                     account = await self._get_account(db)
-                    gmail = GmailService(account)
+                    gmail = await self._create_gmail_service(db, account)
                     messages = await gmail.batch_get_messages(batch_ids)
+                    await self._persist_refreshed_token(gmail)
 
                 async with async_session() as db:
+                    batch_ok = 0
                     for msg in messages:
-                        parsed = GmailService.parse_message(msg)
-                        history_id = parsed.get("gmail_history_id", "")
-                        if history_id:
-                            if latest_history_id is None or int(history_id) > int(latest_history_id):
-                                latest_history_id = history_id
+                        try:
+                            parsed = GmailService.parse_message(msg)
+                            history_id = parsed.get("gmail_history_id", "")
+                            if history_id:
+                                if latest_history_id is None or int(history_id) > int(latest_history_id):
+                                    latest_history_id = history_id
 
-                        await self._upsert_email(db, parsed)
+                            await self._upsert_email(db, parsed)
+                            batch_ok += 1
+                        except Exception as msg_err:
+                            msg_id = msg.get("id", "unknown")
+                            logger.warning(f"Skipping message {msg_id}: {msg_err}")
+                            await db.rollback()
 
-                    synced_count += len(messages)
+                    synced_count += batch_ok
                     await self._update_sync_status(
                         db,
                         messages_synced=synced_count,
-                        total_messages=len(all_message_ids),
-                        current_phase=f"Fetching emails: {synced_count}/{len(all_message_ids)}",
+                        total_messages=total_to_fetch,
+                        current_phase=f"Fetching emails: {synced_count}/{total_to_fetch}",
                     )
                     await db.commit()
+
+                # Pace between outer batches to stay under per-minute quota
+                await asyncio.sleep(3)
 
             # Update search vectors
             async with async_session() as db:
@@ -174,8 +230,30 @@ class EmailSyncService:
                 """), {"account_id": self.account_id})
                 await db.commit()
 
-            # Mark sync complete
+            # Get the max history_id from all messages in DB (including previously synced)
             async with async_session() as db:
+                from sqlalchemy import func as sa_func
+                result = await db.execute(
+                    select(sa_func.max(Email.gmail_history_id)).where(
+                        Email.account_id == self.account_id,
+                        Email.gmail_history_id.isnot(None),
+                        Email.gmail_history_id != "",
+                    )
+                )
+                db_max_history = result.scalar_one_or_none()
+                if db_max_history:
+                    if latest_history_id is None or int(db_max_history) > int(latest_history_id or 0):
+                        latest_history_id = db_max_history
+
+            # Mark sync complete -- count all messages in the DB for this account
+            async with async_session() as db:
+                from sqlalchemy import func as sa_count
+                total_in_db = await db.scalar(
+                    select(sa_count.count(Email.id)).where(
+                        Email.account_id == self.account_id
+                    )
+                ) or 0
+
                 await self._update_sync_status(
                     db,
                     status="completed",
@@ -183,7 +261,8 @@ class EmailSyncService:
                     last_full_sync=datetime.now(timezone.utc),
                     last_history_id=latest_history_id,
                     completed_at=datetime.now(timezone.utc),
-                    messages_synced=synced_count,
+                    messages_synced=total_in_db,
+                    total_messages=total_in_db,
                 )
 
             # Sync labels
@@ -199,6 +278,7 @@ class EmailSyncService:
                     status="error",
                     error_message=str(e),
                     current_phase=None,
+                    completed_at=datetime.now(timezone.utc),
                 )
             raise
 
@@ -215,11 +295,25 @@ class EmailSyncService:
                 await self.full_sync()
                 return
 
-            account = await self._get_account(db)
-            gmail = GmailService(account)
+            last_history_id = sync.last_history_id
 
-            try:
-                history_result = await gmail.get_history(sync.last_history_id)
+        # Set status to syncing
+        async with async_session() as db:
+            await self._update_sync_status(
+                db,
+                status="syncing",
+                current_phase="Incremental sync",
+                error_message=None,
+            )
+
+        try:
+            async with async_session() as db:
+                account = await self._get_account(db)
+                gmail = await self._create_gmail_service(db, account)
+
+                history_result = await gmail.get_history(last_history_id)
+                await self._persist_refreshed_token(gmail)
+
                 if history_result is None:
                     # History expired, need full sync
                     logger.info("History expired, performing full sync")
@@ -233,6 +327,8 @@ class EmailSyncService:
                     # No changes
                     await self._update_sync_status(
                         db,
+                        status="completed",
+                        current_phase=None,
                         last_incremental_sync=datetime.now(timezone.utc),
                     )
                     return
@@ -269,15 +365,30 @@ class EmailSyncService:
                     fetch_list = list(messages_to_fetch - messages_to_delete)
                     if fetch_list:
                         messages = await gmail.batch_get_messages(fetch_list)
+                        await self._persist_refreshed_token(gmail)
                         for msg in messages:
-                            parsed = GmailService.parse_message(msg)
-                            await self._upsert_email(db, parsed)
+                            try:
+                                parsed = GmailService.parse_message(msg)
+                                await self._upsert_email(db, parsed)
+                            except Exception as msg_err:
+                                msg_id = msg.get("id", "unknown")
+                                logger.warning(f"Skipping message {msg_id} in incremental sync: {msg_err}")
+                                await db.rollback()
 
                 if new_history_id:
                     await self._update_sync_status(
                         db,
                         last_history_id=new_history_id,
                         last_incremental_sync=datetime.now(timezone.utc),
+                        status="completed",
+                        current_phase=None,
+                    )
+                else:
+                    await self._update_sync_status(
+                        db,
+                        last_incremental_sync=datetime.now(timezone.utc),
+                        status="completed",
+                        current_phase=None,
                     )
 
                 await db.commit()
@@ -286,9 +397,16 @@ class EmailSyncService:
                     f"{len(messages_to_delete)} deleted for account {self.account_id}"
                 )
 
-            except Exception as e:
-                logger.error(f"Incremental sync error: {e}")
-                raise
+        except Exception as e:
+            logger.error(f"Incremental sync error for account {self.account_id}: {e}")
+            async with async_session() as db:
+                await self._update_sync_status(
+                    db,
+                    status="error",
+                    error_message=str(e),
+                    current_phase=None,
+                )
+            raise
 
     async def _upsert_email(self, db: AsyncSession, parsed: dict):
         """Insert or update an email record."""

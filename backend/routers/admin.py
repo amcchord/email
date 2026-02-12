@@ -1,6 +1,7 @@
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text, cast, Date, case
 from backend.database import get_db
 from backend.models.user import User
 from backend.models.settings import Setting
@@ -11,7 +12,7 @@ from backend.schemas.admin import (
     SettingResponse, SettingUpdate, GoogleAccountResponse,
     SyncStatusResponse, DashboardStats,
 )
-from backend.routers.auth import require_admin
+from backend.routers.auth import require_admin, get_current_user
 from backend.utils.security import encrypt_value, decrypt_value
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -174,3 +175,117 @@ async def remove_account(
     await db.delete(account)
     await db.commit()
     return {"message": f"Account '{account.email}' removed"}
+
+
+@router.get("/stats")
+async def get_stats(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Get detailed email statistics for charts and dashboards."""
+    # Get user's account IDs
+    acct_result = await db.execute(
+        select(GoogleAccount.id).where(GoogleAccount.user_id == user.id)
+    )
+    account_ids = [r[0] for r in acct_result.all()]
+
+    if not account_ids:
+        return {
+            "volume_by_day": [],
+            "top_senders": [],
+            "read_vs_unread": {"read": 0, "unread": 0},
+            "category_distribution": [],
+            "emails_per_day_avg": 0,
+            "total_emails": 0,
+            "total_unread": 0,
+            "total_starred": 0,
+            "total_with_attachments": 0,
+        }
+
+    account_filter = Email.account_id.in_(account_ids)
+
+    # Total counts
+    total_emails = await db.scalar(
+        select(func.count(Email.id)).where(account_filter)
+    ) or 0
+    total_unread = await db.scalar(
+        select(func.count(Email.id)).where(account_filter, Email.is_read == False)
+    ) or 0
+    total_starred = await db.scalar(
+        select(func.count(Email.id)).where(account_filter, Email.is_starred == True)
+    ) or 0
+    total_attachments = await db.scalar(
+        select(func.count(Email.id)).where(account_filter, Email.has_attachments == True)
+    ) or 0
+
+    # Volume by day (last 30 days)
+    thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+    volume_result = await db.execute(
+        select(
+            cast(Email.date, Date).label("day"),
+            func.count(Email.id).label("count"),
+        )
+        .where(account_filter, Email.date >= thirty_days_ago)
+        .group_by("day")
+        .order_by("day")
+    )
+    volume_by_day = [
+        {"date": str(row.day), "count": row.count}
+        for row in volume_result.all()
+    ]
+
+    # Average emails per day
+    emails_per_day_avg = 0
+    if volume_by_day:
+        total_in_period = sum(d["count"] for d in volume_by_day)
+        days_count = len(volume_by_day)
+        if days_count > 0:
+            emails_per_day_avg = round(total_in_period / days_count, 1)
+
+    # Top 10 senders
+    senders_result = await db.execute(
+        select(
+            Email.from_address,
+            Email.from_name,
+            func.count(Email.id).label("count"),
+        )
+        .where(account_filter, Email.from_address.isnot(None))
+        .group_by(Email.from_address, Email.from_name)
+        .order_by(func.count(Email.id).desc())
+        .limit(10)
+    )
+    top_senders = [
+        {"address": row.from_address, "name": row.from_name or row.from_address, "count": row.count}
+        for row in senders_result.all()
+    ]
+
+    # Read vs unread
+    read_count = total_emails - total_unread
+
+    # AI category distribution
+    cat_result = await db.execute(
+        select(
+            AIAnalysis.category,
+            func.count(AIAnalysis.id).label("count"),
+        )
+        .join(Email, Email.id == AIAnalysis.email_id)
+        .where(Email.account_id.in_(account_ids))
+        .group_by(AIAnalysis.category)
+        .order_by(func.count(AIAnalysis.id).desc())
+    )
+    category_distribution = [
+        {"category": row.category, "count": row.count}
+        for row in cat_result.all()
+    ]
+
+    return {
+        "volume_by_day": volume_by_day,
+        "top_senders": top_senders,
+        "read_vs_unread": {"read": read_count, "unread": total_unread},
+        "category_distribution": category_distribution,
+        "emails_per_day_avg": emails_per_day_avg,
+        "total_emails": total_emails,
+        "total_unread": total_unread,
+        "total_starred": total_starred,
+        "total_with_attachments": total_attachments,
+    }

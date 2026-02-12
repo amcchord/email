@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from backend.config import get_settings
 from backend.database import engine, Base
-from backend.routers import auth, admin, emails, compose, accounts, ai
+from backend.routers import auth, admin, emails, compose, accounts, ai, todos, chat
 
 # Import all models so they register with Base
 import backend.models  # noqa: F401
@@ -53,6 +53,8 @@ app.include_router(emails.router)
 app.include_router(compose.router)
 app.include_router(accounts.router)
 app.include_router(ai.router)
+app.include_router(todos.router)
+app.include_router(chat.router)
 
 
 @app.get("/api/health")

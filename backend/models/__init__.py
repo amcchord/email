@@ -3,6 +3,8 @@ from backend.models.account import GoogleAccount, SyncStatus
 from backend.models.email import Email, Attachment, EmailLabel
 from backend.models.ai import AIAnalysis
 from backend.models.settings import Setting
+from backend.models.todo import TodoItem
+from backend.models.chat import ChatConversation, ChatMessage
 
 __all__ = [
     "User",
@@ -13,4 +15,7 @@ __all__ = [
     "EmailLabel",
     "AIAnalysis",
     "Setting",
+    "TodoItem",
+    "ChatConversation",
+    "ChatMessage",
 ]
