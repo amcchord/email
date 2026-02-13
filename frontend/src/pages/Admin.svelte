@@ -5,7 +5,7 @@
   import Button from '../components/common/Button.svelte';
   import Input from '../components/common/Input.svelte';
 
-  let activeTab = $state('accounts');
+  let activeTab = $state('about-me');
   let dashboard = $state(null);
   let settings = $state([]);
   let loading = $state(true);
@@ -21,6 +21,7 @@
   let newDescription = $state('');
 
   let allTabs = [
+    { id: 'about-me', label: 'About Me', adminOnly: false },
     { id: 'accounts', label: 'My Accounts', adminOnly: false },
     { id: 'ai-models', label: 'AI Models', adminOnly: false },
     { id: 'dashboard', label: 'Dashboard', adminOnly: true },
@@ -72,8 +73,8 @@
       allowedAccounts = allowed.allowed_accounts || '';
       allowedLoaded = true;
 
-      // Always load AI preferences (available to all users)
-      await loadAIPreferences();
+      // Always load AI preferences and About Me (available to all users)
+      await Promise.all([loadAIPreferences(), loadAboutMe()]);
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -185,10 +186,30 @@
   let aiPrefsSaving = $state(false);
   let reprocessing = $state(false);
 
+  // About Me
+  let aboutMeText = $state('');
+  let aboutMeLoaded = $state(false);
+  let aboutMeSaving = $state(false);
+
+  // Account descriptions (keyed by account id)
+  let accountDescriptions = $state({});
+  let accountDescSaving = $state({});
+  let accountDescInitialized = $state(new Set());
+
+  // Sync account descriptions from server data when accounts load
+  $effect(() => {
+    for (const acct of adminAccounts) {
+      if (!accountDescInitialized.has(acct.id)) {
+        accountDescriptions[acct.id] = acct.description || '';
+        accountDescInitialized.add(acct.id);
+      }
+    }
+  });
+
   const modelLabels = {
-    'claude-opus-4-6': 'Opus — Most capable',
-    'claude-sonnet-4-5-20250929': 'Sonnet — Balanced',
-    'claude-haiku-4-5-20251001': 'Haiku — Fastest',
+    'claude-opus-4-6': 'Claude Opus 4.6 — Most capable',
+    'claude-sonnet-4-5-20250929': 'Claude Sonnet 4.5 — Balanced',
+    'claude-haiku-4-5-20251001': 'Claude Haiku 4.5 — Fastest',
   };
 
   async function loadAIPreferences() {
@@ -238,6 +259,42 @@
     }
     reprocessing = false;
   }
+
+  // About Me
+  async function loadAboutMe() {
+    try {
+      const data = await api.getAboutMe();
+      aboutMeText = data.about_me || '';
+      aboutMeLoaded = true;
+    } catch (err) {
+      showToast('Failed to load About Me', 'error');
+    }
+  }
+
+  async function saveAboutMe() {
+    aboutMeSaving = true;
+    try {
+      const data = await api.updateAboutMe(aboutMeText);
+      aboutMeText = data.about_me || '';
+      showToast('About Me saved', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    aboutMeSaving = false;
+  }
+
+  // Account descriptions
+  async function saveAccountDescription(accountId) {
+    accountDescSaving = { ...accountDescSaving, [accountId]: true };
+    try {
+      const desc = accountDescriptions[accountId] || '';
+      await api.updateAccountDescription(accountId, desc);
+      showToast('Account description saved', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    accountDescSaving = { ...accountDescSaving, [accountId]: false };
+  }
 </script>
 
 <div class="h-full overflow-y-auto" style="background: var(--bg-primary)">
@@ -259,6 +316,55 @@
       <div class="flex justify-center py-12">
         <div class="w-6 h-6 border-2 rounded-full animate-spin" style="border-color: var(--border-color); border-top-color: var(--color-accent-500)"></div>
       </div>
+    {:else if activeTab === 'about-me'}
+      <!-- About Me -->
+      <div class="space-y-6">
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">About Me</h3>
+          <p class="text-xs mb-4" style="color: var(--text-tertiary)">
+            Tell the AI about yourself -- your role, how you work, and what matters to you.
+            This helps the AI write smarter replies, better summaries, and more relevant categorization.
+          </p>
+          <textarea
+            bind:value={aboutMeText}
+            placeholder="e.g., I'm a partner at a VC fund. I evaluate early-stage SaaS deals, focusing on ARR growth, churn rates, and founding team backgrounds. I prioritize emails from portfolio companies and potential deal flow."
+            rows="6"
+            class="w-full px-3 py-2.5 rounded-lg text-sm outline-none border resize-y"
+            style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary); min-height: 120px"
+          ></textarea>
+          <div class="mt-3 flex items-center gap-3">
+            <Button variant="primary" size="sm" onclick={saveAboutMe} disabled={aboutMeSaving}>
+              {aboutMeSaving ? 'Saving...' : 'Save'}
+            </Button>
+            <span class="text-[10px]" style="color: var(--text-tertiary)">
+              This context is used when analyzing emails, suggesting replies, and chatting about your inbox.
+            </span>
+          </div>
+        </div>
+
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Tips</h3>
+          <ul class="text-xs space-y-2 mt-3" style="color: var(--text-secondary)">
+            <li class="flex gap-2">
+              <span class="shrink-0 w-1.5 h-1.5 rounded-full mt-1.5" style="background: var(--color-accent-500)"></span>
+              <span>Describe your job role and industry so the AI can prioritize relevant emails.</span>
+            </li>
+            <li class="flex gap-2">
+              <span class="shrink-0 w-1.5 h-1.5 rounded-full mt-1.5" style="background: var(--color-accent-500)"></span>
+              <span>Mention key topics or projects you care about for better categorization.</span>
+            </li>
+            <li class="flex gap-2">
+              <span class="shrink-0 w-1.5 h-1.5 rounded-full mt-1.5" style="background: var(--color-accent-500)"></span>
+              <span>Explain your communication style (e.g., "I prefer concise, direct replies") for smarter reply suggestions.</span>
+            </li>
+            <li class="flex gap-2">
+              <span class="shrink-0 w-1.5 h-1.5 rounded-full mt-1.5" style="background: var(--color-accent-500)"></span>
+              <span>You can also describe each connected email account's purpose in the My Accounts tab.</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+
     {:else if activeTab === 'dashboard'}
       <!-- Dashboard -->
       <div class="grid grid-cols-2 md:grid-cols-3 gap-4">
@@ -424,6 +530,8 @@
                           Syncing...
                         {/if}
                       </span>
+                    {:else if acct.sync_status.status === 'rate_limited'}
+                      <span style="color: #f59e0b">Rate limited by Gmail</span>
                     {:else if acct.sync_status.status === 'error'}
                       <span style="color: #ef4444">Error: {acct.sync_status.error_message || 'Unknown error'}</span>
                     {:else if acct.sync_status.status === 'completed'}
@@ -450,6 +558,28 @@
                 </div>
               </div>
 
+              <!-- Account description -->
+              <div class="mt-3">
+                <label class="block text-[10px] font-semibold uppercase tracking-wider mb-1" style="color: var(--text-tertiary)">
+                  Account Purpose
+                </label>
+                <div class="flex gap-2">
+                  <input
+                    type="text"
+                    bind:value={accountDescriptions[acct.id]}
+                    placeholder="e.g., Work email, Personal, Side project, Junk..."
+                    class="flex-1 h-8 px-3 rounded-lg text-xs outline-none border"
+                    style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+                  />
+                  <Button size="sm" onclick={() => saveAccountDescription(acct.id)} disabled={accountDescSaving[acct.id]}>
+                    {accountDescSaving[acct.id] ? 'Saving...' : 'Save'}
+                  </Button>
+                </div>
+                <p class="text-[10px] mt-1" style="color: var(--text-tertiary)">
+                  Helps the AI understand what kind of emails to expect from this account.
+                </p>
+              </div>
+
               <!-- Progress bar during sync -->
               {#if acct.sync_status && acct.sync_status.status === 'syncing' && acct.sync_status.total_messages > 0}
                 <div class="mt-3">
@@ -463,6 +593,16 @@
                       style="background: var(--color-accent-500); width: {Math.min(100, Math.round((acct.sync_status.messages_synced || 0) / acct.sync_status.total_messages * 100))}%"
                     ></div>
                   </div>
+                </div>
+              {/if}
+
+              <!-- Rate limit notice -->
+              {#if acct.sync_status && acct.sync_status.status === 'rate_limited' && acct.sync_status.retry_after}
+                <div class="mt-2 px-3 py-2 rounded-lg text-xs flex items-center gap-2" style="background: #f59e0b10; color: #f59e0b; border: 1px solid #f59e0b30">
+                  <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Gmail rate limit reached. Will automatically retry at {new Date(acct.sync_status.retry_after).toLocaleTimeString()}.
                 </div>
               {/if}
 
@@ -632,19 +772,19 @@
             </thead>
             <tbody>
               <tr class="border-b" style="border-color: var(--border-color)">
-                <td class="py-2 font-medium" style="color: var(--text-primary)">Opus</td>
+                <td class="py-2 font-medium" style="color: var(--text-primary)">Opus 4.6</td>
                 <td class="py-2" style="color: #22c55e">Highest</td>
                 <td class="py-2" style="color: var(--text-secondary)">Slower</td>
                 <td class="py-2" style="color: var(--text-secondary)">$$$</td>
               </tr>
               <tr class="border-b" style="border-color: var(--border-color)">
-                <td class="py-2 font-medium" style="color: var(--text-primary)">Sonnet</td>
+                <td class="py-2 font-medium" style="color: var(--text-primary)">Sonnet 4.5</td>
                 <td class="py-2" style="color: var(--color-accent-600)">High</td>
                 <td class="py-2" style="color: var(--color-accent-600)">Balanced</td>
                 <td class="py-2" style="color: var(--text-secondary)">$$</td>
               </tr>
               <tr>
-                <td class="py-2 font-medium" style="color: var(--text-primary)">Haiku</td>
+                <td class="py-2 font-medium" style="color: var(--text-primary)">Haiku 4.5</td>
                 <td class="py-2" style="color: var(--text-secondary)">Good</td>
                 <td class="py-2" style="color: #22c55e">Fastest</td>
                 <td class="py-2" style="color: #22c55e">$</td>

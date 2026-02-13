@@ -12,6 +12,7 @@ from backend.models.settings import Setting
 from backend.schemas.auth import (
     LoginRequest, TokenResponse, UserResponse, RefreshRequest,
     AIPreferencesResponse, AIPreferencesUpdate,
+    AboutMeResponse, AboutMeUpdate,
     DEFAULT_AI_PREFERENCES,
 )
 from backend.utils.security import (
@@ -380,3 +381,24 @@ async def update_ai_preferences(
         chat_verify_model=prefs.get("chat_verify_model", DEFAULT_AI_PREFERENCES["chat_verify_model"]),
         agentic_model=prefs.get("agentic_model", DEFAULT_AI_PREFERENCES["agentic_model"]),
     )
+
+
+# ── About Me ────────────────────────────────────────────────────────
+
+@router.get("/about-me", response_model=AboutMeResponse)
+async def get_about_me(user: User = Depends(get_current_user)):
+    """Return the current user's about-me text."""
+    return AboutMeResponse(about_me=user.about_me)
+
+
+@router.put("/about-me", response_model=AboutMeResponse)
+async def update_about_me(
+    body: AboutMeUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Update the current user's about-me text."""
+    user.about_me = body.about_me
+    await db.commit()
+    await db.refresh(user)
+    return AboutMeResponse(about_me=user.about_me)

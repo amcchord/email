@@ -1,5 +1,5 @@
 <script>
-  import { currentPage, composeData, showToast, pendingReplyDraft, accounts, todos } from '../../lib/stores.js';
+  import { currentPage, composeData, showToast, pendingReplyDraft, accounts, todos, accountColorMap } from '../../lib/stores.js';
   import { theme } from '../../lib/theme.js';
   import { api } from '../../lib/api.js';
   import { get } from 'svelte/store';
@@ -50,6 +50,7 @@
   let inlineReplyBody = $state('');
   let inlineReplySending = $state(false);
   let lastDraftEmailId = $state(null);
+  let replyFromSuggestion = $state(false);
 
   // When the email changes, check if there's a pending reply draft for it
   $effect(() => {
@@ -57,6 +58,7 @@
       inlineReplyOpen = false;
       inlineReplyBody = '';
       lastDraftEmailId = null;
+      replyFromSuggestion = false;
       return;
     }
 
@@ -64,6 +66,7 @@
     if (draft && draft.emailId === email.id) {
       inlineReplyOpen = true;
       inlineReplyBody = draft.body || '';
+      replyFromSuggestion = !!draft.body;
       lastDraftEmailId = email.id;
       // Clear the pending draft so it doesn't re-trigger
       pendingReplyDraft.set(null);
@@ -72,6 +75,7 @@
       inlineReplyOpen = false;
       inlineReplyBody = '';
       lastDraftEmailId = null;
+      replyFromSuggestion = false;
     }
   });
 
@@ -85,6 +89,7 @@
     inlineReplyOpen = false;
     inlineReplyBody = '';
     lastDraftEmailId = null;
+    replyFromSuggestion = false;
   }
 
   async function sendInlineReply() {
@@ -96,8 +101,15 @@
       let accountId = null;
       if (accountList.length === 1) {
         accountId = accountList[0].id;
+      } else if (accountList.length > 1 && email.account_email) {
+        // Match by account_email field to send from the correct account
+        const matched = accountList.find(a => a.email === email.account_email);
+        if (matched) {
+          accountId = matched.id;
+        } else {
+          accountId = accountList[0].id;
+        }
       } else if (accountList.length > 1) {
-        // Try to match by email address (account_email field from the email list)
         accountId = accountList[0].id;
       }
 
@@ -209,9 +221,10 @@
     if (!email) return;
     inlineReplyOpen = true;
     lastDraftEmailId = email.id;
-    // Don't overwrite if user already has text
-    if (!inlineReplyBody.trim()) {
-      inlineReplyBody = '';
+    // If user hasn't typed anything yet, pre-fill with suggested reply if available
+    if (!inlineReplyBody.trim() && email.suggested_reply) {
+      inlineReplyBody = email.suggested_reply;
+      replyFromSuggestion = true;
     }
   }
 
@@ -268,11 +281,15 @@
   }
 
   const categoryLabels = {
-    needs_response: '🔵 Needs Response',
     urgent: '🔴 Urgent',
     can_ignore: '⚪ Can Ignore',
     fyi: '🟢 FYI',
     awaiting_reply: '🟡 Awaiting Reply',
+  };
+
+  const emailTypeLabels = {
+    work: '💼 Work',
+    personal: '🏠 Personal',
   };
 
   // Helper to determine if we should show recipient instead of sender
@@ -297,6 +314,11 @@
         <div class="flex-1 min-w-0">
           <h2 class="text-lg font-semibold leading-tight" style="color: var(--text-primary)">{email.subject || '(no subject)'}</h2>
           <div class="flex items-center gap-2 mt-1.5 flex-wrap">
+            {#if email.ai_email_type}
+              <span class="inline-block text-xs px-2 py-0.5 rounded-full font-medium {email.ai_email_type === 'work' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400' : 'bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-400'}">
+                {emailTypeLabels[email.ai_email_type] || email.ai_email_type}
+              </span>
+            {/if}
             {#if email.ai_category}
               <span class="inline-block text-xs px-2 py-0.5 rounded-full font-medium" style="background: var(--bg-tertiary); color: var(--text-secondary)">
                 {categoryLabels[email.ai_category] || email.ai_category}
@@ -412,6 +434,15 @@
             </div>
           {/if}
           <div class="text-xs mt-0.5" style="color: var(--text-tertiary)">{formatFullDate(email.date)}</div>
+          {#if email.account_email && $accountColorMap[email.account_email]}
+            <div class="flex items-center gap-1.5 mt-1">
+              <span
+                class="w-2 h-2 rounded-full shrink-0"
+                style="background: {$accountColorMap[email.account_email].bg}"
+              ></span>
+              <span class="text-[11px]" style="color: var(--text-tertiary)">via {email.account_email}</span>
+            </div>
+          {/if}
         </div>
       </div>
     </div>
@@ -574,6 +605,14 @@
             </button>
           </div>
         </div>
+        {#if replyFromSuggestion}
+          <div class="flex items-center gap-1.5 mb-2 px-1">
+            <svg class="w-3.5 h-3.5 shrink-0" style="color: var(--color-accent-500)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+            </svg>
+            <span class="text-[11px] font-medium" style="color: var(--color-accent-600)">AI-suggested reply — edit as needed</span>
+          </div>
+        {/if}
         <textarea
           bind:value={inlineReplyBody}
           placeholder="Write your reply..."

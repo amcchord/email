@@ -26,9 +26,17 @@ class EmailSummary(BaseModel):
     account_email: Optional[str] = None
     ai_category: Optional[str] = None
     ai_priority: Optional[int] = None
+    ai_email_type: Optional[str] = None
     is_subscription: Optional[bool] = None
     needs_reply: Optional[bool] = None
     unsubscribe_info: Optional[dict] = None
+
+    # Thread digest fields (populated when a ThreadDigest exists for this thread)
+    thread_digest_type: Optional[str] = None       # conversation_type
+    thread_digest_summary: Optional[str] = None    # summary
+    thread_digest_outcome: Optional[str] = None    # resolved_outcome
+    thread_digest_resolved: Optional[bool] = None  # is_resolved
+    thread_digest_count: Optional[int] = None      # message_count from digest
 
     model_config = {"from_attributes": True}
 
@@ -46,6 +54,7 @@ class EmailDetail(EmailSummary):
     ai_summary: Optional[str] = None
     ai_action_items: Optional[list] = None
     ai_model_used: Optional[str] = None
+    suggested_reply: Optional[str] = None
 
 
 class AttachmentResponse(BaseModel):

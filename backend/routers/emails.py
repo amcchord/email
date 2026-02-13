@@ -46,6 +46,7 @@ async def list_emails(
     is_read: Optional[bool] = None,
     is_starred: Optional[bool] = None,
     ai_category: Optional[str] = None,
+    ai_email_type: Optional[str] = None,
     needs_reply: Optional[bool] = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -105,6 +106,13 @@ async def list_emails(
         query = query.where(AIAnalysis.category == ai_category)
         ai_joined = True
 
+    # AI email type filter (work/personal)
+    if ai_email_type:
+        if not ai_joined:
+            query = query.join(AIAnalysis, AIAnalysis.email_id == Email.id)
+            ai_joined = True
+        query = query.where(AIAnalysis.email_type == ai_email_type)
+
     # Needs reply filter
     if needs_reply is not None:
         if not ai_joined:
@@ -145,20 +153,51 @@ async def list_emails(
     result = await db.execute(query)
     emails = result.scalars().all()
 
+    # Batch-load ThreadDigest data for threads in this page
+    from backend.models.ai import ThreadDigest
+    thread_ids = list(set(e.gmail_thread_id for e in emails if e.gmail_thread_id))
+    digest_map = {}
+    if thread_ids:
+        digest_result = await db.execute(
+            select(ThreadDigest).where(
+                ThreadDigest.gmail_thread_id.in_(thread_ids),
+                ThreadDigest.account_id.in_(user_accounts.keys()),
+            )
+        )
+        for d in digest_result.scalars().all():
+            digest_map[d.gmail_thread_id] = d
+
     # Build response
     email_summaries = []
     for e in emails:
         ai_cat = None
         ai_pri = None
+        ai_etype = None
         is_sub = None
         needs_rpl = None
         unsub_info = None
         if e.ai_analysis:
             ai_cat = e.ai_analysis.category
             ai_pri = e.ai_analysis.priority
+            ai_etype = e.ai_analysis.email_type
             is_sub = e.ai_analysis.is_subscription
             needs_rpl = e.ai_analysis.needs_reply
             unsub_info = e.ai_analysis.unsubscribe_info
+
+        # Attach thread digest data if available
+        digest = digest_map.get(e.gmail_thread_id)
+        td_type = None
+        td_summary = None
+        td_outcome = None
+        td_resolved = None
+        td_count = None
+        if digest:
+            td_type = digest.conversation_type
+            td_summary = digest.summary
+            td_outcome = digest.resolved_outcome
+            td_resolved = digest.is_resolved
+            td_count = digest.message_count
+
         email_summaries.append(EmailSummary(
             id=e.id,
             gmail_message_id=e.gmail_message_id,
@@ -177,9 +216,15 @@ async def list_emails(
             account_email=user_accounts.get(e.account_id),
             ai_category=ai_cat,
             ai_priority=ai_pri,
+            ai_email_type=ai_etype,
             is_subscription=is_sub,
             needs_reply=needs_rpl,
             unsubscribe_info=unsub_info,
+            thread_digest_type=td_type,
+            thread_digest_summary=td_summary,
+            thread_digest_outcome=td_outcome,
+            thread_digest_resolved=td_resolved,
+            thread_digest_count=td_count,
         ))
 
     total_pages = (total + page_size - 1) // page_size if total else 0
@@ -232,19 +277,23 @@ async def get_email(
     ai_actions = None
     ai_cat = None
     ai_pri = None
+    ai_etype = None
     is_sub = None
     needs_rpl = None
     unsub_info = None
     ai_model = None
+    ai_suggested_reply = None
     if email.ai_analysis:
         ai_summary = email.ai_analysis.summary
         ai_actions = email.ai_analysis.action_items
         ai_cat = email.ai_analysis.category
         ai_pri = email.ai_analysis.priority
+        ai_etype = email.ai_analysis.email_type
         is_sub = email.ai_analysis.is_subscription
         needs_rpl = email.ai_analysis.needs_reply
         unsub_info = email.ai_analysis.unsubscribe_info
         ai_model = email.ai_analysis.model_used
+        ai_suggested_reply = email.ai_analysis.suggested_reply
 
     return EmailDetail(
         id=email.id,
@@ -274,10 +323,12 @@ async def get_email(
         ai_action_items=ai_actions,
         ai_category=ai_cat,
         ai_priority=ai_pri,
+        ai_email_type=ai_etype,
         is_subscription=is_sub,
         needs_reply=needs_rpl,
         unsubscribe_info=unsub_info,
         ai_model_used=ai_model,
+        suggested_reply=ai_suggested_reply,
     )
 
 

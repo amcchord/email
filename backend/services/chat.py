@@ -193,9 +193,32 @@ WEB_SEARCH_TOOL = {
 # System prompts
 # ---------------------------------------------------------------------------
 
-PLAN_SYSTEM_PROMPT = """You are a research planner for an email assistant. The user will ask a question about their emails. Your job is to break this into a structured research plan with PARALLEL execution support.
+PLAN_SYSTEM_PROMPT = """You are a research planner for an email assistant. The user will ask a question about their emails. Your job is EITHER to break it into a structured research plan OR to ask the user a clarifying question if the request is too vague or ambiguous.
 
-Produce a JSON object with a "tasks" array. Each task must have:
+IMPORTANT: If the question is unclear, too broad, or you're unsure what the user wants, ASK for clarification instead of guessing. It is MUCH better to ask a quick question than to run a 5-minute search in the wrong direction. Examples of when to ask:
+- "Find my emails" -- too vague, ask what they're looking for
+- "What did I buy?" -- ask for a time period, category, or retailer
+- "Tell me about that thing" -- ask what thing they mean
+- Ambiguous pronouns or references with no context
+
+However, do NOT ask if the question is reasonably clear -- even if imperfect. A question like "What furniture did I order in 2020?" is clear enough to plan for.
+
+RESPONSE FORMAT -- respond with ONLY a JSON object, one of two forms:
+
+Form 1 -- Clarification needed:
+{
+  "clarification": "Your question to the user here. Be specific about what you need to know."
+}
+
+Form 2 -- Research plan:
+{
+  "tasks": [
+    {"id": 1, "description": "...", "search_strategy": "...", "depends_on": []},
+    ...
+  ]
+}
+
+Each task in the plan must have:
 - "id": sequential integer starting at 1
 - "description": what to do in this step
 - "search_strategy": how to approach this using the available tools
@@ -217,17 +240,7 @@ STRATEGY for order/purchase/delivery questions:
 4. THEN (depends_on: [2, 3]): Read and cross-reference emails to verify details.
 5. FINALLY: Web search for images or supplementary info if needed.
 
-When the user asks about a specific time period, also search slightly beyond (a few months after) to catch delayed confirmations. Extend the date range in your date filters.
-
-Respond with ONLY the JSON object, no other text. Example:
-{
-  "tasks": [
-    {"id": 1, "description": "List sender domains...", "search_strategy": "...", "depends_on": []},
-    {"id": 2, "description": "Search for address...", "search_strategy": "...", "depends_on": []},
-    {"id": 3, "description": "Search retailers found in task 1...", "search_strategy": "...", "depends_on": [1]},
-    {"id": 4, "description": "Read and verify...", "search_strategy": "...", "depends_on": [2, 3]}
-  ]
-}"""
+When the user asks about a specific time period, also search slightly beyond (a few months after) to catch delayed confirmations. Extend the date range in your date filters."""
 
 EXECUTE_SYSTEM_PROMPT = """You are a research assistant working through a specific task from a research plan about a user's emails.
 
@@ -1132,22 +1145,55 @@ class ChatService:
         user: User,
         account_ids: list[int],
         db: AsyncSession,
+        conversation_history: list[dict] = None,
+        account_contexts: list[dict] = None,
     ) -> AsyncGenerator[str, None]:
-        """Run the three-phase Plan-Execute-Verify agent. Yields SSE strings."""
+        """Run the three-phase Plan-Execute-Verify agent. Yields SSE strings.
+
+        account_contexts: list of {"email": ..., "description": ...} for each connected account.
+        """
         client = self._get_async_client()
         plan_model, execute_model, verify_model = self._get_models(user)
         tools = self._build_tools()
         total_tokens = 0
 
+        # Build user context supplement for system prompts
+        user_context_block = ""
+        about_me = getattr(user, "about_me", None)
+        if about_me or account_contexts:
+            parts = ["\n\nUSER CONTEXT (use this to understand the user's role, priorities, and how to tailor your answers):"]
+            if about_me:
+                parts.append(f"About the user: {about_me}")
+            if account_contexts:
+                parts.append("Connected email accounts:")
+                for ac in account_contexts:
+                    desc = ac.get("description")
+                    if desc:
+                        parts.append(f"  - {ac['email']}: {desc}")
+                    else:
+                        parts.append(f"  - {ac['email']}")
+            user_context_block = "\n".join(parts)
+
+        plan_system = PLAN_SYSTEM_PROMPT + user_context_block
+        verify_system = VERIFY_SYSTEM_PROMPT + user_context_block
+
         # ─── PHASE 1: PLAN ────────────────────────────────────────────
         yield _sse_event("phase", {"phase": "plan"})
+
+        # Build plan messages with conversation history for context
+        plan_messages = []
+        if conversation_history:
+            for msg in conversation_history:
+                plan_messages.append({"role": msg["role"], "content": msg["content"]})
+        # Always end with the current user query
+        plan_messages.append({"role": "user", "content": user_query})
 
         try:
             plan_response = await client.messages.create(
                 model=plan_model,
                 max_tokens=4096,
-                system=PLAN_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_query}],
+                system=plan_system,
+                messages=plan_messages,
             )
             total_tokens += plan_response.usage.input_tokens + plan_response.usage.output_tokens
 
@@ -1157,6 +1203,14 @@ class ChatService:
                 plan_text = "\n".join(lines[1:-1])
 
             plan_data = json.loads(plan_text)
+
+            # Check if the model is asking for clarification
+            if "clarification" in plan_data and not plan_data.get("tasks"):
+                question = plan_data["clarification"]
+                yield _sse_event("clarification", {"question": question})
+                yield _sse_event("done", {"tokens_used": total_tokens, "needs_reply": True})
+                return
+
             tasks = plan_data.get("tasks", [])[:MAX_TASKS]
 
         except (json.JSONDecodeError, Exception) as e:
@@ -1269,7 +1323,7 @@ class ChatService:
             verify_response = await client.messages.create(
                 model=verify_model,
                 max_tokens=16000,
-                system=VERIFY_SYSTEM_PROMPT,
+                system=verify_system,
                 messages=[{"role": "user", "content": verify_prompt}],
             )
             total_tokens += verify_response.usage.input_tokens + verify_response.usage.output_tokens

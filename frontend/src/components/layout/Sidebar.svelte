@@ -1,5 +1,5 @@
 <script>
-  import { currentPage, currentMailbox, sidebarCollapsed, composeOpen, accounts, selectedAccountId, labels as labelsStore, syncStatus, smartFilter, todos } from '../../lib/stores.js';
+  import { currentPage, currentMailbox, sidebarCollapsed, composeOpen, accounts, selectedAccountId, labels as labelsStore, syncStatus, smartFilter, todos, accountColorMap } from '../../lib/stores.js';
   import { api } from '../../lib/api.js';
   import { onMount } from 'svelte';
 
@@ -15,6 +15,11 @@
     { id: 'awaiting_reply', label: 'Waiting On', color: 'bg-amber-500' },
     { id: 'fyi', label: 'FYI', color: 'bg-emerald-500' },
     { id: 'can_ignore', label: 'Low Priority', color: 'bg-gray-400' },
+  ];
+
+  const emailTypes = [
+    { id: 'work', label: 'Work', color: 'bg-purple-500' },
+    { id: 'personal', label: 'Personal', color: 'bg-teal-500' },
   ];
 
   let categoryLabels = $derived(
@@ -71,7 +76,7 @@
     const sf = $smartFilter;
     if (!sf) return false;
     if (filter.type !== sf.type) return false;
-    if (filter.type === 'ai_category') return filter.value === sf.value;
+    if (filter.type === 'ai_category' || filter.type === 'ai_email_type') return filter.value === sf.value;
     return true;
   }
 
@@ -199,6 +204,20 @@
                 <span class="truncate">{cat.label}</span>
               </button>
             {/each}
+            <!-- Email Type (Work / Personal) -->
+            {#each emailTypes as et}
+              <button
+                onclick={() => selectSmartFilter({ type: 'ai_email_type', value: et.id })}
+                class="w-full flex items-center gap-3 px-3 h-7 rounded-md text-sm transition-fast"
+                class:font-medium={isSmartFilterActive({ type: 'ai_email_type', value: et.id })}
+                style="color: {isSmartFilterActive({ type: 'ai_email_type', value: et.id }) ? 'var(--text-primary)' : 'var(--text-secondary)'}; background: {isSmartFilterActive({ type: 'ai_email_type', value: et.id }) ? 'var(--bg-hover)' : 'transparent'}"
+              >
+                <span class="w-[16px] h-[16px] flex items-center justify-center shrink-0">
+                  <span class="w-2.5 h-2.5 rounded-full {et.color}"></span>
+                </span>
+                <span class="truncate">{et.label}</span>
+              </button>
+            {/each}
           </div>
         {/if}
       </div>
@@ -280,31 +299,74 @@
 
     <!-- Accounts section -->
     {#if accountList.length > 0 && !$sidebarCollapsed}
-      <div class="mt-6 mb-2 px-3">
+      <div class="mt-6 mb-2 px-3 flex items-center justify-between">
         <span class="text-[11px] font-semibold tracking-wider uppercase" style="color: var(--text-tertiary)">Accounts</span>
       </div>
+      <!-- All Accounts button (shown when filtering by a single account) -->
+      {#if $selectedAccountId !== null}
+        <button
+          onclick={() => selectedAccountId.set(null)}
+          class="w-full flex items-center gap-3 px-3 h-8 rounded-md text-sm transition-fast mb-0.5"
+          style="color: var(--text-secondary); background: transparent"
+        >
+          <div class="w-[18px] h-[18px] rounded-full flex items-center justify-center shrink-0" style="background: var(--bg-tertiary)">
+            <svg class="w-3 h-3" style="color: var(--text-tertiary)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z" />
+            </svg>
+          </div>
+          <span class="truncate">All Accounts</span>
+        </button>
+      {/if}
       {#each accountList as acct}
+        {@const acctColor = $accountColorMap[acct.email]}
         <button
           onclick={() => selectedAccountId.set($selectedAccountId === acct.id ? null : acct.id)}
-          class="w-full flex items-center gap-3 px-3 h-8 rounded-md text-sm transition-fast"
-          style="color: {$selectedAccountId === acct.id ? 'var(--text-primary)' : 'var(--text-secondary)'}; background: {$selectedAccountId === acct.id ? 'var(--bg-hover)' : 'transparent'}"
+          class="w-full flex items-center gap-3 px-3 rounded-md text-sm transition-fast"
+          style="color: {$selectedAccountId === acct.id ? 'var(--text-primary)' : 'var(--text-secondary)'}; background: {$selectedAccountId === acct.id ? 'var(--bg-hover)' : 'transparent'}; height: {acct.description ? '40px' : '32px'}"
+          title={acct.email}
         >
           <div class="relative w-[18px] h-[18px] shrink-0">
-            <div class="w-[18px] h-[18px] rounded-full bg-accent-500/20 flex items-center justify-center text-[10px] font-bold" style="color: var(--color-accent-600)">
+            <div class="w-[18px] h-[18px] rounded-full flex items-center justify-center text-[10px] font-bold text-white" style="background: {acctColor ? acctColor.bg : 'var(--color-accent-500)'}">
               {acct.email[0].toUpperCase()}
             </div>
             <!-- Sync status dot -->
             {#if getAccountSyncState(acct) === 'syncing'}
               <span class="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full animate-pulse" style="background: var(--color-accent-500); box-shadow: 0 0 0 1.5px var(--bg-secondary)"></span>
+            {:else if getAccountSyncState(acct) === 'rate_limited'}
+              <span class="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full" style="background: #f59e0b; box-shadow: 0 0 0 1.5px var(--bg-secondary)"></span>
             {:else if getAccountSyncState(acct) === 'error'}
               <span class="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full" style="background: #ef4444; box-shadow: 0 0 0 1.5px var(--bg-secondary)"></span>
             {:else}
               <span class="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full" style="background: #22c55e; box-shadow: 0 0 0 1.5px var(--bg-secondary)"></span>
             {/if}
           </div>
-          <span class="truncate">{acct.email}</span>
+          <div class="flex flex-col min-w-0 text-left">
+            {#if acct.description}
+              <span class="text-sm truncate leading-tight">{acct.description}</span>
+              <span class="text-[10px] truncate leading-tight" style="color: var(--text-tertiary)">{acct.email}</span>
+            {:else}
+              <span class="truncate">{acct.email}</span>
+            {/if}
+          </div>
         </button>
       {/each}
+    {/if}
+
+    <!-- Collapsed sidebar: account color dots -->
+    {#if accountList.length > 1 && $sidebarCollapsed}
+      <div class="mt-4 flex flex-col items-center gap-1.5 px-2">
+        {#each accountList as acct}
+          {@const acctColor = $accountColorMap[acct.email]}
+          <button
+            onclick={() => selectedAccountId.set($selectedAccountId === acct.id ? null : acct.id)}
+            class="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white transition-fast"
+            style="background: {acctColor ? acctColor.bg : 'var(--color-accent-500)'}; opacity: {$selectedAccountId === null || $selectedAccountId === acct.id ? 1 : 0.4}; box-shadow: {$selectedAccountId === acct.id ? '0 0 0 2px var(--bg-secondary), 0 0 0 3px ' + (acctColor ? acctColor.bg : 'var(--color-accent-500)') : 'none'}"
+            title={acct.description || acct.email}
+          >
+            {acct.email[0].toUpperCase()}
+          </button>
+        {/each}
+      </div>
     {/if}
   </nav>
 

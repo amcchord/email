@@ -109,7 +109,14 @@ class AIService:
             messages=messages,
         )
 
-    async def analyze_email(self, email_id: int, db: Optional[AsyncSession] = None) -> Optional[AIAnalysis]:
+    async def analyze_email(
+        self,
+        email_id: int,
+        db: Optional[AsyncSession] = None,
+        user_context: Optional[str] = None,
+        account_description: Optional[str] = None,
+        account_email: Optional[str] = None,
+    ) -> Optional[AIAnalysis]:
         """Analyze a single email with Claude."""
         close_session = False
         if db is None:
@@ -146,19 +153,82 @@ class AIService:
             if unsub_info:
                 unsub_hint = "\nNote: This email has a List-Unsubscribe header (it is likely a subscription/marketing email)."
 
-            prompt = f"""Analyze this email and provide a structured analysis.
+            # Build user context preamble
+            context_preamble = ""
+            context_parts = []
+            if account_email:
+                context_parts.append(
+                    f"You are analyzing emails for the inbox of {account_email}. "
+                    f"This person is the mailbox owner. Any suggested_reply must be written "
+                    f"FROM {account_email}'s perspective (as if they are writing it), never as "
+                    f"if someone else is replying to them."
+                )
+            if user_context:
+                context_parts.append(f"About the user: {user_context}")
+            if account_description:
+                context_parts.append(f"This email is from their account used for: {account_description}")
+            if context_parts:
+                context_preamble = "\n".join(context_parts) + "\n\nUse this context to prioritize and categorize the email appropriately.\n"
+
+            # Compute email age hint so the AI treats old emails appropriately
+            age_hint = ""
+            if email.date:
+                email_age = datetime.now(timezone.utc) - email.date
+                age_days = email_age.days
+                if age_days > 30:
+                    age_hint = (
+                        f"\nNote: This email is {age_days} days old. "
+                        f"Emails older than 30 days should NOT be considered urgent or high priority — "
+                        f"they are effectively expired. Set priority to 0 (low) and do not use the 'urgent' category."
+                    )
+                elif age_days > 7:
+                    age_hint = f"\nNote: This email is {age_days} days old. Consider this age when assessing urgency."
+
+            # Build thread context so the AI can see if this is part of a
+            # conversation and whether the user already replied.
+            thread_context = ""
+            if email.gmail_thread_id:
+                thread_result = await db.execute(
+                    select(Email)
+                    .where(
+                        Email.gmail_thread_id == email.gmail_thread_id,
+                        Email.account_id == email.account_id,
+                        Email.id != email.id,
+                    )
+                    .order_by(desc(Email.date))
+                    .limit(5)
+                )
+                thread_emails = thread_result.scalars().all()
+                if thread_emails:
+                    lines = []
+                    for te in reversed(thread_emails):
+                        direction = "[Sent by you]" if te.is_sent else "[Received]"
+                        date_str = te.date.strftime("%Y-%m-%d %H:%M") if te.date else "unknown date"
+                        snippet = (te.snippet or "")[:120]
+                        lines.append(f"  {direction} {date_str} — {te.from_name or te.from_address}: {snippet}")
+                    thread_context = (
+                        "\n\nThread context (other messages in this conversation, oldest first):\n"
+                        + "\n".join(lines)
+                        + "\n\nUse this thread context to determine if the user has already replied "
+                        "or if the conversation has moved on. If the user already replied after "
+                        "this email, set needs_reply to false."
+                    )
+
+            prompt = f"""{context_preamble}Analyze this email and provide a structured analysis.
 
 From: {email.from_name or ''} <{email.from_address or ''}>
 To: {json.dumps(email.to_addresses or [])}
 Subject: {email.subject or '(no subject)'}
 Date: {email.date}
-{unsub_hint}
+{unsub_hint}{age_hint}{thread_context}
 Body:
 {body}
 
 Respond with ONLY valid JSON in this exact format:
 {{
-    "category": "<one of: needs_response, can_ignore, fyi, urgent, awaiting_reply>",
+    "category": "<one of: can_ignore, fyi, urgent, awaiting_reply>",
+    "email_type": "<one of: work, personal>",
+    "conversation_type": "<one of: scheduling, discussion, notification, transactional, other>",
     "priority": <0-3 where 0=low 1=normal 2=high 3=urgent>,
     "summary": "<1-2 sentence summary of what this email is about>",
     "action_items": ["<list of specific action items or requests>"],
@@ -172,7 +242,14 @@ Respond with ONLY valid JSON in this exact format:
     "suggested_reply": "<brief suggested reply if response needed, or null>",
     "is_subscription": <true if this is a newsletter, marketing, automated notification, mailing list, or bulk email; false if personal/direct>,
     "needs_reply": <true if the recipient should write back to this email; false if no reply needed>
-}}"""
+}}
+
+conversation_type guide:
+- "scheduling": meeting requests, availability discussions, calendar invites, rescheduling, booking confirmations
+- "discussion": back-and-forth conversation, brainstorming, debate, Q&A threads
+- "notification": automated alerts, system notifications, status updates, delivery updates
+- "transactional": receipts, order confirmations, password resets, account verification
+- "other": anything that does not fit the above categories"""
 
             response = await self._call_claude(
                 model=self.model,
@@ -193,6 +270,8 @@ Respond with ONLY valid JSON in this exact format:
             analysis = AIAnalysis(
                 email_id=email_id,
                 category=analysis_data.get("category", "fyi"),
+                email_type=analysis_data.get("email_type", "personal"),
+                conversation_type=analysis_data.get("conversation_type", "other"),
                 priority=analysis_data.get("priority", 1),
                 summary=analysis_data.get("summary"),
                 action_items=analysis_data.get("action_items", []),
@@ -222,7 +301,12 @@ Respond with ONLY valid JSON in this exact format:
             if close_session:
                 await db.__aexit__(None, None, None)
 
-    async def analyze_thread(self, thread_id: str) -> Optional[dict]:
+    async def analyze_thread(
+        self,
+        thread_id: str,
+        user_context: Optional[str] = None,
+        account_description: Optional[str] = None,
+    ) -> Optional[dict]:
         """Analyze an entire thread for context."""
         async with async_session() as db:
             result = await db.execute(
@@ -234,27 +318,49 @@ Respond with ONLY valid JSON in this exact format:
 
             thread_text = ""
             for e in emails:
+                direction = "[SENT]" if e.is_sent else "[RECEIVED]"
                 body = e.body_text or e.snippet or ""
                 if len(body) > 2000:
                     body = body[:2000] + "..."
-                thread_text += f"\n---\nFrom: {e.from_name} <{e.from_address}>\nDate: {e.date}\nSubject: {e.subject}\n\n{body}\n"
+                thread_text += f"\n---\n{direction} From: {e.from_name} <{e.from_address}>\nDate: {e.date}\nSubject: {e.subject}\n\n{body}\n"
 
             if len(thread_text) > 15000:
                 thread_text = thread_text[:15000] + "\n... (truncated)"
 
-            prompt = f"""Analyze this email thread and provide a comprehensive summary.
+            # Build user context preamble
+            context_preamble = ""
+            if user_context or account_description:
+                context_parts = []
+                if user_context:
+                    context_parts.append(f"About the user: {user_context}")
+                if account_description:
+                    context_parts.append(f"This thread is from their account used for: {account_description}")
+                context_preamble = "\n".join(context_parts) + "\n\nUse this context to provide a more relevant summary.\n\n"
+
+            prompt = f"""{context_preamble}Analyze this email thread and provide a comprehensive summary.
 
 {thread_text}
 
 Respond with ONLY valid JSON:
 {{
     "thread_summary": "<comprehensive summary of the entire thread>",
+    "conversation_type": "<one of: scheduling, discussion, notification, transactional, other>",
+    "resolved_outcome": "<if scheduling: the final confirmed time/place/details, e.g. 'Meeting confirmed for Wednesday 2pm at Coffee Shop'. If discussion: the conclusion reached. null if unresolved or not applicable>",
+    "is_resolved": <true if the conversation has reached a conclusion or agreement, false if still open/pending>,
     "key_decisions": ["<any decisions made>"],
+    "key_topics": ["<main topics discussed>"],
     "open_questions": ["<unresolved questions>"],
     "action_items": ["<action items with who is responsible>"],
     "latest_status": "<current status of the conversation>",
     "participants_context": {{"<email>": "<role/context for each participant>"}}
-}}"""
+}}
+
+conversation_type guide:
+- "scheduling": meeting requests, availability discussions, calendar invites, rescheduling, booking confirmations
+- "discussion": back-and-forth conversation, brainstorming, debate, Q&A threads
+- "notification": automated alerts, system notifications, status updates
+- "transactional": receipts, order confirmations, password resets
+- "other": anything that does not fit the above categories"""
 
             try:
                 response = await self._call_claude(
@@ -274,20 +380,155 @@ Respond with ONLY valid JSON:
                 logger.error(f"Thread analysis error: {e}")
                 return None
 
-    async def batch_categorize(self, email_ids: list[int]):
-        """Batch categorize emails with parallel processing."""
+    async def generate_thread_digest(
+        self,
+        thread_id: str,
+        account_id: int,
+        user_context: Optional[str] = None,
+        account_description: Optional[str] = None,
+    ) -> Optional["ThreadDigest"]:
+        """Analyze a thread and persist the result as a ThreadDigest row.
+
+        Creates or updates the digest for the given gmail_thread_id.
+        Only processes threads with 2+ messages.
+        """
+        from backend.models.ai import ThreadDigest
+
+        async with async_session() as db:
+            # Load thread emails to gather metadata
+            result = await db.execute(
+                select(Email).where(
+                    Email.gmail_thread_id == thread_id,
+                    Email.account_id == account_id,
+                    Email.is_trash == False,
+                    Email.is_spam == False,
+                ).order_by(Email.date)
+            )
+            emails = result.scalars().all()
+
+            if len(emails) < 2:
+                return None
+
+            # Gather metadata from the emails
+            subject = emails[0].subject or "(no subject)"
+            message_count = len(emails)
+            latest_date = emails[-1].date
+            participants = []
+            seen_addrs = set()
+            for e in emails:
+                addr = e.from_address
+                if addr and addr not in seen_addrs:
+                    seen_addrs.add(addr)
+                    participants.append({
+                        "name": e.from_name or addr,
+                        "address": addr,
+                    })
+
+            # Call the thread analysis
+            analysis = await self.analyze_thread(
+                thread_id,
+                user_context=user_context,
+                account_description=account_description,
+            )
+
+            if not analysis:
+                logger.warning(f"Thread analysis returned None for thread {thread_id}")
+                return None
+
+            # Upsert the ThreadDigest row
+            existing_result = await db.execute(
+                select(ThreadDigest).where(
+                    ThreadDigest.account_id == account_id,
+                    ThreadDigest.gmail_thread_id == thread_id,
+                )
+            )
+            digest = existing_result.scalar_one_or_none()
+
+            if digest:
+                digest.conversation_type = analysis.get("conversation_type", "other")
+                digest.summary = analysis.get("thread_summary")
+                digest.resolved_outcome = analysis.get("resolved_outcome")
+                digest.is_resolved = analysis.get("is_resolved", False)
+                digest.key_topics = analysis.get("key_topics", [])
+                digest.message_count = message_count
+                digest.participants = participants
+                digest.subject = subject
+                digest.latest_date = latest_date
+                digest.model_used = self.model
+                digest.updated_at = datetime.now(timezone.utc)
+            else:
+                digest = ThreadDigest(
+                    account_id=account_id,
+                    gmail_thread_id=thread_id,
+                    conversation_type=analysis.get("conversation_type", "other"),
+                    summary=analysis.get("thread_summary"),
+                    resolved_outcome=analysis.get("resolved_outcome"),
+                    is_resolved=analysis.get("is_resolved", False),
+                    key_topics=analysis.get("key_topics", []),
+                    message_count=message_count,
+                    participants=participants,
+                    subject=subject,
+                    latest_date=latest_date,
+                    model_used=self.model,
+                )
+                db.add(digest)
+
+            await db.commit()
+            await db.refresh(digest)
+            logger.info(f"Generated thread digest for {thread_id}: type={digest.conversation_type}, resolved={digest.is_resolved}")
+            return digest
+
+    async def batch_categorize(
+        self,
+        email_ids: list[int],
+        on_progress=None,
+        user_context: Optional[str] = None,
+        account_descriptions: Optional[dict[int, str]] = None,
+        account_emails: Optional[dict[int, str]] = None,
+    ):
+        """Batch categorize emails with parallel processing.
+
+        account_descriptions: mapping of account_id -> description for context.
+        account_emails: mapping of account_id -> email address for sender identity.
+        """
         sem = asyncio.Semaphore(CONCURRENCY)
+
+        # Pre-load account_id for each email so we can look up the description/email
+        acct_map: dict[int, int] = {}
+        if account_descriptions or account_emails:
+            async with async_session() as db:
+                result = await db.execute(
+                    select(Email.id, Email.account_id).where(Email.id.in_(email_ids))
+                )
+                for eid, aid in result.all():
+                    acct_map[eid] = aid
 
         async def process_one(eid):
             async with sem:
                 try:
-                    await self.analyze_email(eid)
+                    acct_id = acct_map.get(eid)
+                    acct_desc = None
+                    acct_email = None
+                    if account_descriptions and acct_id is not None:
+                        acct_desc = account_descriptions.get(acct_id)
+                    if account_emails and acct_id is not None:
+                        acct_email = account_emails.get(acct_id)
+                    await self.analyze_email(
+                        eid,
+                        user_context=user_context,
+                        account_description=acct_desc,
+                        account_email=acct_email,
+                    )
+                    if on_progress:
+                        await on_progress()
                 except Exception as e:
                     logger.error(f"Batch categorize error for {eid}: {e}")
+                    if on_progress:
+                        await on_progress()
 
         await asyncio.gather(*[process_one(eid) for eid in email_ids], return_exceptions=True)
 
-    async def draft_action_reply(self, todo_id: int) -> dict:
+    async def draft_action_reply(self, todo_id: int, user_context: Optional[str] = None) -> dict:
         """Draft a reply for a todo item's action item, using the source email as context."""
         from backend.models.todo import TodoItem
 
@@ -309,7 +550,12 @@ Respond with ONLY valid JSON:
             if len(body) > 3000:
                 body = body[:3000] + "..."
 
-            prompt = f"""You need to draft a reply to an email to address a specific action item.
+            # Build user context preamble for reply drafting
+            context_preamble = ""
+            if user_context:
+                context_preamble = f"About the person writing this reply: {user_context}\n\nUse this context to write a reply that matches their role and tone.\n\n"
+
+            prompt = f"""{context_preamble}You need to draft a reply to an email to address a specific action item.
 
 Original email:
 From: {email.from_name or ''} <{email.from_address or ''}>
@@ -352,23 +598,42 @@ Write a concise, professional reply that addresses this specific action item. Wr
                 await db.commit()
                 raise
 
-    async def auto_categorize_newest(self, account_id: int, limit: int = 1000) -> int:
-        """Categorize the newest `limit` emails for an account that haven't been analyzed yet.
+    async def auto_categorize_newest(
+        self,
+        account_id: int,
+        since_date: Optional[datetime] = None,
+        limit: int = None,
+        on_progress=None,
+        user_context: Optional[str] = None,
+        account_description: Optional[str] = None,
+        account_email: Optional[str] = None,
+    ) -> int:
+        """Categorize unanalyzed emails for an account.
+
+        If since_date is provided, only emails on or after that date are considered.
+        If limit is provided, caps the number of emails to process.
+        If neither is provided, processes all unanalyzed emails.
 
         Uses parallel processing with a concurrency semaphore for speed.
         Returns the count of emails analyzed.
         """
         async with async_session() as db:
-            # Get the newest `limit` emails that don't have an AIAnalysis row
+            # Get unanalyzed emails that don't have an AIAnalysis row
             subquery = select(AIAnalysis.email_id)
-            result = await db.execute(
-                select(Email.id).where(
-                    Email.account_id == account_id,
-                    ~Email.id.in_(subquery),
-                    Email.is_trash == False,
-                    Email.is_spam == False,
-                ).order_by(desc(Email.date)).limit(limit)
-            )
+            where_clauses = [
+                Email.account_id == account_id,
+                ~Email.id.in_(subquery),
+                Email.is_trash == False,
+                Email.is_spam == False,
+            ]
+            if since_date is not None:
+                where_clauses.append(Email.date >= since_date)
+
+            query = select(Email.id).where(*where_clauses).order_by(desc(Email.date))
+            if limit is not None:
+                query = query.limit(limit)
+
+            result = await db.execute(query)
             email_ids = [r[0] for r in result.all()]
 
         if not email_ids:
@@ -384,11 +649,20 @@ Write a concise, professional reply that addresses this specific action item. Wr
             nonlocal analyzed
             async with sem:
                 try:
-                    result = await self.analyze_email(eid)
+                    result = await self.analyze_email(
+                        eid,
+                        user_context=user_context,
+                        account_description=account_description,
+                        account_email=account_email,
+                    )
                     if result:
                         analyzed += 1
+                    if on_progress:
+                        await on_progress()
                 except Exception as e:
                     logger.error(f"Auto-categorize error for email {eid}: {e}")
+                    if on_progress:
+                        await on_progress()
 
         await asyncio.gather(*[process_one(eid) for eid in email_ids], return_exceptions=True)
 

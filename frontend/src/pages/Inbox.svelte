@@ -67,6 +67,8 @@
           params.needs_reply = true;
         } else if (sf.type === 'ai_category') {
           params.ai_category = sf.value;
+        } else if (sf.type === 'ai_email_type') {
+          params.ai_email_type = sf.value;
         }
       }
       const result = await api.listEmails(params);

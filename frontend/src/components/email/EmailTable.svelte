@@ -1,5 +1,7 @@
 <script>
   import { onMount } from 'svelte';
+  import { slide } from 'svelte/transition';
+  import { accountColorMap, selectedAccountId } from '../../lib/stores.js';
 
   let {
     emails = [],
@@ -16,10 +18,24 @@
     onLoadMore = null,
   } = $props();
 
+  let showAccountCol = $derived($selectedAccountId === null);
+
   let selectedIds = $state(new Set());
+  let expandedThreads = $state(new Set());
   let selectAll = $state(false);
   let sentinelEl = $state(null);
   let observer = null;
+
+  function toggleThread(threadId, event) {
+    event.stopPropagation();
+    const next = new Set(expandedThreads);
+    if (next.has(threadId)) {
+      next.delete(threadId);
+    } else {
+      next.add(threadId);
+    }
+    expandedThreads = next;
+  }
 
   // Column widths (px). Checkbox and star are fixed.
   const savedWidths = (() => {
@@ -114,11 +130,15 @@
   }
 
   const categoryColors = {
-    needs_response: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400',
     urgent: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400',
     can_ignore: 'bg-surface-100 text-surface-500 dark:bg-surface-800 dark:text-surface-500',
     fyi: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400',
     awaiting_reply: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400',
+  };
+
+  const emailTypeColors = {
+    work: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400',
+    personal: 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-400',
   };
 
   function colStyle(col) {
@@ -159,6 +179,52 @@
     }
     return result;
   });
+
+  // For digested threads, ALWAYS hide non-first emails from their natural position.
+  // When expanded, we render them grouped under the header instead.
+  let hiddenDigestEmails = $derived.by(() => {
+    const hidden = new Set();
+    const seenDigestThreads = {};
+    for (const e of emails) {
+      const tid = e.gmail_thread_id;
+      if (!tid || !e.thread_digest_type) continue;
+      if (seenDigestThreads[tid]) {
+        hidden.add(e.id);
+      } else {
+        seenDigestThreads[tid] = true;
+      }
+    }
+    return hidden;
+  });
+
+  // Map of threadId -> all emails in that thread, sorted by date (for expanded rendering)
+  let digestThreadEmails = $derived.by(() => {
+    const map = {};
+    for (const e of emails) {
+      const tid = e.gmail_thread_id;
+      if (!tid || !e.thread_digest_type) continue;
+      if (!map[tid]) {
+        map[tid] = [];
+      }
+      map[tid].push(e);
+    }
+    for (const tid of Object.keys(map)) {
+      map[tid].sort((a, b) => new Date(a.date) - new Date(b.date));
+    }
+    return map;
+  });
+
+  const digestTypeConfig = {
+    scheduling: { label: 'Scheduling', classes: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400' },
+    discussion: { label: 'Discussion', classes: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400' },
+    notification: { label: 'Notification', classes: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400' },
+    transactional: { label: 'Transactional', classes: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400' },
+    other: { label: 'Thread', classes: 'bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-400' },
+  };
+
+  function getDigestConfig(type) {
+    return digestTypeConfig[type] || digestTypeConfig.other;
+  }
 
   // Get primary display name/address for email list
   function getPrimaryDisplayInfo(email, showRecipient) {
@@ -259,6 +325,11 @@
             </th>
             <!-- Star col (fixed) -->
             <th class="px-1 py-2" style="width: 32px; min-width: 32px; max-width: 32px"></th>
+            <!-- Account col (only in unified inbox) -->
+            {#if showAccountCol}
+              <th class="px-2 py-2 text-center text-xs font-semibold uppercase tracking-wider" style="color: var(--text-tertiary); width: 36px; min-width: 36px; max-width: 36px">
+              </th>
+            {/if}
             <!-- From / To -->
             <th class="relative px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-tertiary); {colStyle('from')}">
               {shouldShowRecipient(mailbox) ? 'To' : 'From'}
@@ -285,88 +356,195 @@
         </thead>
         <tbody>
           {#each emails as email (email.id)}
-            <!-- svelte-ignore a11y_click_events_have_key_events -->
-            <tr
-              class="border-b cursor-pointer transition-fast"
-              style="border-color: var(--border-subtle); background: {selectedId === email.id ? 'var(--bg-hover)' : 'var(--bg-secondary)'}"
-              onclick={() => onSelect && onSelect(email.id)}
-            >
-              <td class="px-3 py-2" style="width: 40px">
-                <button
-                  onclick={(e) => toggleSelect(email.id, e)}
-                  class="w-4 h-4 rounded border flex items-center justify-center transition-fast"
-                  style="border-color: var(--border-color); background: {selectedIds.has(email.id) ? 'var(--color-accent-500)' : 'transparent'}"
-                >
-                  {#if selectedIds.has(email.id)}
-                    <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+            {#if hiddenDigestEmails.has(email.id)}
+              <!-- Hidden: part of a digested thread (rendered grouped under header) -->
+            {:else if email.thread_digest_type && seenThreadIds[email.id]}
+              <!-- ========== DIGEST THREAD HEADER (collapsed or expanded) ========== -->
+              {@const dConf = getDigestConfig(email.thread_digest_type)}
+              {@const isExpanded = expandedThreads.has(email.gmail_thread_id)}
+              {@const borderColor = email.thread_digest_type === 'scheduling' ? 'rgb(168, 85, 247)' : email.thread_digest_type === 'discussion' ? 'rgb(59, 130, 246)' : 'var(--border-color)'}
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <tr
+                class="border-b cursor-pointer transition-fast"
+                style="border-color: var(--border-subtle); background: {isExpanded ? 'var(--bg-tertiary)' : 'var(--bg-secondary)'}; border-left: 3px solid {borderColor};"
+                onclick={(e) => toggleThread(email.gmail_thread_id, e)}
+              >
+                <td class="px-3 py-2" style="width: 40px">
+                  <div class="transition-transform" style="transform: rotate({isExpanded ? '90' : '0'}deg)">
+                    <svg class="w-4 h-4" style="color: var(--text-tertiary)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
                     </svg>
-                  {/if}
-                </button>
-              </td>
-              <td class="px-1 py-2" style="width: 32px">
-                <button
-                  onclick={(e) => { e.stopPropagation(); onAction && onAction(email.is_starred ? 'unstar' : 'star', [email.id]); }}
-                  style="color: {email.is_starred ? 'var(--color-accent-500)' : 'var(--text-tertiary)'}"
-                >
-                  <svg class="w-4 h-4" fill={email.is_starred ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.563 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z"/>
-                  </svg>
-                </button>
-              </td>
-              <td class="px-3 py-2 overflow-hidden" style="{colStyle('from')}">
-                <div class="flex items-center gap-2">
-                  {#if !email.is_read}
-                    <span class="w-2 h-2 rounded-full bg-accent-500 shrink-0"></span>
-                  {/if}
-                  <span class="truncate" class:font-semibold={!email.is_read} style="color: var(--text-primary)">
-                    {getPrimaryDisplayInfo(email, shouldShowRecipient(mailbox))}
+                  </div>
+                </td>
+                <td class="px-1 py-2" style="width: 32px"></td>
+                {#if showAccountCol}
+                  <td class="px-2 py-2 text-center" style="width: 36px">
+                    {#if email.account_email && $accountColorMap[email.account_email]}
+                      <span class="inline-block w-2.5 h-2.5 rounded-full" style="background: {$accountColorMap[email.account_email].bg}" title={email.account_email}></span>
+                    {/if}
+                  </td>
+                {/if}
+                <td class="px-3 py-2 overflow-hidden" style="{colStyle('from')}">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap {dConf.classes}">{dConf.label}</span>
+                    {#if email.thread_digest_resolved}
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400">Resolved</span>
+                    {/if}
+                  </div>
+                </td>
+                <td class="px-3 py-2 overflow-hidden">
+                  <div class="flex items-center gap-2 min-w-0">
+                    <span class="truncate font-medium" style="color: var(--text-primary)">{email.subject || '(no subject)'}</span>
+                    {#if email.thread_digest_type === 'scheduling' && email.thread_digest_outcome}
+                      <span class="text-xs truncate hidden xl:inline font-medium" style="color: rgb(168, 85, 247)">— {email.thread_digest_outcome}</span>
+                    {:else if email.thread_digest_summary}
+                      <span class="text-xs truncate hidden xl:inline" style="color: var(--text-secondary)">— {email.thread_digest_summary}</span>
+                    {/if}
+                  </div>
+                </td>
+                <td class="px-3 py-2 overflow-hidden" style="{colStyle('category')}">
+                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap" style="background: var(--bg-tertiary); color: var(--text-secondary)">
+                    {email.thread_digest_count || threadCounts[email.gmail_thread_id]} msgs
                   </span>
-                </div>
-              </td>
-              <td class="px-3 py-2 overflow-hidden">
-                <div class="flex items-center gap-2 min-w-0">
-                  <span class="truncate" class:font-semibold={!email.is_read} style="color: var(--text-primary)">
-                    {email.subject || '(no subject)'}
-                  </span>
-                  {#if email.has_attachments}
-                    <svg class="w-3.5 h-3.5 shrink-0" style="color: var(--text-tertiary)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
+                </td>
+                <td class="px-3 py-2 text-right whitespace-nowrap overflow-hidden" style="{colStyle('date')}">
+                  <span class="text-xs" style="color: var(--text-tertiary)">{formatDate(email.date)}</span>
+                </td>
+              </tr>
+              <!-- ========== EXPANDED THREAD CHILDREN (rendered inline) ========== -->
+              {#if isExpanded && digestThreadEmails[email.gmail_thread_id]}
+                {#each digestThreadEmails[email.gmail_thread_id] as child (child.id)}
+                  <!-- svelte-ignore a11y_click_events_have_key_events -->
+                  <tr
+                    class="border-b cursor-pointer transition-fast"
+                    style="border-color: var(--border-subtle); background: {selectedId === child.id ? 'var(--bg-hover)' : 'var(--bg-primary)'}; border-left: 3px solid {borderColor};"
+                    transition:slide={{ duration: 150 }}
+                    onclick={() => onSelect && onSelect(child.id)}
+                  >
+                    <td class="py-2" style="width: 40px"></td>
+                    <td class="px-1 py-2" style="width: 32px"></td>
+                    {#if showAccountCol}
+                      <td class="px-2 py-2" style="width: 36px"></td>
+                    {/if}
+                    <td class="px-3 py-2 overflow-hidden" style="{colStyle('from')}">
+                      <div class="flex items-center gap-2 pl-2">
+                        {#if !child.is_read}
+                          <span class="w-2 h-2 rounded-full bg-accent-500 shrink-0"></span>
+                        {/if}
+                        <span class="truncate text-xs" style="color: var(--text-primary)">{child.from_name || child.from_address || 'Unknown'}</span>
+                      </div>
+                    </td>
+                    <td class="px-3 py-2 overflow-hidden">
+                      <span class="text-xs truncate" style="color: var(--text-tertiary)">{child.snippet || ''}</span>
+                    </td>
+                    <td class="px-3 py-2 overflow-hidden" style="{colStyle('category')}"></td>
+                    <td class="px-3 py-2 text-right whitespace-nowrap overflow-hidden" style="{colStyle('date')}">
+                      <span class="text-xs" style="color: var(--text-tertiary)">{formatDate(child.date)}</span>
+                    </td>
+                  </tr>
+                {/each}
+              {/if}
+            {:else}
+              <!-- ========== NORMAL EMAIL ROW ========== -->
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <tr
+                class="border-b cursor-pointer transition-fast"
+                style="border-color: var(--border-subtle); background: {selectedId === email.id ? 'var(--bg-hover)' : 'var(--bg-secondary)'}"
+                onclick={() => onSelect && onSelect(email.id)}
+              >
+                <td class="px-3 py-2" style="width: 40px">
+                  <button
+                    onclick={(e) => toggleSelect(email.id, e)}
+                    class="w-4 h-4 rounded border flex items-center justify-center transition-fast"
+                    style="border-color: var(--border-color); background: {selectedIds.has(email.id) ? 'var(--color-accent-500)' : 'transparent'}"
+                  >
+                    {#if selectedIds.has(email.id)}
+                      <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+                      </svg>
+                    {/if}
+                  </button>
+                </td>
+                <td class="px-1 py-2" style="width: 32px">
+                  <button
+                    onclick={(e) => { e.stopPropagation(); onAction && onAction(email.is_starred ? 'unstar' : 'star', [email.id]); }}
+                    style="color: {email.is_starred ? 'var(--color-accent-500)' : 'var(--text-tertiary)'}"
+                  >
+                    <svg class="w-4 h-4" fill={email.is_starred ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.563 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z"/>
                     </svg>
-                  {/if}
-                  <span class="text-xs truncate hidden xl:inline" style="color: var(--text-tertiary)">
-                    — {email.snippet || ''}
-                  </span>
-                </div>
-              </td>
-              <td class="px-3 py-2 overflow-hidden" style="{colStyle('category')}">
-                <div class="flex items-center gap-1 flex-wrap">
-                  {#if email.gmail_thread_id && seenThreadIds[email.id] && threadCounts[email.gmail_thread_id] > 1}
-                    <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap" style="background: var(--bg-tertiary); color: var(--text-secondary)" title="Thread with {threadCounts[email.gmail_thread_id]} messages">
-                      {threadCounts[email.gmail_thread_id]}
+                  </button>
+                </td>
+                {#if showAccountCol}
+                  <td class="px-2 py-2 text-center" style="width: 36px">
+                    {#if email.account_email && $accountColorMap[email.account_email]}
+                      <span
+                        class="inline-block w-2.5 h-2.5 rounded-full"
+                        style="background: {$accountColorMap[email.account_email].bg}"
+                        title={email.account_email}
+                      ></span>
+                    {/if}
+                  </td>
+                {/if}
+                <td class="px-3 py-2 overflow-hidden" style="{colStyle('from')}">
+                  <div class="flex items-center gap-2">
+                    {#if !email.is_read}
+                      <span class="w-2 h-2 rounded-full bg-accent-500 shrink-0"></span>
+                    {/if}
+                    <span class="truncate" class:font-semibold={!email.is_read} style="color: var(--text-primary)">
+                      {getPrimaryDisplayInfo(email, shouldShowRecipient(mailbox))}
                     </span>
-                  {/if}
-                  {#if email.needs_reply}
-                    <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400">
-                      reply
+                  </div>
+                </td>
+                <td class="px-3 py-2 overflow-hidden">
+                  <div class="flex items-center gap-2 min-w-0">
+                    <span class="truncate" class:font-semibold={!email.is_read} style="color: var(--text-primary)">
+                      {email.subject || '(no subject)'}
                     </span>
-                  {/if}
-                  {#if email.is_subscription}
-                    <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400">
-                      sub
+                    {#if email.has_attachments}
+                      <svg class="w-3.5 h-3.5 shrink-0" style="color: var(--text-tertiary)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
+                      </svg>
+                    {/if}
+                    <span class="text-xs truncate hidden xl:inline" style="color: var(--text-tertiary)">
+                      — {email.snippet || ''}
                     </span>
-                  {/if}
-                  {#if email.ai_category}
-                    <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap {categoryColors[email.ai_category] || ''}">
-                      {email.ai_category.replace('_', ' ')}
-                    </span>
-                  {/if}
-                </div>
-              </td>
-              <td class="px-3 py-2 text-right whitespace-nowrap overflow-hidden" style="{colStyle('date')}">
-                <span class="text-xs" style="color: var(--text-tertiary)">{formatDate(email.date)}</span>
-              </td>
-            </tr>
+                  </div>
+                </td>
+                <td class="px-3 py-2 overflow-hidden" style="{colStyle('category')}">
+                  <div class="flex items-center gap-1 flex-wrap">
+                    {#if email.gmail_thread_id && seenThreadIds[email.id] && threadCounts[email.gmail_thread_id] > 1}
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap" style="background: var(--bg-tertiary); color: var(--text-secondary)" title="Thread with {threadCounts[email.gmail_thread_id]} messages">
+                        {threadCounts[email.gmail_thread_id]}
+                      </span>
+                    {/if}
+                    {#if email.needs_reply}
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400">
+                        reply
+                      </span>
+                    {/if}
+                    {#if email.is_subscription}
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400">
+                        sub
+                      </span>
+                    {/if}
+                    {#if email.ai_category}
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap {categoryColors[email.ai_category] || ''}">
+                        {email.ai_category.replace('_', ' ')}
+                      </span>
+                    {/if}
+                    {#if email.ai_email_type}
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap {emailTypeColors[email.ai_email_type] || ''}">
+                        {email.ai_email_type}
+                      </span>
+                    {/if}
+                  </div>
+                </td>
+                <td class="px-3 py-2 text-right whitespace-nowrap overflow-hidden" style="{colStyle('date')}">
+                  <span class="text-xs" style="color: var(--text-tertiary)">{formatDate(email.date)}</span>
+                </td>
+              </tr>
+            {/if}
           {/each}
         </tbody>
       </table>

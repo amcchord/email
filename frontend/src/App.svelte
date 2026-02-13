@@ -3,6 +3,7 @@
   import { api, setUnauthorizedHandler } from './lib/api.js';
   import { user, currentPage, showToast, toastMessage, startSyncPolling, stopSyncPolling } from './lib/stores.js';
   import { theme } from './lib/theme.js';
+  import { startVersionPolling } from './lib/autoReload.js';
   import Login from './pages/Login.svelte';
   import Inbox from './pages/Inbox.svelte';
   import Admin from './pages/Admin.svelte';
@@ -39,6 +40,9 @@
       user.set(null);
     }
     loading = false;
+
+    // Poll for build version changes and auto-reload when restart.sh runs
+    startVersionPolling();
 
     if (params.get('page')) {
       currentPage.set(params.get('page'));

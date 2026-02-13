@@ -63,3 +63,15 @@ class AIPreferencesUpdate(BaseModel):
         if v is not None and v not in ALLOWED_MODELS:
             raise ValueError(f"Model must be one of: {', '.join(ALLOWED_MODELS)}")
         return v
+
+
+class AboutMeResponse(BaseModel):
+    about_me: Optional[str] = None
+
+
+class AboutMeUpdate(BaseModel):
+    about_me: Optional[str] = None
+
+
+class AccountDescriptionUpdate(BaseModel):
+    description: Optional[str] = None

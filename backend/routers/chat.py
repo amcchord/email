@@ -65,11 +65,17 @@ async def chat(
     user: User = Depends(get_current_user),
 ):
     """Start or continue a chat conversation. Returns SSE stream."""
-    # Get user's account IDs
+    # Get user's account IDs and descriptions
     acct_result = await db.execute(
-        select(GoogleAccount.id).where(GoogleAccount.user_id == user.id)
+        select(GoogleAccount.id, GoogleAccount.email, GoogleAccount.description)
+        .where(GoogleAccount.user_id == user.id)
     )
-    account_ids = [r[0] for r in acct_result.all()]
+    acct_rows = acct_result.all()
+    account_ids = [r[0] for r in acct_rows]
+    account_contexts = [
+        {"email": r[1], "description": r[2]}
+        for r in acct_rows
+    ]
 
     if not account_ids:
         raise HTTPException(
@@ -125,10 +131,30 @@ async def chat(
             )
             stream_user = user_result.scalar_one()
 
+            # Load conversation history for follow-up context
+            conversation_history = []
+            if body.conversation_id:
+                from sqlalchemy.orm import selectinload
+                conv_result = await stream_db.execute(
+                    select(ChatConversation)
+                    .options(selectinload(ChatConversation.messages))
+                    .where(ChatConversation.id == conv_id)
+                )
+                conv_obj = conv_result.scalar_one_or_none()
+                if conv_obj and conv_obj.messages:
+                    # Include prior messages but not the current one we just saved
+                    for m in conv_obj.messages:
+                        if m.content and m.content != body.message:
+                            conversation_history.append({
+                                "role": m.role,
+                                "content": m.content,
+                            })
+
             final_content = ""
             plan_data = None
             task_results = {}
             total_tokens = 0
+            is_clarification = False
 
             try:
                 async for sse_event in chat_service.run_chat(
@@ -136,6 +162,8 @@ async def chat(
                     user=stream_user,
                     account_ids=account_ids,
                     db=stream_db,
+                    conversation_history=conversation_history if conversation_history else None,
+                    account_contexts=account_contexts,
                 ):
                     # Parse the event to capture data for storage
                     try:
@@ -159,6 +187,9 @@ async def chat(
                                 task_results[parsed.get("task_id")] = f"Failed: {parsed.get('error', '')}"
                             elif event_type == "content":
                                 final_content = parsed.get("text", "")
+                            elif event_type == "clarification":
+                                final_content = parsed.get("question", "")
+                                is_clarification = True
                             elif event_type == "done":
                                 total_tokens = parsed.get("tokens_used", 0)
                     except (json.JSONDecodeError, Exception):

@@ -25,6 +25,7 @@ class GoogleAccountResponse(BaseModel):
     id: int
     email: str
     display_name: Optional[str] = None
+    description: Optional[str] = None
     is_active: bool = True
     created_at: Optional[datetime] = None
     sync_status: Optional["SyncStatusResponse"] = None
@@ -42,6 +43,7 @@ class SyncStatusResponse(BaseModel):
     last_incremental_sync: Optional[datetime] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    retry_after: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 

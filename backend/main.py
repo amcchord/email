@@ -62,6 +62,19 @@ async def health_check():
     return {"status": "ok", "version": "1.0.0"}
 
 
+BUILD_VERSION_FILE = "/opt/mail/.build_version"
+
+
+@app.get("/api/build-version")
+async def build_version():
+    try:
+        with open(BUILD_VERSION_FILE, "r") as f:
+            version = f.read().strip()
+    except FileNotFoundError:
+        version = "unknown"
+    return {"version": version}
+
+
 # Serve frontend
 import os
 

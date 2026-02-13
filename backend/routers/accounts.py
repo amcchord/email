@@ -7,6 +7,7 @@ from backend.models.user import User
 from backend.models.account import GoogleAccount, SyncStatus
 from backend.models.settings import Setting
 from backend.schemas.admin import GoogleAccountResponse, SyncStatusResponse, GoogleOAuthStart
+from backend.schemas.auth import AccountDescriptionUpdate
 from backend.routers.auth import get_current_user
 from backend.utils.security import encrypt_value, decrypt_value
 from backend.config import get_settings
@@ -103,6 +104,7 @@ async def list_accounts(
             id=acct.id,
             email=acct.email,
             display_name=acct.display_name,
+            description=acct.description,
             is_active=acct.is_active,
             created_at=acct.created_at,
             sync_status=sync,
@@ -270,6 +272,8 @@ async def trigger_sync(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    from datetime import datetime, timezone
+
     result = await db.execute(
         select(GoogleAccount).where(
             GoogleAccount.id == account_id,
@@ -279,6 +283,21 @@ async def trigger_sync(
     account = result.scalar_one_or_none()
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
+
+    # ── Dedup: skip if already syncing or recently synced ────────────
+    sync_result = await db.execute(
+        select(SyncStatus).where(SyncStatus.account_id == account_id)
+    )
+    sync = sync_result.scalar_one_or_none()
+
+    if sync and sync.status == "syncing":
+        return {"message": f"Sync already in progress for {account.email}"}
+
+    if sync and sync.last_incremental_sync:
+        now = datetime.now(timezone.utc)
+        since = (now - sync.last_incremental_sync).total_seconds()
+        if since < 30:
+            return {"message": f"Recently synced {account.email} ({int(since)}s ago), skipping"}
 
     from backend.workers.tasks import queue_sync
     await queue_sync(account_id)
@@ -321,3 +340,29 @@ async def remove_account(
     await db.delete(account)
     await db.commit()
     return {"message": f"Account '{email}' removed"}
+
+
+# ── Account description ─────────────────────────────────────────────
+
+@router.put("/{account_id}/description")
+async def update_account_description(
+    account_id: int,
+    body: AccountDescriptionUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Update the description/purpose for a connected Gmail account."""
+    result = await db.execute(
+        select(GoogleAccount).where(
+            GoogleAccount.id == account_id,
+            GoogleAccount.user_id == user.id,
+        )
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    account.description = body.description
+    await db.commit()
+    await db.refresh(account)
+    return {"description": account.description}

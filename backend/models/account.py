@@ -15,6 +15,7 @@ class GoogleAccount(Base):
     encrypted_refresh_token: Mapped[str] = mapped_column(Text, nullable=True)
     token_expiry: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     scopes: Mapped[str] = mapped_column(Text, nullable=True)
+    description: Mapped[str] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -46,5 +47,8 @@ class SyncStatus(Base):
     current_phase: Mapped[str] = mapped_column(String(100), nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)  # Rate limit: don't try before this time
+    rate_limit_count: Mapped[int] = mapped_column(Integer, default=0)  # Consecutive rate-limit hits (for adaptive cooldown)
+    sync_page_token: Mapped[str] = mapped_column(Text, nullable=True)  # Checkpoint for resuming full sync ID collection
 
     account = relationship("GoogleAccount", back_populates="sync_status")

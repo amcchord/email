@@ -21,6 +21,29 @@ export const pageSize = writable(parseInt(localStorage.getItem('pageSize') || '5
 export const accounts = writable([]);
 export const selectedAccountId = writable(null);
 
+// Deterministic color palette for distinguishing accounts
+export const ACCOUNT_COLORS = [
+  { bg: '#3b82f6', light: '#dbeafe', label: 'blue' },
+  { bg: '#8b5cf6', light: '#ede9fe', label: 'violet' },
+  { bg: '#ec4899', light: '#fce7f3', label: 'pink' },
+  { bg: '#f97316', light: '#ffedd5', label: 'orange' },
+  { bg: '#10b981', light: '#d1fae5', label: 'emerald' },
+  { bg: '#06b6d4', light: '#cffafe', label: 'cyan' },
+];
+
+// Derived map: account email/id -> assigned color (stable order by email)
+export const accountColorMap = derived(accounts, ($accounts) => {
+  const map = {};
+  if (!$accounts || $accounts.length === 0) return map;
+  const sorted = [...$accounts].sort((a, b) => a.email.localeCompare(b.email));
+  sorted.forEach((acct, idx) => {
+    const color = ACCOUNT_COLORS[idx % ACCOUNT_COLORS.length];
+    map[acct.email] = color;
+    map[acct.id] = color;
+  });
+  return map;
+});
+
 // Labels
 export const labels = writable([]);
 
@@ -82,59 +105,102 @@ export function forceSyncPoll() {
   }
 }
 
-// Derived sync state for quick access
+// Derived sync state -- multi-account aware
 export const overallSyncState = derived(syncStatus, ($syncStatus) => {
-  if (!$syncStatus || $syncStatus.length === 0) {
-    return { state: 'idle', message: 'No accounts', accounts: [] };
-  }
+  const empty = { state: 'idle', message: 'No accounts', accounts: [],
+    retryAfter: null, syncingCount: 0, rateLimitedCount: 0, errorCount: 0, idleCount: 0, totalCount: 0 };
+  if (!$syncStatus || $syncStatus.length === 0) return empty;
 
-  const hasSyncing = $syncStatus.some(
-    a => a.sync_status && a.sync_status.status === 'syncing'
-  );
-  const hasError = $syncStatus.some(
-    a => a.sync_status && a.sync_status.status === 'error'
-  );
+  const total = $syncStatus.length;
+  let syncingCount = 0;
+  let rateLimitedCount = 0;
+  let errorCount = 0;
+  let idleCount = 0;
+  let soonestRetry = null;
 
-  if (hasSyncing) {
-    const syncing = $syncStatus.find(a => a.sync_status && a.sync_status.status === 'syncing');
-    const phase = syncing.sync_status.current_phase || 'Syncing...';
-    return { state: 'syncing', message: phase, accounts: $syncStatus };
-  }
-
-  if (hasError) {
-    const errored = $syncStatus.find(a => a.sync_status && a.sync_status.status === 'error');
-    const errMsg = errored.sync_status.error_message || 'Sync error';
-    return { state: 'error', message: errMsg, accounts: $syncStatus };
-  }
-
-  // Find the most recent sync time
-  let lastSync = null;
   for (const a of $syncStatus) {
-    if (!a.sync_status) continue;
-    const full = a.sync_status.last_full_sync;
-    const inc = a.sync_status.last_incremental_sync;
-    const latest = inc || full;
-    if (latest) {
-      const d = new Date(latest);
-      if (!lastSync || d > lastSync) {
-        lastSync = d;
+    const s = a.sync_status;
+    if (!s) { idleCount++; continue; }
+    if (s.status === 'syncing') { syncingCount++; }
+    else if (s.status === 'rate_limited') {
+      rateLimitedCount++;
+      if (s.retry_after) {
+        const ra = new Date(s.retry_after);
+        if (!soonestRetry || ra < soonestRetry) soonestRetry = ra;
       }
     }
+    else if (s.status === 'error') { errorCount++; }
+    else { idleCount++; }
   }
 
-  let message = 'Synced';
-  if (lastSync) {
-    const ago = Math.round((Date.now() - lastSync.getTime()) / 1000);
-    if (ago < 60) {
-      message = 'Synced just now';
-    } else if (ago < 3600) {
-      message = `Synced ${Math.round(ago / 60)}m ago`;
-    } else {
-      message = `Synced ${Math.round(ago / 3600)}h ago`;
+  const counts = { syncingCount, rateLimitedCount, errorCount, idleCount, totalCount: total };
+
+  // Determine the overall state and message.
+  // Priority: syncing > mixed issues > rate_limited > error > idle
+
+  // Any account actively syncing -- that's the primary indicator
+  if (syncingCount > 0) {
+    let message = 'Syncing';
+    if (total > 1) {
+      message = `Syncing ${syncingCount} of ${total} accounts`;
     }
+    return { state: 'syncing', message, accounts: $syncStatus, retryAfter: null, ...counts };
   }
 
-  return { state: 'idle', message, accounts: $syncStatus };
+  // All accounts healthy
+  if (rateLimitedCount === 0 && errorCount === 0) {
+    let lastSync = null;
+    for (const a of $syncStatus) {
+      if (!a.sync_status) continue;
+      const inc = a.sync_status.last_incremental_sync;
+      const full = a.sync_status.last_full_sync;
+      const latest = inc || full;
+      if (latest) {
+        const d = new Date(latest);
+        if (!lastSync || d > lastSync) lastSync = d;
+      }
+    }
+    let message = 'Synced';
+    if (lastSync) {
+      const ago = Math.round((Date.now() - lastSync.getTime()) / 1000);
+      if (ago < 60) { message = 'Synced just now'; }
+      else if (ago < 3600) { message = `Synced ${Math.round(ago / 60)}m ago`; }
+      else { message = `Synced ${Math.round(ago / 3600)}h ago`; }
+    }
+    return { state: 'idle', message, accounts: $syncStatus, retryAfter: null, ...counts };
+  }
+
+  // Some accounts have issues but others are fine
+  const healthyCount = idleCount;
+
+  if (rateLimitedCount > 0 && healthyCount > 0) {
+    // Mixed: some OK, some rate limited
+    const message = `${healthyCount} synced, ${rateLimitedCount} rate limited`;
+    return { state: 'partial', message, accounts: $syncStatus, retryAfter: soonestRetry, ...counts };
+  }
+
+  if (errorCount > 0 && healthyCount > 0) {
+    const message = `${healthyCount} synced, ${errorCount} with errors`;
+    return { state: 'partial', message, accounts: $syncStatus, retryAfter: null, ...counts };
+  }
+
+  // All accounts rate limited
+  if (rateLimitedCount > 0 && healthyCount === 0 && errorCount === 0) {
+    let message = 'Rate limited';
+    if (total > 1) { message = `All ${total} accounts rate limited`; }
+    return { state: 'rate_limited', message, accounts: $syncStatus, retryAfter: soonestRetry, ...counts };
+  }
+
+  // All accounts errored
+  if (errorCount > 0 && healthyCount === 0 && rateLimitedCount === 0) {
+    const errored = $syncStatus.find(a => a.sync_status && a.sync_status.status === 'error');
+    const errMsg = errored.sync_status.error_message || 'Sync error';
+    return { state: 'error', message: errMsg, accounts: $syncStatus, retryAfter: null, ...counts };
+  }
+
+  // Mixed errors and rate limits
+  const message = `${rateLimitedCount} rate limited, ${errorCount} errors`;
+  return { state: 'partial', message, accounts: $syncStatus, retryAfter: soonestRetry, ...counts };
 });
 
 // UI state
@@ -149,8 +215,8 @@ export const viewMode = writable(localStorage.getItem('viewMode') || 'column');
 // Format: { emailId, to, subject, body, threadId }
 export const pendingReplyDraft = writable(null);
 
-// Smart filter for AI categories / needs reply in the sidebar
-// Format: { type: 'needs_reply' } or { type: 'ai_category', value: 'urgent' } or null
+// Smart filter for AI categories / needs reply / email type in the sidebar
+// Format: { type: 'needs_reply' } or { type: 'ai_category', value: 'urgent' } or { type: 'ai_email_type', value: 'work' } or null
 export const smartFilter = writable(null);
 
 // Todos

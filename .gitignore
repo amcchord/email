@@ -29,3 +29,13 @@ data/
 .idea/
 *.swp
 *.swo
+.cursor/
+.cursor-server/
+.claude/
+
+# System / user files
+.bash_history
+.cache/
+.npm/
+.ssh/
+.build_version

@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from sqlalchemy import String, Boolean, DateTime, BigInteger, ForeignKey, Text, Float
+from sqlalchemy import String, Boolean, DateTime, BigInteger, Integer, ForeignKey, Text, Float, Index
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from backend.database import Base
@@ -11,7 +11,11 @@ class AIAnalysis(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     email_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("emails.id", ondelete="CASCADE"), unique=True)
     category: Mapped[str] = mapped_column(String(50), nullable=True)
-    # Categories: needs_response, can_ignore, fyi, urgent, awaiting_reply
+    # Categories: can_ignore, fyi, urgent, awaiting_reply
+    email_type: Mapped[str] = mapped_column(String(20), nullable=True)
+    # Email type: work, personal
+    conversation_type: Mapped[str] = mapped_column(String(30), nullable=True)
+    # Conversation type: scheduling, discussion, notification, transactional, other
     priority: Mapped[int] = mapped_column(default=0)  # 0=low, 1=normal, 2=high, 3=urgent
     summary: Mapped[str] = mapped_column(Text, nullable=True)
     action_items = mapped_column(JSONB, default=list)
@@ -32,3 +36,93 @@ class AIAnalysis(Base):
     # unsubscribe_info format: {"method": "email"|"url"|"both", "email": "...", "url": "...", "mailto_subject": "...", "mailto_body": "..."}
 
     email = relationship("Email", back_populates="ai_analysis")
+
+
+class ThreadDigest(Base):
+    __tablename__ = "thread_digests"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    account_id: Mapped[int] = mapped_column(Integer, ForeignKey("google_accounts.id", ondelete="CASCADE"))
+    gmail_thread_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    conversation_type: Mapped[str] = mapped_column(String(30), nullable=True)
+    # Conversation type: scheduling, discussion, notification, transactional, other
+    summary: Mapped[str] = mapped_column(Text, nullable=True)
+    resolved_outcome: Mapped[str] = mapped_column(Text, nullable=True)
+    # For scheduling: "Meeting confirmed Wed 2pm at Coffee Shop"; null for non-scheduling
+    is_resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    key_topics = mapped_column(JSONB, default=list)
+    message_count: Mapped[int] = mapped_column(Integer, default=0)
+    participants = mapped_column(JSONB, default=list)
+    # List of {"name": "...", "address": "..."} dicts
+    subject: Mapped[str] = mapped_column(Text, nullable=True)
+    latest_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+    model_used: Mapped[str] = mapped_column(String(100), nullable=True)
+
+    account = relationship("GoogleAccount")
+
+    __table_args__ = (
+        Index("ix_thread_digests_account_thread", "account_id", "gmail_thread_id", unique=True),
+        Index("ix_thread_digests_latest_date", "latest_date"),
+        Index("ix_thread_digests_conversation_type", "conversation_type"),
+    )
+
+
+class EmailBundle(Base):
+    __tablename__ = "email_bundles"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"))
+    # Bundles are user-level, not account-level -- they can span multiple accounts
+    title: Mapped[str] = mapped_column(Text, nullable=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=True)
+    key_topics = mapped_column(JSONB, default=list)
+    email_ids = mapped_column(JSONB, default=list)
+    thread_ids = mapped_column(JSONB, default=list)
+    account_ids = mapped_column(JSONB, default=list)
+    email_count: Mapped[int] = mapped_column(Integer, default=0)
+    thread_count: Mapped[int] = mapped_column(Integer, default=0)
+    latest_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    # Status: active, resolved, stale
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    user = relationship("User")
+
+    __table_args__ = (
+        Index("ix_email_bundles_user_id", "user_id"),
+        Index("ix_email_bundles_latest_date", "latest_date"),
+        Index("ix_email_bundles_status", "status"),
+    )
+
+
+class UnsubscribeTracking(Base):
+    __tablename__ = "unsubscribe_tracking"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.id", ondelete="CASCADE"))
+    email_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("emails.id", ondelete="CASCADE"))
+    sender_domain: Mapped[str] = mapped_column(String(255), index=True)
+    sender_address: Mapped[str] = mapped_column(String(255))
+    unsubscribe_to: Mapped[str] = mapped_column(String(255), nullable=True)
+    method: Mapped[str] = mapped_column(String(20))  # "email" or "url"
+    unsubscribed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    emails_received_after: Mapped[int] = mapped_column(Integer, default=0)
+    last_email_after_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user = relationship("User")
+    email = relationship("Email")

@@ -7,12 +7,13 @@
   let messageInput = $state('');
   let isProcessing = $state(false);
   let conversations = $state([]);
-  let currentPhase = $state(null); // 'plan' | 'execute' | 'verify' | null
+  let currentPhase = $state(null); // 'plan' | 'execute' | 'verify' | 'clarification' | null
   let tasks = $state([]);
   let taskStatuses = $state({}); // { taskId: { status, summary, detail, error } }
   let finalContent = $state('');
   let renderedContent = $state('');
   let errorMessage = $state('');
+  let clarificationQuestion = $state('');
   let activeConversationId = $state(null);
   let loadingConversation = $state(false);
   let conversationMessages = $state([]); // messages for the loaded conversation
@@ -105,6 +106,7 @@
     finalContent = '';
     renderedContent = '';
     errorMessage = '';
+    clarificationQuestion = '';
   }
 
   function startNewChat() {
@@ -230,11 +232,16 @@
           detail: '',
         },
       };
+    } else if (eventType === 'clarification') {
+      clarificationQuestion = data.question || '';
+      currentPhase = 'clarification';
     } else if (eventType === 'content') {
       finalContent = data.text || '';
       renderedContent = marked.parse(finalContent);
     } else if (eventType === 'done') {
-      currentPhase = 'done';
+      if (currentPhase !== 'clarification') {
+        currentPhase = 'done';
+      }
     } else if (eventType === 'conversation_id') {
       activeConversationId = data.conversation_id;
       currentConversationId.set(data.conversation_id);
@@ -554,6 +561,30 @@
                   <div class="w-2.5 h-2.5 rounded-full" style="background: var(--color-accent-500)"></div>
                 </div>
                 <span class="text-sm font-medium" style="color: var(--text-primary)">Analyzing your question...</span>
+              </div>
+            {/if}
+
+            <!-- Clarification question from the AI -->
+            {#if currentPhase === 'clarification' && clarificationQuestion}
+              <div class="mb-4 rounded-xl border overflow-hidden" style="border-color: var(--color-accent-500)/30; background: var(--color-accent-500)/5">
+                <div class="px-4 py-3 flex items-start gap-3">
+                  <div class="mt-0.5 shrink-0">
+                    <svg class="w-5 h-5" style="color: var(--color-accent-600)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
+                    </svg>
+                  </div>
+                  <div class="flex-1">
+                    <div class="text-xs font-semibold uppercase tracking-wider mb-1" style="color: var(--color-accent-600)">
+                      Quick question before I search
+                    </div>
+                    <div class="text-sm" style="color: var(--text-primary)">
+                      {clarificationQuestion}
+                    </div>
+                    <div class="text-[10px] mt-2" style="color: var(--text-tertiary)">
+                      Type your answer below and I'll get started.
+                    </div>
+                  </div>
+                </div>
               </div>
             {/if}
 

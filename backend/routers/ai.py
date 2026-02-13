@@ -1,12 +1,16 @@
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, asc, and_, cast, Date
+from sqlalchemy import select, func, desc, asc, and_, cast, Date, literal
 from sqlalchemy.dialects.postgresql import JSONB
+import redis.asyncio as aioredis
 from backend.database import get_db
+from backend.config import get_settings
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 from backend.models.user import User
 from backend.models.email import Email
 from backend.models.account import GoogleAccount
@@ -17,6 +21,72 @@ from backend.services.credentials import get_google_credentials
 from backend.schemas.auth import DEFAULT_AI_PREFERENCES
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
+
+_AI_PROGRESS_TTL = 86400  # 24 hours
+
+
+async def _get_redis():
+    """Get a short-lived Redis connection."""
+    return aioredis.from_url(settings.redis_url, decode_responses=True)
+
+
+async def set_ai_progress(user_id: int, job_type: str, total: int, model: str):
+    """Store a new AI processing job in Redis."""
+    r = await _get_redis()
+    try:
+        meta_key = f"ai_progress:{user_id}"
+        counter_key = f"ai_progress:{user_id}:processed"
+        pipe = r.pipeline()
+        pipe.set(meta_key, json.dumps({
+            "type": job_type,
+            "total": total,
+            "model": model,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }), ex=_AI_PROGRESS_TTL)
+        pipe.set(counter_key, 0, ex=_AI_PROGRESS_TTL)
+        await pipe.execute()
+    finally:
+        await r.aclose()
+
+
+async def increment_ai_progress(user_id: int):
+    """Atomically increment the processed counter for a user's AI job."""
+    r = await _get_redis()
+    try:
+        counter_key = f"ai_progress:{user_id}:processed"
+        await r.incr(counter_key)
+    finally:
+        await r.aclose()
+
+
+async def get_ai_progress(user_id: int) -> dict | None:
+    """Read the current AI processing progress for a user."""
+    r = await _get_redis()
+    try:
+        meta_key = f"ai_progress:{user_id}"
+        counter_key = f"ai_progress:{user_id}:processed"
+        pipe = r.pipeline()
+        pipe.get(meta_key)
+        pipe.get(counter_key)
+        meta_raw, processed_raw = await pipe.execute()
+        if not meta_raw:
+            return None
+        meta = json.loads(meta_raw)
+        meta["processed"] = int(processed_raw or 0)
+        return meta
+    finally:
+        await r.aclose()
+
+
+async def clear_ai_progress(user_id: int):
+    """Remove AI processing progress keys."""
+    r = await _get_redis()
+    try:
+        meta_key = f"ai_progress:{user_id}"
+        counter_key = f"ai_progress:{user_id}:processed"
+        await r.delete(meta_key, counter_key)
+    finally:
+        await r.aclose()
 
 
 async def _get_user_account_ids(db: AsyncSession, user: User) -> list[int]:
@@ -36,6 +106,80 @@ async def _get_user_account_ids(db: AsyncSession, user: User) -> list[int]:
     return [r[0] for r in acct_result.all()]
 
 
+@router.get("/stats")
+async def get_ai_stats(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Get AI analysis statistics: total emails, analyzed counts, unanalyzed counts by date range."""
+    account_ids = await _get_user_account_ids(db, user)
+
+    if not account_ids:
+        return {
+            "total_emails": 0,
+            "total_analyzed": 0,
+            "models": {},
+            "unanalyzed": {"30d": 0, "90d": 0, "1y": 0, "all": 0},
+        }
+
+    account_filter = Email.account_id.in_(account_ids)
+    non_junk = and_(Email.is_trash == False, Email.is_spam == False)
+    analyzed_subquery = select(AIAnalysis.email_id)
+
+    now = datetime.now(timezone.utc)
+
+    # Total emails (non-trash/spam)
+    total_emails = await db.scalar(
+        select(func.count(Email.id)).where(account_filter, non_junk)
+    ) or 0
+
+    # Total analyzed
+    total_analyzed = await db.scalar(
+        select(func.count(AIAnalysis.id))
+        .join(Email, Email.id == AIAnalysis.email_id)
+        .where(account_filter, non_junk)
+    ) or 0
+
+    # Model breakdown
+    model_result = await db.execute(
+        select(AIAnalysis.model_used, func.count(AIAnalysis.id))
+        .join(Email, Email.id == AIAnalysis.email_id)
+        .where(account_filter, non_junk)
+        .group_by(AIAnalysis.model_used)
+    )
+    models = {r[0] or "unknown": r[1] for r in model_result.all()}
+
+    # Unanalyzed counts by date range
+    unanalyzed_counts = {}
+    for label, days in [("30d", 30), ("90d", 90), ("1y", 365)]:
+        since = now - timedelta(days=days)
+        count = await db.scalar(
+            select(func.count(Email.id)).where(
+                account_filter,
+                non_junk,
+                ~Email.id.in_(analyzed_subquery),
+                Email.date >= since,
+            )
+        ) or 0
+        unanalyzed_counts[label] = count
+
+    # All unanalyzed
+    unanalyzed_counts["all"] = await db.scalar(
+        select(func.count(Email.id)).where(
+            account_filter,
+            non_junk,
+            ~Email.id.in_(analyzed_subquery),
+        )
+    ) or 0
+
+    return {
+        "total_emails": total_emails,
+        "total_analyzed": total_analyzed,
+        "models": models,
+        "unanalyzed": unanalyzed_counts,
+    }
+
+
 @router.post("/analyze/{email_id}")
 async def analyze_email(
     email_id: int,
@@ -52,9 +196,22 @@ async def analyze_email(
     if email.account_id not in account_ids:
         raise HTTPException(status_code=404, detail="Email not found")
 
+    # Load account description and email for context
+    acct_result = await db.execute(
+        select(GoogleAccount.description, GoogleAccount.email).where(GoogleAccount.id == email.account_id)
+    )
+    acct_row = acct_result.first()
+    acct_desc = acct_row[0] if acct_row else None
+    acct_email = acct_row[1] if acct_row else None
+
     model = await get_model_for_user(user.id)
     ai = AIService(model=model)
-    analysis = await ai.analyze_email(email_id, db)
+    analysis = await ai.analyze_email(
+        email_id, db,
+        user_context=user.about_me,
+        account_description=acct_desc,
+        account_email=acct_email,
+    )
     if not analysis:
         raise HTTPException(status_code=500, detail="Analysis failed")
 
@@ -85,12 +242,23 @@ async def analyze_thread(
             Email.account_id.in_(account_ids),
         ).limit(1)
     )
-    if not result.scalar_one_or_none():
+    thread_email = result.scalar_one_or_none()
+    if not thread_email:
         raise HTTPException(status_code=404, detail="Thread not found")
+
+    # Load account description for context
+    acct_result = await db.execute(
+        select(GoogleAccount.description).where(GoogleAccount.id == thread_email.account_id)
+    )
+    acct_desc = acct_result.scalar_one_or_none()
 
     model = await get_model_for_user(user.id)
     ai = AIService(model=model)
-    analysis = await ai.analyze_thread(thread_id)
+    analysis = await ai.analyze_thread(
+        thread_id,
+        user_context=user.about_me,
+        account_description=acct_desc,
+    )
     if not analysis:
         raise HTTPException(status_code=500, detail="Thread analysis failed")
 
@@ -274,24 +442,92 @@ async def get_ai_trends(
 
 @router.post("/auto-categorize")
 async def auto_categorize(
+    days: int = Query(None, description="Number of days to look back (e.g. 30, 90, 365). Omit for all unanalyzed."),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Trigger auto-categorization of the newest 1000 unanalyzed emails per account."""
+    """Trigger auto-categorization of unanalyzed emails.
+
+    Optionally filter by date range (days parameter). Without days,
+    processes all unanalyzed emails.
+    """
     account_ids = await _get_user_account_ids(db, user)
 
     if not account_ids:
         raise HTTPException(status_code=400, detail="No active accounts found")
 
+    since_date = None
+    if days is not None and days > 0:
+        since_date = datetime.now(timezone.utc) - timedelta(days=days)
+
+    # Count unanalyzed emails across all accounts
+    subquery = select(AIAnalysis.email_id)
+    total_to_process = 0
+    for account_id in account_ids:
+        where_clauses = [
+            Email.account_id == account_id,
+            ~Email.id.in_(subquery),
+            Email.is_trash == False,
+            Email.is_spam == False,
+        ]
+        if since_date is not None:
+            where_clauses.append(Email.date >= since_date)
+
+        count = await db.scalar(
+            select(func.count(Email.id)).where(*where_clauses)
+        ) or 0
+        total_to_process += count
+
+    # Store progress in Redis
+    if total_to_process > 0:
+        model = await get_model_for_user(user.id)
+        await set_ai_progress(user.id, "categorize", total_to_process, model)
+
     from backend.workers.tasks import queue_auto_categorize
     total_queued = 0
     for account_id in account_ids:
-        await queue_auto_categorize(account_id)
+        await queue_auto_categorize(account_id, days=days)
         total_queued += 1
 
+    label = f"last {days} days" if days else "all time"
     return {
-        "message": f"Queued auto-categorization for {total_queued} account(s) (newest 1000 emails each)",
+        "message": f"Queued auto-categorization for {total_queued} account(s) ({total_to_process} emails to process, {label})",
         "accounts_queued": total_queued,
+        "total_to_process": total_to_process,
+    }
+
+
+@router.get("/processing/status")
+async def get_processing_status(
+    user: User = Depends(get_current_user),
+):
+    """Get the current AI processing progress for the user."""
+    progress = await get_ai_progress(user.id)
+
+    if not progress:
+        return {"active": False}
+
+    total = progress.get("total", 0)
+    processed = progress.get("processed", 0)
+
+    # If processing is complete, clear the keys and signal completion
+    if total > 0 and processed >= total:
+        await clear_ai_progress(user.id)
+        return {
+            "active": False,
+            "just_finished": True,
+            "type": progress.get("type"),
+            "total": total,
+            "processed": processed,
+            "model": progress.get("model"),
+        }
+
+    return {
+        "active": True,
+        "type": progress.get("type"),
+        "total": total,
+        "processed": processed,
+        "model": progress.get("model"),
     }
 
 
@@ -310,7 +546,30 @@ async def get_needs_reply(
 
     account_filter = Email.account_id.in_(account_ids)
 
-    base_query = (
+    # Correlated subquery: check whether a sent email exists in the same
+    # thread with a date AFTER the candidate "needs reply" email.  This
+    # avoids the old bug where any sent message in the thread (including
+    # the user's original outbound message) would blanket-exclude the
+    # whole thread.
+    from sqlalchemy.orm import aliased
+    SentEmail = aliased(Email, flat=True)
+    has_later_reply = (
+        select(literal(1))
+        .where(
+            SentEmail.gmail_thread_id == Email.gmail_thread_id,
+            SentEmail.account_id.in_(account_ids),
+            SentEmail.is_sent == True,
+            SentEmail.is_trash == False,
+            SentEmail.date > Email.date,
+        )
+        .correlate(Email)
+        .exists()
+    )
+
+    # Inner query: use DISTINCT ON (gmail_thread_id) to keep only the
+    # latest "needs reply" email per thread.  DISTINCT ON requires the
+    # ORDER BY to start with the DISTINCT ON columns.
+    deduped = (
         select(
             Email.id,
             Email.subject,
@@ -331,25 +590,42 @@ async def get_needs_reply(
             AIAnalysis.needs_reply == True,
             Email.is_trash == False,
             Email.is_spam == False,
+            # Exclude emails where the user sent a reply AFTER the email
+            ~has_later_reply,
         )
-    )
+        .distinct(Email.gmail_thread_id)
+        .order_by(Email.gmail_thread_id, desc(Email.date))
+    ).subquery()
 
-    # Count total
+    # Count total (after dedup)
     count_result = await db.scalar(
-        select(func.count()).select_from(base_query.subquery())
+        select(func.count()).select_from(deduped)
     )
     total = count_result or 0
 
-    # Fetch page
+    # Outer query: re-sort by date descending for display and paginate
     result = await db.execute(
-        base_query
-        .order_by(desc(AIAnalysis.priority), desc(Email.date))
+        select(deduped)
+        .order_by(desc(deduped.c.date))
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
 
-    emails = [
-        {
+    now_utc = datetime.now(timezone.utc)
+    thirty_days_ago = now_utc - timedelta(days=30)
+
+    emails = []
+    for row in result.all():
+        category = row.category
+        priority = row.priority
+
+        # Emails older than 30 days can't still be urgent – mark as expired
+        if row.date and row.date < thirty_days_ago:
+            if category in ("urgent", "needs_response"):
+                category = "expired"
+            priority = 0
+
+        emails.append({
             "id": row.id,
             "subject": row.subject,
             "from_name": row.from_name or row.from_address,
@@ -358,13 +634,11 @@ async def get_needs_reply(
             "snippet": row.snippet,
             "is_read": row.is_read,
             "gmail_thread_id": row.gmail_thread_id,
-            "category": row.category,
-            "priority": row.priority,
+            "category": category,
+            "priority": priority,
             "summary": row.summary,
             "suggested_reply": row.suggested_reply,
-        }
-        for row in result.all()
-    ]
+        })
 
     return {"emails": emails, "total": total}
 
@@ -377,6 +651,8 @@ async def get_subscriptions(
     user: User = Depends(get_current_user),
 ):
     """Get subscription/marketing emails grouped by sender domain."""
+    from backend.models.ai import UnsubscribeTracking
+
     account_ids = await _get_user_account_ids(db, user)
 
     if not account_ids:
@@ -417,10 +693,26 @@ async def get_subscriptions(
         .limit(page_size)
     )
 
+    # Load unsubscribe tracking records for this user, keyed by sender_domain
+    tracking_result = await db.execute(
+        select(UnsubscribeTracking).where(
+            UnsubscribeTracking.user_id == user.id,
+        )
+    )
+    tracking_by_domain = {}
+    for t in tracking_result.scalars().all():
+        existing = tracking_by_domain.get(t.sender_domain)
+        if not existing or t.unsubscribed_at > existing.unsubscribed_at:
+            tracking_by_domain[t.sender_domain] = t
+
     # Group by sender domain
     senders = {}
     all_emails = []
     for row in result.all():
+        addr = row.from_address or ""
+        domain = addr.split("@")[-1] if "@" in addr else addr
+        domain_tracking = tracking_by_domain.get(domain)
+
         email_data = {
             "id": row.id,
             "subject": row.subject,
@@ -430,12 +722,11 @@ async def get_subscriptions(
             "snippet": row.snippet,
             "summary": row.summary,
             "unsubscribe_info": row.unsubscribe_info,
+            "unsubscribed_at": domain_tracking.unsubscribed_at.isoformat() if domain_tracking else None,
         }
         all_emails.append(email_data)
 
         # Group by sender domain
-        addr = row.from_address or ""
-        domain = addr.split("@")[-1] if "@" in addr else addr
         if domain not in senders:
             senders[domain] = {
                 "domain": domain,
@@ -444,6 +735,9 @@ async def get_subscriptions(
                 "latest_date": row.date.isoformat() if row.date else None,
                 "unsubscribe_info": row.unsubscribe_info,
                 "sample_email_id": row.id,
+                "unsubscribed_at": domain_tracking.unsubscribed_at.isoformat() if domain_tracking else None,
+                "emails_received_after": domain_tracking.emails_received_after if domain_tracking else 0,
+                "honors_unsubscribe": True if not domain_tracking else domain_tracking.emails_received_after == 0,
             }
         senders[domain]["count"] += 1
 
@@ -457,10 +751,17 @@ async def get_subscriptions(
 @router.post("/unsubscribe/{email_id}")
 async def unsubscribe_email(
     email_id: int,
+    preview: bool = Query(False),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Unsubscribe from an email. Sends unsubscribe email or returns URL."""
+    """Unsubscribe from an email.
+
+    With preview=true, returns the email that would be sent without actually sending it.
+    With preview=false (default), sends the unsubscribe email and records tracking.
+    """
+    from backend.models.ai import UnsubscribeTracking
+
     # Verify access
     result = await db.execute(select(Email).where(Email.id == email_id))
     email = result.scalar_one_or_none()
@@ -494,35 +795,205 @@ async def unsubscribe_email(
     if not unsub_info:
         raise HTTPException(status_code=400, detail="No unsubscribe method found for this email")
 
+    # Build the email content that would be sent
+    unsub_email_to = unsub_info.get("email")
+    subject = unsub_info.get("mailto_subject", "unsubscribe")
+    body_text = unsub_info.get("mailto_body", "")
+    if not body_text:
+        body_text = "Please unsubscribe me from this mailing list. Thank you."
+
+    # Preview mode: return what would be sent without sending
+    if preview:
+        response_data = {
+            "method": unsub_info.get("method"),
+            "email_sent": False,
+            "url": unsub_info.get("url"),
+        }
+        if unsub_email_to:
+            response_data["preview"] = {
+                "to": unsub_email_to,
+                "subject": subject,
+                "body": body_text,
+            }
+        return response_data
+
+    # Actual send mode
     response_data = {
         "method": unsub_info.get("method"),
         "email_sent": False,
         "url": unsub_info.get("url"),
     }
 
+    # Extract sender domain for tracking
+    from_addr = email.from_address or ""
+    sender_domain = from_addr.split("@")[-1] if "@" in from_addr else from_addr
+
     # If there's an email method, send the unsubscribe email
-    if unsub_info.get("email"):
+    if unsub_email_to:
         from backend.services.gmail import GmailService
         client_id, client_secret = await get_google_credentials(db)
         gmail = GmailService(account, client_id=client_id, client_secret=client_secret)
         try:
-            subject = unsub_info.get("mailto_subject", "unsubscribe")
-            body_text = unsub_info.get("mailto_body", "")
-            if not body_text:
-                body_text = "Please unsubscribe me from this mailing list. Thank you."
-
             await gmail.send_email(
-                to=[unsub_info["email"]],
+                to=[unsub_email_to],
                 subject=subject,
                 body_text=body_text,
             )
             response_data["email_sent"] = True
-            response_data["sent_to"] = unsub_info["email"]
+            response_data["sent_to"] = unsub_email_to
+
+            # Record tracking
+            tracking = UnsubscribeTracking(
+                user_id=user.id,
+                email_id=email_id,
+                sender_domain=sender_domain,
+                sender_address=from_addr,
+                unsubscribe_to=unsub_email_to,
+                method="email",
+            )
+            db.add(tracking)
+            await db.commit()
         except Exception as e:
             logger.error(f"Failed to send unsubscribe email for {email_id}: {e}")
             response_data["email_error"] = str(e)
+    elif unsub_info.get("url"):
+        # URL-only method -- record tracking for the URL click
+        tracking = UnsubscribeTracking(
+            user_id=user.id,
+            email_id=email_id,
+            sender_domain=sender_domain,
+            sender_address=from_addr,
+            unsubscribe_to=None,
+            method="url",
+        )
+        db.add(tracking)
+        await db.commit()
 
     return response_data
+
+
+@router.get("/digests")
+async def get_thread_digests(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    conversation_type: str = Query(None, description="Filter by conversation type: scheduling, discussion, notification, transactional, other"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Get thread digests with AI-generated summaries and conversation type detection.
+
+    Thread digests collapse multi-message threads into single entries.
+    Scheduling threads show the resolved outcome instead of all the back-and-forth.
+    """
+    from backend.models.ai import ThreadDigest
+
+    account_ids = await _get_user_account_ids(db, user)
+
+    if not account_ids:
+        return {"digests": [], "total": 0}
+
+    where_clauses = [
+        ThreadDigest.account_id.in_(account_ids),
+    ]
+    if conversation_type:
+        where_clauses.append(ThreadDigest.conversation_type == conversation_type)
+
+    # Count total
+    count_result = await db.scalar(
+        select(func.count(ThreadDigest.id)).where(*where_clauses)
+    )
+    total = count_result or 0
+
+    # Fetch paginated digests
+    result = await db.execute(
+        select(ThreadDigest)
+        .where(*where_clauses)
+        .order_by(desc(ThreadDigest.latest_date))
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    digests = result.scalars().all()
+
+    return {
+        "digests": [
+            {
+                "id": d.id,
+                "thread_id": d.gmail_thread_id,
+                "account_id": d.account_id,
+                "conversation_type": d.conversation_type,
+                "summary": d.summary,
+                "resolved_outcome": d.resolved_outcome,
+                "is_resolved": d.is_resolved,
+                "key_topics": d.key_topics or [],
+                "message_count": d.message_count,
+                "participants": d.participants or [],
+                "subject": d.subject,
+                "latest_date": d.latest_date.isoformat() if d.latest_date else None,
+                "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+            }
+            for d in digests
+        ],
+        "total": total,
+    }
+
+
+@router.get("/bundles")
+async def get_email_bundles(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: str = Query("active", description="Filter by status: active, resolved, stale"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Get topic-based email bundles that group related emails across threads and accounts.
+
+    Bundles are user-level and can span multiple accounts.
+    """
+    from backend.models.ai import EmailBundle
+
+    where_clauses = [
+        EmailBundle.user_id == user.id,
+    ]
+    if status:
+        where_clauses.append(EmailBundle.status == status)
+
+    # Count total
+    count_result = await db.scalar(
+        select(func.count(EmailBundle.id)).where(*where_clauses)
+    )
+    total = count_result or 0
+
+    # Fetch paginated bundles
+    result = await db.execute(
+        select(EmailBundle)
+        .where(*where_clauses)
+        .order_by(desc(EmailBundle.latest_date))
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    bundles = result.scalars().all()
+
+    return {
+        "bundles": [
+            {
+                "id": b.id,
+                "title": b.title,
+                "summary": b.summary,
+                "key_topics": b.key_topics or [],
+                "email_ids": b.email_ids or [],
+                "thread_ids": b.thread_ids or [],
+                "account_ids": b.account_ids or [],
+                "email_count": b.email_count,
+                "thread_count": b.thread_count,
+                "latest_date": b.latest_date.isoformat() if b.latest_date else None,
+                "status": b.status,
+                "created_at": b.created_at.isoformat() if b.created_at else None,
+                "updated_at": b.updated_at.isoformat() if b.updated_at else None,
+            }
+            for b in bundles
+        ],
+        "total": total,
+    }
 
 
 @router.get("/threads")
@@ -659,7 +1130,7 @@ async def draft_action(
     try:
         model = await get_model_for_user(user.id)
         ai = AIService(model=model)
-        result = await ai.draft_action_reply(todo_id)
+        result = await ai.draft_action_reply(todo_id, user_context=user.about_me)
         return result
     except Exception as e:
         logger.error(f"Draft action error: {e}")
@@ -804,6 +1275,9 @@ async def reprocess_emails(
     )
     await db.commit()
 
+    # Store progress state in Redis before queuing
+    await set_ai_progress(user.id, "reprocess", len(email_ids), target_model)
+
     # Queue re-analysis via worker
     from backend.workers.tasks import queue_analysis
     # Split into chunks of 100 for the worker
@@ -816,3 +1290,77 @@ async def reprocess_emails(
         "model": target_model,
         "message": f"Queued {len(email_ids)} emails for reprocessing with {target_model}",
     }
+
+
+@router.delete("/analyses")
+async def delete_ai_analyses(
+    rebuild_days: int = Query(None, description="If provided, immediately re-queue analysis for the last N days after deletion."),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Drop all AI analyses for the user's accounts.
+
+    Optionally rebuild by re-queuing auto-categorization for a given date range.
+    """
+    account_ids = await _get_user_account_ids(db, user)
+
+    if not account_ids:
+        return {"deleted": 0, "message": "No accounts found"}
+
+    account_filter = Email.account_id.in_(account_ids)
+
+    # Count how many will be deleted
+    delete_count = await db.scalar(
+        select(func.count(AIAnalysis.id))
+        .join(Email, Email.id == AIAnalysis.email_id)
+        .where(account_filter)
+    ) or 0
+
+    if delete_count > 0:
+        # Delete all AI analyses for this user's accounts
+        from sqlalchemy import delete
+        analysis_ids_subquery = (
+            select(AIAnalysis.id)
+            .join(Email, Email.id == AIAnalysis.email_id)
+            .where(account_filter)
+        )
+        await db.execute(
+            delete(AIAnalysis).where(AIAnalysis.id.in_(analysis_ids_subquery))
+        )
+        await db.commit()
+
+    result = {
+        "deleted": delete_count,
+        "message": f"Deleted {delete_count} AI analyses",
+    }
+
+    # Optionally rebuild
+    if rebuild_days is not None and delete_count > 0:
+        since_date = datetime.now(timezone.utc) - timedelta(days=rebuild_days) if rebuild_days > 0 else None
+
+        # Count how many emails will be reprocessed
+        where_clauses = [
+            account_filter,
+            Email.is_trash == False,
+            Email.is_spam == False,
+        ]
+        if since_date is not None:
+            where_clauses.append(Email.date >= since_date)
+
+        rebuild_count = await db.scalar(
+            select(func.count(Email.id)).where(*where_clauses)
+        ) or 0
+
+        if rebuild_count > 0:
+            model = await get_model_for_user(user.id)
+            await set_ai_progress(user.id, "categorize", rebuild_count, model)
+
+            from backend.workers.tasks import queue_auto_categorize
+            for account_id in account_ids:
+                await queue_auto_categorize(account_id, days=rebuild_days if rebuild_days > 0 else None)
+
+        label = f"last {rebuild_days} days" if rebuild_days > 0 else "all time"
+        result["rebuild_queued"] = rebuild_count
+        result["message"] += f". Queued rebuild of {rebuild_count} emails ({label})"
+
+    return result

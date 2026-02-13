@@ -145,7 +145,16 @@ export const api = {
   analyzeEmail: (emailId) => request('POST', `/ai/analyze/${emailId}`),
   analyzeThread: (threadId) => request('POST', `/ai/analyze/thread/${threadId}`),
   getAITrends: () => request('GET', '/ai/trends'),
-  triggerAutoCategorize: () => request('POST', '/ai/auto-categorize'),
+  getAIStats: () => request('GET', '/ai/stats'),
+  triggerAutoCategorize: (days = null) => {
+    const qs = days !== null ? `?days=${days}` : '';
+    return request('POST', `/ai/auto-categorize${qs}`);
+  },
+  deleteAIAnalyses: (rebuildDays = null) => {
+    const qs = rebuildDays !== null ? `?rebuild_days=${rebuildDays}` : '';
+    return request('DELETE', `/ai/analyses${qs}`);
+  },
+  getAIProcessingStatus: () => request('GET', '/ai/processing/status'),
   getNeedsReply: (params = {}) => {
     const searchParams = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
@@ -164,7 +173,10 @@ export const api = {
     }
     return request('GET', `/ai/subscriptions?${searchParams.toString()}`);
   },
-  unsubscribe: (emailId) => request('POST', `/ai/unsubscribe/${emailId}`),
+  unsubscribe: (emailId, preview = false) => {
+    const qs = preview ? '?preview=true' : '';
+    return request('POST', `/ai/unsubscribe/${emailId}${qs}`);
+  },
   getThreadSummaries: (params = {}) => {
     const searchParams = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
@@ -173,6 +185,24 @@ export const api = {
       }
     }
     return request('GET', `/ai/threads?${searchParams.toString()}`);
+  },
+  getThreadDigests: (params = {}) => {
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== null && value !== undefined && value !== '') {
+        searchParams.set(key, value);
+      }
+    }
+    return request('GET', `/ai/digests?${searchParams.toString()}`);
+  },
+  getEmailBundles: (params = {}) => {
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== null && value !== undefined && value !== '') {
+        searchParams.set(key, value);
+      }
+    }
+    return request('GET', `/ai/bundles?${searchParams.toString()}`);
   },
 
   // Todos
@@ -212,6 +242,14 @@ export const api = {
   // AI Preferences
   getAIPreferences: () => request('GET', '/auth/ai-preferences'),
   updateAIPreferences: (prefs) => request('PUT', '/auth/ai-preferences', prefs),
+
+  // About Me
+  getAboutMe: () => request('GET', '/auth/about-me'),
+  updateAboutMe: (aboutMe) => request('PUT', '/auth/about-me', { about_me: aboutMe }),
+
+  // Account description
+  updateAccountDescription: (accountId, description) =>
+    request('PUT', `/accounts/${accountId}/description`, { description }),
 
   // Health
   health: () => request('GET', '/health'),

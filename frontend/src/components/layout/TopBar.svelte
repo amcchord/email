@@ -2,17 +2,55 @@
   import { onMount } from 'svelte';
   import { theme } from '../../lib/theme.js';
   import { api } from '../../lib/api.js';
-  import { user, sidebarCollapsed, searchQuery, currentPage, currentMailbox, viewMode, overallSyncState, syncStatus, showToast, forceSyncPoll } from '../../lib/stores.js';
+  import { user, sidebarCollapsed, searchQuery, currentPage, currentMailbox, viewMode, overallSyncState, syncStatus, showToast, forceSyncPoll, selectedAccountId, accounts, accountColorMap } from '../../lib/stores.js';
 
   let searchValue = $state('');
   let syncDropdownOpen = $state(false);
+
+  let selectedAccount = $derived(
+    $selectedAccountId ? $accounts.find(a => a.id === $selectedAccountId) : null
+  );
+  let selectedAccountColor = $derived(
+    selectedAccount ? $accountColorMap[selectedAccount.email] : null
+  );
+  let countdownText = $state('');
+  let countdownInterval = null;
+
+  function updateCountdown() {
+    const ra = $overallSyncState.retryAfter;
+    if (!ra) {
+      countdownText = '';
+      return;
+    }
+    const target = new Date(ra);
+    const now = Date.now();
+    const diff = Math.max(0, Math.ceil((target.getTime() - now) / 1000));
+    if (diff <= 0) {
+      countdownText = 'Retrying...';
+      forceSyncPoll();
+    } else {
+      const m = Math.floor(diff / 60);
+      const s = diff % 60;
+      countdownText = m > 0 ? `${m}m ${s}s` : `${s}s`;
+    }
+  }
 
   // Keep local searchValue in sync with the store
   onMount(() => {
     const unsub = searchQuery.subscribe(val => {
       searchValue = val;
     });
-    return unsub;
+    countdownInterval = setInterval(updateCountdown, 1000);
+    return () => {
+      unsub();
+      if (countdownInterval) clearInterval(countdownInterval);
+    };
+  });
+
+  // Also update countdown whenever sync state changes
+  $effect(() => {
+    void $overallSyncState.retryAfter;
+    updateCountdown();
   });
 
   function handleSearch(e) {
@@ -121,6 +159,16 @@
     if (!acct.sync_status) return 'idle';
     return acct.sync_status.status || 'idle';
   }
+
+  function getAccountCountdown(acct) {
+    if (!acct.sync_status || !acct.sync_status.retry_after) return '';
+    const target = new Date(acct.sync_status.retry_after);
+    const diff = Math.max(0, Math.ceil((target.getTime() - Date.now()) / 1000));
+    if (diff <= 0) return 'Retrying...';
+    const m = Math.floor(diff / 60);
+    const s = diff % 60;
+    return m > 0 ? `Retry in ${m}m ${s}s` : `Retry in ${s}s`;
+  }
 </script>
 
 <header class="h-14 flex items-center gap-4 px-4 border-b shrink-0" style="background: var(--bg-secondary); border-color: var(--border-color)">
@@ -138,6 +186,30 @@
 
   <!-- Page title -->
   <h1 class="text-base font-semibold" style="color: var(--text-primary)">{getPageTitle()}</h1>
+
+  <!-- Active account filter chip -->
+  {#if selectedAccount}
+    <div
+      class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
+      style="background: {selectedAccountColor ? selectedAccountColor.light : 'var(--bg-tertiary)'}; color: {selectedAccountColor ? selectedAccountColor.bg : 'var(--text-secondary)'}"
+    >
+      <span
+        class="w-2 h-2 rounded-full shrink-0"
+        style="background: {selectedAccountColor ? selectedAccountColor.bg : 'var(--text-tertiary)'}"
+      ></span>
+      <span class="truncate max-w-[160px]">{selectedAccount.description || selectedAccount.email}</span>
+      <button
+        onclick={() => selectedAccountId.set(null)}
+        class="ml-0.5 p-0.5 rounded-full transition-fast hover:opacity-70"
+        title="Show all accounts"
+        aria-label="Clear account filter"
+      >
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+  {/if}
 
   <!-- Search -->
   <div class="flex-1 max-w-md mx-auto">
@@ -206,7 +278,20 @@
           <svg class="w-4 h-4 animate-spin" style="color: var(--color-accent-500)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182M20.017 4.355v4.992" />
           </svg>
-          <span class="hidden sm:inline" style="color: var(--color-accent-500)">{getOverallProgress() || 'Syncing...'}</span>
+          <span class="hidden sm:inline" style="color: var(--color-accent-500)">{getOverallProgress() || $overallSyncState.message}</span>
+        {:else if $overallSyncState.state === 'rate_limited'}
+          <!-- All accounts rate limited -->
+          <svg class="w-4 h-4" style="color: #f59e0b" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <span class="hidden sm:inline" style="color: #f59e0b">{countdownText || 'Rate limited'}</span>
+        {:else if $overallSyncState.state === 'partial'}
+          <!-- Mixed: some accounts OK, some have issues -->
+          <span class="w-2 h-2 rounded-full shrink-0" style="background: #22c55e"></span>
+          <span class="hidden sm:inline">{$overallSyncState.message}</span>
+          {#if $overallSyncState.rateLimitedCount > 0}
+            <span class="hidden sm:inline text-[10px] px-1 rounded" style="color: #f59e0b">{countdownText}</span>
+          {/if}
         {:else if $overallSyncState.state === 'error'}
           <!-- Error icon -->
           <span class="w-2 h-2 rounded-full shrink-0" style="background: #ef4444"></span>
@@ -237,6 +322,8 @@
                 <!-- Status dot -->
                 {#if getAccountSyncState(acct) === 'syncing'}
                   <span class="w-2 h-2 rounded-full shrink-0 animate-pulse" style="background: var(--color-accent-500)"></span>
+                {:else if getAccountSyncState(acct) === 'rate_limited'}
+                  <span class="w-2 h-2 rounded-full shrink-0" style="background: #f59e0b"></span>
                 {:else if getAccountSyncState(acct) === 'error'}
                   <span class="w-2 h-2 rounded-full shrink-0" style="background: #ef4444"></span>
                 {:else}
@@ -254,6 +341,8 @@
                         ></div>
                       </div>
                     {/if}
+                  {:else if getAccountSyncState(acct) === 'rate_limited'}
+                    <div class="text-[10px]" style="color: #f59e0b">{getAccountCountdown(acct)}</div>
                   {:else if getAccountSyncState(acct) === 'error' && acct.sync_status.error_message}
                     <div class="text-[10px] truncate" style="color: #ef4444" title={acct.sync_status.error_message}>{acct.sync_status.error_message}</div>
                   {:else}

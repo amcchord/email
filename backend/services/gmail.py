@@ -16,19 +16,22 @@ from googleapiclient.errors import HttpError
 from backend.models.account import GoogleAccount
 from backend.utils.security import decrypt_value, encrypt_value
 from backend.config import get_settings
+from backend.services.rate_limiter import gmail_rate_limiter, COST_DEFAULT, COST_GET
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # Gmail API quota: 250 units/second, ~15000/minute for reads.
 # messages.list = 5 units, messages.get = 5 units, batch = 1 unit + per-item.
-# Conservative limits to stay well under quota.
+# Gmail batch requests support up to 100 items.
 MAX_RETRIES = 8
 BASE_BACKOFF = 5.0        # seconds
 MAX_BACKOFF = 300.0       # seconds (5 min cap)
-BATCH_INTERNAL_SIZE = 5   # messages per batch HTTP request (very conservative)
-BATCH_PAUSE = 2.0         # seconds between sub-batches
-PAGE_PAUSE = 1.0          # seconds between list pages
+BATCH_INTERNAL_SIZE = 20  # messages per batch HTTP request
+                          # Gmail limits ~15-25 concurrent requests per user;
+                          # 50 consistently triggers "Too many concurrent requests".
+BATCH_PAUSE = 0.5         # seconds between sub-batches
+PAGE_PAUSE = 0.5          # seconds between list pages
 
 
 def _is_rate_limit_error(error):
@@ -135,13 +138,27 @@ class GmailService:
             return current_token
         return None
 
-    async def _execute_with_retry(self, request_builder, context: str = ""):
-        """Execute a Google API request with backoff that respects Retry-After."""
-        for attempt in range(MAX_RETRIES):
+    async def _execute_with_retry(self, request_builder, context: str = "",
+                                   max_retries: int = None, quota_cost: int = COST_DEFAULT):
+        """Execute a Google API request with backoff that respects Retry-After.
+
+        Acquires ``quota_cost`` tokens from the global rate limiter before
+        each attempt so the project-wide quota ceiling is respected across
+        all accounts.
+
+        Runs the synchronous google-api-python-client execute() in a thread
+        pool so it does not block the async event loop.
+        """
+        retries = max_retries if max_retries is not None else MAX_RETRIES
+        loop = asyncio.get_event_loop()
+        for attempt in range(retries):
             try:
-                return request_builder.execute()
+                await gmail_rate_limiter.acquire(quota_cost)
+                return await loop.run_in_executor(None, request_builder.execute)
             except HttpError as e:
-                if _is_rate_limit_error(e) and attempt < MAX_RETRIES - 1:
+                if _is_rate_limit_error(e) and attempt < retries - 1:
+                    # Drain the bucket so other concurrent callers also pause
+                    gmail_rate_limiter.drain()
                     await _rate_limit_sleep(e, attempt, context)
                     continue
                 raise
@@ -174,12 +191,29 @@ class GmailService:
         )
 
     async def batch_get_messages(self, message_ids: list[str], format_type: str = "full") -> list[dict]:
-        """Batch get messages with rate limit handling and Retry-After support."""
+        """Batch get messages with rate limit handling and Retry-After support.
+
+        When individual items inside a batch are rate-limited, they are
+        skipped rather than retried one-by-one (which would amplify quota
+        usage).  The next sync tick will pick them up via history.
+
+        If rate limiting is severe (>= 50% of items in a sub-batch, or 3+
+        consecutive sub-batches with any rate-limited items), raises the
+        underlying HttpError so the caller can abort early instead of
+        consuming quota for minutes while making minimal progress.
+        """
         service = self._get_service()
+        loop = asyncio.get_event_loop()
         results = []
+        consecutive_rl_batches = 0
 
         for i in range(0, len(message_ids), BATCH_INTERNAL_SIZE):
             batch_ids = message_ids[i:i + BATCH_INTERNAL_SIZE]
+
+            # Acquire tokens for the whole sub-batch up front
+            # (1 unit for the batch request + COST_GET per item)
+            batch_cost = 1 + COST_GET * len(batch_ids)
+            await gmail_rate_limiter.acquire(batch_cost)
 
             # Try the batch with retries
             for attempt in range(MAX_RETRIES):
@@ -210,10 +244,11 @@ class GmailService:
                     )
 
                 try:
-                    batch.execute()
+                    await loop.run_in_executor(None, batch.execute)
                 except HttpError as e:
                     # Entire batch rejected (e.g. quota at the HTTP level)
                     if _is_rate_limit_error(e) and attempt < MAX_RETRIES - 1:
+                        gmail_rate_limiter.drain()
                         await _rate_limit_sleep(e, attempt, "batch_execute")
                         continue
                     raise
@@ -224,27 +259,38 @@ class GmailService:
                     if batch_results.get(mid) is not None
                 ])
 
-                # If some individual messages were rate-limited, retry them one-by-one
+                # If some individual items were rate-limited, check severity
                 if rate_limited_ids:
-                    err_for_sleep = last_rate_error if last_rate_error else None
-                    if err_for_sleep:
-                        await _rate_limit_sleep(err_for_sleep, attempt,
-                                                f"batch items: {len(rate_limited_ids)} rate-limited")
-                    else:
-                        await asyncio.sleep(BASE_BACKOFF * (2 ** attempt))
-                    for mid in rate_limited_ids:
-                        try:
-                            msg = await self._execute_with_retry(
-                                service.users().messages().get(
-                                    userId="me", id=mid, format=format_type
-                                ),
-                                context=f"retry_single({mid})",
-                            )
-                            results.append(msg)
-                        except HttpError:
-                            logger.error(f"Giving up on message {mid} after retries")
+                    gmail_rate_limiter.drain()
+                    consecutive_rl_batches += 1
+                    rl_ratio = len(rate_limited_ids) / len(batch_ids)
 
-                # Done with this sub-batch
+                    # Abort if rate limiting is severe: either most items
+                    # in this batch failed, or we've had 3+ consecutive
+                    # sub-batches with any rate-limited items.  Continuing
+                    # would burn quota for minutes with minimal progress.
+                    if rl_ratio >= 0.5 or consecutive_rl_batches >= 3:
+                        logger.warning(
+                            f"Batch: {len(rate_limited_ids)} of {len(batch_ids)} items "
+                            f"rate-limited (consecutive={consecutive_rl_batches}) "
+                            f"-- aborting to preserve quota ({len(results)} msgs fetched so far)"
+                        )
+                        if last_rate_error:
+                            raise last_rate_error
+                        raise HttpError(
+                            resp=type('obj', (object,), {'status': 429})(),
+                            content=b'Rate limited: too many batch items failed',
+                        )
+
+                    logger.warning(
+                        f"Batch: {len(rate_limited_ids)} of {len(batch_ids)} items "
+                        f"rate-limited -- skipping (will retry next sync)"
+                    )
+                else:
+                    # Reset consecutive counter on a clean batch
+                    consecutive_rl_batches = 0
+
+                # Done with this sub-batch (success or partial)
                 break
 
             # Pace between sub-batches
@@ -252,8 +298,13 @@ class GmailService:
 
         return results
 
-    async def get_history(self, start_history_id: str, history_types: list[str] = None):
-        """Get history of changes since a given history ID."""
+    async def get_history(self, start_history_id: str, history_types: list[str] = None,
+                          max_retries: int = 2):
+        """Get history of changes since a given history ID.
+
+        Uses few retries by default -- incremental syncs should fail fast
+        and let the next cron tick retry rather than blocking the worker.
+        """
         service = self._get_service()
         if history_types is None:
             history_types = ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"]
@@ -274,6 +325,7 @@ class GmailService:
                 result = await self._execute_with_retry(
                     service.users().history().list(**kwargs),
                     context="get_history",
+                    max_retries=max_retries,
                 )
                 history = result.get("history", [])
                 all_history.extend(history)
@@ -368,12 +420,9 @@ class GmailService:
         if thread_id:
             body["threadId"] = thread_id
 
-        try:
-            result = service.users().messages().send(userId="me", body=body).execute()
-            return result.get("id", "")
-        except HttpError as e:
-            logger.error(f"Gmail API error sending email: {e}")
-            raise
+        request = service.users().messages().send(userId="me", body=body)
+        result = await self._execute_with_retry(request, context="send_email")
+        return result.get("id", "")
 
     async def create_draft(
         self,
@@ -407,12 +456,9 @@ class GmailService:
         if thread_id:
             draft_body["message"]["threadId"] = thread_id
 
-        try:
-            result = service.users().drafts().create(userId="me", body=draft_body).execute()
-            return result.get("id", "")
-        except HttpError as e:
-            logger.error(f"Gmail API error creating draft: {e}")
-            raise
+        request = service.users().drafts().create(userId="me", body=draft_body)
+        result = await self._execute_with_retry(request, context="create_draft")
+        return result.get("id", "")
 
     @staticmethod
     def parse_message(msg: dict) -> dict:

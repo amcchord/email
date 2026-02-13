@@ -21,7 +21,6 @@
   }
 
   const categoryColors = {
-    needs_response: '#3b82f6',
     urgent: '#ef4444',
     can_ignore: '#9ca3af',
     fyi: '#10b981',
