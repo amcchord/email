@@ -129,6 +129,7 @@ export const api = {
   // Accounts
   listAccounts: () => request('GET', '/accounts/'),
   startOAuth: () => request('GET', '/accounts/oauth/start'),
+  reauthorizeAccount: (accountId) => request('GET', `/accounts/${accountId}/reauthorize`),
   triggerSync: (accountId) => request('POST', `/accounts/${accountId}/sync`),
   getSyncStatus: (accountId) => request('GET', `/accounts/${accountId}/sync-status`),
 

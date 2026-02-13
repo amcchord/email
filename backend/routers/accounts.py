@@ -23,6 +23,7 @@ GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/gmail.labels",
+    "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
 ]
@@ -155,6 +156,63 @@ async def start_oauth(
         include_granted_scopes="true",
         prompt="consent",
         state=state,
+    )
+    return GoogleOAuthStart(auth_url=auth_url)
+
+
+@router.get("/{account_id}/reauthorize", response_model=GoogleOAuthStart)
+async def reauthorize_account(
+    account_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Start OAuth flow to reauthorize an existing account with updated scopes."""
+    # Verify the account belongs to this user
+    result = await db.execute(
+        select(GoogleAccount).where(
+            GoogleAccount.id == account_id,
+            GoogleAccount.user_id == user.id,
+        )
+    )
+    account = result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    from backend.services.credentials import get_google_credentials
+    client_id, client_secret = await get_google_credentials(db)
+
+    if not client_id or not client_secret:
+        raise HTTPException(
+            status_code=400,
+            detail="Google OAuth not configured. Go to Settings > API Keys to add your Google Client ID and Secret.",
+        )
+
+    from google_auth_oauthlib.flow import Flow
+
+    redirect_uri = _get_connect_redirect_uri()
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": [redirect_uri],
+            }
+        },
+        scopes=GMAIL_SCOPES,
+        redirect_uri=redirect_uri,
+    )
+
+    state_data = json.dumps({"user_id": user.id})
+    state = base64.urlsafe_b64encode(state_data.encode()).decode()
+
+    auth_url, _ = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+        state=state,
+        login_hint=account.email,
     )
     return GoogleOAuthStart(auth_url=auth_url)
 

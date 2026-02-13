@@ -144,6 +144,15 @@
     }
   }
 
+  async function reauthorizeAccount(id) {
+    try {
+      const result = await api.reauthorizeAccount(id);
+      window.location.href = result.auth_url;
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
   async function removeAccount(id) {
     try {
       await api.delete(`/accounts/${id}`);
@@ -551,6 +560,9 @@
                     {:else}
                       Sync
                     {/if}
+                  </Button>
+                  <Button size="sm" onclick={() => reauthorizeAccount(acct.id)}>
+                    Reauthorize
                   </Button>
                   <Button size="sm" variant="danger" onclick={() => removeAccount(acct.id)}>
                     Remove
