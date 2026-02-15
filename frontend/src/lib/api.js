@@ -160,6 +160,8 @@ export const api = {
     const qs = accountId ? `?account_id=${accountId}` : '';
     return request('POST', `/ai/rebuild-search-index${qs}`);
   },
+  generateReply: (emailId, prompt) =>
+    request('POST', '/ai/generate-reply', { email_id: emailId, prompt }),
   getNeedsReply: (params = {}) => {
     const searchParams = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {

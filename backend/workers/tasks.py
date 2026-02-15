@@ -833,6 +833,55 @@ async def generate_digests_for_account(ctx, account_id: int, max_digests: int = 
             logger.error(f"Failed to generate digest for thread {thread_id}: {e}")
 
 
+async def generate_digests_for_threads(
+    ctx,
+    thread_account_pairs: list[list],
+):
+    """Generate thread digests for specific thread+account pairs.
+
+    Called as a background job when the awaiting-response endpoint finds
+    threads that lack a ThreadDigest.  Only processes threads with 2+
+    messages (the digest requirement).
+
+    thread_account_pairs: list of [gmail_thread_id, account_id] pairs
+    (arq serialises tuples as lists).
+    """
+    if not thread_account_pairs:
+        return
+
+    # Group by account so we can resolve context once per account
+    from collections import defaultdict
+    by_account = defaultdict(list)
+    for pair in thread_account_pairs:
+        thread_id, account_id = pair[0], pair[1]
+        by_account[account_id].append(thread_id)
+
+    for account_id, thread_ids in by_account.items():
+        model = await _resolve_model_for_account(account_id)
+        user_id = await _resolve_user_id_for_account(account_id)
+        user_context = await _resolve_user_context(user_id)
+        acct_descs = await _resolve_account_descriptions([account_id])
+        acct_desc = acct_descs.get(account_id)
+
+        ai_service = AIService(model=model)
+        for thread_id in thread_ids:
+            try:
+                await ai_service.generate_thread_digest(
+                    thread_id,
+                    account_id,
+                    user_context=user_context,
+                    account_description=acct_desc,
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to generate digest for awaiting thread {thread_id}: {e}"
+                )
+
+    logger.info(
+        f"Finished generating digests for {len(thread_account_pairs)} awaiting-response threads"
+    )
+
+
 async def generate_bundles_for_user(ctx, user_id: int, model: str = None):
     """Generate topic bundles for a user across all their accounts."""
     from backend.services.bundler import bundle_by_topics
@@ -906,6 +955,7 @@ class WorkerSettings:
         analyze_recent_unanalyzed,
         auto_categorize_account,
         generate_digests_for_account,
+        generate_digests_for_threads,
         generate_bundles_for_user,
         sync_calendar_full,
         sync_calendar_incremental,

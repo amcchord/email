@@ -570,7 +570,7 @@ async def get_needs_reply(
     # Inner query: use DISTINCT ON (gmail_thread_id) to keep only the
     # latest "needs reply" email per thread.  DISTINCT ON requires the
     # ORDER BY to start with the DISTINCT ON columns.
-    deduped = (
+    deduped_by_thread = (
         select(
             Email.id,
             Email.subject,
@@ -580,6 +580,7 @@ async def get_needs_reply(
             Email.snippet,
             Email.is_read,
             Email.gmail_thread_id,
+            Email.message_id_header,
             AIAnalysis.category,
             AIAnalysis.priority,
             AIAnalysis.summary,
@@ -597,6 +598,20 @@ async def get_needs_reply(
         )
         .distinct(Email.gmail_thread_id)
         .order_by(Email.gmail_thread_id, desc(Email.date))
+    ).subquery()
+
+    # Second dedup layer: collapse cross-account duplicates.  The same
+    # email delivered to multiple connected accounts shares the same
+    # Message-ID header but gets different gmail_thread_ids.  COALESCE
+    # falls back to gmail_thread_id when message_id_header is NULL.
+    dedup_key = func.coalesce(
+        deduped_by_thread.c.message_id_header,
+        deduped_by_thread.c.gmail_thread_id,
+    )
+    deduped = (
+        select(deduped_by_thread)
+        .distinct(dedup_key)
+        .order_by(dedup_key, desc(deduped_by_thread.c.date))
     ).subquery()
 
     # Count total (after dedup)
@@ -653,7 +668,15 @@ async def get_awaiting_response(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Get emails the user sent that haven't received a reply yet."""
+    """Get emails the user sent that haven't received a reply yet.
+
+    Filters out threads that are resolved (per AI ThreadDigest) and
+    short reply-like closing messages that don't expect a response.
+    """
+    from sqlalchemy.orm import aliased
+    from sqlalchemy import or_, func as sqla_func
+    from backend.models.ai import ThreadDigest
+
     account_ids = await _get_user_account_ids(db, user)
 
     if not account_ids:
@@ -663,7 +686,6 @@ async def get_awaiting_response(
 
     # Find sent emails where no reply has been received in the same thread
     # after the sent email's date
-    from sqlalchemy.orm import aliased
     ReplyEmail = aliased(Email, flat=True)
     has_reply = (
         select(literal(1))
@@ -678,10 +700,33 @@ async def get_awaiting_response(
         .exists()
     )
 
+    # Heuristic: detect short closing replies that don't expect a response.
+    # If the sent email is a reply in a thread (there's a received email
+    # before it) AND the snippet is very short, it's likely a closing
+    # message like "sounds good", "let's do it", "thanks!" etc.
+    PriorEmail = aliased(Email, flat=True)
+    has_prior_received = (
+        select(literal(1))
+        .where(
+            PriorEmail.gmail_thread_id == Email.gmail_thread_id,
+            PriorEmail.account_id.in_(account_ids),
+            PriorEmail.is_sent == False,
+            PriorEmail.is_trash == False,
+            PriorEmail.date < Email.date,
+        )
+        .correlate(Email)
+        .exists()
+    )
+    is_short_closing_reply = and_(
+        has_prior_received,
+        sqla_func.length(sqla_func.coalesce(Email.snippet, '')) < 50,
+    )
+
     seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
 
-    # Use DISTINCT ON to get only the latest sent email per thread
-    deduped = (
+    # Use DISTINCT ON to get only the latest sent email per thread.
+    # Also LEFT JOIN with ThreadDigest to exclude resolved threads.
+    deduped_by_thread = (
         select(
             Email.id,
             Email.subject,
@@ -689,6 +734,15 @@ async def get_awaiting_response(
             Email.date,
             Email.snippet,
             Email.gmail_thread_id,
+            Email.account_id,
+            Email.message_id_header,
+        )
+        .outerjoin(
+            ThreadDigest,
+            and_(
+                ThreadDigest.gmail_thread_id == Email.gmail_thread_id,
+                ThreadDigest.account_id == Email.account_id,
+            ),
         )
         .where(
             account_filter,
@@ -697,9 +751,28 @@ async def get_awaiting_response(
             Email.is_spam == False,
             Email.date >= seven_days_ago,
             ~has_reply,
+            # Exclude threads the AI has marked as resolved
+            or_(
+                ThreadDigest.is_resolved == False,
+                ThreadDigest.is_resolved.is_(None),
+            ),
+            # Exclude short closing replies (heuristic fallback)
+            ~is_short_closing_reply,
         )
         .distinct(Email.gmail_thread_id)
         .order_by(Email.gmail_thread_id, desc(Email.date))
+    ).subquery()
+
+    # Second dedup layer: collapse cross-account duplicates.  The same
+    # sent email visible in multiple accounts shares the same Message-ID.
+    ar_dedup_key = func.coalesce(
+        deduped_by_thread.c.message_id_header,
+        deduped_by_thread.c.gmail_thread_id,
+    )
+    deduped = (
+        select(deduped_by_thread)
+        .distinct(ar_dedup_key)
+        .order_by(ar_dedup_key, desc(deduped_by_thread.c.date))
     ).subquery()
 
     # Count total
@@ -717,6 +790,7 @@ async def get_awaiting_response(
     )
 
     emails = []
+    thread_account_pairs = []
     for row in result.all():
         to_addrs = row.to_addresses or []
         # Extract first recipient name/address
@@ -737,8 +811,73 @@ async def get_awaiting_response(
             "snippet": row.snippet,
             "gmail_thread_id": row.gmail_thread_id,
         })
+        thread_account_pairs.append((row.gmail_thread_id, row.account_id))
+
+    # Ensure digest coverage: find awaiting-response threads that lack a
+    # ThreadDigest and enqueue background generation so the next page load
+    # benefits from the is_resolved filter.
+    if thread_account_pairs:
+        try:
+            await _enqueue_missing_digests(db, thread_account_pairs)
+        except Exception:
+            logger.debug("Failed to enqueue missing digests", exc_info=True)
 
     return {"emails": emails, "total": total}
+
+
+async def _enqueue_missing_digests(
+    db: AsyncSession,
+    thread_account_pairs: list[tuple[str, int]],
+):
+    """Enqueue digest generation for threads that don't have one yet.
+
+    Only enqueues threads with 2+ messages (digest requirement).
+    Runs as a fire-and-forget background task to avoid slowing the response.
+    """
+    from backend.models.ai import ThreadDigest
+
+    if not thread_account_pairs:
+        return
+
+    # Deduplicate
+    unique_pairs = list(set(thread_account_pairs))
+
+    # Check which threads already have a digest
+    thread_ids = [tid for tid, _ in unique_pairs]
+    existing_result = await db.execute(
+        select(
+            ThreadDigest.gmail_thread_id,
+            ThreadDigest.account_id,
+        ).where(
+            ThreadDigest.gmail_thread_id.in_(thread_ids),
+        )
+    )
+    existing = set((r[0], r[1]) for r in existing_result.all())
+
+    missing = [
+        (tid, aid) for tid, aid in unique_pairs
+        if (tid, aid) not in existing
+    ]
+
+    if not missing:
+        return
+
+    # Enqueue a background job to generate digests for the missing threads
+    from backend.workers.tasks import parse_redis_url
+    from arq import create_pool
+
+    redis = await create_pool(parse_redis_url(settings.redis_url))
+    try:
+        await redis.enqueue_job(
+            "generate_digests_for_threads",
+            missing,
+        )
+    finally:
+        await redis.close()
+
+    logger.debug(
+        f"Enqueued digest generation for {len(missing)} awaiting-response threads"
+    )
 
 
 @router.get("/subscriptions")
@@ -1236,6 +1375,54 @@ async def draft_action(
         todo.ai_draft_status = None
         await db.commit()
         raise HTTPException(status_code=500, detail=f"Failed to draft: {str(e)}")
+
+
+@router.post("/generate-reply")
+async def generate_reply(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Generate a custom AI reply based on a user-provided prompt."""
+    email_id = body.get("email_id")
+    prompt = body.get("prompt", "").strip()
+    if not email_id:
+        raise HTTPException(status_code=400, detail="email_id is required")
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+
+    # Verify access
+    result = await db.execute(select(Email).where(Email.id == email_id))
+    email = result.scalar_one_or_none()
+    if not email:
+        raise HTTPException(status_code=404, detail="Email not found")
+
+    account_ids = await _get_user_account_ids(db, user)
+    if email.account_id not in account_ids:
+        raise HTTPException(status_code=404, detail="Email not found")
+
+    # Load account description and email for context
+    acct_result = await db.execute(
+        select(GoogleAccount.description, GoogleAccount.email).where(GoogleAccount.id == email.account_id)
+    )
+    acct_row = acct_result.first()
+    acct_desc = acct_row[0] if acct_row else None
+    acct_email = acct_row[1] if acct_row else None
+
+    try:
+        model = await get_model_for_user(user.id)
+        ai = AIService(model=model)
+        result = await ai.generate_custom_reply(
+            email_id,
+            user_prompt=prompt,
+            user_context=user.about_me,
+            account_description=acct_desc,
+            account_email=acct_email,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Generate reply error: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate reply: {str(e)}")
 
 
 @router.post("/approve-action/{todo_id}")

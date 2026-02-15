@@ -741,6 +741,149 @@ Write a concise, professional reply that addresses this specific action item. Wr
                 await db.commit()
                 raise
 
+    async def generate_custom_reply(
+        self,
+        email_id: int,
+        user_prompt: str,
+        user_context: Optional[str] = None,
+        account_description: Optional[str] = None,
+        account_email: Optional[str] = None,
+    ) -> dict:
+        """Generate a custom reply or new email based on a user-provided prompt instruction.
+
+        Returns a dict with: body, and optionally to, cc, subject, is_new_email
+        when the instruction calls for a new compose rather than a thread reply.
+        """
+        async with async_session() as db:
+            result = await db.execute(select(Email).where(Email.id == email_id))
+            email = result.scalar_one_or_none()
+            if not email:
+                raise ValueError(f"Email {email_id} not found")
+
+            body = email.body_text or email.snippet or ""
+            if len(body) > 5000:
+                body = body[:5000] + "..."
+
+            # Build user context preamble
+            context_preamble = ""
+            context_parts = []
+            if account_email:
+                context_parts.append(
+                    f"You are drafting on behalf of {account_email}. "
+                    f"Write FROM {account_email}'s perspective."
+                )
+            if user_context:
+                context_parts.append(f"About the user: {user_context}")
+            if account_description:
+                context_parts.append(f"This email is from their account used for: {account_description}")
+            if context_parts:
+                context_preamble = "\n".join(context_parts) + "\n\n"
+
+            # Build thread context
+            thread_context = ""
+            if email.gmail_thread_id:
+                thread_result = await db.execute(
+                    select(Email)
+                    .where(
+                        Email.gmail_thread_id == email.gmail_thread_id,
+                        Email.account_id == email.account_id,
+                        Email.id != email.id,
+                    )
+                    .order_by(desc(Email.date))
+                    .limit(5)
+                )
+                thread_emails = thread_result.scalars().all()
+                if thread_emails:
+                    lines = []
+                    for te in reversed(thread_emails):
+                        direction = "[Sent by you]" if te.is_sent else "[Received]"
+                        date_str = te.date.strftime("%Y-%m-%d %H:%M") if te.date else "unknown date"
+                        snippet = (te.snippet or "")[:120]
+                        lines.append(f"  {direction} {date_str} — {te.from_name or te.from_address}: {snippet}")
+                    thread_context = (
+                        "\n\nThread context (other messages in this conversation, oldest first):\n"
+                        + "\n".join(lines)
+                    )
+
+            # Calendar context for scheduling-related prompts
+            calendar_context = ""
+            scheduling_keywords = ["meeting", "calendar", "schedule", "invite", "rsvp",
+                                   "appointment", "call", "sync", "standup", "1:1",
+                                   "one-on-one", "catch up", "reschedule", "availability",
+                                   "later date", "another time", "postpone"]
+            prompt_lower = user_prompt.lower()
+            subject_lower = (email.subject or "").lower()
+            body_lower = body[:500].lower()
+            is_scheduling = any(
+                kw in subject_lower or kw in body_lower or kw in prompt_lower
+                for kw in scheduling_keywords
+            )
+            if is_scheduling:
+                try:
+                    calendar_context = await self._get_upcoming_events_context(email.account_id)
+                except Exception as cal_err:
+                    logger.debug(f"Could not load calendar context for custom reply: {cal_err}")
+
+            prompt = f"""{context_preamble}{calendar_context}You are an intelligent email assistant. The user is looking at an email and has given you an instruction. Based on the instruction, decide whether to draft a reply to the current thread OR compose an entirely new email.
+
+The email the user is currently viewing:
+From: {email.from_name or ''} <{email.from_address or ''}>
+To: {json.dumps(email.to_addresses or [])}
+Subject: {email.subject or '(no subject)'}
+Date: {email.date}
+{thread_context}
+Body:
+{body}
+
+User's instruction: {user_prompt}
+
+Respond with ONLY valid JSON in this exact format:
+{{
+    "is_new_email": <true if this needs a NEW email (introduction, forwarding to someone new, reaching out to a new person, etc.), false if this is a reply in the current thread>,
+    "to": <array of email addresses for the TO field — required if is_new_email is true, omit or null if replying in thread>,
+    "cc": <array of email addresses for the CC field — optional, omit or null if not needed>,
+    "subject": <subject line — required if is_new_email is true, omit or null if replying in thread>,
+    "body": <the full email body text>
+}}
+
+Guidelines:
+- If the instruction mentions introducing, connecting, or forwarding someone to a new person, that is a NEW email (is_new_email: true). Put both parties in the TO field so they can both see and reply.
+- For introductions, write a warm, professional intro that explains who each person is and why they should connect, using context from the email thread.
+- If the instruction is about replying, declining, accepting, deferring, or otherwise responding to the sender, that is a reply (is_new_email: false).
+- Extract any email addresses mentioned in the user's instruction for the to/cc fields.
+- If the user mentions a person by name but no email address, use the email address from the current email context if it matches, otherwise include the name in the body and leave it out of to/cc.
+- Write naturally and concisely. Match the user's tone from the instruction.
+- Write ONLY the JSON, nothing else."""
+
+            response = await self._call_claude(
+                model=self.model,
+                max_tokens=800,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            response_text = response.content[0].text.strip()
+
+            # Parse JSON response
+            if response_text.startswith("```"):
+                lines = response_text.split("\n")
+                response_text = "\n".join(lines[1:-1])
+
+            try:
+                data = json.loads(response_text)
+            except json.JSONDecodeError:
+                # Fallback: treat entire response as plain reply body
+                return {"body": response_text, "is_new_email": False}
+
+            result = {"body": data.get("body", ""), "is_new_email": bool(data.get("is_new_email", False))}
+            if result["is_new_email"]:
+                if data.get("to"):
+                    result["to"] = data["to"]
+                if data.get("cc"):
+                    result["cc"] = data["cc"]
+                if data.get("subject"):
+                    result["subject"] = data["subject"]
+            return result
+
     async def auto_categorize_newest(
         self,
         account_id: int,

@@ -57,6 +57,11 @@
 
   let hasReplyContent = $derived(replyBodyHtml && replyBodyHtml.replace(/<[^>]*>/g, '').trim().length > 0);
 
+  // --- Custom prompt state ---
+  let customPromptOpen = $state(false);
+  let customPromptText = $state('');
+  let customPromptLoading = $state(false);
+
   // --- Resizable pane state ---
   let topPanePercent = $state(parseFloat(localStorage.getItem('flowTopPanePercent')) || 40);
   let isDraggingDivider = $state(false);
@@ -591,6 +596,9 @@
     replyIntent = null;
     collapsedMessages = {};
     selectedOptionIndex = -1;
+    customPromptOpen = false;
+    customPromptText = '';
+    customPromptLoading = false;
 
     if (option) {
       initialReplyContent = '<p>' + (option.body || '').replace(/\n/g, '</p><p>') + '</p>';
@@ -707,7 +715,45 @@
     replyBodyHtml = '';
     replyIntent = null;
     selectedOptionIndex = -1;
+    customPromptOpen = false;
+    customPromptText = '';
     editorKey++;
+  }
+
+  async function generateCustomReply() {
+    if (!customPromptText.trim() || !selectedReplyEmail) return;
+    customPromptLoading = true;
+    try {
+      const result = await api.generateReply(selectedReplyEmail.id, customPromptText.trim());
+      if (result && result.body) {
+        if (result.is_new_email) {
+          // AI determined this needs a new compose (e.g. introduction, forward to new person)
+          const bodyHtml = '<p>' + result.body.replace(/\n/g, '</p><p>') + '</p>';
+          composeData.set({
+            to: result.to || [],
+            cc: result.cc || [],
+            subject: result.subject || '',
+            body_html: bodyHtml,
+          });
+          customPromptOpen = false;
+          customPromptText = '';
+          currentPage.set('compose');
+        } else {
+          // Normal reply in the current thread
+          initialReplyContent = '<p>' + result.body.replace(/\n/g, '</p><p>') + '</p>';
+          replyBodyHtml = initialReplyContent;
+          replyIntent = 'custom';
+          selectedOptionIndex = -1;
+          customPromptOpen = false;
+          customPromptText = '';
+          editorKey++;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to generate custom reply:', err);
+    } finally {
+      customPromptLoading = false;
+    }
   }
 
   function toggleMessageCollapse(msgId) {
@@ -937,8 +983,17 @@
 
       <!-- Active conversation label -->
       {#if activeConversationId}
-        <div class="px-3 py-1.5 border-b" style="border-color: var(--border-color)">
-          <span class="text-[10px] px-2 py-0.5 rounded-full" style="background: var(--bg-tertiary); color: var(--text-tertiary)">
+        <div class="px-3 py-1.5 border-b flex items-center gap-2" style="border-color: var(--border-color)">
+          <button
+            onclick={startNewChat}
+            class="flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium transition-fast shrink-0"
+            style="color: var(--color-accent-600)"
+            title="Back to conversations"
+          >
+            <Icon name="arrow-left" size={12} />
+            Back
+          </button>
+          <span class="text-[10px] px-2 py-0.5 rounded-full truncate" style="background: var(--bg-tertiary); color: var(--text-tertiary)">
             {conversations.find(c => c.id === activeConversationId)?.title || 'Conversation'}
           </span>
         </div>
@@ -1376,7 +1431,44 @@
                     <p class="text-[11px] leading-relaxed line-clamp-3 {intentStyle.text}" style="opacity: 0.75">{option.body}</p>
                   </div>
                 {/each}
+                <!-- Custom prompt card -->
+                <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
+                <div
+                  onclick={() => { customPromptOpen = !customPromptOpen; }}
+                  class="rounded-lg border-2 border-dashed p-3 cursor-pointer transition-fast shrink-0 flex flex-col items-center justify-center gap-1.5"
+                  style="width: 140px; border-color: var(--border-color); opacity: {customPromptOpen ? 1 : 0.6}; {customPromptOpen ? 'border-color: var(--color-accent-500); background: color-mix(in srgb, var(--color-accent-500) 5%, transparent)' : ''}"
+                >
+                  <Icon name="edit-3" size={16} />
+                  <span class="text-[11px] font-medium" style="color: var(--text-secondary)">Custom...</span>
+                </div>
               </div>
+              {#if customPromptOpen}
+                <div class="mt-2 flex items-center gap-2">
+                  <input
+                    type="text"
+                    bind:value={customPromptText}
+                    placeholder="e.g., Suggest meeting at a later date..."
+                    class="flex-1 text-xs px-3 py-2 rounded-lg border outline-none"
+                    style="border-color: var(--border-color); background: var(--bg-primary); color: var(--text-primary)"
+                    disabled={customPromptLoading}
+                    onkeydown={(e) => { if (e.key === 'Enter' && !customPromptLoading) generateCustomReply(); if (e.key === 'Escape') { customPromptOpen = false; customPromptText = ''; } }}
+                  />
+                  <button
+                    onclick={generateCustomReply}
+                    disabled={customPromptLoading || !customPromptText.trim()}
+                    class="px-3 py-2 rounded-lg text-xs font-medium transition-fast shrink-0 flex items-center gap-1.5"
+                    style="background: var(--color-accent-500); color: white; opacity: {customPromptLoading || !customPromptText.trim() ? '0.5' : '1'}"
+                  >
+                    {#if customPromptLoading}
+                      <span class="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                      Generating...
+                    {:else}
+                      <Icon name="zap" size={12} />
+                      Generate
+                    {/if}
+                  </button>
+                </div>
+              {/if}
             </div>
           {:else if selectedReplyEmail.suggested_reply}
             <div class="px-5 py-2.5 border-b shrink-0" style="border-color: var(--border-color); background: var(--bg-secondary)">

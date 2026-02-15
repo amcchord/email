@@ -47,6 +47,15 @@
     });
   });
 
+  // Sync content prop changes into TipTap after mount
+  let lastSetContent = $state(content);
+  $effect(() => {
+    if (editor && content !== lastSetContent) {
+      lastSetContent = content;
+      editor.commands.setContent(content, false);
+    }
+  });
+
   onDestroy(() => {
     if (editor) {
       editor.destroy();
