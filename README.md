@@ -151,20 +151,27 @@ All configuration is done through the `.env` file in the project root. The backe
 
 ## Google OAuth Setup
 
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
-2. Create a new project (or select an existing one).
-3. Navigate to **APIs & Services > Library** and enable the **Gmail API**.
-4. Navigate to **APIs & Services > Credentials**.
-5. Click **Create Credentials > OAuth 2.0 Client ID**.
-   - Application type: **Web application**
-   - Authorized redirect URIs: add `https://yourdomain.com/api/auth/google/callback`
-6. Copy the **Client ID** and **Client Secret** into your `.env` file as `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`.
-7. Set `GOOGLE_REDIRECT_URI` in `.env` to the same redirect URI you registered.
-8. Under **OAuth consent screen**, configure the app name, support email, and scopes. You will need at minimum:
-   - `https://www.googleapis.com/auth/gmail.modify`
-   - `https://www.googleapis.com/auth/gmail.send`
-   - `https://www.googleapis.com/auth/userinfo.email`
-   - `https://www.googleapis.com/auth/userinfo.profile`
+The app requires a Google Cloud project with OAuth 2.0 credentials to access Gmail and Google Calendar. You will need to:
+
+1. Create a Google Cloud project and enable the **Gmail API** and **Google Calendar API**.
+2. Configure the **OAuth consent screen** with the required scopes.
+3. Create **OAuth 2.0 credentials** (Web application type) with two redirect URIs -- one for login and one for connecting accounts.
+4. Copy the Client ID and Client Secret into your `.env` file.
+
+The full list of required scopes:
+
+| Scope | Purpose |
+| --- | --- |
+| `openid` | OpenID Connect authentication |
+| `userinfo.email` | Identify users by email |
+| `userinfo.profile` | Display name and profile picture |
+| `gmail.readonly` | Read email messages and metadata |
+| `gmail.send` | Send and reply to emails |
+| `gmail.modify` | Mark read/unread, star, archive, trash, spam, labels |
+| `gmail.labels` | List and manage Gmail labels |
+| `calendar.readonly` | Read calendar events (for calendar view and AI context) |
+
+**For a detailed, step-by-step walkthrough** -- including screenshots guidance, troubleshooting, and how to handle Google's verification process -- see the **[Google Cloud Setup Guide](docs/google-setup.md)**.
 
 ## Running the Application
 
