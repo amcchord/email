@@ -37,11 +37,11 @@
   let loadingConversation = $state(false);
   let conversationMessages = $state([]);
   let messagesContainer = $state(null);
-  let chatHistoryOpen = $state(false);
   let expandedTasks = $state({});
 
   // --- Reply View State ---
   let replyViewOpen = $state(false);
+  let viewSource = $state('needs_reply'); // 'needs_reply' | 'awaiting' | 'thread'
   let activeReplyIndex = $state(0);
   let selectedReplyEmail = $state(null);
   let threadData = $state(null);
@@ -80,6 +80,64 @@
 
     function onMouseUp() {
       isDraggingDivider = false;
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    }
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  }
+
+  // --- Resizable sidebar state ---
+  let chatWidthPx = $state(parseInt(localStorage.getItem('flowChatWidthPx')) || 340);
+  let isDraggingSidebar = $state(false);
+
+  $effect(() => {
+    localStorage.setItem('flowChatWidthPx', String(chatWidthPx));
+  });
+
+  function startSidebarDrag(e) {
+    e.preventDefault();
+    isDraggingSidebar = true;
+
+    function onMouseMove(ev) {
+      const x = ev.clientX;
+      chatWidthPx = Math.min(600, Math.max(200, x));
+    }
+
+    function onMouseUp() {
+      isDraggingSidebar = false;
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    }
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  }
+
+  // --- Resizable bottom columns state ---
+  let bottomLeftPercent = $state(parseFloat(localStorage.getItem('flowBottomLeftPercent')) || 50);
+  let isDraggingBottomCol = $state(false);
+  let bottomColContainerEl = $state(null);
+
+  $effect(() => {
+    localStorage.setItem('flowBottomLeftPercent', String(bottomLeftPercent));
+  });
+
+  function startBottomColDrag(e) {
+    e.preventDefault();
+    isDraggingBottomCol = true;
+
+    function onMouseMove(ev) {
+      if (!bottomColContainerEl) return;
+      const rect = bottomColContainerEl.getBoundingClientRect();
+      const x = ev.clientX - rect.left;
+      const pct = (x / rect.width) * 100;
+      bottomLeftPercent = Math.min(75, Math.max(25, pct));
+    }
+
+    function onMouseUp() {
+      isDraggingBottomCol = false;
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
     }
@@ -170,7 +228,6 @@
     loadingConversation = true;
     activeConversationId = id;
     currentConversationId.set(id);
-    chatHistoryOpen = false;
     resetChatState();
 
     try {
@@ -240,7 +297,6 @@
     currentConversationId.set(null);
     conversationMessages = [];
     messageInput = '';
-    chatHistoryOpen = false;
   }
 
   async function sendMessage() {
@@ -527,6 +583,7 @@
   async function openReplyView(email, index, option) {
     selectedReplyEmail = email;
     activeReplyIndex = index;
+    viewSource = 'needs_reply';
     replyViewOpen = true;
     threadLoading = true;
     threadData = null;
@@ -566,8 +623,68 @@
     threadLoading = false;
   }
 
+  async function openThreadInFlow(threadId, metadata, source) {
+    viewSource = source;
+    replyViewOpen = true;
+    threadLoading = true;
+    threadData = null;
+    replyBodyHtml = '';
+    replyIntent = null;
+    collapsedMessages = {};
+    selectedOptionIndex = -1;
+    initialReplyContent = '';
+    activeReplyIndex = 0;
+    editorKey++;
+
+    // Build a minimal email-like object for the reply view header
+    selectedReplyEmail = {
+      subject: metadata.subject || '(no subject)',
+      from_name: metadata.from_name || '',
+      from_address: metadata.from_address || '',
+      date: metadata.date || null,
+      gmail_thread_id: threadId,
+      id: metadata.id || null,
+      snippet: metadata.snippet || '',
+      summary: metadata.summary || '',
+      reply_options: null,
+      suggested_reply: null,
+      category: null,
+    };
+
+    if (threadId) {
+      try {
+        const data = await api.getThread(threadId);
+        threadData = data;
+        if (data.emails && data.emails.length > 1) {
+          let collapsed = {};
+          for (let i = 0; i < data.emails.length - 1; i++) {
+            collapsed[data.emails[i].id] = true;
+          }
+          collapsedMessages = collapsed;
+        }
+
+        // Derive reply-to from the thread's latest inbound message
+        if (data.emails && data.emails.length > 0) {
+          const lastInbound = [...data.emails].reverse().find(m => !m.is_sent);
+          if (lastInbound) {
+            selectedReplyEmail = {
+              ...selectedReplyEmail,
+              from_name: lastInbound.from_name || selectedReplyEmail.from_name,
+              from_address: lastInbound.from_address || selectedReplyEmail.from_address,
+              date: lastInbound.date || selectedReplyEmail.date,
+            };
+          }
+        }
+      } catch (err) {
+        showToast('Failed to load thread: ' + err.message, 'error');
+      }
+    }
+    threadLoading = false;
+  }
+
   function closeReplyView() {
     replyViewOpen = false;
+    viewSource = 'needs_reply';
     selectedReplyEmail = null;
     threadData = null;
     replyBodyHtml = '';
@@ -731,16 +848,19 @@
       });
       showToast('Reply sent!', 'success');
 
-      // Archive if toggled
-      if (archiveAfterSend) {
-        try {
-          await api.emailActions([email.id], 'archive');
-        } catch {
-          // silent fail on archive
+      if (viewSource === 'needs_reply') {
+        // Archive if toggled
+        if (archiveAfterSend && email.id) {
+          try {
+            await api.emailActions([email.id], 'archive');
+          } catch {
+            // silent fail on archive
+          }
         }
+        removeCurrentAndAdvance();
+      } else {
+        closeReplyView();
       }
-
-      removeCurrentAndAdvance();
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -767,12 +887,12 @@
   }
 </script>
 
-<div class="h-full flex" style="background: var(--bg-primary)">
+<div class="h-full flex" style="background: var(--bg-primary); {isDraggingSidebar ? 'user-select: none; cursor: col-resize' : ''}{isDraggingBottomCol ? 'user-select: none; cursor: col-resize' : ''}">
 
   <!-- ============ LEFT SIDEBAR: CHAT ============ -->
   <div
-    class="h-full shrink-0 flex flex-col border-r transition-all duration-300"
-    style="border-color: var(--border-color); background: var(--bg-secondary); width: {chatCollapsed ? '48px' : '340px'}"
+    class="h-full shrink-0 flex flex-col border-r {isDraggingSidebar ? '' : 'transition-all duration-300'}"
+    style="border-color: var(--border-color); background: var(--bg-secondary); width: {chatCollapsed ? '48px' : chatWidthPx + 'px'}"
   >
     {#if chatCollapsed}
       <!-- Collapsed: just an icon button -->
@@ -804,68 +924,6 @@
               <Icon name="plus" size={14} />
             </button>
           {/if}
-          <div class="relative">
-            <button
-              onclick={() => { chatHistoryOpen = !chatHistoryOpen; }}
-              class="p-1 rounded-md transition-fast"
-              style="color: var(--text-tertiary)"
-              title="History"
-            >
-              <Icon name="clock" size={14} />
-              {#if conversations.length > 0}
-                <span class="absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full text-[8px] font-bold flex items-center justify-center" style="background: var(--color-accent-500); color: white">{conversations.length > 9 ? '9+' : conversations.length}</span>
-              {/if}
-            </button>
-
-            {#if chatHistoryOpen}
-              <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-              <div class="fixed inset-0 z-40" onclick={() => { chatHistoryOpen = false; }}></div>
-              <div
-                class="absolute left-0 top-full mt-1 z-50 w-72 max-h-80 rounded-lg border shadow-lg overflow-hidden"
-                style="background: var(--bg-secondary); border-color: var(--border-color)"
-              >
-                <div class="px-3 py-2 border-b flex items-center justify-between" style="border-color: var(--border-color)">
-                  <span class="text-[10px] font-semibold uppercase tracking-wider" style="color: var(--text-tertiary)">Conversations</span>
-                  <button
-                    onclick={startNewChat}
-                    class="text-[10px] px-2 py-0.5 rounded font-medium transition-fast"
-                    style="background: var(--color-accent-500); color: white"
-                  >New Chat</button>
-                </div>
-                <div class="overflow-y-auto max-h-64">
-                  {#if conversations.length === 0}
-                    <div class="p-4 text-center text-xs" style="color: var(--text-tertiary)">No conversations yet</div>
-                  {:else}
-                    {#each conversations as conv}
-                      <div
-                        role="button"
-                        tabindex="0"
-                        onclick={() => loadConversation(conv.id)}
-                        onkeydown={(e) => { if (e.key === 'Enter') loadConversation(conv.id); }}
-                        class="px-3 py-2 border-b transition-fast group relative cursor-pointer"
-                        style="border-color: var(--border-color); background: {activeConversationId === conv.id ? 'var(--bg-hover)' : 'transparent'}"
-                      >
-                        <div class="text-xs truncate pr-5" style="color: {activeConversationId === conv.id ? 'var(--text-primary)' : 'var(--text-secondary)'}">
-                          {conv.title || 'Untitled'}
-                        </div>
-                        <div class="text-[9px] mt-0.5" style="color: var(--text-tertiary)">
-                          {formatDate(conv.created_at)}
-                        </div>
-                        <button
-                          onclick={(e) => { e.stopPropagation(); deleteConversation(conv.id); }}
-                          class="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded transition-fast"
-                          style="color: var(--text-tertiary)"
-                          title="Delete"
-                        >
-                          <Icon name="x" size={12} />
-                        </button>
-                      </div>
-                    {/each}
-                  {/if}
-                </div>
-              </div>
-            {/if}
-          </div>
           <button
             onclick={() => { chatCollapsed = true; }}
             class="p-1 rounded-md transition-fast"
@@ -889,30 +947,57 @@
       <!-- Chat Messages -->
       <div bind:this={messagesContainer} class="flex-1 overflow-y-auto p-3 space-y-3">
         {#if conversationMessages.length === 0 && !isProcessing}
-          <!-- Empty state -->
-          <div class="flex flex-col items-center justify-center py-6 text-center px-2">
-            <div class="w-10 h-10 rounded-xl flex items-center justify-center mb-2" style="background: var(--color-accent-500)/10; color: var(--color-accent-500)">
-              <Icon name="zap" size={20} />
-            </div>
-            <h3 class="text-xs font-semibold mb-1" style="color: var(--text-primary)">Ask about your emails</h3>
-            <p class="text-[10px] mb-3" style="color: var(--text-secondary)">
-              Search, summarize, and get insights.
-            </p>
-            <div class="flex flex-col gap-1.5 w-full">
-              {#each [
-                'Summarize my unread emails',
-                'What needs my attention?',
-                'Find recent receipts',
-              ] as suggestion}
+          <!-- Empty state with conversation history -->
+          <div class="flex flex-col px-1">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-[10px] font-semibold uppercase tracking-wider" style="color: var(--text-tertiary)">History</span>
+              {#if conversations.length > 0}
                 <button
-                  onclick={() => { messageInput = suggestion; }}
-                  class="px-2.5 py-1.5 rounded-lg text-[10px] border transition-fast text-left"
-                  style="border-color: var(--border-color); color: var(--text-secondary); background: var(--bg-primary)"
-                >
-                  {suggestion}
-                </button>
-              {/each}
+                  onclick={startNewChat}
+                  class="text-[10px] px-2 py-0.5 rounded font-medium transition-fast"
+                  style="background: var(--color-accent-500); color: white"
+                >New Chat</button>
+              {/if}
             </div>
+            {#if conversations.length === 0}
+              <div class="flex flex-col items-center justify-center py-8 text-center">
+                <div class="w-10 h-10 rounded-xl flex items-center justify-center mb-2" style="background: var(--color-accent-500)/10; color: var(--color-accent-500)">
+                  <Icon name="zap" size={20} />
+                </div>
+                <h3 class="text-xs font-semibold mb-1" style="color: var(--text-primary)">Ask about your emails</h3>
+                <p class="text-[10px]" style="color: var(--text-secondary)">
+                  Search, summarize, and get insights.
+                </p>
+              </div>
+            {:else}
+              <div class="flex flex-col gap-1">
+                {#each conversations as conv}
+                  <div
+                    role="button"
+                    tabindex="0"
+                    onclick={() => loadConversation(conv.id)}
+                    onkeydown={(e) => { if (e.key === 'Enter') loadConversation(conv.id); }}
+                    class="px-2.5 py-2 rounded-lg transition-fast group relative cursor-pointer"
+                    style="background: {activeConversationId === conv.id ? 'var(--bg-hover)' : 'var(--bg-primary)'};"
+                  >
+                    <div class="text-xs truncate pr-5" style="color: {activeConversationId === conv.id ? 'var(--text-primary)' : 'var(--text-secondary)'}">
+                      {conv.title || 'Untitled'}
+                    </div>
+                    <div class="text-[9px] mt-0.5" style="color: var(--text-tertiary)">
+                      {formatDate(conv.created_at)}
+                    </div>
+                    <button
+                      onclick={(e) => { e.stopPropagation(); deleteConversation(conv.id); }}
+                      class="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-0.5 rounded transition-fast"
+                      style="color: var(--text-tertiary)"
+                      title="Delete"
+                    >
+                      <Icon name="x" size={12} />
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
           </div>
         {:else}
           <!-- Messages -->
@@ -1088,6 +1173,21 @@
     {/if}
   </div>
 
+  <!-- Sidebar Resize Handle -->
+  {#if !chatCollapsed}
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div
+      class="shrink-0 flex items-center justify-center cursor-col-resize col-resize-handle"
+      style="width: 7px; background: var(--bg-secondary); border-left: 1px solid var(--border-color); border-right: 1px solid var(--border-color); {isDraggingSidebar ? 'user-select: none' : ''}"
+      onmousedown={startSidebarDrag}
+    >
+      <div
+        class="h-10 w-1 rounded-full transition-fast"
+        style="background: {isDraggingSidebar ? 'var(--color-accent-500)' : 'var(--border-color)'}"
+      ></div>
+    </div>
+  {/if}
+
   <!-- ============ MAIN CONTENT ============ -->
   {#if replyViewOpen && selectedReplyEmail}
     <!-- ============ FULL-WIDTH REPLY VIEW ============ -->
@@ -1105,29 +1205,37 @@
         <div class="flex-1 min-w-0 mx-4">
           <h2 class="text-sm font-semibold truncate text-center" style="color: var(--text-primary)">{selectedReplyEmail.subject || '(no subject)'}</h2>
         </div>
-        <div class="flex items-center gap-2 shrink-0">
-          <span class="text-[11px] font-medium tabular-nums" style="color: var(--text-tertiary)">{activeReplyIndex + 1} of {needsReplyEmails.length}</span>
-          <div class="flex items-center gap-0.5">
-            <button
-              onclick={goToPrevReply}
-              disabled={activeReplyIndex <= 0}
-              class="p-1 rounded-md transition-fast"
-              style="color: {activeReplyIndex <= 0 ? 'var(--border-color)' : 'var(--text-secondary)'}"
-              title="Previous email"
-            >
-              <Icon name="chevron-left" size={16} />
-            </button>
-            <button
-              onclick={goToNextReply}
-              disabled={activeReplyIndex >= needsReplyEmails.length - 1}
-              class="p-1 rounded-md transition-fast"
-              style="color: {activeReplyIndex >= needsReplyEmails.length - 1 ? 'var(--border-color)' : 'var(--text-secondary)'}"
-              title="Next email"
-            >
-              <Icon name="chevron-right" size={16} />
-            </button>
+        {#if viewSource === 'needs_reply'}
+          <div class="flex items-center gap-2 shrink-0">
+            <span class="text-[11px] font-medium tabular-nums" style="color: var(--text-tertiary)">{activeReplyIndex + 1} of {needsReplyEmails.length}</span>
+            <div class="flex items-center gap-0.5">
+              <button
+                onclick={goToPrevReply}
+                disabled={activeReplyIndex <= 0}
+                class="p-1 rounded-md transition-fast"
+                style="color: {activeReplyIndex <= 0 ? 'var(--border-color)' : 'var(--text-secondary)'}"
+                title="Previous email"
+              >
+                <Icon name="chevron-left" size={16} />
+              </button>
+              <button
+                onclick={goToNextReply}
+                disabled={activeReplyIndex >= needsReplyEmails.length - 1}
+                class="p-1 rounded-md transition-fast"
+                style="color: {activeReplyIndex >= needsReplyEmails.length - 1 ? 'var(--border-color)' : 'var(--text-secondary)'}"
+                title="Next email"
+              >
+                <Icon name="chevron-right" size={16} />
+              </button>
+            </div>
           </div>
-        </div>
+        {:else}
+          <div class="flex items-center gap-1.5 shrink-0">
+            <span class="text-[10px] px-2 py-0.5 rounded-full font-medium" style="background: var(--bg-tertiary); color: var(--text-tertiary)">
+              {viewSource === 'awaiting' ? 'Waiting for response' : 'Thread'}
+            </span>
+          </div>
+        {/if}
       </div>
 
       <!-- Top/Bottom Resizable Layout -->
@@ -1322,46 +1430,58 @@
           <!-- Action Bar -->
           <div class="px-4 py-2.5 border-t shrink-0 flex items-center justify-between" style="border-color: var(--border-color); background: var(--bg-secondary)">
             <div class="flex items-center gap-2">
-              <!-- Archive after send toggle -->
-              <label class="flex items-center gap-1.5 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  bind:checked={archiveAfterSend}
-                  class="w-3.5 h-3.5 rounded border accent-current"
-                  style="accent-color: var(--color-accent-500)"
-                />
-                <span class="text-[10px] font-medium" style="color: var(--text-secondary)">Archive after send</span>
-              </label>
+              {#if viewSource === 'needs_reply'}
+                <!-- Archive after send toggle -->
+                <label class="flex items-center gap-1.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    bind:checked={archiveAfterSend}
+                    class="w-3.5 h-3.5 rounded border accent-current"
+                    style="accent-color: var(--color-accent-500)"
+                  />
+                  <span class="text-[10px] font-medium" style="color: var(--text-secondary)">Archive after send</span>
+                </label>
 
-              <div class="w-px h-4 mx-1" style="background: var(--border-color)"></div>
+                <div class="w-px h-4 mx-1" style="background: var(--border-color)"></div>
 
-              <!-- Triage Actions -->
-              <button
-                onclick={skipEmail}
-                class="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-fast hover-bg-subtle"
-                style="color: var(--text-secondary)"
-                title="Skip to next email"
-              >
-                <Icon name="fast-forward" size={12} />
-                Skip
-              </button>
-              <button
-                onclick={archiveCurrentEmail}
-                class="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-fast hover-bg-subtle"
-                style="color: var(--text-secondary)"
-                title="Archive without replying"
-              >
-                <Icon name="archive" size={12} />
-                Archive
-              </button>
-              <button
-                onclick={trashCurrentEmail}
-                class="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-fast hover-bg-subtle"
-                style="color: var(--text-secondary)"
-                title="Move to trash"
-              >
-                <Icon name="trash-2" size={12} />
-              </button>
+                <!-- Triage Actions -->
+                <button
+                  onclick={skipEmail}
+                  class="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-fast hover-bg-subtle"
+                  style="color: var(--text-secondary)"
+                  title="Skip to next email"
+                >
+                  <Icon name="fast-forward" size={12} />
+                  Skip
+                </button>
+                <button
+                  onclick={archiveCurrentEmail}
+                  class="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-fast hover-bg-subtle"
+                  style="color: var(--text-secondary)"
+                  title="Archive without replying"
+                >
+                  <Icon name="archive" size={12} />
+                  Archive
+                </button>
+                <button
+                  onclick={trashCurrentEmail}
+                  class="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-fast hover-bg-subtle"
+                  style="color: var(--text-secondary)"
+                  title="Move to trash"
+                >
+                  <Icon name="trash-2" size={12} />
+                </button>
+              {:else}
+                <button
+                  onclick={closeReplyView}
+                  class="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-fast hover-bg-subtle"
+                  style="color: var(--text-secondary)"
+                  title="Back to Flow"
+                >
+                  <Icon name="arrow-left" size={12} />
+                  Back
+                </button>
+              {/if}
             </div>
 
             <div class="flex items-center gap-2">
@@ -1514,9 +1634,14 @@
         </div>
 
         {#if needsReplyEmails.length > 0}
-          <div class="divide-y" style="border-color: var(--border-color)">
+          <div class="px-2 py-2 space-y-1">
             {#each needsReplyEmails as email, idx}
-              <div class="px-4 py-3 transition-fast hover-bg-subtle">
+              <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
+              <div
+                class="px-3 py-2.5 rounded-lg transition-fast hover-bg-subtle cursor-pointer border-b last-child-no-border"
+                style="border-color: color-mix(in srgb, var(--border-color) 50%, transparent)"
+                onclick={() => openReplyView(email, idx)}
+              >
                 <div class="flex items-start gap-3">
                   <div class="flex-1 min-w-0">
                     <!-- Top row: category + subject -->
@@ -1544,7 +1669,8 @@
 
                     <!-- Reply options -->
                     {#if email.reply_options && email.reply_options.length > 0}
-                      <div class="flex flex-wrap gap-1.5">
+                      <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+                      <div class="flex flex-wrap gap-1.5" onclick={(e) => e.stopPropagation()}>
                         {#each email.reply_options as option}
                           <button
                             onclick={() => openReplyView(email, idx, option)}
@@ -1562,23 +1688,15 @@
                     {/if}
                   </div>
 
-                  <!-- Action buttons -->
-                  <div class="flex flex-col gap-1.5 shrink-0">
-                    <button
-                      onclick={() => openReplyView(email, idx)}
-                      class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-fast"
-                      style="background: var(--color-accent-500); color: white"
-                    >
-                      <Icon name="corner-up-left" size={12} />
-                      Reply
-                    </button>
+                  <!-- Open in inbox button -->
+                  <div class="shrink-0" onclick={(e) => e.stopPropagation()}>
                     <button
                       onclick={() => goToEmail(email.id)}
-                      class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-fast border"
-                      style="border-color: var(--border-color); color: var(--text-secondary)"
+                      class="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-medium transition-fast border"
+                      style="border-color: var(--border-color); color: var(--text-tertiary)"
+                      title="Open in inbox"
                     >
                       <Icon name="external-link" size={12} />
-                      Open
                     </button>
                   </div>
                 </div>
@@ -1594,9 +1712,9 @@
       </div>
 
       <!-- ============ BOTTOM ROW: Waiting + Active Threads ============ -->
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div class="flex flex-col lg:flex-row" bind:this={bottomColContainerEl} style="{isDraggingBottomCol ? 'user-select: none; cursor: col-resize' : ''}">
         <!-- Waiting For Response -->
-        <div class="rounded-xl border p-4" style="background: var(--bg-secondary); border-color: var(--border-color)">
+        <div class="min-w-0 rounded-xl border p-4" style="background: var(--bg-secondary); border-color: var(--border-color); flex: 0 0 {bottomLeftPercent}%">
           <div class="flex items-center justify-between mb-3">
             <div class="flex items-center gap-2">
               <span style="color: #f59e0b"><Icon name="clock" size={14} /></span>
@@ -1612,9 +1730,9 @@
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div
-                  class="p-2.5 rounded-lg cursor-pointer transition-fast"
+                  class="p-2.5 rounded-lg cursor-pointer transition-fast hover-bg-subtle"
                   style="background: var(--bg-primary)"
-                  onclick={() => goToEmail(email.id)}
+                  onclick={() => openThreadInFlow(email.gmail_thread_id, { subject: email.subject, from_name: email.to_name, date: email.date, id: email.id, snippet: email.snippet }, 'awaiting')}
                 >
                   <div class="text-xs font-medium truncate" style="color: var(--text-primary)">{email.subject || '(no subject)'}</div>
                   <div class="flex items-center gap-2 mt-0.5">
@@ -1637,8 +1755,21 @@
           {/if}
         </div>
 
+        <!-- Bottom Column Resize Handle (hidden on mobile, visible on lg+) -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="hidden lg:flex shrink-0 items-center justify-center cursor-col-resize col-resize-handle"
+          style="width: 11px"
+          onmousedown={startBottomColDrag}
+        >
+          <div
+            class="h-10 w-1 rounded-full transition-fast"
+            style="background: {isDraggingBottomCol ? 'var(--color-accent-500)' : 'var(--border-color)'}"
+          ></div>
+        </div>
+
         <!-- Active Threads -->
-        <div class="rounded-xl border p-4" style="background: var(--bg-secondary); border-color: var(--border-color)">
+        <div class="min-w-0 rounded-xl border p-4 mt-4 lg:mt-0" style="background: var(--bg-secondary); border-color: var(--border-color); flex: 1 1 0%">
           <div class="flex items-center gap-2 mb-3">
             <span style="color: #8b5cf6"><Icon name="message-circle" size={14} /></span>
             <h3 class="text-sm font-semibold" style="color: var(--text-primary)">Active Threads</h3>
@@ -1646,7 +1777,13 @@
           {#if activeThreads.length > 0}
             <div class="space-y-2">
               {#each activeThreads as thread}
-                <div class="p-2.5 rounded-lg" style="background: var(--bg-primary)">
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div
+                  class="p-2.5 rounded-lg cursor-pointer transition-fast hover-bg-subtle"
+                  style="background: var(--bg-primary)"
+                  onclick={() => openThreadInFlow(thread.thread_id, { subject: thread.subject, summary: thread.summary, date: thread.latest_date }, 'thread')}
+                >
                   <div class="flex items-center gap-2 mb-0.5">
                     {#if thread.conversation_type}
                       {@const typeColor = conversationTypeColors[thread.conversation_type] || conversationTypeColors.discussion}
@@ -1811,8 +1948,13 @@
     background: var(--bg-hover);
   }
 
-  /* Divider hover state via group */
+  /* Horizontal divider hover state via group */
   .group:hover > div {
+    background: var(--text-tertiary) !important;
+  }
+
+  /* Vertical column resize handle hover state */
+  .col-resize-handle:hover > div {
     background: var(--text-tertiary) !important;
   }
 
@@ -1820,8 +1962,8 @@
     font-family: inherit;
   }
 
-  /* Divide-y with theme colors */
-  .divide-y > * + * {
-    border-top: 1px solid var(--border-color);
+  .last-child-no-border:last-child {
+    border-bottom: none;
   }
+
 </style>
