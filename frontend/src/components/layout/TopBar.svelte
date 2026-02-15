@@ -1,8 +1,9 @@
 <script>
   import { onMount } from 'svelte';
   import { theme } from '../../lib/theme.js';
+  import Icon from '../common/Icon.svelte';
   import { api } from '../../lib/api.js';
-  import { user, sidebarCollapsed, searchQuery, currentPage, currentMailbox, viewMode, overallSyncState, syncStatus, showToast, forceSyncPoll, selectedAccountId, accounts, accountColorMap } from '../../lib/stores.js';
+  import { user, sidebarCollapsed, searchQuery, currentPage, currentMailbox, viewMode, overallSyncState, syncStatus, showToast, forceSyncPoll, selectedAccountId, accounts, accountColorMap, hideIgnored } from '../../lib/stores.js';
 
   let searchValue = $state('');
   let syncDropdownOpen = $state(false);
@@ -15,6 +16,12 @@
   );
   let countdownText = $state('');
   let countdownInterval = null;
+
+  const tabs = [
+    { id: 'flow', label: 'Flow', icon: 'sparkles' },
+    { id: 'inbox', label: 'Email', icon: 'inbox' },
+    { id: 'calendar', label: 'Calendar', icon: 'calendar' },
+  ];
 
   function updateCountdown() {
     const ra = $overallSyncState.retryAfter;
@@ -31,7 +38,11 @@
     } else {
       const m = Math.floor(diff / 60);
       const s = diff % 60;
-      countdownText = m > 0 ? `${m}m ${s}s` : `${s}s`;
+      if (m > 0) {
+        countdownText = `${m}m ${s}s`;
+      } else {
+        countdownText = `${s}s`;
+      }
     }
   }
 
@@ -73,20 +84,8 @@
     user.set(null);
   }
 
-  function getPageTitle() {
-    if ($currentPage === 'admin') return 'Settings';
-    if ($currentPage === 'compose') return 'Compose';
-    if ($currentPage === 'stats') return 'Stats';
-    if ($currentPage === 'ai-insights') return 'AI Insights';
-    const mb = $currentMailbox || 'INBOX';
-    // Handle label names like CATEGORY_SOCIAL
-    if (mb.startsWith('CATEGORY_')) {
-      return mb.replace('CATEGORY_', '').charAt(0) + mb.replace('CATEGORY_', '').slice(1).toLowerCase();
-    }
-    if (mb.startsWith('Label_')) {
-      return mb.replace('Label_', '').replace(/_/g, ' ');
-    }
-    return mb.charAt(0) + mb.slice(1).toLowerCase();
+  function switchTab(tabId) {
+    currentPage.set(tabId);
   }
 
   function toggleViewMode() {
@@ -167,101 +166,153 @@
     if (diff <= 0) return 'Retrying...';
     const m = Math.floor(diff / 60);
     const s = diff % 60;
-    return m > 0 ? `Retry in ${m}m ${s}s` : `Retry in ${s}s`;
+    if (m > 0) {
+      return `Retry in ${m}m ${s}s`;
+    }
+    return `Retry in ${s}s`;
   }
 </script>
 
-<header class="h-14 flex items-center gap-4 px-4 border-b shrink-0" style="background: var(--bg-secondary); border-color: var(--border-color)">
-  <!-- Collapse toggle -->
-  <button
-    onclick={() => sidebarCollapsed.update(v => !v)}
-    class="p-1.5 rounded-md transition-fast"
-    style="color: var(--text-secondary)"
-    aria-label="Toggle sidebar"
-  >
-    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
-    </svg>
-  </button>
-
-  <!-- Page title -->
-  <h1 class="text-base font-semibold" style="color: var(--text-primary)">{getPageTitle()}</h1>
-
-  <!-- Active account filter chip -->
-  {#if selectedAccount}
-    <div
-      class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
-      style="background: {selectedAccountColor ? selectedAccountColor.light : 'var(--bg-tertiary)'}; color: {selectedAccountColor ? selectedAccountColor.bg : 'var(--text-secondary)'}"
-    >
-      <span
-        class="w-2 h-2 rounded-full shrink-0"
-        style="background: {selectedAccountColor ? selectedAccountColor.bg : 'var(--text-tertiary)'}"
-      ></span>
-      <span class="truncate max-w-[160px]">{selectedAccount.description || selectedAccount.email}</span>
+<header class="h-14 flex items-center gap-2 px-4 border-b shrink-0" style="background: var(--bg-secondary); border-color: var(--border-color)">
+  <!-- Left: Tab navigation -->
+  <nav class="flex items-center gap-1 mr-2">
+    {#each tabs as tab}
       <button
-        onclick={() => selectedAccountId.set(null)}
-        class="ml-0.5 p-0.5 rounded-full transition-fast hover:opacity-70"
-        title="Show all accounts"
-        aria-label="Clear account filter"
+        onclick={() => switchTab(tab.id)}
+        class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-150"
+        class:tab-active={$currentPage === tab.id}
+        class:tab-inactive={$currentPage !== tab.id}
+        aria-label="{tab.label} tab"
       >
-        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12" />
-        </svg>
-      </button>
-    </div>
-  {/if}
-
-  <!-- Search -->
-  <div class="flex-1 max-w-md mx-auto">
-    <div class="relative">
-      <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4" style="color: var(--text-tertiary)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-      </svg>
-      <input
-        type="text"
-        bind:value={searchValue}
-        onkeydown={handleSearch}
-        placeholder="Search emails..."
-        class="w-full h-8 pl-9 pr-8 rounded-lg text-sm outline-none border"
-        style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
-      />
-      {#if searchValue}
-        <button
-          onclick={clearSearch}
-          class="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded transition-fast"
-          style="color: var(--text-tertiary)"
-          aria-label="Clear search"
-        >
+        {#if tab.icon === 'sparkles'}
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
           </svg>
-        </button>
-      {/if}
-    </div>
-  </div>
+        {:else}
+          <Icon name={tab.icon} size={16} />
+        {/if}
+        {tab.label}
+      </button>
+    {/each}
+  </nav>
 
-  <div class="flex items-center gap-2">
-    <!-- View toggle (only show on inbox/email pages) -->
-    {#if $currentPage === 'inbox'}
+  <!-- Center: Contextual content -->
+  {#if $currentPage === 'inbox'}
+    <!-- Email tab: Focused toggle + search + view mode -->
+    <div class="flex items-center gap-2 flex-1 min-w-0">
+      <!-- Sidebar toggle (only on email tab) -->
+      <button
+        onclick={() => sidebarCollapsed.update(v => !v)}
+        class="p-1.5 rounded-md transition-fast shrink-0"
+        style="color: var(--text-secondary)"
+        aria-label="Toggle sidebar"
+      >
+        <Icon name="menu" size={16} />
+      </button>
+
+      <!-- Focused toggle -->
+      <button
+        onclick={() => hideIgnored.update(v => !v)}
+        class="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-fast shrink-0 {$hideIgnored ? 'bg-accent-500/15' : ''}"
+        style="color: {$hideIgnored ? 'var(--color-accent-600)' : 'var(--text-tertiary)'}"
+        title="{$hideIgnored ? 'Showing focused emails (hiding low priority)' : 'Click to hide low priority emails'}"
+        aria-label="Toggle hide low priority emails"
+      >
+        <Icon name="filter" size={14} />
+        Focused
+      </button>
+
+      <!-- Active account filter chip -->
+      {#if selectedAccount}
+        <div
+          class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium shrink-0"
+          style="background: {selectedAccountColor ? selectedAccountColor.light : 'var(--bg-tertiary)'}; color: {selectedAccountColor ? selectedAccountColor.bg : 'var(--text-secondary)'}"
+        >
+          <span
+            class="w-2 h-2 rounded-full shrink-0"
+            style="background: {selectedAccountColor ? selectedAccountColor.bg : 'var(--text-tertiary)'}"
+          ></span>
+          <span class="truncate max-w-[120px]">{selectedAccount.description || selectedAccount.email}</span>
+          <button
+            onclick={() => selectedAccountId.set(null)}
+            class="ml-0.5 p-0.5 rounded-full transition-fast hover:opacity-70"
+            title="Show all accounts"
+            aria-label="Clear account filter"
+          >
+            <Icon name="x" size={12} strokeWidth={2.5} />
+          </button>
+        </div>
+      {/if}
+
+      <!-- Search bar -->
+      <div class="flex-1 max-w-md">
+        <div class="relative">
+          <span class="absolute left-3 top-1/2 -translate-y-1/2" style="color: var(--text-tertiary)">
+            <Icon name="search" size={16} />
+          </span>
+          <input
+            type="text"
+            bind:value={searchValue}
+            onkeydown={handleSearch}
+            placeholder="Search emails..."
+            class="w-full h-8 pl-9 pr-8 rounded-lg text-sm outline-none border"
+            style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+          />
+          {#if searchValue}
+            <button
+              onclick={clearSearch}
+              class="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded transition-fast"
+              style="color: var(--text-tertiary)"
+              aria-label="Clear search"
+            >
+              <Icon name="x" size={16} />
+            </button>
+          {/if}
+        </div>
+      </div>
+
+      <!-- View mode toggle -->
       <button
         onclick={toggleViewMode}
-        class="p-1.5 rounded-md transition-fast"
+        class="p-1.5 rounded-md transition-fast shrink-0"
         style="color: var(--text-secondary)"
         aria-label="Toggle view mode"
         title="{$viewMode === 'column' ? 'Switch to table view' : 'Switch to column view'}"
       >
         {#if $viewMode === 'column'}
-          <!-- Table icon -->
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.375 19.5h17.25m-17.25 0a1.125 1.125 0 01-1.125-1.125M3.375 19.5h7.5c.621 0 1.125-.504 1.125-1.125m-9.75 0V5.625m0 12.75v-1.5c0-.621.504-1.125 1.125-1.125m18.375 2.625V5.625m0 12.75c0 .621-.504 1.125-1.125 1.125m1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125m0 3.75h-7.5A1.125 1.125 0 0112 18.375m9.75-12.75c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125m19.5 0v1.5c0 .621-.504 1.125-1.125 1.125M2.25 5.625v1.5c0 .621.504 1.125 1.125 1.125m0 0h17.25m-17.25 0h7.5c.621 0 1.125.504 1.125 1.125M3.375 8.25c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125m17.25-3.75h-7.5c-.621 0-1.125.504-1.125 1.125m8.625-1.125c.621 0 1.125.504 1.125 1.125v1.5c0 .621-.504 1.125-1.125 1.125m-17.25 0h7.5m-7.5 0c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125M12 10.875v-1.5m0 1.5c0 .621-.504 1.125-1.125 1.125M12 10.875c0 .621.504 1.125 1.125 1.125m-2.25 0c.621 0 1.125.504 1.125 1.125M10.875 12h-7.5m8.625 0h7.5m-8.625 0c.621 0 1.125.504 1.125 1.125v1.5" />
-          </svg>
+          <Icon name="columns" size={16} />
         {:else}
-          <!-- List icon -->
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.25 6.75h12M8.25 12h12m-12 5.25h12M3.75 6.75h.007v.008H3.75V6.75zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zM3.75 12h.007v.008H3.75V12zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm-.375 5.25h.007v.008H3.75v-.008zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
-          </svg>
+          <Icon name="list" size={16} />
         {/if}
       </button>
+    </div>
+  {:else}
+    <!-- Flow / Calendar / other tabs: spacer -->
+    <div class="flex-1"></div>
+  {/if}
+
+  <!-- Right section: sync, theme, settings gear, user -->
+  <div class="flex items-center gap-1.5 shrink-0">
+    <!-- Active account filter chip (non-email tabs) -->
+    {#if selectedAccount && $currentPage !== 'inbox'}
+      <div
+        class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
+        style="background: {selectedAccountColor ? selectedAccountColor.light : 'var(--bg-tertiary)'}; color: {selectedAccountColor ? selectedAccountColor.bg : 'var(--text-secondary)'}"
+      >
+        <span
+          class="w-2 h-2 rounded-full shrink-0"
+          style="background: {selectedAccountColor ? selectedAccountColor.bg : 'var(--text-tertiary)'}"
+        ></span>
+        <span class="truncate max-w-[120px]">{selectedAccount.description || selectedAccount.email}</span>
+        <button
+          onclick={() => selectedAccountId.set(null)}
+          class="ml-0.5 p-0.5 rounded-full transition-fast hover:opacity-70"
+          title="Show all accounts"
+          aria-label="Clear account filter"
+        >
+          <Icon name="x" size={12} strokeWidth={2.5} />
+        </button>
+      </div>
     {/if}
 
     <!-- Sync status indicator -->
@@ -274,30 +325,25 @@
         title={$overallSyncState.message}
       >
         {#if $overallSyncState.state === 'syncing'}
-          <!-- Spinning sync icon -->
-          <svg class="w-4 h-4 animate-spin" style="color: var(--color-accent-500)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182M20.017 4.355v4.992" />
-          </svg>
+          <span class="animate-spin" style="color: var(--color-accent-500)">
+            <Icon name="refresh-cw" size={16} />
+          </span>
           <span class="hidden sm:inline" style="color: var(--color-accent-500)">{getOverallProgress() || $overallSyncState.message}</span>
         {:else if $overallSyncState.state === 'rate_limited'}
-          <!-- All accounts rate limited -->
-          <svg class="w-4 h-4" style="color: #f59e0b" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
+          <span style="color: #f59e0b">
+            <Icon name="clock" size={16} />
+          </span>
           <span class="hidden sm:inline" style="color: #f59e0b">{countdownText || 'Rate limited'}</span>
         {:else if $overallSyncState.state === 'partial'}
-          <!-- Mixed: some accounts OK, some have issues -->
           <span class="w-2 h-2 rounded-full shrink-0" style="background: #22c55e"></span>
           <span class="hidden sm:inline">{$overallSyncState.message}</span>
           {#if $overallSyncState.rateLimitedCount > 0}
             <span class="hidden sm:inline text-[10px] px-1 rounded" style="color: #f59e0b">{countdownText}</span>
           {/if}
         {:else if $overallSyncState.state === 'error'}
-          <!-- Error icon -->
           <span class="w-2 h-2 rounded-full shrink-0" style="background: #ef4444"></span>
           <span class="hidden sm:inline" style="color: #ef4444">Sync Error</span>
         {:else}
-          <!-- Idle/completed icon -->
           <span class="w-2 h-2 rounded-full shrink-0" style="background: #22c55e"></span>
           <span class="hidden sm:inline">{$overallSyncState.message}</span>
         {/if}
@@ -319,7 +365,6 @@
           <div class="max-h-64 overflow-y-auto">
             {#each $overallSyncState.accounts as acct}
               <div class="px-3 py-2 flex items-center gap-2 border-b last:border-b-0" style="border-color: var(--border-color)">
-                <!-- Status dot -->
                 {#if getAccountSyncState(acct) === 'syncing'}
                   <span class="w-2 h-2 rounded-full shrink-0 animate-pulse" style="background: var(--color-accent-500)"></span>
                 {:else if getAccountSyncState(acct) === 'rate_limited'}
@@ -356,9 +401,7 @@
                   title="Sync now"
                   aria-label="Sync {acct.email}"
                 >
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182M20.017 4.355v4.992" />
-                  </svg>
+                  <Icon name="refresh-cw" size={14} />
                 </button>
               </div>
             {/each}
@@ -378,35 +421,53 @@
       aria-label="Toggle theme"
     >
       {#if $theme === 'dark'}
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 3v2.25m6.364.386l-1.591 1.591M21 12h-2.25m-.386 6.364l-1.591-1.591M12 18.75V21m-4.773-4.227l-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0z" />
-        </svg>
+        <Icon name="sun" size={16} />
       {:else}
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21.752 15.002A9.718 9.718 0 0118 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 003 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 009.002-5.998z" />
-        </svg>
+        <Icon name="moon" size={16} />
       {/if}
     </button>
 
+    <!-- Settings gear -->
+    <button
+      onclick={() => currentPage.set('admin')}
+      class="p-1.5 rounded-md transition-fast"
+      style="color: {$currentPage === 'admin' ? 'var(--color-accent-500)' : 'var(--text-secondary)'}"
+      aria-label="Settings"
+      title="Settings"
+    >
+      <Icon name="settings" size={16} />
+    </button>
+
     <!-- User menu -->
-    <div class="flex items-center gap-2 pl-2 border-l" style="border-color: var(--border-color)">
-      <div class="w-7 h-7 rounded-full bg-accent-500/20 flex items-center justify-center text-xs font-bold" style="color: var(--color-accent-600)">
+    <div class="flex items-center gap-1.5 pl-2 border-l" style="border-color: var(--border-color)">
+      <div class="w-6 h-6 rounded-full bg-accent-500/20 flex items-center justify-center text-[10px] font-bold" style="color: var(--color-accent-600)">
         {($user?.display_name || $user?.username || 'U')[0].toUpperCase()}
       </div>
-      {#if $user}
-        <span class="text-sm hidden sm:inline" style="color: var(--text-secondary)">{$user.display_name || $user.username}</span>
-      {/if}
       <button
         onclick={handleLogout}
-        class="p-1.5 rounded-md transition-fast"
+        class="p-1 rounded-md transition-fast"
         style="color: var(--text-secondary)"
         aria-label="Logout"
         title="Logout"
       >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15m3 0l3-3m0 0l-3-3m3 3H9" />
-        </svg>
+        <Icon name="log-out" size={14} />
       </button>
     </div>
   </div>
 </header>
+
+<style>
+  .tab-active {
+    background: var(--color-accent-500);
+    color: white;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  }
+  .tab-inactive {
+    color: var(--text-secondary);
+    background: transparent;
+  }
+  .tab-inactive:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+</style>

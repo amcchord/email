@@ -12,6 +12,8 @@
   import AIInsights from './pages/AIInsights.svelte';
   import Todos from './pages/Todos.svelte';
   import Chat from './pages/Chat.svelte';
+  import Calendar from './pages/Calendar.svelte';
+  import Flow from './pages/Flow.svelte';
   import EmailViewStandalone from './pages/EmailViewStandalone.svelte';
   import Layout from './components/layout/Layout.svelte';
   import Toast from './components/common/Toast.svelte';
@@ -72,7 +74,9 @@
   <Login />
 {:else}
   <Layout>
-    {#if $currentPage === 'admin'}
+    {#if $currentPage === 'flow'}
+      <Flow />
+    {:else if $currentPage === 'admin'}
       <Admin />
     {:else if $currentPage === 'compose'}
       <Compose />
@@ -82,10 +86,14 @@
       <AIInsights />
     {:else if $currentPage === 'todos'}
       <Todos />
+    {:else if $currentPage === 'calendar'}
+      <Calendar />
     {:else if $currentPage === 'chat'}
       <Chat />
-    {:else}
+    {:else if $currentPage === 'inbox'}
       <Inbox />
+    {:else}
+      <Flow />
     {/if}
   </Layout>
 {/if}

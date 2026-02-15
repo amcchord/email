@@ -1,9 +1,10 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
   import { user, showToast, syncStatus, forceSyncPoll } from '../lib/stores.js';
   import Button from '../components/common/Button.svelte';
   import Input from '../components/common/Input.svelte';
+  import Icon from '../components/common/Icon.svelte';
 
   let activeTab = $state('about-me');
   let dashboard = $state(null);
@@ -24,6 +25,7 @@
     { id: 'about-me', label: 'About Me', adminOnly: false },
     { id: 'accounts', label: 'My Accounts', adminOnly: false },
     { id: 'ai-models', label: 'AI Models', adminOnly: false },
+    { id: 'data', label: 'Data Management', adminOnly: false },
     { id: 'dashboard', label: 'Dashboard', adminOnly: true },
     { id: 'apikeys', label: 'API Keys', adminOnly: true },
     { id: 'settings', label: 'Settings', adminOnly: true },
@@ -46,6 +48,22 @@
       showToast('That Google account is already connected to another user', 'error', 5000);
       window.history.replaceState({}, '', '/?page=admin');
     }
+
+    // Load AI stats and check for active processing
+    loadAIStats();
+    try {
+      const status = await api.getAIProcessingStatus();
+      if (status.active) {
+        processingStatus = status;
+        startProcessingPoll();
+      }
+    } catch {
+      // Ignore
+    }
+  });
+
+  onDestroy(() => {
+    stopProcessingPoll();
   });
 
   async function loadData() {
@@ -205,6 +223,42 @@
   let accountDescSaving = $state({});
   let accountDescInitialized = $state(new Set());
 
+  // Error details expand/collapse (keyed by account id)
+  let expandedErrors = $state({});
+
+  function toggleErrorDetails(accountId) {
+    expandedErrors = { ...expandedErrors, [accountId]: !expandedErrors[accountId] };
+  }
+
+  function getFriendlyError(errorMessage) {
+    if (!errorMessage) return 'An unknown error occurred';
+    const lower = errorMessage.toLowerCase();
+    if (lower.includes('insufficient authentication scopes') || lower.includes('insufficientpermissions')) {
+      return 'Insufficient permissions — please reauthorize this account';
+    }
+    if (lower.includes('invalid_grant') || lower.includes('token has been expired') || lower.includes('token expired')) {
+      return 'Authorization expired — please reauthorize this account';
+    }
+    if (lower.includes('invalid credentials') || lower.includes('unauthorized') || lower.includes('401')) {
+      return 'Invalid credentials — please reauthorize this account';
+    }
+    if (lower.includes('403') || lower.includes('forbidden')) {
+      return 'Access denied — please reauthorize this account';
+    }
+    if (lower.includes('rate limit') || lower.includes('429')) {
+      return 'Rate limited by Gmail — will retry automatically';
+    }
+    if (lower.includes('network') || lower.includes('timeout') || lower.includes('connection')) {
+      return 'Connection error — will retry on next sync';
+    }
+    // If it's a short message, show it directly
+    if (errorMessage.length <= 80) {
+      return errorMessage;
+    }
+    // Otherwise, give a generic message
+    return 'Sync failed — expand details below for more info';
+  }
+
   // Sync account descriptions from server data when accounts load
   $effect(() => {
     for (const acct of adminAccounts) {
@@ -260,6 +314,7 @@
       const result = await api.reprocessEmails(aiPrefs.agentic_model);
       if (result.queued > 0) {
         showToast(result.message, 'success');
+        startProcessingPoll();
       } else {
         showToast(result.message, 'info');
       }
@@ -267,6 +322,128 @@
       showToast(err.message, 'error');
     }
     reprocessing = false;
+  }
+
+  // Data Management state
+  let categorizing = $state(false);
+  let showBackfillMenu = $state(false);
+  let showDropConfirm = $state(false);
+  let showDropOnlyConfirm = $state(false);
+  let dropRebuildDays = $state(90);
+  let dropping = $state(false);
+  let aiStats = $state(null);
+  let rebuildingSearch = $state(false);
+  let processingStatus = $state(null);
+  let processingPollInterval = null;
+  let processingJustFinished = $state(false);
+
+  function getProcessingLabel(status) {
+    if (!status) return '';
+    if (status.type === 'reprocess') {
+      return `Reprocessing emails with ${status.model || 'AI'}`;
+    }
+    return 'Categorizing emails';
+  }
+
+  function getProcessingPercent(status) {
+    if (!status || !status.total || status.total === 0) return 0;
+    return Math.min(Math.round((status.processed / status.total) * 100), 100);
+  }
+
+  async function pollProcessingStatus() {
+    try {
+      const result = await api.getAIProcessingStatus();
+      if (result.active) {
+        processingStatus = result;
+      } else if (result.just_finished) {
+        processingStatus = null;
+        processingJustFinished = true;
+        stopProcessingPoll();
+        setTimeout(() => {
+          processingJustFinished = false;
+        }, 3000);
+        loadAIStats();
+      } else {
+        processingStatus = null;
+        stopProcessingPoll();
+      }
+    } catch {
+      // Ignore polling errors
+    }
+  }
+
+  function startProcessingPoll() {
+    stopProcessingPoll();
+    pollProcessingStatus();
+    processingPollInterval = setInterval(pollProcessingStatus, 3000);
+  }
+
+  function stopProcessingPoll() {
+    if (processingPollInterval) {
+      clearInterval(processingPollInterval);
+      processingPollInterval = null;
+    }
+  }
+
+  async function loadAIStats() {
+    try {
+      aiStats = await api.getAIStats();
+    } catch {
+      // Ignore stats loading errors
+    }
+  }
+
+  async function triggerAutoCategorize(days = null) {
+    categorizing = true;
+    showBackfillMenu = false;
+    try {
+      const result = await api.triggerAutoCategorize(days);
+      showToast(result.message, 'success');
+      startProcessingPoll();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    categorizing = false;
+  }
+
+  async function dropAndRebuild(rebuildDays = null) {
+    dropping = true;
+    showDropConfirm = false;
+    try {
+      const result = await api.deleteAIAnalyses(rebuildDays);
+      showToast(result.message, 'success');
+      await loadAIStats();
+      if (rebuildDays !== null) {
+        startProcessingPoll();
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    dropping = false;
+  }
+
+  async function dropOnly() {
+    dropping = true;
+    showDropConfirm = false;
+    try {
+      const result = await api.deleteAIAnalyses();
+      showToast(result.message, 'success');
+      await loadAIStats();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    dropping = false;
+  }
+
+  async function rebuildSearchIndex() {
+    rebuildingSearch = true;
+    try {
+      const result = await api.rebuildSearchIndex();
+      showToast(result.message, 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    rebuildingSearch = false;
   }
 
   // About Me
@@ -472,9 +649,7 @@
                   style="color: var(--text-tertiary)"
                   title="Copy to clipboard"
                 >
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25h-3c-1.03 0-1.9.693-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.75a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" />
-                  </svg>
+                  <Icon name="copy" size={16} />
                 </button>
               </div>
             {/each}
@@ -521,41 +696,60 @@
           </div>
         {:else}
           {#each adminAccounts as acct}
-            <div class="rounded-xl border p-4" style="background: var(--bg-secondary); border-color: var(--border-color)">
+            {@const hasError = acct.sync_status && acct.sync_status.status === 'error'}
+            {@const isRateLimited = acct.sync_status && acct.sync_status.status === 'rate_limited'}
+            {@const isSyncing = acct.sync_status && acct.sync_status.status === 'syncing'}
+            <div
+              class="rounded-xl border p-4"
+              style="background: var(--bg-secondary); border-color: {hasError ? '#fecaca' : isRateLimited ? '#fde68a' : 'var(--border-color)'}"
+            >
+              <!-- Header row: avatar + email + status + actions -->
               <div class="flex items-center gap-4">
-                <div class="w-10 h-10 rounded-full bg-accent-500/20 flex items-center justify-center text-lg font-bold shrink-0" style="color: var(--color-accent-600)">
-                  {acct.email[0].toUpperCase()}
+                <div
+                  class="w-10 h-10 rounded-full flex items-center justify-center text-lg font-bold shrink-0"
+                  style="background: {hasError ? '#fef2f2' : 'var(--color-accent-500-alpha, rgba(99,102,241,0.12))'}; color: {hasError ? '#dc2626' : 'var(--color-accent-600)'}"
+                >
+                  {#if hasError}
+                    <Icon name="alert-triangle" size={20} />
+                  {:else}
+                    {acct.email[0].toUpperCase()}
+                  {/if}
                 </div>
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium truncate" style="color: var(--text-primary)">{acct.email}</div>
-                  <div class="text-xs" style="color: var(--text-secondary)">
+                  <div class="text-xs mt-0.5" style="color: var(--text-secondary)">
                     {#if !acct.sync_status}
-                      Not synced
-                    {:else if acct.sync_status.status === 'syncing'}
-                      <span style="color: var(--color-accent-500)">
+                      Not synced yet
+                    {:else if isSyncing}
+                      <span class="flex items-center gap-1.5" style="color: var(--color-accent-500)">
+                        <span class="inline-block w-2 h-2 rounded-full animate-pulse" style="background: var(--color-accent-500)"></span>
                         {#if acct.sync_status.current_phase}
                           {acct.sync_status.current_phase}
                         {:else}
                           Syncing...
                         {/if}
                       </span>
-                    {:else if acct.sync_status.status === 'rate_limited'}
-                      <span style="color: #f59e0b">Rate limited by Gmail</span>
-                    {:else if acct.sync_status.status === 'error'}
-                      <span style="color: #ef4444">Error: {acct.sync_status.error_message || 'Unknown error'}</span>
+                    {:else if isRateLimited}
+                      <span style="color: #d97706">Rate limited by Gmail</span>
+                    {:else if hasError}
+                      <span style="color: #dc2626">{getFriendlyError(acct.sync_status.error_message)}</span>
                     {:else if acct.sync_status.status === 'completed'}
-                      {acct.sync_status.messages_synced ? acct.sync_status.messages_synced.toLocaleString() + ' messages synced' : 'Completed'}
+                      {#if acct.sync_status.messages_synced}
+                        {acct.sync_status.messages_synced.toLocaleString()} messages synced
+                      {:else}
+                        Sync complete
+                      {/if}
                     {:else}
                       {acct.sync_status.status || 'Idle'}
                       {#if acct.sync_status.messages_synced}
-                        -- {acct.sync_status.messages_synced.toLocaleString()} messages
+                        &middot; {acct.sync_status.messages_synced.toLocaleString()} messages
                       {/if}
                     {/if}
                   </div>
                 </div>
                 <div class="flex gap-2 shrink-0">
-                  <Button size="sm" onclick={() => triggerSync(acct.id)}>
-                    {#if acct.sync_status && acct.sync_status.status === 'syncing'}
+                  <Button size="sm" onclick={() => triggerSync(acct.id)} disabled={isSyncing}>
+                    {#if isSyncing}
                       Syncing...
                     {:else}
                       Sync
@@ -570,8 +764,63 @@
                 </div>
               </div>
 
+              <!-- Error banner with expandable details -->
+              {#if hasError && acct.sync_status.error_message}
+                <div class="mt-3 rounded-lg overflow-hidden" style="border: 1px solid #fecaca; background: #fef2f2">
+                  <button
+                    onclick={() => toggleErrorDetails(acct.id)}
+                    class="w-full flex items-center gap-2 px-3 py-2 text-xs text-left transition-colors"
+                    style="color: #991b1b"
+                  >
+                    <span class="shrink-0" style="color: #dc2626">
+                      <Icon name="alert-triangle" size={16} />
+                    </span>
+                    <span class="flex-1 font-medium">{getFriendlyError(acct.sync_status.error_message)}</span>
+                    <span
+                      class="shrink-0 transition-transform duration-200"
+                      style="transform: rotate({expandedErrors[acct.id] ? '180' : '0'}deg); color: #991b1b"
+                    >
+                      <Icon name="chevron-down" size={16} />
+                    </span>
+                  </button>
+                  {#if expandedErrors[acct.id]}
+                    <div class="px-3 pb-3">
+                      <div class="px-3 py-2 rounded text-[11px] font-mono break-all leading-relaxed" style="background: #fee2e2; color: #7f1d1d; max-height: 120px; overflow-y: auto">
+                        {acct.sync_status.error_message}
+                      </div>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+
+              <!-- Rate limit notice -->
+              {#if isRateLimited && acct.sync_status.retry_after}
+                <div class="mt-3 px-3 py-2.5 rounded-lg text-xs flex items-center gap-2.5" style="background: #fffbeb; color: #92400e; border: 1px solid #fde68a">
+                  <span class="shrink-0" style="color: #d97706">
+                    <Icon name="clock" size={16} />
+                  </span>
+                  <span>Gmail rate limit reached. Will automatically retry at <strong>{new Date(acct.sync_status.retry_after).toLocaleTimeString()}</strong>.</span>
+                </div>
+              {/if}
+
+              <!-- Progress bar during sync -->
+              {#if isSyncing && acct.sync_status.total_messages > 0}
+                <div class="mt-3">
+                  <div class="flex justify-between text-[10px] mb-1" style="color: var(--text-tertiary)">
+                    <span>{(acct.sync_status.messages_synced || 0).toLocaleString()} of {acct.sync_status.total_messages.toLocaleString()} messages</span>
+                    <span>{Math.round((acct.sync_status.messages_synced || 0) / acct.sync_status.total_messages * 100)}%</span>
+                  </div>
+                  <div class="h-1.5 rounded-full overflow-hidden" style="background: var(--border-color)">
+                    <div
+                      class="h-full rounded-full transition-all duration-700 ease-out"
+                      style="background: var(--color-accent-500); width: {Math.min(100, Math.round((acct.sync_status.messages_synced || 0) / acct.sync_status.total_messages * 100))}%"
+                    ></div>
+                  </div>
+                </div>
+              {/if}
+
               <!-- Account description -->
-              <div class="mt-3">
+              <div class="mt-3 pt-3" style="border-top: 1px solid var(--border-color)">
                 <label class="block text-[10px] font-semibold uppercase tracking-wider mb-1" style="color: var(--text-tertiary)">
                   Account Purpose
                 </label>
@@ -592,41 +841,25 @@
                 </p>
               </div>
 
-              <!-- Progress bar during sync -->
-              {#if acct.sync_status && acct.sync_status.status === 'syncing' && acct.sync_status.total_messages > 0}
-                <div class="mt-3">
-                  <div class="flex justify-between text-[10px] mb-1" style="color: var(--text-tertiary)">
-                    <span>{(acct.sync_status.messages_synced || 0).toLocaleString()} of {acct.sync_status.total_messages.toLocaleString()} messages</span>
-                    <span>{Math.round((acct.sync_status.messages_synced || 0) / acct.sync_status.total_messages * 100)}%</span>
-                  </div>
-                  <div class="h-1.5 rounded-full overflow-hidden" style="background: var(--border-color)">
-                    <div
-                      class="h-full rounded-full transition-all duration-700 ease-out"
-                      style="background: var(--color-accent-500); width: {Math.min(100, Math.round((acct.sync_status.messages_synced || 0) / acct.sync_status.total_messages * 100))}%"
-                    ></div>
-                  </div>
-                </div>
-              {/if}
-
-              <!-- Rate limit notice -->
-              {#if acct.sync_status && acct.sync_status.status === 'rate_limited' && acct.sync_status.retry_after}
-                <div class="mt-2 px-3 py-2 rounded-lg text-xs flex items-center gap-2" style="background: #f59e0b10; color: #f59e0b; border: 1px solid #f59e0b30">
-                  <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  Gmail rate limit reached. Will automatically retry at {new Date(acct.sync_status.retry_after).toLocaleTimeString()}.
-                </div>
-              {/if}
-
-              <!-- Error detail -->
-              {#if acct.sync_status && acct.sync_status.status === 'error' && acct.sync_status.error_message}
-                <div class="mt-2 px-3 py-2 rounded-lg text-xs" style="background: #ef444410; color: #ef4444; border: 1px solid #ef444430">
-                  {acct.sync_status.error_message}
+              <!-- Calendar scope notice -->
+              {#if acct.has_calendar_scope === false}
+                <div class="mt-3 px-3 py-2.5 rounded-lg text-xs flex items-center gap-2.5" style="background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe">
+                  <span class="shrink-0" style="color: #6366f1">
+                    <Icon name="calendar" size={16} />
+                  </span>
+                  <span class="flex-1">Calendar access not granted. Reauthorize to enable calendar sync.</span>
+                  <button
+                    onclick={() => reauthorizeAccount(acct.id)}
+                    class="shrink-0 px-2.5 py-1 rounded-md text-[11px] font-medium transition-fast"
+                    style="background: #6366f120; color: #4f46e5"
+                  >
+                    Reauthorize
+                  </button>
                 </div>
               {/if}
 
               <!-- Last sync info -->
-              {#if acct.sync_status && acct.sync_status.status !== 'syncing'}
+              {#if acct.sync_status && !isSyncing}
                 <div class="mt-2 flex gap-4 text-[10px]" style="color: var(--text-tertiary)">
                   {#if acct.sync_status.last_full_sync}
                     <span>Full sync: {new Date(acct.sync_status.last_full_sync).toLocaleString()}</span>
@@ -803,6 +1036,259 @@
               </tr>
             </tbody>
           </table>
+        </div>
+      </div>
+
+    {:else if activeTab === 'data'}
+      <!-- Data Management -->
+      <div class="space-y-6">
+
+        <!-- AI Processing Progress Bar -->
+        {#if processingStatus && processingStatus.active}
+          {@const pct = getProcessingPercent(processingStatus)}
+          <div class="rounded-xl border overflow-hidden" style="background: var(--bg-secondary); border-color: var(--border-color)">
+            <div class="px-5 py-4 flex items-center gap-3">
+              <div class="w-5 h-5 shrink-0">
+                <div class="w-5 h-5 rounded-full border-2 border-t-transparent animate-spin" style="border-color: var(--color-accent-500); border-top-color: transparent"></div>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center justify-between mb-1.5">
+                  <span class="text-sm font-medium" style="color: var(--text-primary)">{getProcessingLabel(processingStatus)}</span>
+                  <span class="text-xs font-medium shrink-0 ml-2" style="color: var(--text-tertiary)">{processingStatus.processed} / {processingStatus.total} emails</span>
+                </div>
+                <div class="h-2 rounded-full overflow-hidden" style="background: var(--bg-tertiary)">
+                  <div
+                    class="h-full rounded-full transition-all duration-500 ease-out"
+                    style="background: var(--color-accent-500); width: {pct}%"
+                  ></div>
+                </div>
+              </div>
+              <span class="text-xs font-bold shrink-0" style="color: var(--color-accent-500)">{pct}%</span>
+            </div>
+          </div>
+        {/if}
+
+        <!-- Just finished banner -->
+        {#if processingJustFinished}
+          <div class="rounded-xl border px-5 py-3 flex items-center gap-2" style="background: #ecfdf5; border-color: #a7f3d0; color: #065f46">
+            <Icon name="check-circle" size={16} />
+            <span class="text-sm font-medium">Processing complete! Data has been refreshed.</span>
+          </div>
+        {/if}
+
+        <!-- AI Analysis Management -->
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">AI Email Analysis</h3>
+          <p class="text-xs mb-4" style="color: var(--text-tertiary)">
+            Analyze emails with AI for categorization, summaries, action items, and reply suggestions.
+            You can also drop all analyses and rebuild from scratch.
+          </p>
+
+          <!-- Stats -->
+          {#if aiStats}
+            <div class="flex flex-wrap gap-3 mb-4">
+              <div class="px-3 py-2 rounded-lg text-center" style="background: var(--bg-tertiary)">
+                <div class="text-lg font-bold" style="color: var(--text-primary)">{aiStats.total_analyzed || 0}</div>
+                <div class="text-[10px] uppercase tracking-wider font-semibold" style="color: var(--text-tertiary)">Analyzed</div>
+              </div>
+              <div class="px-3 py-2 rounded-lg text-center" style="background: var(--bg-tertiary)">
+                <div class="text-lg font-bold" style="color: var(--text-primary)">{aiStats.total_emails || 0}</div>
+                <div class="text-[10px] uppercase tracking-wider font-semibold" style="color: var(--text-tertiary)">Total Emails</div>
+              </div>
+              {#if aiStats.unanalyzed}
+                <div class="px-3 py-2 rounded-lg text-center" style="background: var(--bg-tertiary)">
+                  <div class="text-lg font-bold" style="color: var(--color-accent-500)">{aiStats.unanalyzed.all || 0}</div>
+                  <div class="text-[10px] uppercase tracking-wider font-semibold" style="color: var(--text-tertiary)">Unanalyzed</div>
+                </div>
+              {/if}
+              {#if aiStats.models && Object.keys(aiStats.models).length > 0}
+                <div class="flex items-center gap-1.5 px-3 py-2 rounded-lg" style="background: var(--bg-tertiary)">
+                  <span class="text-[10px] uppercase tracking-wider font-semibold" style="color: var(--text-tertiary)">Models:</span>
+                  {#each Object.entries(aiStats.models) as [model, count]}
+                    <span class="px-1.5 py-0.5 rounded text-[10px] font-medium" style="background: var(--bg-secondary); color: var(--text-secondary)">{model}: {count}</span>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
+
+          <!-- Action buttons -->
+          <div class="flex flex-wrap items-center gap-2">
+            <!-- Analyze backfill dropdown -->
+            <div class="relative">
+              <button
+                onclick={() => { showBackfillMenu = !showBackfillMenu; showDropConfirm = false; }}
+                disabled={categorizing || (processingStatus && processingStatus.active)}
+                class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-fast disabled:opacity-50"
+                style="background: var(--color-accent-500); color: white"
+              >
+                {#if categorizing}
+                  <div class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                  Analyzing...
+                {:else}
+                  <Icon name="zap" size={16} />
+                  Analyze Emails
+                  <Icon name="chevron-down" size={12} />
+                {/if}
+              </button>
+              {#if showBackfillMenu}
+                <div class="absolute left-0 top-full mt-1 w-56 rounded-lg border shadow-lg z-50 py-1" style="background: var(--bg-secondary); border-color: var(--border-color)">
+                  {#each [{ label: 'Last 30 days', days: 30, key: '30d' }, { label: 'Last 90 days', days: 90, key: '90d' }, { label: 'Last year', days: 365, key: '1y' }, { label: 'All unanalyzed', days: null, key: 'all' }] as opt}
+                    <button
+                      onclick={() => triggerAutoCategorize(opt.days)}
+                      class="w-full text-left px-4 py-2 text-sm transition-fast flex items-center justify-between"
+                      style="color: var(--text-primary)"
+                      onmouseenter={(e) => e.target.style.background = 'var(--bg-tertiary)'}
+                      onmouseleave={(e) => e.target.style.background = 'transparent'}
+                    >
+                      <span>{opt.label}</span>
+                      {#if aiStats && aiStats.unanalyzed}
+                        <span class="text-xs px-1.5 py-0.5 rounded-full" style="background: var(--bg-tertiary); color: var(--text-tertiary)">{aiStats.unanalyzed[opt.key]}</span>
+                      {/if}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+
+            <!-- Drop & Rebuild button -->
+            <div class="relative">
+              <button
+                onclick={() => { showDropConfirm = !showDropConfirm; showBackfillMenu = false; showDropOnlyConfirm = false; }}
+                disabled={dropping || (processingStatus && processingStatus.active)}
+                class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-fast disabled:opacity-50 border"
+                style="border-color: var(--border-color); color: var(--text-secondary); background: var(--bg-primary)"
+                title="Drop & Rebuild AI Data"
+              >
+                {#if dropping}
+                  <div class="w-4 h-4 border-2 rounded-full animate-spin" style="border-color: var(--border-color); border-top-color: var(--text-secondary)"></div>
+                {:else}
+                  <Icon name="refresh-cw" size={16} />
+                {/if}
+                Drop & Rebuild
+              </button>
+              {#if showDropConfirm}
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div class="absolute left-0 top-full mt-1 w-72 rounded-lg border shadow-lg z-50 p-4 space-y-3" style="background: var(--bg-secondary); border-color: var(--border-color)" onclick={(e) => e.stopPropagation()}>
+                  <div class="text-sm font-medium" style="color: var(--text-primary)">Drop & Rebuild AI Data</div>
+                  {#if aiStats}
+                    <div class="text-xs space-y-1" style="color: var(--text-tertiary)">
+                      <div>{aiStats.total_analyzed} analyses will be deleted, then re-analyzed</div>
+                      {#if aiStats.models && Object.keys(aiStats.models).length > 0}
+                        <div class="flex flex-wrap gap-1">
+                          {#each Object.entries(aiStats.models) as [model, count]}
+                            <span class="px-1.5 py-0.5 rounded text-[10px]" style="background: var(--bg-tertiary)">{model}: {count}</span>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
+                  {/if}
+                  <div class="text-xs" style="color: var(--text-secondary)">Rebuild range:</div>
+                  <div class="flex flex-wrap gap-1">
+                    {#each [{ label: '30 days', days: 30 }, { label: '90 days', days: 90 }, { label: '1 year', days: 365 }, { label: 'All', days: 0 }] as opt}
+                      <button
+                        onclick={() => { dropRebuildDays = opt.days; }}
+                        class="px-2 py-1 rounded text-xs font-medium transition-fast"
+                        style="background: {dropRebuildDays === opt.days ? 'var(--color-accent-500)' : 'var(--bg-tertiary)'}; color: {dropRebuildDays === opt.days ? 'white' : 'var(--text-secondary)'}"
+                      >
+                        {opt.label}
+                      </button>
+                    {/each}
+                  </div>
+                  <div class="flex gap-2">
+                    <button
+                      onclick={() => dropAndRebuild(dropRebuildDays === 0 ? 0 : dropRebuildDays)}
+                      class="flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-fast"
+                      style="background: var(--color-accent-500); color: white"
+                    >
+                      Drop & Rebuild
+                    </button>
+                    <button
+                      onclick={() => { showDropConfirm = false; }}
+                      class="px-3 py-1.5 rounded-md text-xs font-medium transition-fast"
+                      style="background: var(--bg-tertiary); color: var(--text-secondary)"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              {/if}
+            </div>
+
+            <!-- Drop Only button -->
+            <div class="relative">
+              <button
+                onclick={() => { showDropOnlyConfirm = !showDropOnlyConfirm; showBackfillMenu = false; showDropConfirm = false; }}
+                disabled={dropping || (processingStatus && processingStatus.active)}
+                class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-fast disabled:opacity-50 border"
+                style="border-color: #fecaca; color: #dc2626; background: var(--bg-primary)"
+                title="Drop all AI data without rebuilding"
+              >
+                {#if dropping}
+                  <div class="w-4 h-4 border-2 rounded-full animate-spin" style="border-color: #fecaca; border-top-color: #dc2626"></div>
+                {:else}
+                  <Icon name="trash-2" size={16} />
+                {/if}
+                Drop All
+              </button>
+              {#if showDropOnlyConfirm}
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div class="absolute left-0 top-full mt-1 w-72 rounded-lg border shadow-lg z-50 p-4 space-y-3" style="background: var(--bg-secondary); border-color: var(--border-color)" onclick={(e) => e.stopPropagation()}>
+                  <div class="text-sm font-medium" style="color: var(--text-primary)">Drop All AI Data</div>
+                  <p class="text-xs" style="color: var(--text-tertiary)">
+                    This will permanently delete all AI analyses (categories, summaries, action items, reply suggestions) without rebuilding.
+                  </p>
+                  {#if aiStats}
+                    <div class="text-xs font-medium" style="color: var(--text-secondary)">
+                      {aiStats.total_analyzed} analyses will be deleted
+                    </div>
+                  {/if}
+                  <div class="flex gap-2">
+                    <button
+                      onclick={dropOnly}
+                      class="flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-fast"
+                      style="background: #ef4444; color: white"
+                    >
+                      Yes, Drop All
+                    </button>
+                    <button
+                      onclick={() => { showDropOnlyConfirm = false; }}
+                      class="px-3 py-1.5 rounded-md text-xs font-medium transition-fast"
+                      style="background: var(--bg-tertiary); color: var(--text-secondary)"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              {/if}
+            </div>
+          </div>
+
+          <!-- Click outside to close menus -->
+          {#if showBackfillMenu || showDropConfirm || showDropOnlyConfirm}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="fixed inset-0 z-40" onclick={() => { showBackfillMenu = false; showDropConfirm = false; showDropOnlyConfirm = false; }}></div>
+          {/if}
+        </div>
+
+        <!-- Search Index -->
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Search Index</h3>
+          <p class="text-xs mb-4" style="color: var(--text-tertiary)">
+            Rebuild the full-text search index for all your emails. This updates the search vectors used
+            for email search. Use this if search results seem incomplete or after a large sync.
+          </p>
+          <Button size="sm" onclick={rebuildSearchIndex} disabled={rebuildingSearch}>
+            {#if rebuildingSearch}
+              <div class="w-3.5 h-3.5 border-2 rounded-full animate-spin inline-block mr-1.5" style="border-color: var(--border-color); border-top-color: var(--color-accent-500)"></div>
+              Rebuilding...
+            {:else}
+              Rebuild Search Index
+            {/if}
+          </Button>
         </div>
       </div>
 

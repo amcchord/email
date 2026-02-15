@@ -16,6 +16,7 @@ class GoogleAccount(Base):
     token_expiry: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     scopes: Mapped[str] = mapped_column(Text, nullable=True)
     description: Mapped[str] = mapped_column(Text, nullable=True)
+    short_label: Mapped[str] = mapped_column(String(50), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -30,6 +31,8 @@ class GoogleAccount(Base):
     sync_status = relationship("SyncStatus", back_populates="account", uselist=False, cascade="all, delete-orphan")
     emails = relationship("Email", back_populates="account", cascade="all, delete-orphan")
     labels = relationship("EmailLabel", back_populates="account", cascade="all, delete-orphan")
+    calendar_events = relationship("CalendarEvent", back_populates="account", cascade="all, delete-orphan")
+    calendar_sync_status = relationship("CalendarSyncStatus", back_populates="account", uselist=False, cascade="all, delete-orphan")
 
 
 class SyncStatus(Base):

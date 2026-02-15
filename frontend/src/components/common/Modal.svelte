@@ -1,4 +1,5 @@
 <script>
+  import Icon from './Icon.svelte';
   let { open = false, onclose = null, title = '', children } = $props();
 
   function handleBackdrop(e) {
@@ -32,9 +33,7 @@
         <div class="flex items-center justify-between px-5 py-4 border-b" style="border-color: var(--border-color)">
           <h2 class="text-base font-semibold" style="color: var(--text-primary)">{title}</h2>
           <button onclick={onclose} class="p-1 rounded-md transition-fast" style="color: var(--text-tertiary)" aria-label="Close">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-            </svg>
+            <Icon name="x" size={20} />
           </button>
         </div>
       {/if}

@@ -5,11 +5,12 @@ from arq import create_pool, cron
 from arq.connections import RedisSettings
 from backend.config import get_settings
 from backend.services.sync import EmailSyncService
+from backend.services.calendar_sync import CalendarSyncService
 from backend.services.ai import AIService
 from backend.database import async_session
 from backend.models.email import Email
 from backend.models.account import GoogleAccount
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -70,6 +71,137 @@ async def _queue_ai_for_new_emails(account_id: int, new_email_ids: list[int]):
         await redis.close()
 
 
+async def _clear_needs_reply_for_replied_threads(new_email_ids: list[int]):
+    """When sent emails are synced, mark needs_reply=false on earlier
+    emails in the same thread.
+
+    This handles the case where a user sends a reply and the original
+    received email's stale needs_reply=true flag should be cleared.
+    """
+    if not new_email_ids:
+        return
+
+    from backend.models.ai import AIAnalysis
+
+    async with async_session() as db:
+        # Find sent emails among the newly synced batch
+        result = await db.execute(
+            select(Email.gmail_thread_id, Email.account_id, Email.date)
+            .where(
+                Email.id.in_(new_email_ids),
+                Email.is_sent == True,
+                Email.gmail_thread_id.isnot(None),
+            )
+        )
+        sent_emails = result.all()
+
+        if not sent_emails:
+            return
+
+        cleared_total = 0
+        # For each sent email, clear needs_reply on earlier thread emails
+        for thread_id, account_id, sent_date in sent_emails:
+            # Find email IDs in the same thread that are older
+            thread_result = await db.execute(
+                select(Email.id).where(
+                    Email.gmail_thread_id == thread_id,
+                    Email.account_id == account_id,
+                    Email.date < sent_date,
+                )
+            )
+            older_ids = [r[0] for r in thread_result.all()]
+
+            if older_ids:
+                result = await db.execute(
+                    update(AIAnalysis)
+                    .where(
+                        AIAnalysis.email_id.in_(older_ids),
+                        AIAnalysis.needs_reply == True,
+                    )
+                    .values(needs_reply=False)
+                )
+                cleared_total += result.rowcount
+
+        await db.commit()
+        if cleared_total:
+            logger.info(f"Cleared needs_reply on {cleared_total} emails due to sent replies")
+
+
+async def _refresh_digests_for_replied_threads(new_email_ids: list[int]):
+    """Regenerate thread digests for threads that received new sent emails.
+
+    When a user sends a reply, the existing thread digest (summary,
+    is_resolved, resolved_outcome) may be stale.  This function finds
+    threads that already have a digest and got a new sent email, then
+    regenerates those digests so the conversation status is up to date.
+    """
+    if not new_email_ids:
+        return
+
+    from backend.models.ai import ThreadDigest
+
+    async with async_session() as db:
+        # Find sent emails among the newly synced batch
+        result = await db.execute(
+            select(Email.gmail_thread_id, Email.account_id)
+            .where(
+                Email.id.in_(new_email_ids),
+                Email.is_sent == True,
+                Email.gmail_thread_id.isnot(None),
+            )
+            .distinct()
+        )
+        sent_thread_pairs = [(r[0], r[1]) for r in result.all()]
+
+        if not sent_thread_pairs:
+            return
+
+        # Find which of these threads already have a digest (only those
+        # need regeneration -- threads without a digest will get one
+        # during the normal digest generation flow)
+        threads_needing_refresh = []
+        for thread_id, account_id in sent_thread_pairs:
+            existing = await db.scalar(
+                select(ThreadDigest.id).where(
+                    ThreadDigest.gmail_thread_id == thread_id,
+                    ThreadDigest.account_id == account_id,
+                )
+            )
+            if existing:
+                threads_needing_refresh.append((account_id, thread_id))
+
+    if not threads_needing_refresh:
+        return
+
+    logger.info(
+        f"Refreshing {len(threads_needing_refresh)} thread digests "
+        f"due to new sent replies"
+    )
+
+    # Resolve model/context from the first account
+    first_account_id = threads_needing_refresh[0][0]
+    model = await _resolve_model_for_account(first_account_id)
+    user_id = await _resolve_user_id_for_account(first_account_id)
+    user_context = await _resolve_user_context(user_id)
+    acct_ids = list(set(aid for aid, _ in threads_needing_refresh))
+    acct_descs = await _resolve_account_descriptions(acct_ids)
+
+    ai_service = AIService(model=model)
+    for account_id, thread_id in threads_needing_refresh:
+        try:
+            acct_desc = acct_descs.get(account_id)
+            await ai_service.generate_thread_digest(
+                thread_id,
+                account_id,
+                user_context=user_context,
+                account_description=acct_desc,
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to refresh digest for thread {thread_id}: {e}"
+            )
+
+
 async def sync_account_full(ctx, account_id: int):
     """Full sync for an account."""
     logger.info(f"Starting full sync task for account {account_id}")
@@ -93,6 +225,18 @@ async def sync_account_incremental(ctx, account_id: int):
         await _queue_ai_for_new_emails(account_id, new_email_ids)
     except Exception as e:
         logger.warning(f"Failed to queue AI analysis after sync for account {account_id}: {e}")
+
+    # Clear stale needs_reply flags for threads where the user sent a reply
+    try:
+        await _clear_needs_reply_for_replied_threads(new_email_ids)
+    except Exception as e:
+        logger.warning(f"Failed to clear needs_reply after sync for account {account_id}: {e}")
+
+    # Refresh thread digests for threads that received sent replies
+    try:
+        await _refresh_digests_for_replied_threads(new_email_ids)
+    except Exception as e:
+        logger.warning(f"Failed to refresh digests after sync for account {account_id}: {e}")
 
 
 def _is_rate_limit_exception(exc: Exception) -> bool:
@@ -272,6 +416,18 @@ async def sync_all_accounts(ctx):
                     await _queue_ai_for_new_emails(account.id, new_email_ids)
                 except Exception as ai_err:
                     logger.warning(f"Failed to queue AI analysis after sync for account {account.id}: {ai_err}")
+
+                # Clear stale needs_reply flags for threads where the user sent a reply
+                try:
+                    await _clear_needs_reply_for_replied_threads(new_email_ids)
+                except Exception as nr_err:
+                    logger.warning(f"Failed to clear needs_reply after sync for account {account.id}: {nr_err}")
+
+                # Refresh thread digests for threads that received sent replies
+                try:
+                    await _refresh_digests_for_replied_threads(new_email_ids)
+                except Exception as dig_err:
+                    logger.warning(f"Failed to refresh digests after sync for account {account.id}: {dig_err}")
 
             except Exception as e:
                 logger.error(f"Sync error for account {account.id}: {e}")
@@ -686,6 +842,49 @@ async def generate_bundles_for_user(ctx, user_id: int, model: str = None):
     logger.info(f"Generated/updated {count} topic bundles for user {user_id}")
 
 
+_calendar_sync_lock = asyncio.Lock()
+
+
+async def sync_calendar_full(ctx, account_id: int):
+    """Full calendar sync for an account."""
+    logger.info(f"Starting full calendar sync for account {account_id}")
+    sync_service = CalendarSyncService(account_id)
+    await sync_service.full_sync()
+    logger.info(f"Full calendar sync completed for account {account_id}")
+
+
+async def sync_calendar_incremental(ctx, account_id: int):
+    """Incremental calendar sync for an account."""
+    logger.info(f"Starting incremental calendar sync for account {account_id}")
+    sync_service = CalendarSyncService(account_id)
+    await sync_service.incremental_sync()
+    logger.info(f"Incremental calendar sync completed for account {account_id}")
+
+
+async def sync_all_calendars(ctx):
+    """Incremental calendar sync for all active accounts.
+
+    Runs every 5 minutes. Uses an in-memory lock to prevent overlapping runs.
+    """
+    if _calendar_sync_lock.locked():
+        return
+
+    async with _calendar_sync_lock:
+        async with async_session() as db:
+            result = await db.execute(
+                select(GoogleAccount).where(GoogleAccount.is_active == True)
+            )
+            accounts = result.scalars().all()
+
+        for account in accounts:
+            try:
+                sync_service = CalendarSyncService(account.id)
+                await sync_service.incremental_sync()
+            except Exception as e:
+                logger.error(f"Calendar sync error for account {account.id}: {e}")
+            await asyncio.sleep(1)
+
+
 async def startup(ctx):
     """Worker startup."""
     logger.info("ARQ worker started")
@@ -708,12 +907,17 @@ class WorkerSettings:
         auto_categorize_account,
         generate_digests_for_account,
         generate_bundles_for_user,
+        sync_calendar_full,
+        sync_calendar_incremental,
+        sync_all_calendars,
     ]
     # Schedule periodic incremental sync for all accounts every minute.
     # Deliberately NOT using run_at_startup to avoid a burst of API calls
     # when the worker boots.  The first tick will fire within 60 seconds.
+    # Calendar sync runs every 5 minutes (less frequent than email).
     cron_jobs = [
         cron(sync_all_accounts, minute={i for i in range(0, 60)}),
+        cron(sync_all_calendars, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
     ]
     on_startup = startup
     on_shutdown = shutdown

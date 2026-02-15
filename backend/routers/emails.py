@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from sqlalchemy import select, func, desc, asc, or_, text, update, literal_column
+from sqlalchemy import select, func, desc, asc, or_, text, update, literal_column, literal
 from typing import Optional
 from backend.database import get_db
 
@@ -46,6 +46,7 @@ async def list_emails(
     is_read: Optional[bool] = None,
     is_starred: Optional[bool] = None,
     ai_category: Optional[str] = None,
+    exclude_ai_category: Optional[str] = None,
     ai_email_type: Optional[str] = None,
     needs_reply: Optional[bool] = None,
     db: AsyncSession = Depends(get_db),
@@ -106,6 +107,15 @@ async def list_emails(
         query = query.where(AIAnalysis.category == ai_category)
         ai_joined = True
 
+    # Exclude AI category filter
+    if exclude_ai_category:
+        if not ai_joined:
+            query = query.outerjoin(AIAnalysis, AIAnalysis.email_id == Email.id)
+            ai_joined = True
+        query = query.where(
+            or_(AIAnalysis.category == None, AIAnalysis.category != exclude_ai_category)
+        )
+
     # AI email type filter (work/personal)
     if ai_email_type:
         if not ai_joined:
@@ -117,7 +127,29 @@ async def list_emails(
     if needs_reply is not None:
         if not ai_joined:
             query = query.join(AIAnalysis, AIAnalysis.email_id == Email.id)
+            ai_joined = True
         query = query.where(AIAnalysis.needs_reply == needs_reply)
+
+        # When filtering for needs_reply=True, exclude emails where the
+        # user already sent a reply later in the same thread.  This
+        # mirrors the logic in /api/ai/needs-reply and catches any stale
+        # flags that haven't been cleared yet by the post-sync job.
+        if needs_reply:
+            from sqlalchemy.orm import aliased
+            SentEmail = aliased(Email, flat=True)
+            has_later_reply = (
+                select(literal(1))
+                .where(
+                    SentEmail.gmail_thread_id == Email.gmail_thread_id,
+                    SentEmail.account_id.in_(user_accounts.keys()),
+                    SentEmail.is_sent == True,
+                    SentEmail.is_trash == False,
+                    SentEmail.date > Email.date,
+                )
+                .correlate(Email)
+                .exists()
+            )
+            query = query.where(~has_later_reply)
 
     # Full-text search with ILIKE fallback
     if search:
@@ -167,6 +199,30 @@ async def list_emails(
         for d in digest_result.scalars().all():
             digest_map[d.gmail_thread_id] = d
 
+    # Batch-check which emails have a later sent reply in their thread.
+    # This overrides stale needs_reply=true flags in the response even
+    # when the stored AIAnalysis hasn't been updated yet.
+    replied_email_ids = set()
+    emails_with_needs_reply = [
+        e for e in emails
+        if e.ai_analysis and e.ai_analysis.needs_reply and e.gmail_thread_id
+    ]
+    if emails_with_needs_reply:
+        from sqlalchemy.orm import aliased
+        SentReply = aliased(Email, flat=True)
+        for e in emails_with_needs_reply:
+            has_reply = await db.scalar(
+                select(literal(1)).where(
+                    SentReply.gmail_thread_id == e.gmail_thread_id,
+                    SentReply.account_id.in_(user_accounts.keys()),
+                    SentReply.is_sent == True,
+                    SentReply.is_trash == False,
+                    SentReply.date > e.date,
+                ).limit(1)
+            )
+            if has_reply:
+                replied_email_ids.add(e.id)
+
     # Build response
     email_summaries = []
     for e in emails:
@@ -183,6 +239,10 @@ async def list_emails(
             is_sub = e.ai_analysis.is_subscription
             needs_rpl = e.ai_analysis.needs_reply
             unsub_info = e.ai_analysis.unsubscribe_info
+
+        # Override needs_reply if a later reply exists in the thread
+        if needs_rpl and e.id in replied_email_ids:
+            needs_rpl = False
 
         # Attach thread digest data if available
         digest = digest_map.get(e.gmail_thread_id)
@@ -283,6 +343,7 @@ async def get_email(
     unsub_info = None
     ai_model = None
     ai_suggested_reply = None
+    ai_reply_options = None
     if email.ai_analysis:
         ai_summary = email.ai_analysis.summary
         ai_actions = email.ai_analysis.action_items
@@ -294,6 +355,7 @@ async def get_email(
         unsub_info = email.ai_analysis.unsubscribe_info
         ai_model = email.ai_analysis.model_used
         ai_suggested_reply = email.ai_analysis.suggested_reply
+        ai_reply_options = email.ai_analysis.reply_options
 
     return EmailDetail(
         id=email.id,
@@ -329,6 +391,7 @@ async def get_email(
         unsubscribe_info=unsub_info,
         ai_model_used=ai_model,
         suggested_reply=ai_suggested_reply,
+        reply_options=ai_reply_options,
     )
 
 

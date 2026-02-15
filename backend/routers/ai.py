@@ -223,6 +223,7 @@ async def analyze_email(
         "key_topics": analysis.key_topics,
         "sentiment": analysis.sentiment,
         "suggested_reply": analysis.suggested_reply,
+        "reply_options": analysis.reply_options,
         "context": analysis.context,
     }
 
@@ -583,6 +584,7 @@ async def get_needs_reply(
             AIAnalysis.priority,
             AIAnalysis.summary,
             AIAnalysis.suggested_reply,
+            AIAnalysis.reply_options,
         )
         .join(AIAnalysis, AIAnalysis.email_id == Email.id)
         .where(
@@ -638,6 +640,102 @@ async def get_needs_reply(
             "priority": priority,
             "summary": row.summary,
             "suggested_reply": row.suggested_reply,
+            "reply_options": row.reply_options,
+        })
+
+    return {"emails": emails, "total": total}
+
+
+@router.get("/awaiting-response")
+async def get_awaiting_response(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Get emails the user sent that haven't received a reply yet."""
+    account_ids = await _get_user_account_ids(db, user)
+
+    if not account_ids:
+        return {"emails": [], "total": 0}
+
+    account_filter = Email.account_id.in_(account_ids)
+
+    # Find sent emails where no reply has been received in the same thread
+    # after the sent email's date
+    from sqlalchemy.orm import aliased
+    ReplyEmail = aliased(Email, flat=True)
+    has_reply = (
+        select(literal(1))
+        .where(
+            ReplyEmail.gmail_thread_id == Email.gmail_thread_id,
+            ReplyEmail.account_id.in_(account_ids),
+            ReplyEmail.is_sent == False,
+            ReplyEmail.is_trash == False,
+            ReplyEmail.date > Email.date,
+        )
+        .correlate(Email)
+        .exists()
+    )
+
+    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+
+    # Use DISTINCT ON to get only the latest sent email per thread
+    deduped = (
+        select(
+            Email.id,
+            Email.subject,
+            Email.to_addresses,
+            Email.date,
+            Email.snippet,
+            Email.gmail_thread_id,
+        )
+        .where(
+            account_filter,
+            Email.is_sent == True,
+            Email.is_trash == False,
+            Email.is_spam == False,
+            Email.date >= seven_days_ago,
+            ~has_reply,
+        )
+        .distinct(Email.gmail_thread_id)
+        .order_by(Email.gmail_thread_id, desc(Email.date))
+    ).subquery()
+
+    # Count total
+    count_result = await db.scalar(
+        select(func.count()).select_from(deduped)
+    )
+    total = count_result or 0
+
+    # Paginate
+    result = await db.execute(
+        select(deduped)
+        .order_by(desc(deduped.c.date))
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+
+    emails = []
+    for row in result.all():
+        to_addrs = row.to_addresses or []
+        # Extract first recipient name/address
+        first_to = ""
+        if to_addrs:
+            first = to_addrs[0]
+            if isinstance(first, dict):
+                first_to = first.get("name") or first.get("address", "")
+            else:
+                first_to = str(first)
+
+        emails.append({
+            "id": row.id,
+            "subject": row.subject,
+            "to_name": first_to,
+            "to_addresses": to_addrs,
+            "date": row.date.isoformat() if row.date else None,
+            "snippet": row.snippet,
+            "gmail_thread_id": row.gmail_thread_id,
         })
 
     return {"emails": emails, "total": total}
@@ -1364,3 +1462,40 @@ async def delete_ai_analyses(
         result["message"] += f". Queued rebuild of {rebuild_count} emails ({label})"
 
     return result
+
+
+@router.post("/rebuild-search-index")
+async def rebuild_search_index(
+    account_id: int = Query(None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Rebuild PostgreSQL full-text search vectors for emails."""
+    from backend.services.search import SearchService
+
+    # Verify user owns the account if specified
+    if account_id:
+        acct = await db.scalar(
+            select(GoogleAccount.id).where(
+                GoogleAccount.id == account_id,
+                GoogleAccount.user_id == user.id,
+            )
+        )
+        if not acct:
+            raise HTTPException(status_code=404, detail="Account not found")
+        await SearchService.rebuild_search_index(db, account_id=account_id)
+        return {"message": f"Search index rebuilt for account {account_id}"}
+
+    # Rebuild for all user accounts
+    acct_result = await db.execute(
+        select(GoogleAccount.id).where(GoogleAccount.user_id == user.id)
+    )
+    account_ids = [r[0] for r in acct_result.all()]
+
+    if not account_ids:
+        return {"message": "No accounts found"}
+
+    for aid in account_ids:
+        await SearchService.rebuild_search_index(db, account_id=aid)
+
+    return {"message": f"Search index rebuilt for {len(account_ids)} account(s)"}

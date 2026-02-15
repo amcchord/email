@@ -109,6 +109,84 @@ class AIService:
             messages=messages,
         )
 
+    async def _get_upcoming_events_context(self, account_id: int, days: int = 14) -> str:
+        """Query upcoming calendar events for context injection."""
+        from datetime import timedelta as _td
+        from sqlalchemy import or_, and_
+        from backend.models.calendar import CalendarEvent
+
+        now = datetime.now(timezone.utc)
+        end_dt = now + _td(days=days)
+        end_str = end_dt.strftime("%Y-%m-%d")
+        now_str = now.strftime("%Y-%m-%d")
+
+        async with async_session() as db:
+            # Fetch both timed and all-day events
+            timed_condition = and_(
+                CalendarEvent.is_all_day == False,
+                CalendarEvent.start_time >= now,
+                CalendarEvent.start_time <= end_dt,
+            )
+            allday_condition = and_(
+                CalendarEvent.is_all_day == True,
+                CalendarEvent.start_date >= now_str,
+                CalendarEvent.start_date <= end_str,
+            )
+            result = await db.execute(
+                select(CalendarEvent)
+                .where(
+                    CalendarEvent.account_id == account_id,
+                    CalendarEvent.status != "cancelled",
+                    or_(timed_condition, allday_condition),
+                )
+                .order_by(CalendarEvent.start_time.asc().nulls_last())
+                .limit(30)
+            )
+            events = result.scalars().all()
+
+        if not events:
+            return ""
+
+        lines = []
+        for e in events:
+            title = e.summary or "(no title)"
+            if e.is_all_day:
+                lines.append(f"  - {e.start_date} (all day): {title}")
+            else:
+                start_str = e.start_time.strftime("%a %b %d, %I:%M %p") if e.start_time else "?"
+                end_str_fmt = e.end_time.strftime("%I:%M %p") if e.end_time else "?"
+                entry = f"  - {start_str} - {end_str_fmt}: {title}"
+                if e.location:
+                    entry += f" ({e.location})"
+                attendee_count = len(e.attendees) if e.attendees else 0
+                if attendee_count > 0:
+                    entry += f" [{attendee_count} attendees]"
+                lines.append(entry)
+
+        return (
+            f"\nUpcoming calendar events (next {days} days):\n"
+            + "\n".join(lines)
+            + "\nUse this calendar context to identify scheduling conflicts. "
+            "If a proposed meeting time overlaps with an existing event, note the conflict.\n\n"
+        )
+
+    async def generate_short_label(self, description: str) -> str:
+        """Generate a 1-2 word short label from an account description."""
+        prompt = (
+            f"Given this email account description, produce a concise 1-2 word label "
+            f"that identifies the account's purpose. Examples: 'Work', 'Personal', "
+            f"'Side Project', 'Freelance', 'School', 'Gaming', 'Shopping', 'Finance', "
+            f"'Startup', 'Consulting'.\n\n"
+            f"Description: {description}\n\n"
+            f"Respond with ONLY the 1-2 word label, nothing else."
+        )
+        response = await self._call_claude(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=20,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text.strip().strip('"').strip("'")
+
     async def analyze_email(
         self,
         email_id: int,
@@ -214,7 +292,51 @@ class AIService:
                         "this email, set needs_reply to false."
                     )
 
-            prompt = f"""{context_preamble}Analyze this email and provide a structured analysis.
+            # Inject calendar context for scheduling-related emails
+            calendar_context = ""
+            scheduling_keywords = ["meeting", "calendar", "schedule", "invite", "rsvp",
+                                   "appointment", "call", "sync", "standup", "1:1",
+                                   "one-on-one", "catch up", "reschedule", "availability"]
+            subject_lower = (email.subject or "").lower()
+            body_lower = body[:500].lower()
+            is_scheduling = any(kw in subject_lower or kw in body_lower for kw in scheduling_keywords)
+            if is_scheduling:
+                try:
+                    calendar_context = await self._get_upcoming_events_context(email.account_id)
+                except Exception as cal_err:
+                    logger.debug(f"Could not load calendar context: {cal_err}")
+
+            # Build scheduling assistant hint if the user's context mentions one
+            scheduling_assistant_hint = ""
+            combined_context = ((user_context or "") + " " + (account_description or "")).lower()
+            assistant_keywords = ["assistant", "ea", "executive assistant", "scheduler",
+                                  "scheduling assistant", "admin assistant", "office manager"]
+            has_scheduling_assistant = any(kw in combined_context for kw in assistant_keywords)
+            if has_scheduling_assistant:
+                scheduling_assistant_hint = (
+                    "\nNote: The user's context mentions they have a scheduling assistant or similar. "
+                    "When generating scheduling-related replies, consider suggesting that the sender "
+                    "coordinate with the assistant or that the user will check with their assistant.\n"
+                )
+
+            reply_options_guide = ""
+            if is_scheduling:
+                reply_options_guide = """
+reply_options guide (for scheduling emails):
+- ALWAYS include an "accept" option with a friendly acceptance reply body
+- ALWAYS include a "decline" option with a polite decline reply body
+- If calendar events show a conflict at the proposed time, mention the conflict in the decline body (but do NOT reveal the conflicting event title)
+- Optionally include a "defer" option suggesting alternative times or asking to check back later
+- If the user has a scheduling assistant, suggest coordinating through them"""
+            else:
+                reply_options_guide = """
+reply_options guide (for non-scheduling emails):
+- If the email needs a reply, include a "custom" option with a helpful default reply body
+- Include a "not_relevant" option with label "Not for me" if the email could be misdirected or not relevant
+- Include a "defer" option with label "Not now" if the reply could reasonably be deferred
+- If the email does NOT need a reply, reply_options should be null"""
+
+            prompt = f"""{context_preamble}{calendar_context}{scheduling_assistant_hint}Analyze this email and provide a structured analysis.
 
 From: {email.from_name or ''} <{email.from_address or ''}>
 To: {json.dumps(email.to_addresses or [])}
@@ -239,7 +361,8 @@ Respond with ONLY valid JSON in this exact format:
         "deadline": "<any mentioned deadlines or null>",
         "requires_action": <true/false>
     }},
-    "suggested_reply": "<brief suggested reply if response needed, or null>",
+    "suggested_reply": "<brief best-fit suggested reply if response needed, or null>",
+    "reply_options": <array of reply option objects or null. Each object has: "label" (short button text like "Accept", "Decline", "Not now", "Reply"), "intent" (one of: accept, decline, defer, custom, not_relevant), "body" (the full reply text). Provide 2-4 options when a reply is needed, or null if no reply is needed.>,
     "is_subscription": <true if this is a newsletter, marketing, automated notification, mailing list, or bulk email; false if personal/direct>,
     "needs_reply": <true if the recipient should write back to this email; false if no reply needed>
 }}
@@ -249,11 +372,12 @@ conversation_type guide:
 - "discussion": back-and-forth conversation, brainstorming, debate, Q&A threads
 - "notification": automated alerts, system notifications, status updates, delivery updates
 - "transactional": receipts, order confirmations, password resets, account verification
-- "other": anything that does not fit the above categories"""
+- "other": anything that does not fit the above categories
+{reply_options_guide}"""
 
             response = await self._call_claude(
                 model=self.model,
-                max_tokens=1000,
+                max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}],
             )
 
@@ -267,6 +391,24 @@ conversation_type guide:
             analysis_data = json.loads(response_text)
             tokens_used = response.usage.input_tokens + response.usage.output_tokens
 
+            # Validate reply_options structure
+            raw_reply_options = analysis_data.get("reply_options")
+            reply_options = None
+            if raw_reply_options and isinstance(raw_reply_options, list):
+                valid_intents = {"accept", "decline", "defer", "custom", "not_relevant"}
+                validated = []
+                for opt in raw_reply_options:
+                    if isinstance(opt, dict) and opt.get("label") and opt.get("intent") and opt.get("body"):
+                        intent = opt["intent"]
+                        if intent in valid_intents:
+                            validated.append({
+                                "label": str(opt["label"]),
+                                "intent": intent,
+                                "body": str(opt["body"]),
+                            })
+                if validated:
+                    reply_options = validated
+
             analysis = AIAnalysis(
                 email_id=email_id,
                 category=analysis_data.get("category", "fyi"),
@@ -279,6 +421,7 @@ conversation_type guide:
                 sentiment=analysis_data.get("sentiment"),
                 key_topics=analysis_data.get("key_topics", []),
                 suggested_reply=analysis_data.get("suggested_reply"),
+                reply_options=reply_options,
                 is_subscription=analysis_data.get("is_subscription", False),
                 needs_reply=analysis_data.get("needs_reply", False),
                 unsubscribe_info=unsub_info,

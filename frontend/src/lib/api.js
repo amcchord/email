@@ -156,6 +156,10 @@ export const api = {
     return request('DELETE', `/ai/analyses${qs}`);
   },
   getAIProcessingStatus: () => request('GET', '/ai/processing/status'),
+  rebuildSearchIndex: (accountId = null) => {
+    const qs = accountId ? `?account_id=${accountId}` : '';
+    return request('POST', `/ai/rebuild-search-index${qs}`);
+  },
   getNeedsReply: (params = {}) => {
     const searchParams = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
@@ -195,6 +199,15 @@ export const api = {
       }
     }
     return request('GET', `/ai/digests?${searchParams.toString()}`);
+  },
+  getAwaitingResponse: (params = {}) => {
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== null && value !== undefined && value !== '') {
+        searchParams.set(key, value);
+      }
+    }
+    return request('GET', `/ai/awaiting-response?${searchParams.toString()}`);
   },
   getEmailBundles: (params = {}) => {
     const searchParams = new URLSearchParams();
@@ -239,6 +252,24 @@ export const api = {
   getConversations: () => request('GET', '/chat/conversations'),
   getConversation: (id) => request('GET', `/chat/conversations/${id}`),
   deleteConversation: (id) => request('DELETE', `/chat/conversations/${id}`),
+
+  // Calendar
+  getCalendarEvents: (params = {}) => {
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== null && value !== undefined && value !== '') {
+        searchParams.set(key, value);
+      }
+    }
+    return request('GET', `/calendar/events?${searchParams.toString()}`);
+  },
+  getCalendarEvent: (id) => request('GET', `/calendar/events/${id}`),
+  triggerCalendarSync: (accountId = null) => {
+    const qs = accountId ? `?account_id=${accountId}` : '';
+    return request('POST', `/calendar/sync${qs}`);
+  },
+  getCalendarSyncStatus: () => request('GET', '/calendar/sync-status'),
+  getUpcomingEvents: (days = 7) => request('GET', `/calendar/upcoming?days=${days}`),
 
   // AI Preferences
   getAIPreferences: () => request('GET', '/auth/ai-preferences'),

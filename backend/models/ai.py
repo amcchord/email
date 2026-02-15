@@ -23,6 +23,9 @@ class AIAnalysis(Base):
     sentiment: Mapped[float] = mapped_column(Float, nullable=True)
     key_topics = mapped_column(JSONB, default=list)
     suggested_reply: Mapped[str] = mapped_column(Text, nullable=True)
+    reply_options = mapped_column(JSONB, nullable=True)
+    # reply_options format: [{"label": "Accept", "intent": "accept", "body": "..."}, ...]
+    # intent values: accept, decline, defer, custom, not_relevant
     analyzed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

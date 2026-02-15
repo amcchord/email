@@ -3,6 +3,7 @@
   import { marked } from 'marked';
   import { api } from '../lib/api.js';
   import { chatConversations, currentConversationId, showToast } from '../lib/stores.js';
+  import Icon from '../components/common/Icon.svelte';
 
   let messageInput = $state('');
   let isProcessing = $state(false);
@@ -441,9 +442,7 @@
           class="w-full h-9 flex items-center justify-center gap-2 rounded-lg text-sm font-medium transition-fast"
           style="background: var(--color-accent-500); color: white"
         >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.5v15m7.5-7.5h-15" />
-          </svg>
+          <Icon name="plus" size={16} />
           New Chat
         </button>
       </div>
@@ -477,9 +476,7 @@
                 style="color: var(--text-tertiary)"
                 title="Delete conversation"
               >
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                <Icon name="x" size={14} />
               </button>
             </div>
           {/each}
@@ -498,9 +495,7 @@
         style="color: var(--text-secondary)"
         title="{sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}"
       >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
-        </svg>
+        <Icon name="menu" size={20} />
       </button>
       <h2 class="text-sm font-semibold" style="color: var(--text-primary)">
         Talk to your Emails
@@ -513,9 +508,9 @@
         <!-- Empty state -->
         <div class="flex flex-col items-center justify-center h-full text-center px-4">
           <div class="w-16 h-16 rounded-2xl flex items-center justify-center mb-4" style="background: var(--color-accent-500)/10">
-            <svg class="w-8 h-8" style="color: var(--color-accent-500)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.087.16 2.185.283 3.293.369V21l4.076-4.076a1.526 1.526 0 011.037-.443 48.282 48.282 0 005.68-.494c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z" />
-            </svg>
+            <span style="color: var(--color-accent-500)">
+              <Icon name="message-circle" size={32} />
+            </span>
           </div>
           <h3 class="text-lg font-semibold mb-2" style="color: var(--text-primary)">Ask anything about your emails</h3>
           <p class="text-sm max-w-md" style="color: var(--text-secondary)">
@@ -569,9 +564,9 @@
               <div class="mb-4 rounded-xl border overflow-hidden" style="border-color: var(--color-accent-500)/30; background: var(--color-accent-500)/5">
                 <div class="px-4 py-3 flex items-start gap-3">
                   <div class="mt-0.5 shrink-0">
-                    <svg class="w-5 h-5" style="color: var(--color-accent-600)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
-                    </svg>
+                    <span style="color: var(--color-accent-600)">
+                      <Icon name="help-circle" size={20} />
+                    </span>
                   </div>
                   <div class="flex-1">
                     <div class="text-xs font-semibold uppercase tracking-wider mb-1" style="color: var(--color-accent-600)">
@@ -619,15 +614,11 @@
                           <div class="w-5 h-5 rounded-full border-2 border-t-transparent animate-spin" style="border-color: var(--color-accent-500)"></div>
                         {:else if status.status === 'completed'}
                           <div class="w-5 h-5 rounded-full flex items-center justify-center" style="background: #22c55e">
-                            <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M4.5 12.75l6 6 9-13.5" />
-                            </svg>
+                            <Icon name="check" size={12} class="text-white" strokeWidth={3} />
                           </div>
                         {:else if status.status === 'failed'}
                           <div class="w-5 h-5 rounded-full flex items-center justify-center" style="background: #ef4444">
-                            <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12" />
-                            </svg>
+                            <Icon name="x" size={12} class="text-white" strokeWidth={3} />
                           </div>
                         {/if}
                       </div>
@@ -653,12 +644,7 @@
                             class="mt-1 text-xs flex items-center gap-1 transition-fast"
                             style="color: var(--text-tertiary)"
                           >
-                            <svg
-                              class="w-3 h-3 transition-transform duration-200 {expandedTasks[task.id] ? 'rotate-90' : ''}"
-                              fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                            >
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-                            </svg>
+                            <Icon name="chevron-right" size={12} class="transition-transform duration-200 {expandedTasks[task.id] ? 'rotate-90' : ''}" />
                             {expandedTasks[task.id] ? 'Hide details' : 'Show details'}
                           </button>
                           {#if expandedTasks[task.id]}
@@ -702,9 +688,7 @@
                   style="border-color: var(--border-color); color: var(--text-secondary); background: var(--bg-secondary)"
                   title="Download as Markdown"
                 >
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                  </svg>
+                  <Icon name="download" size={14} />
                   Markdown
                 </button>
                 <button
@@ -718,9 +702,7 @@
                     <div class="w-3.5 h-3.5 border-2 rounded-full animate-spin" style="border-color: var(--border-color); border-top-color: var(--text-secondary)"></div>
                     Generating...
                   {:else}
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
+                    <Icon name="download" size={14} />
                     PDF
                   {/if}
                 </button>
@@ -769,9 +751,7 @@
             {#if isProcessing}
               <div class="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
             {:else}
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
-              </svg>
+              <Icon name="send" size={16} />
             {/if}
           </button>
         </div>

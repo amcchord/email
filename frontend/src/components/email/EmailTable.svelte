@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { slide } from 'svelte/transition';
   import { accountColorMap, selectedAccountId } from '../../lib/stores.js';
+  import Icon from '../common/Icon.svelte';
 
   let {
     emails = [],
@@ -251,9 +252,9 @@
   <!-- Search indicator -->
   {#if searchActive}
     <div class="px-4 py-2 border-b shrink-0 flex items-center gap-2" style="border-color: var(--border-color); background: var(--bg-tertiary)">
-      <svg class="w-4 h-4 shrink-0" style="color: var(--color-accent-500)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
-      </svg>
+      <span class="shrink-0" style="color: var(--color-accent-500)">
+        <Icon name="search" size={16} />
+      </span>
       <span class="text-xs" style="color: var(--text-secondary)">Results for "<strong style="color: var(--text-primary)">{searchTerm}</strong>"</span>
       <span class="text-xs ml-auto" style="color: var(--text-tertiary)">{total.toLocaleString()} found</span>
     </div>
@@ -317,9 +318,7 @@
                 style="border-color: var(--border-color); background: {selectAll ? 'var(--color-accent-500)' : 'transparent'}"
               >
                 {#if selectAll}
-                  <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
-                  </svg>
+                  <Icon name="check" size={12} class="text-white" strokeWidth={3} />
                 {/if}
               </button>
             </th>
@@ -371,9 +370,7 @@
               >
                 <td class="px-3 py-2" style="width: 40px">
                   <div class="transition-transform" style="transform: rotate({isExpanded ? '90' : '0'}deg)">
-                    <svg class="w-4 h-4" style="color: var(--text-tertiary)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
-                    </svg>
+                    <Icon name="chevron-right" size={16} />
                   </div>
                 </td>
                 <td class="px-1 py-2" style="width: 32px"></td>
@@ -459,9 +456,7 @@
                     style="border-color: var(--border-color); background: {selectedIds.has(email.id) ? 'var(--color-accent-500)' : 'transparent'}"
                   >
                     {#if selectedIds.has(email.id)}
-                      <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
-                      </svg>
+                      <Icon name="check" size={12} class="text-white" strokeWidth={3} />
                     {/if}
                   </button>
                 </td>
@@ -470,9 +465,7 @@
                     onclick={(e) => { e.stopPropagation(); onAction && onAction(email.is_starred ? 'unstar' : 'star', [email.id]); }}
                     style="color: {email.is_starred ? 'var(--color-accent-500)' : 'var(--text-tertiary)'}"
                   >
-                    <svg class="w-4 h-4" fill={email.is_starred ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11.48 3.499a.562.562 0 011.04 0l2.125 5.111a.563.563 0 00.475.345l5.518.442c.499.04.701.663.321.988l-4.204 3.602a.563.563 0 00-.182.557l1.285 5.385a.562.562 0 01-.84.61l-4.725-2.885a.563.563 0 00-.586 0L6.982 20.54a.562.562 0 01-.84-.61l1.285-5.386a.562.563 0 00-.182-.557l-4.204-3.602a.563.563 0 01.321-.988l5.518-.442a.563.563 0 00.475-.345L11.48 3.5z"/>
-                    </svg>
+                    <Icon name="star" size={16} />
                   </button>
                 </td>
                 {#if showAccountCol}
@@ -502,9 +495,9 @@
                       {email.subject || '(no subject)'}
                     </span>
                     {#if email.has_attachments}
-                      <svg class="w-3.5 h-3.5 shrink-0" style="color: var(--text-tertiary)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18.375 12.739l-7.693 7.693a4.5 4.5 0 01-6.364-6.364l10.94-10.94A3 3 0 1119.5 7.372L8.552 18.32m.009-.01l-.01.01m5.699-9.941l-7.81 7.81a1.5 1.5 0 002.112 2.13" />
-                      </svg>
+                      <span class="shrink-0" style="color: var(--text-tertiary)">
+                        <Icon name="paperclip" size={14} />
+                      </span>
                     {/if}
                     <span class="text-xs truncate hidden xl:inline" style="color: var(--text-tertiary)">
                       — {email.snippet || ''}

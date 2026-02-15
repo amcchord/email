@@ -189,6 +189,56 @@ WEB_SEARCH_TOOL = {
     },
 }
 
+SEARCH_CALENDAR_TOOL = {
+    "name": "search_calendar",
+    "description": (
+        "Search the user's calendar events by date range and text query. "
+        "Returns event id, summary, start/end time, location, and attendees. "
+        "Use this to answer questions about meetings, scheduling, and availability."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Text to search for in event summary, description, or location. Optional.",
+            },
+            "date_from": {
+                "type": "string",
+                "description": "Start date filter (YYYY-MM-DD). Optional.",
+            },
+            "date_to": {
+                "type": "string",
+                "description": "End date filter (YYYY-MM-DD). Optional.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Max results to return (default 20, max 50).",
+            },
+        },
+        "required": [],
+    },
+}
+
+READ_CALENDAR_EVENT_TOOL = {
+    "name": "read_calendar_event",
+    "description": (
+        "Read full details of a single calendar event by its ID. "
+        "Returns summary, time, location, description, attendees with response status, "
+        "and video call links."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "event_id": {
+                "type": "integer",
+                "description": "The calendar event ID to read.",
+            },
+        },
+        "required": ["event_id"],
+    },
+}
+
 # ---------------------------------------------------------------------------
 # System prompts
 # ---------------------------------------------------------------------------
@@ -232,6 +282,8 @@ AVAILABLE TOOLS (for your reference when planning):
 - read_email / read_emails_batch: Read full email content.
 - read_attachment: Read PDF/image attachments (converts PDFs to images for visual inspection).
 - web_search: Search the web for images, product details, etc. (if configured).
+- search_calendar: Search calendar events by date range and text query. Use for scheduling, meeting, and availability questions.
+- read_calendar_event: Read full details of a calendar event by ID.
 
 STRATEGY for order/purchase/delivery questions:
 1. FIRST task (depends_on: []): Use list_sender_domains with subject keywords like ['order', 'shipped', 'delivery', 'receipt', 'confirmation'] to discover which companies sent transactional emails.
@@ -772,6 +824,133 @@ async def _execute_read_attachment(
     return content_blocks
 
 
+async def _execute_search_calendar(
+    params: dict, account_ids: list[int], db: AsyncSession,
+) -> str:
+    """Execute the search_calendar tool."""
+    from backend.models.calendar import CalendarEvent
+
+    query_text = params.get("query", "")
+    date_from = params.get("date_from")
+    date_to = params.get("date_to")
+    limit = min(params.get("limit", 20), 50)
+
+    q = select(CalendarEvent).where(
+        CalendarEvent.account_id.in_(account_ids),
+        CalendarEvent.status != "cancelled",
+    )
+
+    if query_text:
+        pattern = f"%{query_text}%"
+        q = q.where(
+            or_(
+                CalendarEvent.summary.ilike(pattern),
+                CalendarEvent.description.ilike(pattern),
+                CalendarEvent.location.ilike(pattern),
+            )
+        )
+
+    if date_from:
+        try:
+            dt = datetime.strptime(date_from, "%Y-%m-%d")
+            q = q.where(
+                or_(
+                    and_(CalendarEvent.is_all_day == False, CalendarEvent.start_time >= dt),
+                    and_(CalendarEvent.is_all_day == True, CalendarEvent.start_date >= date_from),
+                )
+            )
+        except ValueError:
+            pass
+
+    if date_to:
+        try:
+            dt = datetime.strptime(date_to, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+            q = q.where(
+                or_(
+                    and_(CalendarEvent.is_all_day == False, CalendarEvent.start_time <= dt),
+                    and_(CalendarEvent.is_all_day == True, CalendarEvent.start_date <= date_to),
+                )
+            )
+        except ValueError:
+            pass
+
+    q = q.order_by(CalendarEvent.start_time.asc().nullslast()).limit(limit)
+
+    result = await db.execute(q)
+    events = result.scalars().all()
+
+    if not events:
+        return json.dumps({"results": [], "total": 0, "message": "No calendar events found."})
+
+    results = []
+    for e in events:
+        entry = {
+            "id": e.id,
+            "summary": e.summary or "(no title)",
+            "location": e.location,
+            "is_all_day": e.is_all_day,
+        }
+        if e.is_all_day:
+            entry["start_date"] = e.start_date
+            entry["end_date"] = e.end_date
+        else:
+            entry["start_time"] = e.start_time.isoformat() if e.start_time else None
+            entry["end_time"] = e.end_time.isoformat() if e.end_time else None
+        if e.attendees:
+            entry["attendees_count"] = len(e.attendees)
+        results.append(entry)
+
+    return json.dumps({"results": results, "total": len(results)})
+
+
+async def _execute_read_calendar_event(
+    params: dict, account_ids: list[int], db: AsyncSession,
+) -> str:
+    """Execute the read_calendar_event tool."""
+    from backend.models.calendar import CalendarEvent
+
+    event_id = params.get("event_id")
+    if not event_id:
+        return json.dumps({"error": "event_id is required"})
+
+    result = await db.execute(
+        select(CalendarEvent).where(
+            CalendarEvent.id == event_id,
+            CalendarEvent.account_id.in_(account_ids),
+        )
+    )
+    event = result.scalar_one_or_none()
+
+    if not event:
+        return json.dumps({"error": f"Calendar event {event_id} not found or not accessible"})
+
+    data = {
+        "id": event.id,
+        "summary": event.summary or "(no title)",
+        "description": event.description,
+        "location": event.location,
+        "is_all_day": event.is_all_day,
+        "status": event.status,
+        "html_link": event.html_link,
+        "hangout_link": event.hangout_link,
+        "organizer_email": event.organizer_email,
+        "organizer_name": event.organizer_name,
+    }
+
+    if event.is_all_day:
+        data["start_date"] = event.start_date
+        data["end_date"] = event.end_date
+    else:
+        data["start_time"] = event.start_time.isoformat() if event.start_time else None
+        data["end_time"] = event.end_time.isoformat() if event.end_time else None
+        data["timezone"] = event.timezone
+
+    if event.attendees:
+        data["attendees"] = event.attendees
+
+    return json.dumps(data)
+
+
 async def _execute_web_search(params: dict) -> str:
     """Execute the web_search tool using Brave Search API."""
     query = params.get("query", "")
@@ -829,6 +1008,10 @@ async def _execute_tool(
         return await _execute_read_emails_batch(tool_input, account_ids, db)
     elif tool_name == "read_attachment":
         return await _execute_read_attachment(tool_input, account_ids, db)
+    elif tool_name == "search_calendar":
+        return await _execute_search_calendar(tool_input, account_ids, db)
+    elif tool_name == "read_calendar_event":
+        return await _execute_read_calendar_event(tool_input, account_ids, db)
     elif tool_name == "web_search":
         return await _execute_web_search(tool_input)
     else:
@@ -863,6 +1046,16 @@ def _tool_progress_detail(tool_name: str, tool_input: dict) -> str:
         return f"Reading {len(tool_input.get('email_ids', []))} emails"
     elif tool_name == "read_attachment":
         return f"Reading attachment '{tool_input.get('attachment_filename', '?')}' from email #{tool_input.get('email_id', '?')}"
+    elif tool_name == "search_calendar":
+        query = tool_input.get("query", "")
+        parts = ["Searching calendar"]
+        if query:
+            parts[0] += f" for '{query}'"
+        if tool_input.get("date_from") or tool_input.get("date_to"):
+            parts.append(f"({tool_input.get('date_from', '...')} to {tool_input.get('date_to', '...')})")
+        return " ".join(parts)
+    elif tool_name == "read_calendar_event":
+        return f"Reading calendar event #{tool_input.get('event_id', '?')}"
     elif tool_name == "web_search":
         return f"Searching the web for '{tool_input.get('query', '')}'"
     return f"Running {tool_name}"
@@ -1134,6 +1327,8 @@ class ChatService:
             READ_EMAIL_TOOL,
             READ_EMAILS_BATCH_TOOL,
             READ_ATTACHMENT_TOOL,
+            SEARCH_CALENDAR_TOOL,
+            READ_CALENDAR_EVENT_TOOL,
         ]
         if settings.brave_search_api_key:
             tools.append(WEB_SEARCH_TOOL)

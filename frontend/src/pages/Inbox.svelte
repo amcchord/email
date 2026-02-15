@@ -6,6 +6,7 @@
     emails, emailsLoading, emailsTotal, currentPageNum,
     currentMailbox, selectedEmailId, selectedAccountId,
     searchQuery, showToast, pageSize, viewMode, smartFilter,
+    hideIgnored,
   } from '../lib/stores.js';
   import EmailList from '../components/email/EmailList.svelte';
   import EmailTable from '../components/email/EmailTable.svelte';
@@ -33,6 +34,7 @@
     void $selectedAccountId;
     void $searchQuery;
     void $smartFilter;
+    void $hideIgnored;
     if (!mounted) return;
     currentPageNum.set(1);
     selectedEmailId.set(null);
@@ -70,6 +72,9 @@
         } else if (sf.type === 'ai_email_type') {
           params.ai_email_type = sf.value;
         }
+      }
+      if (get(hideIgnored)) {
+        params.exclude_ai_category = 'can_ignore';
       }
       const result = await api.listEmails(params);
       if (append) {

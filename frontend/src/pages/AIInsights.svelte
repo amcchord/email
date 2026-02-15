@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
   import { showToast, selectedEmailId, currentPage, currentMailbox, composeData, pendingReplyDraft } from '../lib/stores.js';
+  import Icon from '../components/common/Icon.svelte';
 
   let activeTab = $state('overview');
   let trends = $state(null);
@@ -381,14 +382,22 @@
     }, 0);
   }
 
-  function goToEmailWithReply(email) {
+  function goToEmailWithReply(email, replyBody) {
     // Navigate to the email and pre-fill an inline reply composer
     const subject = email.subject && email.subject.startsWith('Re:') ? email.subject : `Re: ${email.subject || ''}`;
+    // Use explicit replyBody if provided, otherwise fall back to first reply option or suggested_reply
+    let body = replyBody || '';
+    if (!body && email.reply_options && email.reply_options.length > 0) {
+      body = email.reply_options[0].body || '';
+    }
+    if (!body) {
+      body = email.suggested_reply || '';
+    }
     pendingReplyDraft.set({
       emailId: email.id,
       to: email.from_address,
       subject: subject,
-      body: email.suggested_reply || '',
+      body: body,
       threadId: email.gmail_thread_id || null,
     });
     currentMailbox.set('ALL');
@@ -453,9 +462,7 @@
               {#if dropping}
                 <div class="w-4 h-4 border-2 rounded-full animate-spin" style="border-color: var(--border-color); border-top-color: var(--text-secondary)"></div>
               {:else}
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182" />
-                </svg>
+                <Icon name="refresh-cw" size={16} />
               {/if}
               Rebuild
             </button>
@@ -542,9 +549,7 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
                 </svg>
                 Analyze
-                <svg class="w-3 h-3 -mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                </svg>
+                <span class="-mr-1"><Icon name="chevron-down" size={12} /></span>
               {/if}
             </button>
             {#if showBackfillMenu}
@@ -607,9 +612,7 @@
         <div class="rounded-xl border overflow-hidden" style="background: var(--bg-secondary); border-color: #22c55e">
           <div class="px-4 py-3 flex items-center gap-3">
             <div class="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style="background: #22c55e">
-              <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M4.5 12.75l6 6 9-13.5" />
-              </svg>
+              <span class="text-white"><Icon name="check" size={12} /></span>
             </div>
             <span class="text-sm font-medium" style="color: var(--text-primary)">Processing complete -- insights updated</span>
           </div>
@@ -797,7 +800,24 @@
                           <div class="text-xs mt-1" style="color: var(--text-tertiary)">{email.summary}</div>
                         {/if}
                       </div>
-                      {#if email.suggested_reply}
+                      {#if email.reply_options?.length > 0}
+                        <div class="mt-2 flex flex-wrap gap-1.5">
+                          {#each email.reply_options as option}
+                            <button
+                              onclick={() => goToEmailWithReply(email, option.body)}
+                              class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium border transition-fast cursor-pointer
+                                {option.intent === 'accept' ? 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400' :
+                                 option.intent === 'decline' ? 'bg-red-50 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400' :
+                                 option.intent === 'defer' ? 'bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400' :
+                                 option.intent === 'not_relevant' ? 'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400' :
+                                 'bg-blue-50 dark:bg-blue-900/30 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-400'}"
+                              title={option.body}
+                            >
+                              {option.label}
+                            </button>
+                          {/each}
+                        </div>
+                      {:else if email.suggested_reply}
                         <div class="mt-2 p-2 rounded-md text-xs" style="background: var(--bg-tertiary); color: var(--text-secondary)">
                           <span class="font-semibold" style="color: var(--color-accent-600)">Suggested:</span> {email.suggested_reply}
                         </div>
@@ -809,9 +829,7 @@
                         class="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium transition-fast"
                         style="background: var(--color-accent-500); color: white"
                       >
-                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 010 12h-3" />
-                        </svg>
+                        <Icon name="corner-up-left" size={14} />
                         Reply
                       </button>
                     </div>
@@ -855,9 +873,7 @@
                         <div class="text-xs mt-0.5" style="color: var(--text-tertiary)">{sender.domain}</div>
                         {#if sender.unsubscribed_at && !sender.honors_unsubscribe}
                           <div class="flex items-center gap-1 mt-1">
-                            <svg class="w-3 h-3 shrink-0" style="color: #f59e0b" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4.5c-.77-.833-2.694-.833-3.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                            </svg>
+                            <span class="shrink-0" style="color: #f59e0b"><Icon name="alert-triangle" size={12} /></span>
                             <span class="text-[10px]" style="color: #f59e0b">Still sending emails after unsubscribe ({sender.emails_received_after} received)</span>
                           </div>
                         {/if}
@@ -872,13 +888,11 @@
                           {#if unsubscribingId === sender.sample_email_id}
                             <div class="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
                           {:else}
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              {#if unsubscribePreview && unsubscribePreview.emailId === sender.sample_email_id}
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
-                              {:else}
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
-                              {/if}
-                            </svg>
+                            {#if unsubscribePreview && unsubscribePreview.emailId === sender.sample_email_id}
+                              <Icon name="send" size={14} />
+                            {:else}
+                              <Icon name="slash" size={14} />
+                            {/if}
                           {/if}
                           {#if unsubscribePreview && unsubscribePreview.emailId === sender.sample_email_id}
                             Send
@@ -949,13 +963,11 @@
                           {#if unsubscribingId === email.id}
                             <div class="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
                           {:else}
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              {#if unsubscribePreview && unsubscribePreview.emailId === email.id}
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
-                              {:else}
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                              {/if}
-                            </svg>
+                            {#if unsubscribePreview && unsubscribePreview.emailId === email.id}
+                              <Icon name="send" size={12} />
+                            {:else}
+                              <Icon name="slash" size={12} />
+                            {/if}
                           {/if}
                           {#if unsubscribePreview && unsubscribePreview.emailId === email.id}
                             <span>Send</span>
@@ -1031,21 +1043,13 @@
                       <!-- Conversation type icon -->
                       <div class="flex items-center justify-center w-8 h-8 rounded-full shrink-0 {typeConfig.bg}">
                         {#if digest.conversation_type === 'scheduling'}
-                          <svg class="w-4 h-4 {typeConfig.text}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
-                          </svg>
+                          <Icon name="calendar" size={16} class={typeConfig.text} />
                         {:else if digest.conversation_type === 'discussion'}
-                          <svg class="w-4 h-4 {typeConfig.text}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242m9.345-8.334a2.126 2.126 0 00-.476-.095 48.64 48.64 0 00-8.048 0c-1.131.094-1.976 1.057-1.976 2.192v4.286c0 .837.46 1.58 1.155 1.951m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0011.25 3c-2.115 0-4.198.137-6.24.402-1.608.209-2.76 1.614-2.76 3.235v6.226c0 1.621 1.152 3.026 2.76 3.235.577.075 1.157.14 1.74.194V21l4.155-4.155" />
-                          </svg>
+                          <Icon name="message-circle" size={16} class={typeConfig.text} />
                         {:else if digest.conversation_type === 'notification'}
-                          <svg class="w-4 h-4 {typeConfig.text}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0" />
-                          </svg>
+                          <Icon name="bell" size={16} class={typeConfig.text} />
                         {:else}
-                          <svg class="w-4 h-4 {typeConfig.text}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
-                          </svg>
+                          <Icon name="mail" size={16} class={typeConfig.text} />
                         {/if}
                       </div>
 
@@ -1139,9 +1143,7 @@
                     <div class="flex items-start gap-3">
                       <!-- Bundle icon -->
                       <div class="flex items-center justify-center w-10 h-10 rounded-lg shrink-0" style="background: var(--color-accent-500); opacity: 0.15">
-                        <svg class="w-5 h-5" style="color: var(--color-accent-500); opacity: 1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M2.25 12.75V12A2.25 2.25 0 014.5 9.75h15A2.25 2.25 0 0121.75 12v.75m-8.69-6.44l-2.12-2.12a1.5 1.5 0 00-1.061-.44H4.5A2.25 2.25 0 002.25 6v12a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9a2.25 2.25 0 00-2.25-2.25h-5.379a1.5 1.5 0 01-1.06-.44z" />
-                        </svg>
+                        <span style="color: var(--color-accent-500); opacity: 1"><Icon name="folder" size={20} /></span>
                       </div>
 
                       <div class="flex-1 min-w-0">
@@ -1157,22 +1159,16 @@
                         <!-- Stats row -->
                         <div class="flex items-center gap-3 mt-2">
                           <span class="text-[10px] flex items-center gap-1" style="color: var(--text-tertiary)">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
-                            </svg>
+                            <Icon name="mail" size={12} />
                             {bundle.email_count} emails
                           </span>
                           <span class="text-[10px] flex items-center gap-1" style="color: var(--text-tertiary)">
-                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242m9.345-8.334a2.126 2.126 0 00-.476-.095 48.64 48.64 0 00-8.048 0c-1.131.094-1.976 1.057-1.976 2.192v4.286c0 .837.46 1.58 1.155 1.951m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0011.25 3c-2.115 0-4.198.137-6.24.402-1.608.209-2.76 1.614-2.76 3.235v6.226c0 1.621 1.152 3.026 2.76 3.235.577.075 1.157.14 1.74.194V21l4.155-4.155" />
-                            </svg>
+                            <Icon name="message-circle" size={12} />
                             {bundle.thread_count} threads
                           </span>
                           {#if bundle.account_ids && bundle.account_ids.length > 1}
                             <span class="text-[10px] flex items-center gap-1" style="color: var(--text-tertiary)">
-                              <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" />
-                              </svg>
+                              <Icon name="users" size={12} />
                               {bundle.account_ids.length} accounts
                             </span>
                           {/if}

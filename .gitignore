@@ -35,7 +35,13 @@ data/
 
 # System / user files
 .bash_history
+.bashrc
+.gitconfig
 .cache/
 .npm/
 .ssh/
+.local/
+.config/
 .build_version
+.claude.json
+.claude.json.backup.*

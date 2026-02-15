@@ -5,6 +5,7 @@ from backend.models.ai import AIAnalysis
 from backend.models.settings import Setting
 from backend.models.todo import TodoItem
 from backend.models.chat import ChatConversation, ChatMessage
+from backend.models.calendar import CalendarEvent, CalendarSyncStatus
 
 __all__ = [
     "User",
@@ -18,4 +19,6 @@ __all__ = [
     "TodoItem",
     "ChatConversation",
     "ChatMessage",
+    "CalendarEvent",
+    "CalendarSyncStatus",
 ]

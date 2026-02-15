@@ -26,9 +26,11 @@ class GoogleAccountResponse(BaseModel):
     email: str
     display_name: Optional[str] = None
     description: Optional[str] = None
+    short_label: Optional[str] = None
     is_active: bool = True
     created_at: Optional[datetime] = None
     sync_status: Optional["SyncStatusResponse"] = None
+    has_calendar_scope: bool = False
 
     model_config = {"from_attributes": True}
 

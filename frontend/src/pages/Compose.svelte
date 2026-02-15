@@ -3,6 +3,7 @@
   import { api } from '../lib/api.js';
   import { currentPage, composeData, accounts, showToast } from '../lib/stores.js';
   import Button from '../components/common/Button.svelte';
+  import Icon from '../components/common/Icon.svelte';
   import RichEditor from '../components/email/RichEditor.svelte';
 
   let to = $state('');
@@ -117,9 +118,7 @@
         class="p-1.5 rounded-md transition-fast"
         style="color: var(--text-secondary)"
       >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
-        </svg>
+        <Icon name="arrow-left" size={20} />
       </button>
       <h2 class="text-base font-semibold" style="color: var(--text-primary)">New Message</h2>
     </div>

@@ -55,6 +55,7 @@ class EmailDetail(EmailSummary):
     ai_action_items: Optional[list] = None
     ai_model_used: Optional[str] = None
     suggested_reply: Optional[str] = None
+    reply_options: Optional[list] = None
 
 
 class AttachmentResponse(BaseModel):

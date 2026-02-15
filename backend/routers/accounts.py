@@ -101,14 +101,24 @@ async def list_accounts(
         sync = None
         if acct.sync_status:
             sync = SyncStatusResponse.model_validate(acct.sync_status)
+        # Check if the account has calendar.readonly scope
+        has_cal = False
+        if acct.scopes:
+            try:
+                scopes = json.loads(acct.scopes)
+                has_cal = "https://www.googleapis.com/auth/calendar.readonly" in scopes
+            except (json.JSONDecodeError, TypeError):
+                pass
         response.append(GoogleAccountResponse(
             id=acct.id,
             email=acct.email,
             display_name=acct.display_name,
             description=acct.description,
+            short_label=acct.short_label,
             is_active=acct.is_active,
             created_at=acct.created_at,
             sync_status=sync,
+            has_calendar_scope=has_cal,
         ))
     return response
 
@@ -298,6 +308,16 @@ async def oauth_callback(
         account.token_expiry = credentials.expiry
         account.scopes = json.dumps(GMAIL_SCOPES)
         account.is_active = True
+
+        # Clear calendar sync error so it retries with the new token
+        from backend.models.calendar import CalendarSyncStatus
+        cal_result = await db.execute(
+            select(CalendarSyncStatus).where(CalendarSyncStatus.account_id == account.id)
+        )
+        cal_sync = cal_result.scalar_one_or_none()
+        if cal_sync and cal_sync.status == "error":
+            cal_sync.status = "idle"
+            cal_sync.error_message = None
     else:
         # New connection -- associate with the logged-in user
         account = GoogleAccount(
@@ -316,6 +336,11 @@ async def oauth_callback(
         # Create sync status record
         sync_status = SyncStatus(account_id=account.id)
         db.add(sync_status)
+
+        # Create calendar sync status record
+        from backend.models.calendar import CalendarSyncStatus
+        cal_sync_status = CalendarSyncStatus(account_id=account.id)
+        db.add(cal_sync_status)
 
     await db.commit()
 
@@ -421,6 +446,20 @@ async def update_account_description(
         raise HTTPException(status_code=404, detail="Account not found")
 
     account.description = body.description
+
+    # Generate a short 1-2 word label using AI
+    if body.description:
+        try:
+            from backend.services.ai import AIService
+            ai = AIService()
+            account.short_label = await ai.generate_short_label(body.description)
+        except Exception:
+            # Fallback: use first two words of description
+            words = body.description.split()
+            account.short_label = " ".join(words[:2])
+    else:
+        account.short_label = None
+
     await db.commit()
     await db.refresh(account)
-    return {"description": account.description}
+    return {"description": account.description, "short_label": account.short_label}

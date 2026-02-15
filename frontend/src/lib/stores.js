@@ -5,7 +5,7 @@ export const user = writable(null);
 export const isAuthenticated = derived(user, ($user) => $user !== null);
 
 // Navigation
-export const currentPage = writable('inbox');
+export const currentPage = writable('flow');
 export const currentMailbox = writable('INBOX');
 export const selectedEmailId = writable(null);
 export const selectedThreadId = writable(null);
@@ -215,6 +215,10 @@ export const viewMode = writable(localStorage.getItem('viewMode') || 'column');
 // Format: { emailId, to, subject, body, threadId }
 export const pendingReplyDraft = writable(null);
 
+// Hide "can_ignore" emails toggle (persisted)
+export const hideIgnored = writable(localStorage.getItem('hideIgnored') === 'true');
+hideIgnored.subscribe(v => localStorage.setItem('hideIgnored', String(v)));
+
 // Smart filter for AI categories / needs reply / email type in the sidebar
 // Format: { type: 'needs_reply' } or { type: 'ai_category', value: 'urgent' } or { type: 'ai_email_type', value: 'work' } or null
 export const smartFilter = writable(null);
@@ -225,6 +229,12 @@ export const todos = writable([]);
 // Chat
 export const chatConversations = writable([]);
 export const currentConversationId = writable(null);
+
+// Calendar
+export const calendarView = writable('month');
+export const calendarDate = writable(new Date());
+export const calendarEvents = writable([]);
+export const calendarLoading = writable(false);
 
 // Show toast notification
 export function showToast(message, type = 'info', duration = 3000) {
