@@ -67,7 +67,7 @@ When an email is open in the preview pane:
 
 ## Flow
 
-On the dashboard, `J`/`K` highlights items within each section (Needs Reply, Waiting For Response, Active Threads). `Tab`/`Shift+Tab` jumps between sections.
+On the dashboard, `J`/`K` highlights items within each section (Needs Reply, Waiting On Other Party, Active Threads). `Tab`/`Shift+Tab` jumps between sections.
 
 | Shortcut | Action |
 |----------|--------|

@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { api, setUnauthorizedHandler } from './lib/api.js';
-  import { user, currentPage, showToast, toastMessage, startSyncPolling, stopSyncPolling } from './lib/stores.js';
+  import { user, currentPage, showToast, toastMessage, startSyncPolling, stopSyncPolling, threadOrder } from './lib/stores.js';
   import { theme } from './lib/theme.js';
   import { startVersionPolling } from './lib/autoReload.js';
   import Login from './pages/Login.svelte';
@@ -38,6 +38,15 @@
       user.set(me);
       // Start polling sync status once authenticated
       startSyncPolling(() => api.listAccounts());
+      // Load UI preferences from server (sync across devices)
+      try {
+        const uiPrefs = await api.getUIPreferences();
+        if (uiPrefs.thread_order) {
+          threadOrder.set(uiPrefs.thread_order);
+        }
+      } catch {
+        // Use localStorage default
+      }
     } catch {
       user.set(null);
     }

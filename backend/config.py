@@ -3,12 +3,12 @@ from functools import lru_cache
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql+asyncpg://mailapp:mailapp_secure_2024@localhost:5432/maildb"
+    database_url: str = ""
     redis_url: str = "redis://localhost:6379/0"
-    secret_key: str = "change-this-to-a-random-secret-key-in-production"
+    secret_key: str = ""
     encryption_key: str = ""
     admin_username: str = "admin"
-    admin_password: str = "mountainlion1024"
+    admin_password: str = ""
     claude_api_key: str = ""
     google_client_id: str = ""
     google_client_secret: str = ""

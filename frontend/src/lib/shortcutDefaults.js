@@ -70,6 +70,8 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'flow.prevSection', key: 'Shift+Tab', label: 'Previous section',         context: 'flow', category: 'Flow' },
   { id: 'flow.open',       key: 'Enter',      label: 'Open selected item',       context: 'flow', category: 'Flow' },
   { id: 'flow.skip',       key: 'Shift+s',    label: 'Skip email',               context: 'flow', category: 'Flow' },
+  { id: 'flow.ignore',     key: 'i',          label: 'Ignore needs-reply email', context: 'flow', category: 'Flow' },
+  { id: 'flow.snooze',     key: 'z',          label: 'Snooze needs-reply email', context: 'flow', category: 'Flow' },
   { id: 'flow.newChat',    key: 'n',          label: 'New chat',                 context: 'flow', category: 'Flow' },
   { id: 'flow.send',       key: 'Ctrl+Enter', label: 'Send reply',               context: 'flow', category: 'Flow' },
   { id: 'flow.back',       key: 'Escape',     label: 'Back to list / deselect',  context: 'flow', category: 'Flow' },

@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { marked } from 'marked';
   import { api } from '../lib/api.js';
-  import { chatConversations, currentConversationId, showToast, currentPage, currentMailbox, selectedEmailId, pendingReplyDraft, accounts, composeData } from '../lib/stores.js';
+  import { chatConversations, currentConversationId, showToast, currentPage, currentMailbox, selectedEmailId, pendingReplyDraft, accounts, composeData, threadOrder } from '../lib/stores.js';
   import { get } from 'svelte/store';
   import { registerActions } from '../lib/shortcutStore.js';
   import Icon from '../components/common/Icon.svelte';
@@ -299,6 +299,12 @@
       },
       'flow.skip': () => {
         if (replyViewOpen) skipEmail();
+      },
+      'flow.ignore': () => {
+        if (replyViewOpen) ignoreCurrentEmail();
+      },
+      'flow.snooze': () => {
+        if (replyViewOpen && selectedReplyEmail) openSnoozePopover(selectedReplyEmail.id);
       },
       'flow.newChat': () => startNewChat(),
       'flow.send': () => {
@@ -767,12 +773,16 @@
 
     if (email.gmail_thread_id) {
       try {
-        const data = await api.getThread(email.gmail_thread_id);
+        const orderParam = get(threadOrder) === 'newest_first' ? 'desc' : 'asc';
+        const data = await api.getThread(email.gmail_thread_id, orderParam);
         threadData = data;
         if (data.emails && data.emails.length > 1) {
           let collapsed = {};
-          for (let i = 0; i < data.emails.length - 1; i++) {
-            collapsed[data.emails[i].id] = true;
+          const expandIdx = orderParam === 'desc' ? 0 : data.emails.length - 1;
+          for (let i = 0; i < data.emails.length; i++) {
+            if (i !== expandIdx) {
+              collapsed[data.emails[i].id] = true;
+            }
           }
           collapsedMessages = collapsed;
         }
@@ -815,25 +825,31 @@
 
     if (threadId) {
       try {
-        const data = await api.getThread(threadId);
+        const orderParam = get(threadOrder) === 'newest_first' ? 'desc' : 'asc';
+        const data = await api.getThread(threadId, orderParam);
         threadData = data;
         if (data.emails && data.emails.length > 1) {
           let collapsed = {};
-          for (let i = 0; i < data.emails.length - 1; i++) {
-            collapsed[data.emails[i].id] = true;
+          const expandIdx = orderParam === 'desc' ? 0 : data.emails.length - 1;
+          for (let i = 0; i < data.emails.length; i++) {
+            if (i !== expandIdx) {
+              collapsed[data.emails[i].id] = true;
+            }
           }
           collapsedMessages = collapsed;
         }
 
         // Derive reply-to from the thread's latest inbound message
         if (data.emails && data.emails.length > 0) {
-          const lastInbound = [...data.emails].reverse().find(m => !m.is_sent);
-          if (lastInbound) {
+          const latestInbound = orderParam === 'desc'
+            ? data.emails.find(m => !m.is_sent)
+            : [...data.emails].reverse().find(m => !m.is_sent);
+          if (latestInbound) {
             selectedReplyEmail = {
               ...selectedReplyEmail,
-              from_name: lastInbound.from_name || selectedReplyEmail.from_name,
-              from_address: lastInbound.from_address || selectedReplyEmail.from_address,
-              date: lastInbound.date || selectedReplyEmail.date,
+              from_name: latestInbound.from_name || selectedReplyEmail.from_name,
+              from_address: latestInbound.from_address || selectedReplyEmail.from_address,
+              date: latestInbound.date || selectedReplyEmail.date,
             };
           }
         }
@@ -967,6 +983,69 @@
     }
   }
 
+  async function ignoreCurrentEmail() {
+    if (!selectedReplyEmail) return;
+    try {
+      await api.ignoreNeedsReply(selectedReplyEmail.id);
+      showToast('Ignored — won\'t appear in needs reply', 'success');
+      if (viewSource === 'needs_reply') {
+        removeCurrentAndAdvance();
+      } else {
+        needsReplyEmails = needsReplyEmails.filter(e => e.id !== selectedReplyEmail.id);
+        if (needsReplyTotal > 0) needsReplyTotal -= 1;
+        closeReplyView();
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  async function ignoreEmailFromList(emailId) {
+    try {
+      await api.ignoreNeedsReply(emailId);
+      needsReplyEmails = needsReplyEmails.filter(e => e.id !== emailId);
+      if (needsReplyTotal > 0) needsReplyTotal -= 1;
+      showToast('Ignored — won\'t appear in needs reply', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  let snoozePopoverEmailId = $state(null);
+
+  function openSnoozePopover(emailId) {
+    if (snoozePopoverEmailId === emailId) {
+      snoozePopoverEmailId = null;
+    } else {
+      snoozePopoverEmailId = emailId;
+    }
+  }
+
+  function closeSnoozePopover() {
+    snoozePopoverEmailId = null;
+  }
+
+  async function snoozeEmail(emailId, duration, fromReplyView) {
+    const labels = { '1h': '1 hour', '3h': '3 hours', 'tomorrow': 'tomorrow morning', 'next_week': 'next week' };
+    try {
+      await api.snoozeNeedsReply(emailId, duration);
+      snoozePopoverEmailId = null;
+      showToast(`Snoozed until ${labels[duration]}`, 'success');
+      if (fromReplyView && viewSource === 'needs_reply') {
+        removeCurrentAndAdvance();
+      } else if (fromReplyView) {
+        needsReplyEmails = needsReplyEmails.filter(e => e.id !== emailId);
+        if (needsReplyTotal > 0) needsReplyTotal -= 1;
+        closeReplyView();
+      } else {
+        needsReplyEmails = needsReplyEmails.filter(e => e.id !== emailId);
+        if (needsReplyTotal > 0) needsReplyTotal -= 1;
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
   function removeCurrentAndAdvance() {
     const removedId = selectedReplyEmail.id;
     needsReplyEmails = needsReplyEmails.filter(e => e.id !== removedId);
@@ -1089,6 +1168,15 @@
     const tmp = document.createElement('div');
     tmp.innerHTML = html;
     return tmp.textContent || tmp.innerText || '';
+  }
+
+  function formatAddresses(addresses) {
+    if (!addresses || addresses.length === 0) return '';
+    return addresses.map(a => {
+      if (typeof a === 'string') return a;
+      if (a.name) return `${a.name} <${a.address}>`;
+      return a.address;
+    }).join(', ');
   }
 </script>
 
@@ -1460,11 +1548,11 @@
           <div class="px-5 py-2.5 border-b shrink-0" style="border-color: var(--border-color)">
             <div class="flex items-center gap-2 mb-0.5">
               {#if selectedReplyEmail.category}
-                <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 {categoryColors[selectedReplyEmail.category]?.bg || ''} {categoryColors[selectedReplyEmail.category]?.text || ''}">
+                <span class="text-xs px-1.5 py-0.5 rounded-full font-medium shrink-0 {categoryColors[selectedReplyEmail.category]?.bg || ''} {categoryColors[selectedReplyEmail.category]?.text || ''}">
                   {categoryLabel(selectedReplyEmail.category)}
                 </span>
               {/if}
-              <h3 class="text-sm font-semibold" style="color: var(--text-primary)">{selectedReplyEmail.subject || '(no subject)'}</h3>
+              <h3 class="text-base font-semibold" style="color: var(--text-primary)">{selectedReplyEmail.subject || '(no subject)'}</h3>
             </div>
             <div class="flex items-center gap-2 text-xs" style="color: var(--text-secondary)">
               <span class="font-medium">{selectedReplyEmail.from_name || selectedReplyEmail.from_address}</span>
@@ -1477,13 +1565,13 @@
             <div class="px-5 py-2.5 border-b shrink-0" style="border-color: var(--border-color); background: var(--bg-secondary)">
               <div class="flex items-center gap-1.5 mb-1">
                 <span style="color: var(--color-accent-500)"><Icon name="zap" size={12} /></span>
-                <span class="text-[10px] font-semibold uppercase tracking-wider" style="color: var(--color-accent-600)">AI Summary</span>
+                <span class="text-[11px] font-semibold uppercase tracking-wider" style="color: var(--color-accent-600)">AI Summary</span>
               </div>
-              <p class="text-xs leading-relaxed" style="color: var(--text-secondary)">{selectedReplyEmail.summary}</p>
+              <p class="text-sm leading-relaxed" style="color: var(--text-primary)">{selectedReplyEmail.summary}</p>
               {#if selectedReplyEmail.action_items && selectedReplyEmail.action_items.length > 0}
                 <div class="flex flex-wrap gap-x-4 gap-y-0.5 mt-1.5">
                   {#each selectedReplyEmail.action_items as item}
-                    <span class="text-[10px] flex items-center gap-1" style="color: var(--text-secondary)">
+                    <span class="text-xs flex items-center gap-1" style="color: var(--text-secondary)">
                       <span class="w-1 h-1 rounded-full shrink-0" style="background: var(--color-accent-500)"></span>
                       {item}
                     </span>
@@ -1502,12 +1590,12 @@
             {:else if threadData && threadData.emails}
               {#each threadData.emails as msg, msgIdx}
                 {@const isCollapsed = collapsedMessages[msg.id]}
-                {@const isLast = msgIdx === threadData.emails.length - 1}
+                {@const isNewest = $threadOrder === 'newest_first' ? msgIdx === 0 : msgIdx === threadData.emails.length - 1}
                 <div class="rounded-lg border overflow-hidden" style="border-color: var(--border-color)">
                   <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
                   <div
                     class="px-4 py-2 flex items-center gap-2 cursor-pointer transition-fast"
-                    style="background: {isLast ? 'var(--bg-secondary)' : 'var(--bg-tertiary)'}"
+                    style="background: {isNewest ? 'var(--bg-secondary)' : 'var(--bg-tertiary)'}"
                     onclick={() => toggleMessageCollapse(msg.id)}
                   >
                     <div class="flex-1 min-w-0">
@@ -1516,21 +1604,31 @@
                         {#if msg.is_sent}
                           <span class="text-[9px] px-1.5 py-0.5 rounded-full" style="background: var(--bg-tertiary); color: var(--text-tertiary)">You</span>
                         {/if}
-                        <span class="text-[10px]" style="color: var(--text-tertiary)">{formatEmailDate(msg.date)}</span>
+                        <span class="text-xs" style="color: var(--text-tertiary)">{formatEmailDate(msg.date)}</span>
                       </div>
+                      {#if !isCollapsed && msg.to_addresses && msg.to_addresses.length > 0}
+                        <div class="text-[11px] mt-0.5 truncate" style="color: var(--text-secondary)">
+                          To: {formatAddresses(msg.to_addresses)}
+                        </div>
+                      {/if}
+                      {#if !isCollapsed && msg.cc_addresses && msg.cc_addresses.length > 0}
+                        <div class="text-[11px] truncate" style="color: var(--text-secondary)">
+                          Cc: {formatAddresses(msg.cc_addresses)}
+                        </div>
+                      {/if}
                       {#if isCollapsed && msg.body_text}
-                        <div class="text-[10px] truncate mt-0.5" style="color: var(--text-tertiary)">{msg.body_text.slice(0, 120)}</div>
+                        <div class="text-xs truncate mt-0.5" style="color: var(--text-tertiary)">{msg.body_text.slice(0, 120)}</div>
                       {/if}
                     </div>
                     <span style="color: var(--text-tertiary)"><Icon name={isCollapsed ? 'chevron-down' : 'chevron-up'} size={14} /></span>
                   </div>
 
                   {#if !isCollapsed}
-                    <div class="px-4 py-3 text-sm thread-message-body" style="color: var(--text-primary); max-height: 300px; overflow-y: auto">
+                    <div class="px-4 py-3 text-sm thread-message-body" style="color: var(--text-primary); background: var(--bg-secondary)">
                       {#if msg.body_text}
-                        <pre class="whitespace-pre-wrap font-sans text-xs" style="color: var(--text-secondary)">{msg.body_text}</pre>
+                        <pre class="whitespace-pre-wrap font-sans text-sm" style="color: var(--text-primary)">{msg.body_text}</pre>
                       {:else if msg.body_html}
-                        <div class="text-xs" style="color: var(--text-secondary)">{stripHtml(msg.body_html)}</div>
+                        <div class="text-sm" style="color: var(--text-primary)">{stripHtml(msg.body_html)}</div>
                       {:else}
                         <p class="text-xs italic" style="color: var(--text-tertiary)">No content</p>
                       {/if}
@@ -1566,7 +1664,7 @@
             <div class="px-5 py-2.5 border-b shrink-0" style="border-color: var(--border-color)">
               <div class="flex items-center gap-1.5 mb-2">
                 <span style="color: var(--color-accent-500)"><Icon name="zap" size={12} /></span>
-                <span class="text-[10px] font-semibold uppercase tracking-wider" style="color: var(--color-accent-600)">AI Reply Options</span>
+                <span class="text-[11px] font-semibold uppercase tracking-wider" style="color: var(--color-accent-600)">AI Reply Options</span>
               </div>
               <div class="flex gap-2 overflow-x-auto pb-1">
                 {#each selectedReplyEmail.reply_options as option, optIdx}
@@ -1576,7 +1674,7 @@
                   <div
                     onclick={() => selectReplyOption(option, optIdx)}
                     class="rounded-lg border p-3 cursor-pointer transition-fast shrink-0 {intentStyle.bg} {intentStyle.border}"
-                    style="width: 260px; {isSelected ? 'box-shadow: 0 0 0 2px var(--color-accent-500)' : 'opacity: 0.8'}"
+                    style="width: 260px; {isSelected ? 'box-shadow: 0 0 0 2px var(--color-accent-500)' : ''}"
                   >
                     <div class="flex items-center justify-between mb-1">
                       <div class="flex items-center gap-1.5">
@@ -1587,7 +1685,7 @@
                         <span class="text-[8px] px-1.5 py-0.5 rounded-full font-bold" style="background: var(--color-accent-500); color: white">SELECTED</span>
                       {/if}
                     </div>
-                    <p class="text-[11px] leading-relaxed line-clamp-3 {intentStyle.text}" style="opacity: 0.75">{option.body}</p>
+                    <p class="text-xs leading-relaxed line-clamp-3 {intentStyle.text}">{option.body}</p>
                   </div>
                 {/each}
                 <!-- Custom prompt card -->
@@ -1595,7 +1693,7 @@
                 <div
                   onclick={() => { customPromptOpen = !customPromptOpen; }}
                   class="rounded-lg border-2 border-dashed p-3 cursor-pointer transition-fast shrink-0 flex flex-col items-center justify-center gap-1.5"
-                  style="width: 140px; border-color: var(--border-color); opacity: {customPromptOpen ? 1 : 0.6}; {customPromptOpen ? 'border-color: var(--color-accent-500); background: color-mix(in srgb, var(--color-accent-500) 5%, transparent)' : ''}"
+                  style="width: 140px; border-color: var(--border-color); opacity: {customPromptOpen ? 1 : 0.8}; {customPromptOpen ? 'border-color: var(--color-accent-500); background: color-mix(in srgb, var(--color-accent-500) 5%, transparent)' : ''}"
                 >
                   <Icon name="edit-3" size={16} />
                   <span class="text-[11px] font-medium" style="color: var(--text-secondary)">Custom...</span>
@@ -1750,7 +1848,7 @@
                     class="w-3.5 h-3.5 rounded border accent-current"
                     style="accent-color: var(--color-accent-500)"
                   />
-                  <span class="text-[10px] font-medium" style="color: var(--text-secondary)">Archive after send</span>
+                  <span class="text-xs font-medium" style="color: var(--text-secondary)">Archive after send</span>
                 </label>
 
                 <div class="w-px h-4 mx-1" style="background: var(--border-color)"></div>
@@ -1758,7 +1856,7 @@
                 <!-- Triage Actions -->
                 <button
                   onclick={skipEmail}
-                  class="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-fast hover-bg-subtle"
+                  class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
                   style="color: var(--text-secondary)"
                   title="Skip to next email"
                 >
@@ -1766,8 +1864,53 @@
                   Skip
                 </button>
                 <button
+                  onclick={ignoreCurrentEmail}
+                  class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
+                  style="color: var(--text-secondary)"
+                  title="Ignore — remove from needs reply"
+                  data-shortcut="flow.ignore"
+                >
+                  <Icon name="eye-off" size={12} />
+                  Ignore
+                </button>
+                <div class="relative">
+                  <button
+                    onclick={() => openSnoozePopover(selectedReplyEmail?.id)}
+                    class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
+                    style="color: var(--text-secondary)"
+                    title="Snooze — hide temporarily"
+                    data-shortcut="flow.snooze"
+                  >
+                    <Icon name="clock" size={12} />
+                    Snooze
+                  </button>
+                  {#if snoozePopoverEmailId === selectedReplyEmail?.id}
+                    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+                    <div
+                      class="absolute top-full left-0 mt-1 py-1 rounded-lg border shadow-lg z-50 min-w-[160px]"
+                      style="background: var(--bg-secondary); border-color: var(--border-color)"
+                      onclick={(e) => e.stopPropagation()}
+                    >
+                      {#each [
+                        { key: '1h', label: '1 hour' },
+                        { key: '3h', label: '3 hours' },
+                        { key: 'tomorrow', label: 'Tomorrow morning' },
+                        { key: 'next_week', label: 'Next week' },
+                      ] as option}
+                        <button
+                          onclick={() => snoozeEmail(selectedReplyEmail.id, option.key, true)}
+                          class="w-full text-left px-3 py-1.5 text-xs transition-fast hover-bg-subtle"
+                          style="color: var(--text-primary)"
+                        >
+                          {option.label}
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+                <button
                   onclick={archiveCurrentEmail}
-                  class="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-fast hover-bg-subtle"
+                  class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
                   style="color: var(--text-secondary)"
                   title="Archive without replying"
                 >
@@ -1776,7 +1919,7 @@
                 </button>
                 <button
                   onclick={trashCurrentEmail}
-                  class="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-fast hover-bg-subtle"
+                  class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
                   style="color: var(--text-secondary)"
                   title="Move to trash"
                 >
@@ -1785,13 +1928,61 @@
               {:else}
                 <button
                   onclick={closeReplyView}
-                  class="flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium transition-fast hover-bg-subtle"
+                  class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
                   style="color: var(--text-secondary)"
                   title="Back to Flow"
                 >
                   <Icon name="arrow-left" size={12} />
                   Back
                 </button>
+
+                <div class="w-px h-4 mx-1" style="background: var(--border-color)"></div>
+
+                <button
+                  onclick={ignoreCurrentEmail}
+                  class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
+                  style="color: var(--text-secondary)"
+                  title="Ignore — remove from needs reply"
+                  data-shortcut="flow.ignore"
+                >
+                  <Icon name="eye-off" size={12} />
+                  Ignore
+                </button>
+                <div class="relative">
+                  <button
+                    onclick={() => openSnoozePopover(selectedReplyEmail?.id)}
+                    class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
+                    style="color: var(--text-secondary)"
+                    title="Snooze — hide temporarily"
+                    data-shortcut="flow.snooze"
+                  >
+                    <Icon name="clock" size={12} />
+                    Snooze
+                  </button>
+                  {#if snoozePopoverEmailId === selectedReplyEmail?.id}
+                    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+                    <div
+                      class="absolute top-full left-0 mt-1 py-1 rounded-lg border shadow-lg z-50 min-w-[160px]"
+                      style="background: var(--bg-secondary); border-color: var(--border-color)"
+                      onclick={(e) => e.stopPropagation()}
+                    >
+                      {#each [
+                        { key: '1h', label: '1 hour' },
+                        { key: '3h', label: '3 hours' },
+                        { key: 'tomorrow', label: 'Tomorrow morning' },
+                        { key: 'next_week', label: 'Next week' },
+                      ] as option}
+                        <button
+                          onclick={() => snoozeEmail(selectedReplyEmail.id, option.key, true)}
+                          class="w-full text-left px-3 py-1.5 text-xs transition-fast hover-bg-subtle"
+                          style="color: var(--text-primary)"
+                        >
+                          {option.label}
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
               {/if}
             </div>
 
@@ -2000,11 +2191,52 @@
                     {/if}
                   </div>
 
-                  <!-- Open in inbox button -->
-                  <div class="shrink-0" onclick={(e) => e.stopPropagation()}>
+                  <!-- Quick actions -->
+                  <div class="shrink-0 flex flex-col gap-1" onclick={(e) => e.stopPropagation()}>
+                    <button
+                      onclick={() => ignoreEmailFromList(email.id)}
+                      class="flex items-center justify-center w-7 h-7 rounded-lg text-[10px] font-medium transition-fast hover-bg-subtle border"
+                      style="border-color: var(--border-color); color: var(--text-tertiary)"
+                      title="Ignore"
+                    >
+                      <Icon name="eye-off" size={12} />
+                    </button>
+                    <div class="relative">
+                      <button
+                        onclick={() => openSnoozePopover(email.id)}
+                        class="flex items-center justify-center w-7 h-7 rounded-lg text-[10px] font-medium transition-fast hover-bg-subtle border"
+                        style="border-color: var(--border-color); color: var(--text-tertiary)"
+                        title="Snooze"
+                      >
+                        <Icon name="clock" size={12} />
+                      </button>
+                      {#if snoozePopoverEmailId === email.id}
+                        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+                        <div
+                          class="absolute top-0 right-full mr-1 py-1 rounded-lg border shadow-lg z-50 min-w-[160px]"
+                          style="background: var(--bg-secondary); border-color: var(--border-color)"
+                          onclick={(e) => e.stopPropagation()}
+                        >
+                          {#each [
+                            { key: '1h', label: '1 hour' },
+                            { key: '3h', label: '3 hours' },
+                            { key: 'tomorrow', label: 'Tomorrow morning' },
+                            { key: 'next_week', label: 'Next week' },
+                          ] as option}
+                            <button
+                              onclick={() => snoozeEmail(email.id, option.key, false)}
+                              class="w-full text-left px-3 py-1.5 text-xs transition-fast hover-bg-subtle"
+                              style="color: var(--text-primary)"
+                            >
+                              {option.label}
+                            </button>
+                          {/each}
+                        </div>
+                      {/if}
+                    </div>
                     <button
                       onclick={() => goToEmail(email.id)}
-                      class="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-medium transition-fast border"
+                      class="flex items-center justify-center w-7 h-7 rounded-lg text-[10px] font-medium transition-fast hover-bg-subtle border"
                       style="border-color: var(--border-color); color: var(--text-tertiary)"
                       title="Open in inbox"
                     >
@@ -2030,7 +2262,7 @@
           <div class="flex items-center justify-between mb-3">
             <div class="flex items-center gap-2">
               <span style="color: #f59e0b"><Icon name="clock" size={14} /></span>
-              <h3 class="text-sm font-semibold" style="color: var(--text-primary)">Waiting For Response</h3>
+              <h3 class="text-sm font-semibold" style="color: var(--text-primary)">Waiting On Other Party</h3>
             </div>
             {#if awaitingResponseTotal > 0}
               <span class="text-[10px] px-2 py-0.5 rounded-full font-medium" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b">{awaitingResponseTotal}</span>
@@ -2063,7 +2295,7 @@
           {:else}
             <div class="flex flex-col items-center justify-center py-6">
               <span style="color: var(--text-tertiary); opacity: 0.3"><Icon name="check-circle" size={24} /></span>
-              <p class="text-xs mt-2" style="color: var(--text-tertiary)">No pending responses</p>
+              <p class="text-xs mt-2" style="color: var(--text-tertiary)">No emails waiting on others</p>
             </div>
           {/if}
         </div>

@@ -219,6 +219,10 @@ export const pendingReplyDraft = writable(null);
 export const hideIgnored = writable(localStorage.getItem('hideIgnored') === 'true');
 hideIgnored.subscribe(v => localStorage.setItem('hideIgnored', String(v)));
 
+// Thread message ordering preference (persisted)
+export const threadOrder = writable(localStorage.getItem('threadOrder') || 'newest_first');
+threadOrder.subscribe(v => localStorage.setItem('threadOrder', String(v)));
+
 // Smart filter for AI categories / needs reply / email type in the sidebar
 // Format: { type: 'needs_reply' } or { type: 'ai_category', value: 'urgent' } or { type: 'ai_email_type', value: 'work' } or null
 export const smartFilter = writable(null);

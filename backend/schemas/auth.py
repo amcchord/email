@@ -4,6 +4,7 @@ from typing import Optional
 
 ALLOWED_MODELS = [
     "claude-opus-4-6",
+    "claude-opus-4-6-fast",
     "claude-sonnet-4-5-20250929",
     "claude-haiku-4-5-20251001",
 ]
@@ -86,3 +87,23 @@ class KeyboardShortcutsResponse(BaseModel):
 
 class KeyboardShortcutsUpdate(BaseModel):
     shortcuts: dict[str, str] = {}
+
+
+DEFAULT_UI_PREFERENCES = {
+    "thread_order": "newest_first",
+}
+
+
+class UIPreferencesResponse(BaseModel):
+    thread_order: str = "newest_first"
+
+
+class UIPreferencesUpdate(BaseModel):
+    thread_order: Optional[str] = None
+
+    @field_validator("thread_order")
+    @classmethod
+    def validate_thread_order(cls, v):
+        if v is not None and v not in ("newest_first", "oldest_first"):
+            raise ValueError("thread_order must be 'newest_first' or 'oldest_first'")
+        return v

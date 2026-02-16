@@ -38,6 +38,8 @@ class AIAnalysis(Base):
     expects_reply: Mapped[bool] = mapped_column(Boolean, nullable=True)
     # expects_reply: for sent emails, True if the sender expects a reply from the recipient.
     # NULL = not yet classified, False = no reply expected, True = reply expected.
+    needs_reply_ignored: Mapped[bool] = mapped_column(Boolean, default=False)
+    needs_reply_snoozed_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     unsubscribe_info = mapped_column(JSONB, nullable=True)
     # unsubscribe_info format: {"method": "email"|"url"|"both", "email": "...", "url": "...", "mailto_subject": "...", "mailto_body": "..."}
 

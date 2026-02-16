@@ -14,7 +14,8 @@ from backend.schemas.auth import (
     AIPreferencesResponse, AIPreferencesUpdate,
     AboutMeResponse, AboutMeUpdate,
     KeyboardShortcutsResponse, KeyboardShortcutsUpdate,
-    DEFAULT_AI_PREFERENCES,
+    UIPreferencesResponse, UIPreferencesUpdate,
+    DEFAULT_AI_PREFERENCES, DEFAULT_UI_PREFERENCES,
 )
 from backend.utils.security import (
     verify_password, hash_password, create_access_token,
@@ -437,3 +438,36 @@ async def update_keyboard_shortcuts(
     await db.commit()
     await db.refresh(user)
     return KeyboardShortcutsResponse(shortcuts=user.keyboard_shortcuts or {})
+
+
+# ── UI Preferences ──────────────────────────────────────────────────
+
+@router.get("/ui-preferences", response_model=UIPreferencesResponse)
+async def get_ui_preferences(user: User = Depends(get_current_user)):
+    """Return the current user's UI preferences with defaults filled in."""
+    prefs = user.ui_preferences or {}
+    return UIPreferencesResponse(
+        thread_order=prefs.get("thread_order", DEFAULT_UI_PREFERENCES["thread_order"]),
+    )
+
+
+@router.put("/ui-preferences", response_model=UIPreferencesResponse)
+async def update_ui_preferences(
+    body: UIPreferencesUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Update the current user's UI preferences."""
+    current = user.ui_preferences or {}
+    if body.thread_order is not None:
+        current["thread_order"] = body.thread_order
+    user.ui_preferences = current
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(user, "ui_preferences")
+    await db.commit()
+    await db.refresh(user)
+
+    prefs = user.ui_preferences or {}
+    return UIPreferencesResponse(
+        thread_order=prefs.get("thread_order", DEFAULT_UI_PREFERENCES["thread_order"]),
+    )

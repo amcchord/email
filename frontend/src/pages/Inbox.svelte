@@ -12,6 +12,7 @@
   import EmailList from '../components/email/EmailList.svelte';
   import EmailTable from '../components/email/EmailTable.svelte';
   import EmailView from '../components/email/EmailView.svelte';
+  import Icon from '../components/common/Icon.svelte';
 
   let selectedEmail = $state(null);
   let emailLoading = $state(false);
@@ -118,29 +119,40 @@
   async function loadEmails(append) {
     if (append) { loadingMore = true; } else { emailsLoading.set(true); }
     try {
-      const params = {
-        mailbox: get(currentMailbox),
-        page: get(currentPageNum),
-        page_size: get(pageSize),
-      };
-      const acctId = get(selectedAccountId);
-      if (acctId) params.account_id = acctId;
-      const sq = get(searchQuery);
-      if (sq) params.search = sq;
       const sf = get(smartFilter);
-      if (sf) {
-        if (sf.type === 'needs_reply') {
-          params.needs_reply = true;
-        } else if (sf.type === 'ai_category') {
-          params.ai_category = sf.value;
-        } else if (sf.type === 'ai_email_type') {
-          params.ai_email_type = sf.value;
+      let result;
+
+      if (sf && sf.type === 'needs_reply_ignored') {
+        const paginationParams = { page: get(currentPageNum), page_size: get(pageSize) };
+        result = await api.getNeedsReplyIgnored(paginationParams);
+      } else if (sf && sf.type === 'needs_reply_snoozed') {
+        const paginationParams = { page: get(currentPageNum), page_size: get(pageSize) };
+        result = await api.getNeedsReplySnoozed(paginationParams);
+      } else {
+        const params = {
+          mailbox: get(currentMailbox),
+          page: get(currentPageNum),
+          page_size: get(pageSize),
+        };
+        const acctId = get(selectedAccountId);
+        if (acctId) params.account_id = acctId;
+        const sq = get(searchQuery);
+        if (sq) params.search = sq;
+        if (sf) {
+          if (sf.type === 'needs_reply') {
+            params.needs_reply = true;
+          } else if (sf.type === 'ai_category') {
+            params.ai_category = sf.value;
+          } else if (sf.type === 'ai_email_type') {
+            params.ai_email_type = sf.value;
+          }
         }
+        if (get(hideIgnored)) {
+          params.exclude_ai_category = 'can_ignore';
+        }
+        result = await api.listEmails(params);
       }
-      if (get(hideIgnored)) {
-        params.exclude_ai_category = 'can_ignore';
-      }
-      const result = await api.listEmails(params);
+
       if (append) {
         emails.update(existing => {
           const existingIds = new Set(existing.map(e => e.id));
@@ -159,6 +171,36 @@
     }
     emailsLoading.set(false);
     loadingMore = false;
+  }
+
+  async function handleRestoreFromIgnored(emailId) {
+    try {
+      await api.unignoreNeedsReply(emailId);
+      showToast('Restored to needs reply', 'success');
+      emails.update(list => list.filter(e => e.id !== emailId));
+      emailsTotal.update(t => Math.max(0, t - 1));
+      if (get(selectedEmailId) === emailId) {
+        selectedEmailId.set(null);
+        selectedEmail = null;
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  async function handleRestoreFromSnoozed(emailId) {
+    try {
+      await api.unsnoozeNeedsReply(emailId);
+      showToast('Unsnooze — restored to needs reply', 'success');
+      emails.update(list => list.filter(e => e.id !== emailId));
+      emailsTotal.update(t => Math.max(0, t - 1));
+      if (get(selectedEmailId) === emailId) {
+        selectedEmailId.set(null);
+        selectedEmail = null;
+      }
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
   }
 
   function handleLoadMore() {
@@ -236,7 +278,32 @@
   }
 </script>
 
-<div class="h-full flex" class:select-none={panelDragging}>
+<div class="h-full flex flex-col" class:select-none={panelDragging}>
+  {#if $smartFilter?.type === 'needs_reply_ignored' || $smartFilter?.type === 'needs_reply_snoozed'}
+    <div class="flex items-center gap-2 px-4 py-2 border-b" style="background: var(--bg-tertiary); border-color: var(--border-color)">
+      <Icon name={$smartFilter.type === 'needs_reply_ignored' ? 'eye-off' : 'clock'} size={14} />
+      <span class="text-xs font-medium" style="color: var(--text-secondary)">
+        {$smartFilter.type === 'needs_reply_ignored' ? 'Ignored needs-reply emails' : 'Snoozed needs-reply emails'}
+      </span>
+      {#if $selectedEmailId}
+        <button
+          onclick={() => {
+            if ($smartFilter.type === 'needs_reply_ignored') {
+              handleRestoreFromIgnored($selectedEmailId);
+            } else {
+              handleRestoreFromSnoozed($selectedEmailId);
+            }
+          }}
+          class="ml-auto flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-fast border"
+          style="border-color: var(--border-color); color: var(--text-secondary)"
+        >
+          <Icon name="rotate-ccw" size={12} />
+          {$smartFilter.type === 'needs_reply_ignored' ? 'Unignore' : 'Unsnooze'}
+        </button>
+      {/if}
+    </div>
+  {/if}
+  <div class="flex-1 min-h-0 flex">
   {#if $viewMode === 'table'}
     <!-- Table view: vertical split (table on top, preview below) -->
     <div class="flex flex-col w-full h-full overflow-hidden" bind:this={containerEl}>
@@ -317,4 +384,5 @@
       </div>
     {/if}
   {/if}
+  </div>
 </div>

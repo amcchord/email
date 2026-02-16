@@ -138,6 +138,17 @@ class AIService:
     async def _call_claude(self, model: str, max_tokens: int, messages: list) -> object:
         """Call Claude API in a thread to avoid blocking the async event loop."""
         client = self._get_client()
+        use_fast = model.endswith("-fast")
+        if use_fast:
+            model = model.removesuffix("-fast")
+        if use_fast:
+            return await asyncio.to_thread(
+                client.beta.messages.create,
+                model=model,
+                max_tokens=max_tokens,
+                messages=messages,
+                betas=["fast-mode-2026-02-01"],
+            )
         return await asyncio.to_thread(
             client.messages.create,
             model=model,

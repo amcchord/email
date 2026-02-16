@@ -398,6 +398,7 @@ async def get_email(
 @router.get("/thread/{thread_id}", response_model=ThreadResponse)
 async def get_thread(
     thread_id: str,
+    order: str = Query("asc", pattern="^(asc|desc)$"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -407,13 +408,14 @@ async def get_thread(
     )
     account_ids = [r[0] for r in acct_result.all()]
 
+    order_clause = desc(Email.date) if order == "desc" else asc(Email.date)
     result = await db.execute(
         select(Email)
         .options(selectinload(Email.attachments), selectinload(Email.ai_analysis))
         .where(
             Email.gmail_thread_id == thread_id,
             Email.account_id.in_(account_ids),
-        ).order_by(asc(Email.date))
+        ).order_by(order_clause)
     )
     emails = result.scalars().all()
 

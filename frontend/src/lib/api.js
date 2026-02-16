@@ -114,7 +114,10 @@ export const api = {
     return request('GET', `/emails/?${searchParams.toString()}`);
   },
   getEmail: (id) => request('GET', `/emails/${id}`),
-  getThread: (threadId) => request('GET', `/emails/thread/${threadId}`),
+  getThread: (threadId, order = null) => {
+    const params = order ? `?order=${order}` : '';
+    return request('GET', `/emails/thread/${threadId}${params}`);
+  },
   emailActions: (emailIds, action, label = null) =>
     request('POST', '/emails/actions', { email_ids: emailIds, action, label }),
   getLabels: (accountId = null) => {
@@ -170,6 +173,32 @@ export const api = {
       }
     }
     return request('GET', `/ai/needs-reply?${searchParams.toString()}`);
+  },
+  ignoreNeedsReply: (emailId) =>
+    request('POST', `/ai/needs-reply/${emailId}/ignore`),
+  unignoreNeedsReply: (emailId) =>
+    request('POST', `/ai/needs-reply/${emailId}/unignore`),
+  snoozeNeedsReply: (emailId, duration) =>
+    request('POST', `/ai/needs-reply/${emailId}/snooze?duration=${duration}`),
+  unsnoozeNeedsReply: (emailId) =>
+    request('POST', `/ai/needs-reply/${emailId}/unsnooze`),
+  getNeedsReplyIgnored: (params = {}) => {
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== null && value !== undefined && value !== '') {
+        searchParams.set(key, value);
+      }
+    }
+    return request('GET', `/ai/needs-reply/ignored?${searchParams.toString()}`);
+  },
+  getNeedsReplySnoozed: (params = {}) => {
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== null && value !== undefined && value !== '') {
+        searchParams.set(key, value);
+      }
+    }
+    return request('GET', `/ai/needs-reply/snoozed?${searchParams.toString()}`);
   },
   getSubscriptions: (params = {}) => {
     const searchParams = new URLSearchParams();
@@ -284,6 +313,10 @@ export const api = {
   // Keyboard Shortcuts
   getKeyboardShortcuts: () => request('GET', '/auth/keyboard-shortcuts'),
   updateKeyboardShortcuts: (shortcuts) => request('PUT', '/auth/keyboard-shortcuts', { shortcuts }),
+
+  // UI Preferences
+  getUIPreferences: () => request('GET', '/auth/ui-preferences'),
+  updateUIPreferences: (prefs) => request('PUT', '/auth/ui-preferences', prefs),
 
   // Account description
   updateAccountDescription: (accountId, description) =>

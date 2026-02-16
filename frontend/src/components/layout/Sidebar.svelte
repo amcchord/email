@@ -169,6 +169,30 @@
               </span>
               <span class="truncate">Needs Reply</span>
             </button>
+            <!-- Needs Reply - Ignored -->
+            <button
+              onclick={() => selectSmartFilter({ type: 'needs_reply_ignored' })}
+              class="w-full flex items-center gap-3 px-3 h-7 rounded-md text-sm transition-fast pl-8"
+              class:font-medium={isSmartFilterActive({ type: 'needs_reply_ignored' })}
+              style="color: {isSmartFilterActive({ type: 'needs_reply_ignored' }) ? 'var(--text-primary)' : 'var(--text-tertiary)'}; background: {isSmartFilterActive({ type: 'needs_reply_ignored' }) ? 'var(--bg-hover)' : 'transparent'}"
+            >
+              <span class="w-[16px] h-[16px] flex items-center justify-center shrink-0">
+                <span class="w-2 h-2 rounded-full bg-gray-400"></span>
+              </span>
+              <span class="truncate text-xs">Ignored</span>
+            </button>
+            <!-- Needs Reply - Snoozed -->
+            <button
+              onclick={() => selectSmartFilter({ type: 'needs_reply_snoozed' })}
+              class="w-full flex items-center gap-3 px-3 h-7 rounded-md text-sm transition-fast pl-8"
+              class:font-medium={isSmartFilterActive({ type: 'needs_reply_snoozed' })}
+              style="color: {isSmartFilterActive({ type: 'needs_reply_snoozed' }) ? 'var(--text-primary)' : 'var(--text-tertiary)'}; background: {isSmartFilterActive({ type: 'needs_reply_snoozed' }) ? 'var(--bg-hover)' : 'transparent'}"
+            >
+              <span class="w-[16px] h-[16px] flex items-center justify-center shrink-0">
+                <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+              </span>
+              <span class="truncate text-xs">Snoozed</span>
+            </button>
             <!-- AI Categories -->
             {#each aiCategories as cat}
               <button

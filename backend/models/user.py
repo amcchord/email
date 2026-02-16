@@ -18,6 +18,7 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     ai_preferences = mapped_column(JSONB, nullable=True)
     keyboard_shortcuts = mapped_column(JSONB, nullable=True)
+    ui_preferences = mapped_column(JSONB, nullable=True)
     about_me: Mapped[str] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

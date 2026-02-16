@@ -591,6 +591,9 @@ async def get_needs_reply(
         .where(
             account_filter,
             AIAnalysis.needs_reply == True,
+            AIAnalysis.needs_reply_ignored == False,
+            # Exclude snoozed emails (snoozed_until is NULL or in the past)
+            (AIAnalysis.needs_reply_snoozed_until == None) | (AIAnalysis.needs_reply_snoozed_until <= datetime.now(timezone.utc)),
             Email.is_trash == False,
             Email.is_spam == False,
             # Exclude emails where the user sent a reply AFTER the email
@@ -656,6 +659,247 @@ async def get_needs_reply(
             "summary": row.summary,
             "suggested_reply": row.suggested_reply,
             "reply_options": row.reply_options,
+        })
+
+    return {"emails": emails, "total": total}
+
+
+@router.post("/needs-reply/{email_id}/ignore")
+async def ignore_needs_reply(
+    email_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Mark a needs-reply email as ignored so it no longer appears in the list."""
+    account_ids = await _get_user_account_ids(db, user)
+    result = await db.execute(
+        select(AIAnalysis)
+        .join(Email, Email.id == AIAnalysis.email_id)
+        .where(AIAnalysis.email_id == email_id, Email.account_id.in_(account_ids))
+    )
+    analysis = result.scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Email not found")
+    analysis.needs_reply_ignored = True
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/needs-reply/{email_id}/unignore")
+async def unignore_needs_reply(
+    email_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Restore an ignored needs-reply email back to the active list."""
+    account_ids = await _get_user_account_ids(db, user)
+    result = await db.execute(
+        select(AIAnalysis)
+        .join(Email, Email.id == AIAnalysis.email_id)
+        .where(AIAnalysis.email_id == email_id, Email.account_id.in_(account_ids))
+    )
+    analysis = result.scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Email not found")
+    analysis.needs_reply_ignored = False
+    await db.commit()
+    return {"ok": True}
+
+
+@router.post("/needs-reply/{email_id}/snooze")
+async def snooze_needs_reply(
+    email_id: int,
+    duration: str = Query(..., pattern="^(1h|3h|tomorrow|next_week)$"),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Snooze a needs-reply email for a preset duration."""
+    account_ids = await _get_user_account_ids(db, user)
+    result = await db.execute(
+        select(AIAnalysis)
+        .join(Email, Email.id == AIAnalysis.email_id)
+        .where(AIAnalysis.email_id == email_id, Email.account_id.in_(account_ids))
+    )
+    analysis = result.scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Email not found")
+
+    now = datetime.now(timezone.utc)
+    if duration == "1h":
+        snooze_until = now + timedelta(hours=1)
+    elif duration == "3h":
+        snooze_until = now + timedelta(hours=3)
+    elif duration == "tomorrow":
+        tomorrow = (now + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+        snooze_until = tomorrow
+    elif duration == "next_week":
+        days_until_monday = (7 - now.weekday()) % 7
+        if days_until_monday == 0:
+            days_until_monday = 7
+        next_monday = (now + timedelta(days=days_until_monday)).replace(hour=9, minute=0, second=0, microsecond=0)
+        snooze_until = next_monday
+    else:
+        raise HTTPException(status_code=400, detail="Invalid duration")
+
+    analysis.needs_reply_snoozed_until = snooze_until
+    await db.commit()
+    return {"ok": True, "snoozed_until": snooze_until.isoformat()}
+
+
+@router.post("/needs-reply/{email_id}/unsnooze")
+async def unsnooze_needs_reply(
+    email_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Remove snooze from a needs-reply email so it reappears immediately."""
+    account_ids = await _get_user_account_ids(db, user)
+    result = await db.execute(
+        select(AIAnalysis)
+        .join(Email, Email.id == AIAnalysis.email_id)
+        .where(AIAnalysis.email_id == email_id, Email.account_id.in_(account_ids))
+    )
+    analysis = result.scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Email not found")
+    analysis.needs_reply_snoozed_until = None
+    await db.commit()
+    return {"ok": True}
+
+
+@router.get("/needs-reply/ignored")
+async def get_needs_reply_ignored(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Get needs-reply emails that the user has ignored."""
+    account_ids = await _get_user_account_ids(db, user)
+    if not account_ids:
+        return {"emails": [], "total": 0}
+
+    account_filter = Email.account_id.in_(account_ids)
+
+    query = (
+        select(
+            Email.id,
+            Email.subject,
+            Email.from_name,
+            Email.from_address,
+            Email.date,
+            Email.snippet,
+            Email.is_read,
+            Email.gmail_thread_id,
+            AIAnalysis.category,
+            AIAnalysis.priority,
+            AIAnalysis.summary,
+        )
+        .join(AIAnalysis, AIAnalysis.email_id == Email.id)
+        .where(
+            account_filter,
+            AIAnalysis.needs_reply == True,
+            AIAnalysis.needs_reply_ignored == True,
+            Email.is_trash == False,
+            Email.is_spam == False,
+        )
+        .order_by(desc(Email.date))
+    )
+
+    count_result = await db.scalar(
+        select(func.count()).select_from(query.subquery())
+    )
+    total = count_result or 0
+
+    result = await db.execute(
+        query.offset((page - 1) * page_size).limit(page_size)
+    )
+
+    emails = []
+    for row in result.all():
+        emails.append({
+            "id": row.id,
+            "subject": row.subject,
+            "from_name": row.from_name or row.from_address,
+            "from_address": row.from_address,
+            "date": row.date.isoformat() if row.date else None,
+            "snippet": row.snippet,
+            "is_read": row.is_read,
+            "gmail_thread_id": row.gmail_thread_id,
+            "category": row.category,
+            "priority": row.priority,
+            "summary": row.summary,
+        })
+
+    return {"emails": emails, "total": total}
+
+
+@router.get("/needs-reply/snoozed")
+async def get_needs_reply_snoozed(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Get needs-reply emails that are currently snoozed."""
+    account_ids = await _get_user_account_ids(db, user)
+    if not account_ids:
+        return {"emails": [], "total": 0}
+
+    account_filter = Email.account_id.in_(account_ids)
+    now_utc = datetime.now(timezone.utc)
+
+    query = (
+        select(
+            Email.id,
+            Email.subject,
+            Email.from_name,
+            Email.from_address,
+            Email.date,
+            Email.snippet,
+            Email.is_read,
+            Email.gmail_thread_id,
+            AIAnalysis.category,
+            AIAnalysis.priority,
+            AIAnalysis.summary,
+            AIAnalysis.needs_reply_snoozed_until,
+        )
+        .join(AIAnalysis, AIAnalysis.email_id == Email.id)
+        .where(
+            account_filter,
+            AIAnalysis.needs_reply == True,
+            AIAnalysis.needs_reply_snoozed_until != None,
+            AIAnalysis.needs_reply_snoozed_until > now_utc,
+            Email.is_trash == False,
+            Email.is_spam == False,
+        )
+        .order_by(asc(AIAnalysis.needs_reply_snoozed_until))
+    )
+
+    count_result = await db.scalar(
+        select(func.count()).select_from(query.subquery())
+    )
+    total = count_result or 0
+
+    result = await db.execute(
+        query.offset((page - 1) * page_size).limit(page_size)
+    )
+
+    emails = []
+    for row in result.all():
+        emails.append({
+            "id": row.id,
+            "subject": row.subject,
+            "from_name": row.from_name or row.from_address,
+            "from_address": row.from_address,
+            "date": row.date.isoformat() if row.date else None,
+            "snippet": row.snippet,
+            "is_read": row.is_read,
+            "gmail_thread_id": row.gmail_thread_id,
+            "category": row.category,
+            "priority": row.priority,
+            "summary": row.summary,
+            "snoozed_until": row.needs_reply_snoozed_until.isoformat() if row.needs_reply_snoozed_until else None,
         })
 
     return {"emails": emails, "total": total}
@@ -740,7 +984,7 @@ async def get_awaiting_response(
 
     is_short_closing_reply = and_(
         has_prior_received,
-        stripped_len < 120,
+        stripped_len < 200,
     )
 
     # An email should be excluded when either:
@@ -754,7 +998,7 @@ async def get_awaiting_response(
     )
     should_exclude = or_(ai_says_no_reply, heuristic_closing)
 
-    seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+    fourteen_days_ago = datetime.now(timezone.utc) - timedelta(days=14)
 
     # Use DISTINCT ON to get only the latest sent email per thread.
     # LEFT JOIN with ThreadDigest to exclude resolved threads and
@@ -786,7 +1030,7 @@ async def get_awaiting_response(
             Email.is_sent == True,
             Email.is_trash == False,
             Email.is_spam == False,
-            Email.date >= seven_days_ago,
+            Email.date >= fourteen_days_ago,
             ~has_reply,
             # Exclude threads the AI has marked as resolved
             or_(

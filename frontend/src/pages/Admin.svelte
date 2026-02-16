@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
-  import { user, showToast, syncStatus, forceSyncPoll } from '../lib/stores.js';
+  import { user, showToast, syncStatus, forceSyncPoll, threadOrder } from '../lib/stores.js';
   import {
     activeShortcuts,
     shortcutsByCategory,
@@ -37,6 +37,7 @@
     { id: 'about-me', label: 'About Me', adminOnly: false },
     { id: 'accounts', label: 'My Accounts', adminOnly: false },
     { id: 'ai-models', label: 'AI Models', adminOnly: false },
+    { id: 'preferences', label: 'Preferences', adminOnly: false },
     { id: 'shortcuts', label: 'Keyboard Shortcuts', adminOnly: false },
     { id: 'data', label: 'Data Management', adminOnly: false },
     { id: 'dashboard', label: 'Dashboard', adminOnly: true },
@@ -107,8 +108,8 @@
       allowedAccounts = allowed.allowed_accounts || '';
       allowedLoaded = true;
 
-      // Always load AI preferences and About Me (available to all users)
-      await Promise.all([loadAIPreferences(), loadAboutMe()]);
+      // Always load AI preferences, About Me, and UI preferences (available to all users)
+      await Promise.all([loadAIPreferences(), loadAboutMe(), loadUIPreferences()]);
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -234,6 +235,10 @@
   let aboutMeLoaded = $state(false);
   let aboutMeSaving = $state(false);
 
+  // UI Preferences
+  let uiPrefsLoaded = $state(false);
+  let uiPrefsSaving = $state(false);
+
   // Account descriptions (keyed by account id)
   let accountDescriptions = $state({});
   let accountDescSaving = $state({});
@@ -287,6 +292,7 @@
 
   const modelLabels = {
     'claude-opus-4-6': 'Claude Opus 4.6 — Most capable',
+    'claude-opus-4-6-fast': 'Claude Opus 4.6 (Fast) — 2.5x speed, 6x cost',
     'claude-sonnet-4-5-20250929': 'Claude Sonnet 4.5 — Balanced',
     'claude-haiku-4-5-20251001': 'Claude Haiku 4.5 — Fastest',
   };
@@ -324,6 +330,28 @@
       showToast(err.message, 'error');
     }
     aiPrefsSaving = false;
+  }
+
+  async function loadUIPreferences() {
+    try {
+      const data = await api.getUIPreferences();
+      threadOrder.set(data.thread_order || 'newest_first');
+      uiPrefsLoaded = true;
+    } catch (err) {
+      showToast('Failed to load UI preferences', 'error');
+    }
+  }
+
+  async function saveUIPreferences() {
+    uiPrefsSaving = true;
+    try {
+      const data = await api.updateUIPreferences({ thread_order: $threadOrder });
+      threadOrder.set(data.thread_order);
+      showToast('Preferences saved', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    uiPrefsSaving = false;
   }
 
   async function reprocessWithModel() {
@@ -1168,6 +1196,48 @@
               </tr>
             </tbody>
           </table>
+        </div>
+      </div>
+
+    {:else if activeTab === 'preferences'}
+      <!-- UI Preferences -->
+      <div class="space-y-6">
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Thread Display</h3>
+          <p class="text-xs mb-4" style="color: var(--text-tertiary)">Configure how email threads are displayed throughout the app.</p>
+
+          <div class="space-y-4">
+            <div>
+              <label class="text-xs font-medium mb-1.5 block" style="color: var(--text-secondary)">Message Order</label>
+              <p class="text-[11px] mb-2" style="color: var(--text-tertiary)">Choose whether to show the newest or oldest message first when viewing a thread.</p>
+              <div class="flex gap-2">
+                <button
+                  onclick={() => threadOrder.set('newest_first')}
+                  class="px-4 py-2 rounded-lg border text-xs font-medium transition-fast"
+                  style="{$threadOrder === 'newest_first'
+                    ? 'background: var(--color-accent-500); color: white; border-color: var(--color-accent-500)'
+                    : 'background: var(--bg-primary); color: var(--text-secondary); border-color: var(--border-color)'}"
+                >
+                  Newest first
+                </button>
+                <button
+                  onclick={() => threadOrder.set('oldest_first')}
+                  class="px-4 py-2 rounded-lg border text-xs font-medium transition-fast"
+                  style="{$threadOrder === 'oldest_first'
+                    ? 'background: var(--color-accent-500); color: white; border-color: var(--color-accent-500)'
+                    : 'background: var(--bg-primary); color: var(--text-secondary); border-color: var(--border-color)'}"
+                >
+                  Oldest first
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-5 flex items-center gap-3">
+            <Button variant="primary" size="sm" onclick={saveUIPreferences} disabled={uiPrefsSaving}>
+              {uiPrefsSaving ? 'Saving...' : 'Save Preferences'}
+            </Button>
+          </div>
         </div>
       </div>
 
