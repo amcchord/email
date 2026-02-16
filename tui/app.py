@@ -82,10 +82,8 @@ class MailApp(App):
         from tui.screens.stats import StatsScreen
         from tui.screens.ai_insights import AIInsightsScreen
         from tui.screens.chat import ChatScreen
-        from tui.screens.placeholders import (
-            SettingsScreen,
-            HelpScreen,
-        )
+        from tui.screens.settings import SettingsScreen
+        from tui.screens.placeholders import HelpScreen
 
         # Screens navigated via switch_screen (top-level nav targets)
         switch_map = {

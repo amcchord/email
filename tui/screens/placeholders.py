@@ -8,14 +8,6 @@ from textual.widgets import Static
 from tui.screens.base import BaseScreen
 
 
-class SettingsScreen(BaseScreen):
-    SCREEN_TITLE = "Settings"
-    SCREEN_NAV_ID = "settings"
-
-    def compose_content(self) -> ComposeResult:
-        yield Static("Settings - Coming Soon", classes="placeholder-label")
-
-
 class HelpScreen(BaseScreen):
     SCREEN_TITLE = "Help"
     SCREEN_NAV_ID = ""

@@ -21,3 +21,7 @@ anthropic>=0.40.0
 email-validator>=2.2.0
 aiofiles>=24.1.0
 jinja2>=3.1.4
+textual>=0.89.0
+textual-serve>=1.1.0
+asyncssh>=2.17.0
+html2text>=2024.2.26

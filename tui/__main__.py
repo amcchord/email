@@ -1,6 +1,7 @@
 """Entry point for `python -m tui`."""
 
 import argparse
+import asyncio
 import sys
 
 
@@ -27,11 +28,27 @@ def main():
     args = parser.parse_args()
 
     if args.ssh is not False:
-        print("SSH server: Not yet implemented (Phase 6)")
+        from tui.config import TUIConfig
+        from tui.servers.ssh import start_ssh_server
+
+        config = TUIConfig.from_env()
+        port = int(args.ssh) if isinstance(args.ssh, str) else config.ssh_port
+        asyncio.run(
+            start_ssh_server(
+                host=config.web_host,
+                port=port,
+                host_key_path=config.ssh_host_key_path,
+            )
+        )
         sys.exit(0)
 
     if args.web is not False:
-        print("Web server: Not yet implemented (Phase 6)")
+        from tui.config import TUIConfig
+        from tui.servers.web import start_web_server
+
+        config = TUIConfig.from_env()
+        port = int(args.web) if isinstance(args.web, str) else config.web_port
+        start_web_server(host=config.web_host, port=port)
         sys.exit(0)
 
     # Default: run Textual app directly in terminal
