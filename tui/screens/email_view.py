@@ -278,12 +278,16 @@ class EmailViewScreen(Screen):
         self.app.pop_screen()
 
     def action_reply(self) -> None:
-        """Reply to the email (placeholder)."""
-        self.notify("Reply - coming soon", severity="information")
+        """Reply to the current email."""
+        if self._email_data:
+            from tui.screens.compose import ComposeScreen
+            self.app.push_screen(ComposeScreen(reply_data=self._email_data))
 
     def action_forward(self) -> None:
-        """Forward the email (placeholder)."""
-        self.notify("Forward - coming soon", severity="information")
+        """Forward the current email."""
+        if self._email_data:
+            from tui.screens.compose import ComposeScreen
+            self.app.push_screen(ComposeScreen(forward_data=self._email_data))
 
     @work(exclusive=True, group="action")
     async def action_archive(self) -> None:

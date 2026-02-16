@@ -314,12 +314,24 @@ class InboxScreen(BaseScreen):
         self._perform_action("spam")
 
     def action_reply(self) -> None:
-        """Reply to the selected email (placeholder)."""
-        self.notify("Reply - coming soon", severity="information")
+        """Reply to the selected email."""
+        email_id = self._get_selected_email_id()
+        if email_id is None:
+            return
+        email = self._find_email(email_id)
+        if email:
+            from tui.screens.compose import ComposeScreen
+            self.app.push_screen(ComposeScreen(reply_data=email))
 
     def action_forward(self) -> None:
-        """Forward the selected email (placeholder)."""
-        self.notify("Forward - coming soon", severity="information")
+        """Forward the selected email."""
+        email_id = self._get_selected_email_id()
+        if email_id is None:
+            return
+        email = self._find_email(email_id)
+        if email:
+            from tui.screens.compose import ComposeScreen
+            self.app.push_screen(ComposeScreen(forward_data=email))
 
     def action_focus_search(self) -> None:
         """Focus the search input."""

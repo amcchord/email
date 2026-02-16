@@ -144,6 +144,54 @@ LoginScreen {
     dock: bottom;
 }
 
+/* ── Flow Screen ─────────────────────────────────────────── */
+
+#flow-scroll {
+    width: 100%;
+    height: 100%;
+}
+
+#flow-needs-reply,
+#flow-awaiting,
+#flow-threads,
+#flow-events,
+#flow-todos {
+    width: 100%;
+    height: auto;
+    max-height: 16;
+    min-height: 3;
+    padding: 0;
+}
+
+#flow-needs-reply:focus-within,
+#flow-awaiting:focus-within,
+#flow-threads:focus-within,
+#flow-events:focus-within,
+#flow-todos:focus-within {
+    border: tall $accent;
+}
+
+#flow-status {
+    width: 100%;
+    height: 1;
+    padding: 0 1;
+    background: $surface;
+    color: $text-muted;
+    margin: 1 0 0 0;
+}
+
+/* ── Compose Screen ──────────────────────────────────────── */
+
+#compose-container {
+    width: 100%;
+    height: 100%;
+}
+
+#compose-editor {
+    width: 100%;
+    height: 1fr;
+}
+
 /* ── Light theme overrides ────────────────────────────────── */
 
 .light Screen {

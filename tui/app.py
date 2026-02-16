@@ -75,19 +75,20 @@ class MailApp(App):
     def _handle_action(self, action: str) -> bool:
         """Handle a resolved key action. Returns True if handled."""
         from tui.screens.inbox import InboxScreen
+        from tui.screens.flow import FlowScreen
+        from tui.screens.compose import ComposeScreen
         from tui.screens.placeholders import (
-            FlowScreen,
             CalendarScreen,
             TodoScreen,
             StatsScreen,
             AIInsightsScreen,
             ChatScreen,
             SettingsScreen,
-            ComposeScreen,
             HelpScreen,
         )
 
-        action_map = {
+        # Screens navigated via switch_screen (top-level nav targets)
+        switch_map = {
             "g_f": FlowScreen,
             "g_i": InboxScreen,
             "g_l": CalendarScreen,
@@ -96,13 +97,17 @@ class MailApp(App):
             "g_a": AIInsightsScreen,
             "g_h": ChatScreen,
             "g_comma": SettingsScreen,
-            "c": ComposeScreen,
             "question_mark": HelpScreen,
         }
 
-        screen_class = action_map.get(action)
+        screen_class = switch_map.get(action)
         if screen_class is not None:
             self.switch_screen(screen_class())
+            return True
+
+        # Screens navigated via push_screen (overlays that pop back)
+        if action == "c":
+            self.push_screen(ComposeScreen())
             return True
 
         if action == "full_stop":

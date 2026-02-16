@@ -8,14 +8,6 @@ from textual.widgets import Static
 from tui.screens.base import BaseScreen
 
 
-class FlowScreen(BaseScreen):
-    SCREEN_TITLE = "Flow"
-    SCREEN_NAV_ID = "flow"
-
-    def compose_content(self) -> ComposeResult:
-        yield Static("Flow - Coming Soon", classes="placeholder-label")
-
-
 class CalendarScreen(BaseScreen):
     SCREEN_TITLE = "Calendar"
     SCREEN_NAV_ID = "calendar"
@@ -62,14 +54,6 @@ class SettingsScreen(BaseScreen):
 
     def compose_content(self) -> ComposeResult:
         yield Static("Settings - Coming Soon", classes="placeholder-label")
-
-
-class ComposeScreen(BaseScreen):
-    SCREEN_TITLE = "Compose"
-    SCREEN_NAV_ID = ""
-
-    def compose_content(self) -> ComposeResult:
-        yield Static("Compose - Coming Soon", classes="placeholder-label")
 
 
 class HelpScreen(BaseScreen):
