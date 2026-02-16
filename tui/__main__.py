@@ -46,9 +46,11 @@ def main():
         from tui.config import TUIConfig
         from tui.servers.web import start_web_server
 
+        import os
         config = TUIConfig.from_env()
         port = int(args.web) if isinstance(args.web, str) else config.web_port
-        start_web_server(host=config.web_host, port=port)
+        public_url = os.environ.get("TUI_PUBLIC_URL")
+        start_web_server(host=config.web_host, port=port, public_url=public_url)
         sys.exit(0)
 
     # Default: run Textual app directly in terminal

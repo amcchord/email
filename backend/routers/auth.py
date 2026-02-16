@@ -471,3 +471,27 @@ async def update_ui_preferences(
     return UIPreferencesResponse(
         thread_order=prefs.get("thread_order", DEFAULT_UI_PREFERENCES["thread_order"]),
     )
+
+
+# ── TUI / CLI Password ────────────────────────────────────────────
+
+@router.put("/tui-password")
+async def set_tui_password(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Set a password for TUI/SSH access.
+
+    Google OAuth users don't have a password by default. This lets them
+    set one so they can log into the TUI via SSH using their email + this password.
+    """
+    password = body.get("password", "")
+    if len(password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 6 characters",
+        )
+    user.hashed_password = hash_password(password)
+    await db.commit()
+    return {"status": "ok", "message": "TUI password set. Log in with your email and this password."}
