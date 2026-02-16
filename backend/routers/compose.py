@@ -7,6 +7,7 @@ from backend.models.account import GoogleAccount
 from backend.schemas.email import ComposeRequest
 from backend.routers.auth import get_current_user
 from backend.services.gmail import GmailService
+from backend.services.credentials import get_google_credentials
 
 router = APIRouter(prefix="/api/compose", tags=["compose"])
 
@@ -27,7 +28,8 @@ async def send_email(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    gmail = GmailService(account)
+    client_id, client_secret = await get_google_credentials(db)
+    gmail = GmailService(account, client_id=client_id, client_secret=client_secret)
     try:
         message_id = await gmail.send_email(
             to=request.to,
@@ -61,7 +63,8 @@ async def save_draft(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    gmail = GmailService(account)
+    client_id, client_secret = await get_google_credentials(db)
+    gmail = GmailService(account, client_id=client_id, client_secret=client_secret)
     try:
         draft_id = await gmail.create_draft(
             to=request.to,

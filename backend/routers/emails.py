@@ -571,7 +571,9 @@ async def email_actions(
                 )
                 account = acct_obj.scalar_one_or_none()
                 if account:
-                    gmail_svc = GmailService(account)
+                    from backend.services.credentials import get_google_credentials
+                    client_id, client_secret = await get_google_credentials(db)
+                    gmail_svc = GmailService(account, client_id=client_id, client_secret=client_secret)
                     for msg_id in msg_ids:
                         try:
                             await gmail_svc.modify_labels(
