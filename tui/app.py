@@ -77,9 +77,9 @@ class MailApp(App):
         from tui.screens.inbox import InboxScreen
         from tui.screens.flow import FlowScreen
         from tui.screens.compose import ComposeScreen
+        from tui.screens.calendar import CalendarScreen
+        from tui.screens.todos import TodoScreen
         from tui.screens.placeholders import (
-            CalendarScreen,
-            TodoScreen,
             StatsScreen,
             AIInsightsScreen,
             ChatScreen,
