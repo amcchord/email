@@ -16,14 +16,6 @@ class FlowScreen(BaseScreen):
         yield Static("Flow - Coming Soon", classes="placeholder-label")
 
 
-class InboxScreen(BaseScreen):
-    SCREEN_TITLE = "Inbox"
-    SCREEN_NAV_ID = "inbox"
-
-    def compose_content(self) -> ComposeResult:
-        yield Static("Inbox - Coming Soon", classes="placeholder-label")
-
-
 class CalendarScreen(BaseScreen):
     SCREEN_TITLE = "Calendar"
     SCREEN_NAV_ID = "calendar"

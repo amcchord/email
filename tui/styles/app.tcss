@@ -90,6 +90,60 @@ LoginScreen {
     text-style: italic;
 }
 
+/* ── Inbox Screen ────────────────────────────────────────── */
+
+#inbox-layout {
+    width: 100%;
+    height: 100%;
+}
+
+#mailbox-sidebar {
+    width: 24;
+    height: 100%;
+    background: $surface;
+    border-right: solid $primary-background-darken-2;
+    padding: 0;
+}
+
+#mailbox-header {
+    width: 100%;
+    height: 1;
+    padding: 0 1;
+    background: $surface;
+    color: $accent;
+}
+
+#mailbox-tree {
+    width: 100%;
+    height: 1fr;
+    padding: 0 1;
+}
+
+#inbox-main {
+    width: 1fr;
+    height: 100%;
+}
+
+#search-input {
+    width: 100%;
+    height: 3;
+    margin: 0;
+}
+
+#email-table {
+    width: 100%;
+    height: 1fr;
+}
+
+#inbox-status {
+    width: 100%;
+    height: 1;
+    padding: 0 1;
+    background: $surface;
+    color: $text-muted;
+    dock: bottom;
+}
+
 /* ── Light theme overrides ────────────────────────────────── */
 
 .light Screen {

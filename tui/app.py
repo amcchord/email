@@ -74,9 +74,9 @@ class MailApp(App):
 
     def _handle_action(self, action: str) -> bool:
         """Handle a resolved key action. Returns True if handled."""
+        from tui.screens.inbox import InboxScreen
         from tui.screens.placeholders import (
             FlowScreen,
-            InboxScreen,
             CalendarScreen,
             TodoScreen,
             StatsScreen,
