@@ -1,6 +1,8 @@
 <script>
+  import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
   import { calendarView, calendarDate, calendarEvents, calendarLoading, selectedAccountId, accounts, accountColorMap, showToast } from '../lib/stores.js';
+  import { registerActions } from '../lib/shortcutStore.js';
   import CalendarMonth from '../components/calendar/CalendarMonth.svelte';
   import CalendarWeek from '../components/calendar/CalendarWeek.svelte';
   import CalendarDay from '../components/calendar/CalendarDay.svelte';
@@ -10,6 +12,18 @@
   let selectedEvent = $state(null);
   let hasLoaded = $state(false);
   let syncing = $state(false);
+
+  onMount(() => {
+    const cleanupShortcuts = registerActions({
+      'cal.today': () => goToday(),
+      'cal.prev': () => navigatePrev(),
+      'cal.next': () => navigateNext(),
+      'cal.month': () => calendarView.set('month'),
+      'cal.week': () => calendarView.set('week'),
+      'cal.day': () => calendarView.set('day'),
+    });
+    return cleanupShortcuts;
+  });
 
   let selectedAccount = $derived(
     $selectedAccountId ? $accounts.find(a => a.id === $selectedAccountId) : null
@@ -140,6 +154,7 @@
         class="p-1.5 rounded-md transition-fast hover:bg-black/5"
         style="color: var(--text-secondary)"
         aria-label="Previous"
+        data-shortcut="cal.prev"
       >
         <Icon name="chevron-left" size={20} />
       </button>
@@ -148,6 +163,7 @@
         class="p-1.5 rounded-md transition-fast hover:bg-black/5"
         style="color: var(--text-secondary)"
         aria-label="Next"
+        data-shortcut="cal.next"
       >
         <Icon name="chevron-right" size={20} />
       </button>
@@ -155,6 +171,7 @@
         onclick={goToday}
         class="px-3 py-1 rounded-md text-sm font-medium border transition-fast hover:bg-black/5"
         style="color: var(--text-secondary); border-color: var(--border-color)"
+        data-shortcut="cal.today"
       >
         Today
       </button>
@@ -221,6 +238,7 @@
             onclick={() => calendarView.set(view)}
             class="px-3 py-1 text-sm font-medium capitalize transition-fast"
             style="background: {$calendarView === view ? 'var(--color-accent-500)' : 'transparent'}; color: {$calendarView === view ? 'white' : 'var(--text-secondary)'}"
+            data-shortcut={view === 'month' ? 'cal.month' : view === 'week' ? 'cal.week' : 'cal.day'}
           >
             {view}
           </button>

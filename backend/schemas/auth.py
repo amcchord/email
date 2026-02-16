@@ -13,6 +13,7 @@ DEFAULT_AI_PREFERENCES = {
     "chat_execute_model": "claude-opus-4-6",
     "chat_verify_model": "claude-opus-4-6",
     "agentic_model": "claude-sonnet-4-5-20250929",
+    "custom_prompt_model": "claude-sonnet-4-5-20250929",
 }
 
 
@@ -48,6 +49,7 @@ class AIPreferencesResponse(BaseModel):
     chat_execute_model: str
     chat_verify_model: str
     agentic_model: str
+    custom_prompt_model: str
     allowed_models: list[str] = ALLOWED_MODELS
 
 
@@ -56,8 +58,9 @@ class AIPreferencesUpdate(BaseModel):
     chat_execute_model: Optional[str] = None
     chat_verify_model: Optional[str] = None
     agentic_model: Optional[str] = None
+    custom_prompt_model: Optional[str] = None
 
-    @field_validator("chat_plan_model", "chat_execute_model", "chat_verify_model", "agentic_model")
+    @field_validator("chat_plan_model", "chat_execute_model", "chat_verify_model", "agentic_model", "custom_prompt_model")
     @classmethod
     def validate_model_name(cls, v):
         if v is not None and v not in ALLOWED_MODELS:
@@ -75,3 +78,11 @@ class AboutMeUpdate(BaseModel):
 
 class AccountDescriptionUpdate(BaseModel):
     description: Optional[str] = None
+
+
+class KeyboardShortcutsResponse(BaseModel):
+    shortcuts: dict[str, str] = {}
+
+
+class KeyboardShortcutsUpdate(BaseModel):
+    shortcuts: dict[str, str] = {}

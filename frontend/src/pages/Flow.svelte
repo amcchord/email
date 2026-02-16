@@ -4,6 +4,7 @@
   import { api } from '../lib/api.js';
   import { chatConversations, currentConversationId, showToast, currentPage, currentMailbox, selectedEmailId, pendingReplyDraft, accounts, composeData } from '../lib/stores.js';
   import { get } from 'svelte/store';
+  import { registerActions } from '../lib/shortcutStore.js';
   import Icon from '../components/common/Icon.svelte';
   import RichEditor from '../components/email/RichEditor.svelte';
 
@@ -57,10 +58,109 @@
 
   let hasReplyContent = $derived(replyBodyHtml && replyBodyHtml.replace(/<[^>]*>/g, '').trim().length > 0);
 
+  // --- Keyboard navigation state for dashboard ---
+  // Sections: 'needs_reply', 'awaiting', 'threads'
+  let focusedSection = $state('needs_reply');
+  let highlightedIndex = $state(-1);
+
+  // Get the items for the currently focused section
+  function getSectionItems(section) {
+    if (section === 'needs_reply') return needsReplyEmails;
+    if (section === 'awaiting') return awaitingResponse;
+    if (section === 'threads') return activeThreads;
+    return [];
+  }
+
+  const sectionOrder = ['needs_reply', 'awaiting', 'threads'];
+
+  function cycleSectionForward() {
+    const currentIdx = sectionOrder.indexOf(focusedSection);
+    // Find next section that has items
+    for (let i = 1; i <= sectionOrder.length; i++) {
+      const nextIdx = (currentIdx + i) % sectionOrder.length;
+      const section = sectionOrder[nextIdx];
+      if (getSectionItems(section).length > 0) {
+        focusedSection = section;
+        highlightedIndex = 0;
+        scrollHighlightedIntoView();
+        return;
+      }
+    }
+  }
+
+  function cycleSectionBackward() {
+    const currentIdx = sectionOrder.indexOf(focusedSection);
+    for (let i = 1; i <= sectionOrder.length; i++) {
+      const nextIdx = (currentIdx - i + sectionOrder.length) % sectionOrder.length;
+      const section = sectionOrder[nextIdx];
+      if (getSectionItems(section).length > 0) {
+        focusedSection = section;
+        highlightedIndex = 0;
+        scrollHighlightedIntoView();
+        return;
+      }
+    }
+  }
+
+  function navigateHighlight(direction) {
+    const items = getSectionItems(focusedSection);
+    if (items.length === 0) return;
+
+    if (highlightedIndex === -1) {
+      highlightedIndex = 0;
+    } else {
+      const next = highlightedIndex + direction;
+      if (next < 0) {
+        // At the top, try going to previous section
+        cycleSectionBackward();
+        const newItems = getSectionItems(focusedSection);
+        if (newItems.length > 0) {
+          highlightedIndex = newItems.length - 1;
+        }
+        scrollHighlightedIntoView();
+        return;
+      } else if (next >= items.length) {
+        // At the bottom, try going to next section
+        cycleSectionForward();
+        scrollHighlightedIntoView();
+        return;
+      } else {
+        highlightedIndex = next;
+      }
+    }
+    scrollHighlightedIntoView();
+  }
+
+  function openHighlighted() {
+    const items = getSectionItems(focusedSection);
+    if (highlightedIndex < 0 || highlightedIndex >= items.length) return;
+
+    const item = items[highlightedIndex];
+    if (focusedSection === 'needs_reply') {
+      openReplyView(item, highlightedIndex, null);
+    } else if (focusedSection === 'awaiting') {
+      openThreadInFlow(item.gmail_thread_id, { subject: item.subject, from_name: item.to_name, date: item.date, id: item.id, snippet: item.snippet }, 'awaiting');
+    } else if (focusedSection === 'threads') {
+      openThreadInFlow(item.thread_id, { subject: item.subject, summary: item.summary, date: item.latest_date }, 'thread');
+    }
+  }
+
+  function scrollHighlightedIntoView() {
+    // Use requestAnimationFrame so the DOM has updated
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-flow-item="${focusedSection}-${highlightedIndex}"]`);
+      if (el) {
+        el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    });
+  }
+
   // --- Custom prompt state ---
   let customPromptOpen = $state(false);
   let customPromptText = $state('');
   let customPromptLoading = $state(false);
+  let lastCustomPrompt = $state('');
+  let editingCustomPrompt = $state(false);
 
   // --- Resizable pane state ---
   let topPanePercent = $state(parseFloat(localStorage.getItem('flowTopPanePercent')) || 40);
@@ -166,6 +266,56 @@
       loadAwaitingResponse(),
       loadActiveThreads(),
     ]);
+
+    // Register keyboard shortcut actions for the Flow page
+    const cleanupShortcuts = registerActions({
+      'flow.next': () => {
+        if (replyViewOpen) {
+          goToNextReply();
+        } else {
+          navigateHighlight(1);
+        }
+      },
+      'flow.prev': () => {
+        if (replyViewOpen) {
+          goToPrevReply();
+        } else {
+          navigateHighlight(-1);
+        }
+      },
+      'flow.nextSection': () => {
+        if (!replyViewOpen) cycleSectionForward();
+      },
+      'flow.prevSection': () => {
+        if (!replyViewOpen) cycleSectionBackward();
+      },
+      'flow.open': () => {
+        if (replyViewOpen) return;
+        if (highlightedIndex >= 0) {
+          openHighlighted();
+        } else if (needsReplyEmails.length > 0) {
+          openReplyView(needsReplyEmails[0], 0, null);
+        }
+      },
+      'flow.skip': () => {
+        if (replyViewOpen) skipEmail();
+      },
+      'flow.newChat': () => startNewChat(),
+      'flow.send': () => {
+        if (replyViewOpen) sendReply();
+      },
+      'flow.back': () => {
+        if (replyViewOpen) {
+          closeReplyView();
+        } else if (highlightedIndex >= 0) {
+          highlightedIndex = -1;
+        }
+      },
+    });
+
+    return () => {
+      cleanupShortcuts();
+    };
   });
 
   // ============ Day Summary ============
@@ -599,6 +749,8 @@
     customPromptOpen = false;
     customPromptText = '';
     customPromptLoading = false;
+    lastCustomPrompt = '';
+    editingCustomPrompt = false;
 
     if (option) {
       initialReplyContent = '<p>' + (option.body || '').replace(/\n/g, '</p><p>') + '</p>';
@@ -642,6 +794,8 @@
     selectedOptionIndex = -1;
     initialReplyContent = '';
     activeReplyIndex = 0;
+    lastCustomPrompt = '';
+    editingCustomPrompt = false;
     editorKey++;
 
     // Build a minimal email-like object for the reply view header
@@ -700,6 +854,8 @@
     collapsedMessages = {};
     selectedOptionIndex = -1;
     initialReplyContent = '';
+    lastCustomPrompt = '';
+    editingCustomPrompt = false;
   }
 
   function selectReplyOption(option, optIdx) {
@@ -717,17 +873,21 @@
     selectedOptionIndex = -1;
     customPromptOpen = false;
     customPromptText = '';
+    lastCustomPrompt = '';
+    editingCustomPrompt = false;
     editorKey++;
   }
 
-  async function generateCustomReply() {
-    if (!customPromptText.trim() || !selectedReplyEmail) return;
+  async function generateCustomReply(promptOverride) {
+    const promptToUse = (promptOverride || customPromptText).trim();
+    if (!promptToUse || !selectedReplyEmail) return;
     customPromptLoading = true;
     try {
-      const result = await api.generateReply(selectedReplyEmail.id, customPromptText.trim());
+      const result = await api.generateReply(selectedReplyEmail.id, promptToUse);
       if (result && result.body) {
+        lastCustomPrompt = promptToUse;
+        editingCustomPrompt = false;
         if (result.is_new_email) {
-          // AI determined this needs a new compose (e.g. introduction, forward to new person)
           const bodyHtml = '<p>' + result.body.replace(/\n/g, '</p><p>') + '</p>';
           composeData.set({
             to: result.to || [],
@@ -739,7 +899,6 @@
           customPromptText = '';
           currentPage.set('compose');
         } else {
-          // Normal reply in the current thread
           initialReplyContent = '<p>' + result.body.replace(/\n/g, '</p><p>') + '</p>';
           replyBodyHtml = initialReplyContent;
           replyIntent = 'custom';
@@ -1489,22 +1648,82 @@
 
           <!-- AI Suggestion Banner -->
           {#if replyIntent}
-            <div class="px-5 py-1.5 border-b shrink-0 flex items-center justify-between" style="border-color: var(--border-color); background: color-mix(in srgb, var(--color-accent-500) 8%, transparent)">
-              <div class="flex items-center gap-1.5">
-                <svg class="w-3.5 h-3.5 shrink-0" style="color: var(--color-accent-500)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
-                </svg>
-                <span class="text-[11px] font-medium" style="color: var(--color-accent-600)">
-                  AI-suggested {intentLabels[replyIntent] || 'reply'} -- edit as needed
-                </span>
+            <div class="px-5 py-1.5 border-b shrink-0" style="border-color: var(--border-color); background: color-mix(in srgb, var(--color-accent-500) 8%, transparent)">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-1.5">
+                  <svg class="w-3.5 h-3.5 shrink-0" style="color: var(--color-accent-500)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456zM16.894 20.567L16.5 21.75l-.394-1.183a2.25 2.25 0 00-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 001.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 001.423 1.423l1.183.394-1.183.394a2.25 2.25 0 00-1.423 1.423z" />
+                  </svg>
+                  <span class="text-[11px] font-medium" style="color: var(--color-accent-600)">
+                    {#if replyIntent === 'custom' && lastCustomPrompt}
+                      AI-generated from custom prompt -- edit as needed
+                    {:else}
+                      AI-suggested {intentLabels[replyIntent] || 'reply'} -- edit as needed
+                    {/if}
+                  </span>
+                </div>
+                <button
+                  onclick={clearReplyOption}
+                  class="text-[10px] font-medium px-2 py-0.5 rounded transition-fast"
+                  style="color: var(--text-tertiary)"
+                >
+                  Reset
+                </button>
               </div>
-              <button
-                onclick={clearReplyOption}
-                class="text-[10px] font-medium px-2 py-0.5 rounded transition-fast"
-                style="color: var(--text-tertiary)"
-              >
-                Reset
-              </button>
+              {#if replyIntent === 'custom' && lastCustomPrompt}
+                <div class="mt-1.5 flex items-center gap-2">
+                  {#if editingCustomPrompt}
+                    <input
+                      type="text"
+                      bind:value={lastCustomPrompt}
+                      class="flex-1 text-xs px-3 py-1.5 rounded-lg border outline-none"
+                      style="border-color: var(--color-accent-400); background: var(--bg-primary); color: var(--text-primary)"
+                      disabled={customPromptLoading}
+                      onkeydown={(e) => {
+                        if (e.key === 'Enter' && !customPromptLoading) { generateCustomReply(lastCustomPrompt); }
+                        if (e.key === 'Escape') { editingCustomPrompt = false; }
+                      }}
+                    />
+                    <button
+                      onclick={() => generateCustomReply(lastCustomPrompt)}
+                      disabled={customPromptLoading || !lastCustomPrompt.trim()}
+                      class="px-2.5 py-1.5 rounded-lg text-[10px] font-medium transition-fast shrink-0 flex items-center gap-1"
+                      style="background: var(--color-accent-500); color: white; opacity: {customPromptLoading || !lastCustomPrompt.trim() ? '0.5' : '1'}"
+                    >
+                      {#if customPromptLoading}
+                        <span class="inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                        Generating...
+                      {:else}
+                        <Icon name="zap" size={11} />
+                        Regenerate
+                      {/if}
+                    </button>
+                    <button
+                      onclick={() => { editingCustomPrompt = false; }}
+                      class="text-[10px] font-medium px-1.5 py-0.5 rounded transition-fast"
+                      style="color: var(--text-tertiary)"
+                    >
+                      Cancel
+                    </button>
+                  {:else}
+                    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions a11y_no_noninteractive_element_interactions -->
+                    <p
+                      class="flex-1 text-xs italic leading-relaxed cursor-pointer rounded px-1 -mx-1 transition-fast hover-bg-subtle"
+                      style="color: var(--text-secondary)"
+                      onclick={() => { editingCustomPrompt = true; }}
+                      title="Click to edit prompt"
+                    >"{lastCustomPrompt}"</p>
+                    <button
+                      onclick={() => { editingCustomPrompt = true; }}
+                      class="text-[10px] font-medium px-2 py-1 rounded-md border transition-fast shrink-0 flex items-center gap-1"
+                      style="border-color: var(--border-color); color: var(--color-accent-600)"
+                    >
+                      <Icon name="edit-3" size={10} />
+                      Edit & Regenerate
+                    </button>
+                  {/if}
+                </div>
+              {/if}
             </div>
           {/if}
 
@@ -1714,7 +1933,7 @@
       </div>
 
       <!-- ============ NEEDS REPLY - CORE SECTION ============ -->
-      <div class="rounded-xl border overflow-hidden" style="background: var(--bg-secondary); border-color: var(--border-color)">
+      <div class="rounded-xl border overflow-hidden" style="background: var(--bg-secondary); border-color: {focusedSection === 'needs_reply' && highlightedIndex >= 0 ? 'var(--color-accent-500)' : 'var(--border-color)'}">
         <div class="px-4 py-3 border-b flex items-center justify-between" style="border-color: var(--border-color)">
           <div class="flex items-center gap-2">
             <span style="color: var(--color-accent-500)"><Icon name="inbox" size={16} /></span>
@@ -1731,7 +1950,8 @@
               <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
               <div
                 class="px-3 py-2.5 rounded-lg transition-fast hover-bg-subtle cursor-pointer border-b last-child-no-border"
-                style="border-color: color-mix(in srgb, var(--border-color) 50%, transparent)"
+                style="border-color: color-mix(in srgb, var(--border-color) 50%, transparent); {focusedSection === 'needs_reply' && highlightedIndex === idx ? 'outline: 2px solid var(--color-accent-500); outline-offset: -2px; background: var(--bg-tertiary)' : ''}"
+                data-flow-item="needs_reply-{idx}"
                 onclick={() => openReplyView(email, idx)}
               >
                 <div class="flex items-start gap-3">
@@ -1818,12 +2038,13 @@
           </div>
           {#if awaitingResponse.length > 0}
             <div class="space-y-2">
-              {#each awaitingResponse as email}
+              {#each awaitingResponse as email, awIdx}
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div
                   class="p-2.5 rounded-lg cursor-pointer transition-fast hover-bg-subtle"
-                  style="background: var(--bg-primary)"
+                  style="background: var(--bg-primary); {focusedSection === 'awaiting' && highlightedIndex === awIdx ? 'outline: 2px solid var(--color-accent-500); outline-offset: -2px; background: var(--bg-tertiary)' : ''}"
+                  data-flow-item="awaiting-{awIdx}"
                   onclick={() => openThreadInFlow(email.gmail_thread_id, { subject: email.subject, from_name: email.to_name, date: email.date, id: email.id, snippet: email.snippet }, 'awaiting')}
                 >
                   <div class="text-xs font-medium truncate" style="color: var(--text-primary)">{email.subject || '(no subject)'}</div>
@@ -1868,12 +2089,13 @@
           </div>
           {#if activeThreads.length > 0}
             <div class="space-y-2">
-              {#each activeThreads as thread}
+              {#each activeThreads as thread, thIdx}
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div
                   class="p-2.5 rounded-lg cursor-pointer transition-fast hover-bg-subtle"
-                  style="background: var(--bg-primary)"
+                  style="background: var(--bg-primary); {focusedSection === 'threads' && highlightedIndex === thIdx ? 'outline: 2px solid var(--color-accent-500); outline-offset: -2px; background: var(--bg-tertiary)' : ''}"
+                  data-flow-item="threads-{thIdx}"
                   onclick={() => openThreadInFlow(thread.thread_id, { subject: thread.subject, summary: thread.summary, date: thread.latest_date }, 'thread')}
                 >
                   <div class="flex items-center gap-2 mb-0.5">

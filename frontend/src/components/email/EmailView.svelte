@@ -374,6 +374,7 @@
             class="p-1.5 rounded-md transition-fast"
             style="color: {email.is_starred ? 'var(--color-accent-500)' : 'var(--text-tertiary)'}"
             title="Star"
+            data-shortcut="email.star"
           >
             <Icon name="star" size={20} />
           </button>
@@ -382,6 +383,7 @@
             class="p-1.5 rounded-md transition-fast"
             style="color: var(--text-tertiary)"
             title="Archive"
+            data-shortcut="email.archive"
           >
             <Icon name="archive" size={20} />
           </button>
@@ -390,6 +392,7 @@
             class="p-1.5 rounded-md transition-fast"
             style="color: var(--text-tertiary)"
             title="Delete"
+            data-shortcut="email.trash"
           >
             <Icon name="trash-2" size={20} />
           </button>
@@ -400,6 +403,7 @@
               class="p-1.5 rounded-md transition-fast"
               style="color: var(--text-tertiary)"
               title="Open in new window"
+              data-shortcut="email.popout"
             >
               <Icon name="external-link" size={20} />
             </button>

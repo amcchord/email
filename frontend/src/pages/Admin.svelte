@@ -2,6 +2,18 @@
   import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
   import { user, showToast, syncStatus, forceSyncPoll } from '../lib/stores.js';
+  import {
+    activeShortcuts,
+    shortcutsByCategory,
+    updateShortcut,
+    resetShortcut,
+    resetAllShortcuts,
+    checkConflict,
+    eventToCombo,
+    formatComboForDisplay,
+    normalizeCombo,
+  } from '../lib/shortcutStore.js';
+  import { getCategories } from '../lib/shortcutDefaults.js';
   import Button from '../components/common/Button.svelte';
   import Input from '../components/common/Input.svelte';
   import Icon from '../components/common/Icon.svelte';
@@ -25,6 +37,7 @@
     { id: 'about-me', label: 'About Me', adminOnly: false },
     { id: 'accounts', label: 'My Accounts', adminOnly: false },
     { id: 'ai-models', label: 'AI Models', adminOnly: false },
+    { id: 'shortcuts', label: 'Keyboard Shortcuts', adminOnly: false },
     { id: 'data', label: 'Data Management', adminOnly: false },
     { id: 'dashboard', label: 'Dashboard', adminOnly: true },
     { id: 'apikeys', label: 'API Keys', adminOnly: true },
@@ -40,6 +53,8 @@
     if (params.get('tab')) {
       activeTab = params.get('tab');
     }
+    // Listen for navigation from the shortcuts help modal
+    window.addEventListener('shortcut-settings-navigate', handleShortcutSettingsNavigate);
     if (params.get('error') === 'not_allowed') {
       showToast('That Google account is not on the allowed list', 'error', 5000);
       window.history.replaceState({}, '', '/?page=admin');
@@ -64,6 +79,7 @@
 
   onDestroy(() => {
     stopProcessingPoll();
+    window.removeEventListener('shortcut-settings-navigate', handleShortcutSettingsNavigate);
   });
 
   async function loadData() {
@@ -283,6 +299,7 @@
         chat_execute_model: data.chat_execute_model,
         chat_verify_model: data.chat_verify_model,
         agentic_model: data.agentic_model,
+        custom_prompt_model: data.custom_prompt_model,
       };
       aiPrefsAllowedModels = data.allowed_models || [];
       aiPrefsLoaded = true;
@@ -300,6 +317,7 @@
         chat_execute_model: data.chat_execute_model,
         chat_verify_model: data.chat_verify_model,
         agentic_model: data.agentic_model,
+        custom_prompt_model: data.custom_prompt_model,
       };
       showToast('AI model preferences saved', 'success');
     } catch (err) {
@@ -467,6 +485,86 @@
       showToast(err.message, 'error');
     }
     aboutMeSaving = false;
+  }
+
+  // ── Keyboard Shortcuts ────────────────────────────────────────────
+  let shortcutSearchFilter = $state('');
+  let recordingActionId = $state(null);
+  let recordedCombo = $state('');
+  let shortcutConflict = $state(null);
+  let shortcutCategories = getCategories();
+
+  let filteredShortcutCategories = $derived.by(() => {
+    const byCategory = $shortcutsByCategory;
+    const query = shortcutSearchFilter.toLowerCase().trim();
+    const result = [];
+    for (const cat of shortcutCategories) {
+      const shortcuts = byCategory[cat] || [];
+      let filtered = shortcuts;
+      if (query) {
+        filtered = shortcuts.filter(s =>
+          s.label.toLowerCase().includes(query) ||
+          s.key.toLowerCase().includes(query) ||
+          s.id.toLowerCase().includes(query)
+        );
+      }
+      if (filtered.length > 0) {
+        result.push({ name: cat, shortcuts: filtered });
+      }
+    }
+    return result;
+  });
+
+  function startRecording(actionId) {
+    recordingActionId = actionId;
+    recordedCombo = '';
+    shortcutConflict = null;
+  }
+
+  function cancelRecording() {
+    recordingActionId = null;
+    recordedCombo = '';
+    shortcutConflict = null;
+  }
+
+  function handleShortcutKeydown(e) {
+    if (!recordingActionId) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (e.key === 'Escape') {
+      cancelRecording();
+      return;
+    }
+
+    const combo = eventToCombo(e);
+    if (!combo) return;
+
+    recordedCombo = combo;
+    const conflict = checkConflict(recordingActionId, combo);
+    shortcutConflict = conflict;
+  }
+
+  async function saveRecordedShortcut() {
+    if (!recordingActionId || !recordedCombo) return;
+    await updateShortcut(recordingActionId, recordedCombo);
+    showToast('Shortcut updated', 'success');
+    cancelRecording();
+  }
+
+  async function handleResetShortcut(actionId) {
+    await resetShortcut(actionId);
+    showToast('Shortcut reset to default', 'success');
+  }
+
+  async function handleResetAll() {
+    await resetAllShortcuts();
+    showToast('All shortcuts reset to defaults', 'success');
+  }
+
+  function handleShortcutSettingsNavigate() {
+    activeTab = 'shortcuts';
   }
 
   // Account descriptions
@@ -956,6 +1054,40 @@
           </div>
         </div>
 
+        <!-- Custom Prompt Model -->
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Custom Prompt Model</h3>
+          <p class="text-xs mb-5" style="color: var(--text-tertiary)">
+            Used when generating replies from custom prompts in the Flow view.
+            Opus gives the best quality, Haiku is fastest and cheapest.
+          </p>
+
+          <div>
+            <label for="ai-custom-prompt-model" class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color: var(--text-tertiary)">
+              Model
+            </label>
+            <select
+              id="ai-custom-prompt-model"
+              bind:value={aiPrefs.custom_prompt_model}
+              class="w-full h-9 px-3 rounded-lg text-sm outline-none border appearance-none cursor-pointer"
+              style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+            >
+              {#each aiPrefsAllowedModels as model}
+                <option value={model}>{modelLabels[model] || model}</option>
+              {/each}
+            </select>
+          </div>
+
+          <div class="mt-5 flex items-center gap-3">
+            <Button variant="primary" size="sm" onclick={saveAIPreferences} disabled={aiPrefsSaving}>
+              {aiPrefsSaving ? 'Saving...' : 'Save'}
+            </Button>
+            <span class="text-[10px]" style="color: var(--text-tertiary)">
+              Changes take effect on the next custom prompt generation.
+            </span>
+          </div>
+        </div>
+
         <!-- Email Processing Model -->
         <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
           <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Email Processing Model</h3>
@@ -1290,6 +1422,125 @@
             {/if}
           </Button>
         </div>
+      </div>
+
+    {:else if activeTab === 'shortcuts'}
+      <!-- Keyboard Shortcuts Customization -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_no_static_element_interactions -->
+      <div class="space-y-4" onkeydown={handleShortcutKeydown}>
+        <div class="flex items-center justify-between gap-4">
+          <div class="flex-1">
+            <input
+              type="text"
+              placeholder="Search shortcuts..."
+              bind:value={shortcutSearchFilter}
+              class="w-full h-9 px-3 rounded-lg text-sm outline-none border"
+              style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary)"
+            />
+          </div>
+          <button
+            onclick={handleResetAll}
+            class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-fast border"
+            style="border-color: var(--border-color); color: var(--text-secondary); background: var(--bg-secondary)"
+          >
+            <Icon name="refresh-cw" size={14} />
+            Reset All to Defaults
+          </button>
+        </div>
+
+        <p class="text-xs" style="color: var(--text-tertiary)">
+          Click a shortcut key to re-record it. Press <kbd class="px-1.5 py-0.5 rounded text-[10px] font-semibold" style="background: var(--bg-secondary); border: 1px solid var(--border-color)">Esc</kbd> to cancel recording. Hold <kbd class="px-1.5 py-0.5 rounded text-[10px] font-semibold" style="background: var(--bg-secondary); border: 1px solid var(--border-color)">Option/Alt</kbd> on any page to see shortcut badges on screen.
+        </p>
+
+        {#each filteredShortcutCategories as category (category.name)}
+          <div class="rounded-xl border overflow-hidden" style="background: var(--bg-secondary); border-color: var(--border-color)">
+            <div class="px-4 py-2.5 border-b" style="border-color: var(--border-color)">
+              <h3 class="text-xs font-bold uppercase tracking-wider" style="color: var(--text-secondary)">{category.name}</h3>
+            </div>
+            <div>
+              {#each category.shortcuts as shortcut, i (shortcut.id)}
+                <div
+                  class="flex items-center gap-3 px-4 py-2.5 {i < category.shortcuts.length - 1 ? 'border-b' : ''}"
+                  style="border-color: var(--border-color)"
+                >
+                  <!-- Label -->
+                  <div class="flex-1 min-w-0">
+                    <span class="text-sm" style="color: var(--text-primary)">{shortcut.label}</span>
+                    <span class="text-[10px] ml-2 font-mono" style="color: var(--text-tertiary)">{shortcut.id}</span>
+                  </div>
+
+                  <!-- Current binding -->
+                  {#if recordingActionId === shortcut.id}
+                    <!-- Recording mode -->
+                    <div class="flex items-center gap-2">
+                      <div
+                        class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm min-w-[80px] justify-center border-2 animate-pulse"
+                        style="border-color: var(--color-accent-500); background: var(--bg-primary); color: var(--text-primary)"
+                      >
+                        {#if recordedCombo}
+                          <span class="font-semibold">{formatComboForDisplay(recordedCombo)}</span>
+                        {:else}
+                          <span class="text-xs" style="color: var(--text-tertiary)">Press a key...</span>
+                        {/if}
+                      </div>
+                      {#if shortcutConflict}
+                        <span class="text-[10px]" style="color: #ef4444">Conflicts with: {shortcutConflict.label}</span>
+                      {/if}
+                      {#if recordedCombo}
+                        <button
+                          onclick={saveRecordedShortcut}
+                          class="px-2 py-1 rounded text-xs font-medium"
+                          style="background: var(--color-accent-500); color: white"
+                        >Save</button>
+                      {/if}
+                      <button
+                        onclick={cancelRecording}
+                        class="px-2 py-1 rounded text-xs font-medium"
+                        style="background: var(--bg-tertiary, var(--bg-primary)); color: var(--text-secondary)"
+                      >Cancel</button>
+                    </div>
+                  {:else}
+                    <!-- Display mode -->
+                    <div class="flex items-center gap-2">
+                      <button
+                        onclick={() => startRecording(shortcut.id)}
+                        class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm min-w-[60px] justify-center cursor-pointer transition-fast border"
+                        style="border-color: var(--border-color); background: var(--bg-primary); color: var(--text-primary)"
+                        title="Click to change this shortcut"
+                      >
+                        {#each shortcut.key.split('+') as part, pi}
+                          {#if pi > 0}
+                            <span class="text-[10px] mx-0.5" style="color: var(--text-tertiary)">+</span>
+                          {/if}
+                          <kbd class="px-1.5 py-0.5 rounded text-xs font-semibold" style="background: var(--bg-secondary); border: 1px solid var(--border-color)">{formatComboForDisplay(part)}</kbd>
+                        {/each}
+                        {#if shortcut.isCustom}
+                          <span class="text-[10px] font-bold ml-1" style="color: var(--color-accent-500)">*</span>
+                        {/if}
+                      </button>
+                      {#if shortcut.isCustom}
+                        <button
+                          onclick={() => handleResetShortcut(shortcut.id)}
+                          class="p-1 rounded transition-fast"
+                          style="color: var(--text-tertiary)"
+                          title="Reset to default ({shortcut.defaultKey})"
+                        >
+                          <Icon name="refresh-cw" size={12} />
+                        </button>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          </div>
+        {/each}
+
+        {#if filteredShortcutCategories.length === 0}
+          <div class="rounded-xl border p-8 text-center" style="background: var(--bg-secondary); border-color: var(--border-color)">
+            <p class="text-sm" style="color: var(--text-secondary)">No shortcuts match "{shortcutSearchFilter}"</p>
+          </div>
+        {/if}
       </div>
 
     {:else if activeTab === 'settings'}

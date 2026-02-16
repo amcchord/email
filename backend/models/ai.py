@@ -35,6 +35,9 @@ class AIAnalysis(Base):
     # Agentic features
     is_subscription: Mapped[bool] = mapped_column(Boolean, default=False)
     needs_reply: Mapped[bool] = mapped_column(Boolean, default=False)
+    expects_reply: Mapped[bool] = mapped_column(Boolean, nullable=True)
+    # expects_reply: for sent emails, True if the sender expects a reply from the recipient.
+    # NULL = not yet classified, False = no reply expected, True = reply expected.
     unsubscribe_info = mapped_column(JSONB, nullable=True)
     # unsubscribe_info format: {"method": "email"|"url"|"both", "email": "...", "url": "...", "mailto_subject": "...", "mailto_body": "..."}
 

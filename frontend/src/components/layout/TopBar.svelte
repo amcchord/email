@@ -183,6 +183,7 @@
         class:tab-active={$currentPage === tab.id}
         class:tab-inactive={$currentPage !== tab.id}
         aria-label="{tab.label} tab"
+        data-shortcut={tab.id === 'flow' ? 'nav.flow' : tab.id === 'inbox' ? 'nav.inbox' : tab.id === 'calendar' ? 'nav.calendar' : undefined}
       >
         {#if tab.icon === 'sparkles'}
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -257,6 +258,7 @@
             placeholder="Search emails..."
             class="w-full h-8 pl-9 pr-8 rounded-lg text-sm outline-none border"
             style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+            data-shortcut="nav.search"
           />
           {#if searchValue}
             <button
@@ -419,6 +421,7 @@
       class="p-1.5 rounded-md transition-fast"
       style="color: var(--text-secondary)"
       aria-label="Toggle theme"
+      data-shortcut="nav.theme"
     >
       {#if $theme === 'dark'}
         <Icon name="sun" size={16} />
@@ -434,6 +437,7 @@
       style="color: {$currentPage === 'admin' ? 'var(--color-accent-500)' : 'var(--text-secondary)'}"
       aria-label="Settings"
       title="Settings"
+      data-shortcut="nav.settings"
     >
       <Icon name="settings" size={16} />
     </button>

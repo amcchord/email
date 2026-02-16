@@ -281,6 +281,10 @@ export const api = {
   getAboutMe: () => request('GET', '/auth/about-me'),
   updateAboutMe: (aboutMe) => request('PUT', '/auth/about-me', { about_me: aboutMe }),
 
+  // Keyboard Shortcuts
+  getKeyboardShortcuts: () => request('GET', '/auth/keyboard-shortcuts'),
+  updateKeyboardShortcuts: (shortcuts) => request('PUT', '/auth/keyboard-shortcuts', { shortcuts }),
+
   // Account description
   updateAccountDescription: (accountId, description) =>
     request('PUT', `/accounts/${accountId}/description`, { description }),

@@ -71,6 +71,40 @@ async def _queue_ai_for_new_emails(account_id: int, new_email_ids: list[int]):
         await redis.close()
 
 
+async def _queue_sent_email_classification(account_id: int, new_email_ids: list[int]):
+    """Queue lightweight AI classification for newly synced sent emails.
+
+    Determines whether each sent email expects a reply from the recipient.
+    """
+    if not new_email_ids:
+        return
+
+    from backend.models.ai import AIAnalysis
+
+    async with async_session() as db:
+        result = await db.execute(
+            select(Email.id).where(
+                Email.id.in_(new_email_ids),
+                Email.is_sent == True,
+                Email.is_trash == False,
+                Email.is_spam == False,
+            )
+        )
+        sent_ids = [r[0] for r in result.all()]
+
+    if not sent_ids:
+        return
+
+    logger.info(f"Queuing sent-email classification for {len(sent_ids)} emails (account {account_id})")
+    redis = await create_pool(parse_redis_url(settings.redis_url))
+    try:
+        for i in range(0, len(sent_ids), 100):
+            chunk = sent_ids[i:i + 100]
+            await redis.enqueue_job("classify_sent_emails_batch", chunk)
+    finally:
+        await redis.close()
+
+
 async def _clear_needs_reply_for_replied_threads(new_email_ids: list[int]):
     """When sent emails are synced, mark needs_reply=false on earlier
     emails in the same thread.
@@ -225,6 +259,12 @@ async def sync_account_incremental(ctx, account_id: int):
         await _queue_ai_for_new_emails(account_id, new_email_ids)
     except Exception as e:
         logger.warning(f"Failed to queue AI analysis after sync for account {account_id}: {e}")
+
+    # Classify sent emails for expects_reply
+    try:
+        await _queue_sent_email_classification(account_id, new_email_ids)
+    except Exception as e:
+        logger.warning(f"Failed to queue sent-email classification after sync for account {account_id}: {e}")
 
     # Clear stale needs_reply flags for threads where the user sent a reply
     try:
@@ -608,6 +648,17 @@ async def analyze_emails_batch(ctx, email_ids: list[int]):
             logger.warning(f"Failed to queue bundle generation for user {user_id}: {e}")
 
 
+async def classify_sent_emails_batch(ctx, email_ids: list[int]):
+    """Classify a batch of sent emails for expects_reply using a lightweight AI call."""
+    ai_service = AIService()
+    for email_id in email_ids:
+        try:
+            await ai_service.classify_sent_email(email_id)
+        except Exception as e:
+            logger.error(f"Failed to classify sent email {email_id}: {e}")
+    logger.info(f"Classified {len(email_ids)} sent emails for expects_reply")
+
+
 async def analyze_recent_unanalyzed(ctx, account_id: int, limit: int = 50):
     """Analyze recent emails that haven't been analyzed yet."""
     from backend.models.ai import AIAnalysis
@@ -952,6 +1003,7 @@ class WorkerSettings:
         sync_account_incremental,
         sync_all_accounts,
         analyze_emails_batch,
+        classify_sent_emails_batch,
         analyze_recent_unanalyzed,
         auto_categorize_account,
         generate_digests_for_account,

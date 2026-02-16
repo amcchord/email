@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
   import { currentPage, composeData, accounts, showToast } from '../lib/stores.js';
+  import { registerActions } from '../lib/shortcutStore.js';
   import Button from '../components/common/Button.svelte';
   import Icon from '../components/common/Icon.svelte';
   import RichEditor from '../components/email/RichEditor.svelte';
@@ -39,9 +40,19 @@
       }
     });
 
+    // Register keyboard shortcut actions for the Compose page
+    const cleanupShortcuts = registerActions({
+      'compose.send': () => handleSend(),
+      'compose.draft': () => handleSaveDraft(),
+      'compose.discard': () => currentPage.set('inbox'),
+      'compose.cc': () => { showCcBcc = !showCcBcc; },
+      'compose.bcc': () => { showCcBcc = !showCcBcc; },
+    });
+
     return () => {
       unsub();
       composeData.set(null);
+      cleanupShortcuts();
     };
   });
 

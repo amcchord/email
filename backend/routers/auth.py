@@ -13,6 +13,7 @@ from backend.schemas.auth import (
     LoginRequest, TokenResponse, UserResponse, RefreshRequest,
     AIPreferencesResponse, AIPreferencesUpdate,
     AboutMeResponse, AboutMeUpdate,
+    KeyboardShortcutsResponse, KeyboardShortcutsUpdate,
     DEFAULT_AI_PREFERENCES,
 )
 from backend.utils.security import (
@@ -348,6 +349,7 @@ async def get_ai_preferences(user: User = Depends(get_current_user)):
         chat_execute_model=prefs.get("chat_execute_model", DEFAULT_AI_PREFERENCES["chat_execute_model"]),
         chat_verify_model=prefs.get("chat_verify_model", DEFAULT_AI_PREFERENCES["chat_verify_model"]),
         agentic_model=prefs.get("agentic_model", DEFAULT_AI_PREFERENCES["agentic_model"]),
+        custom_prompt_model=prefs.get("custom_prompt_model", DEFAULT_AI_PREFERENCES["custom_prompt_model"]),
     )
 
 
@@ -367,6 +369,8 @@ async def update_ai_preferences(
         current["chat_verify_model"] = body.chat_verify_model
     if body.agentic_model is not None:
         current["agentic_model"] = body.agentic_model
+    if body.custom_prompt_model is not None:
+        current["custom_prompt_model"] = body.custom_prompt_model
     user.ai_preferences = current
     # Force SQLAlchemy to detect JSONB mutation
     from sqlalchemy.orm.attributes import flag_modified
@@ -380,6 +384,7 @@ async def update_ai_preferences(
         chat_execute_model=prefs.get("chat_execute_model", DEFAULT_AI_PREFERENCES["chat_execute_model"]),
         chat_verify_model=prefs.get("chat_verify_model", DEFAULT_AI_PREFERENCES["chat_verify_model"]),
         agentic_model=prefs.get("agentic_model", DEFAULT_AI_PREFERENCES["agentic_model"]),
+        custom_prompt_model=prefs.get("custom_prompt_model", DEFAULT_AI_PREFERENCES["custom_prompt_model"]),
     )
 
 
@@ -402,3 +407,33 @@ async def update_about_me(
     await db.commit()
     await db.refresh(user)
     return AboutMeResponse(about_me=user.about_me)
+
+
+# ── Keyboard Shortcuts ──────────────────────────────────────────────
+
+@router.get("/keyboard-shortcuts", response_model=KeyboardShortcutsResponse)
+async def get_keyboard_shortcuts(user: User = Depends(get_current_user)):
+    """Return the current user's keyboard shortcut overrides."""
+    overrides = user.keyboard_shortcuts or {}
+    return KeyboardShortcutsResponse(shortcuts=overrides)
+
+
+@router.put("/keyboard-shortcuts", response_model=KeyboardShortcutsResponse)
+async def update_keyboard_shortcuts(
+    body: KeyboardShortcutsUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Update the current user's keyboard shortcut overrides (merge)."""
+    current = user.keyboard_shortcuts or {}
+    for action_id, key_combo in body.shortcuts.items():
+        if key_combo == "":
+            current.pop(action_id, None)
+        else:
+            current[action_id] = key_combo
+    user.keyboard_shortcuts = current
+    from sqlalchemy.orm.attributes import flag_modified
+    flag_modified(user, "keyboard_shortcuts")
+    await db.commit()
+    await db.refresh(user)
+    return KeyboardShortcutsResponse(shortcuts=user.keyboard_shortcuts or {})

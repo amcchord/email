@@ -85,6 +85,42 @@ async def get_model_for_user(user_id: int) -> str:
     return DEFAULT_AI_PREFERENCES["agentic_model"]
 
 
+async def get_custom_prompt_model_for_user(user_id: int) -> str:
+    """Read the custom_prompt_model preference for a user.
+
+    Falls back to agentic_model, then to the default.
+    """
+    async with async_session() as db:
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if user and user.ai_preferences:
+            custom = user.ai_preferences.get("custom_prompt_model")
+            if custom:
+                return custom
+            return user.ai_preferences.get(
+                "agentic_model",
+                DEFAULT_AI_PREFERENCES["agentic_model"],
+            )
+    return DEFAULT_AI_PREFERENCES["custom_prompt_model"]
+
+
+def _strip_quoted_text(body: str) -> str:
+    """Strip quoted reply content and signatures from an email body.
+
+    Removes:
+    - Everything after an 'On ... wrote:' reply header
+    - Lines starting with '>'
+    - Signature blocks starting with '-- '
+    """
+    # Remove everything from "On ... wrote:" onwards
+    body = re.sub(r'\r?\nOn [^\n]+wrote:\s*[\s\S]*$', '', body)
+    # Remove signature blocks
+    body = re.sub(r'\r?\n-- ?\r?\n[\s\S]*$', '', body)
+    # Remove individual quoted lines (lines starting with >)
+    body = re.sub(r'(^|\n)>.*', '', body)
+    return body.strip()
+
+
 class AIService:
     def __init__(self, model: Optional[str] = None):
         self.client = None
@@ -439,6 +475,127 @@ conversation_type guide:
             return None
         except Exception as e:
             logger.error(f"AI analysis error for email {email_id}: {e}")
+            return None
+        finally:
+            if close_session:
+                await db.__aexit__(None, None, None)
+
+    async def classify_sent_email(
+        self,
+        email_id: int,
+        db: Optional[AsyncSession] = None,
+    ) -> Optional[AIAnalysis]:
+        """Lightweight classification for sent emails: does this email expect a reply?
+
+        Uses Haiku for minimal cost.  Creates or updates an AIAnalysis row
+        with only the expects_reply field populated.
+        """
+        close_session = False
+        if db is None:
+            db = async_session()
+            await db.__aenter__()
+            close_session = True
+
+        try:
+            result = await db.execute(select(Email).where(Email.id == email_id))
+            email = result.scalar_one_or_none()
+            if not email:
+                return None
+
+            # Check if already classified
+            result = await db.execute(
+                select(AIAnalysis).where(AIAnalysis.email_id == email_id)
+            )
+            existing = result.scalar_one_or_none()
+            if existing and existing.expects_reply is not None:
+                return existing
+
+            # Build the email body, stripping quoted reply content
+            body = email.body_text or email.snippet or ""
+            body = _strip_quoted_text(body)
+            if len(body) > 2000:
+                body = body[:2000] + "..."
+
+            # Build thread context so the AI understands the conversation
+            thread_context = ""
+            if email.gmail_thread_id:
+                thread_result = await db.execute(
+                    select(Email)
+                    .where(
+                        Email.gmail_thread_id == email.gmail_thread_id,
+                        Email.account_id == email.account_id,
+                        Email.id != email.id,
+                    )
+                    .order_by(desc(Email.date))
+                    .limit(5)
+                )
+                thread_emails = thread_result.scalars().all()
+                if thread_emails:
+                    lines = []
+                    for te in reversed(thread_emails):
+                        direction = "[Sent by user]" if te.is_sent else "[Received]"
+                        date_str = te.date.strftime("%Y-%m-%d %H:%M") if te.date else "unknown"
+                        snippet = (te.snippet or "")[:150]
+                        lines.append(f"  {direction} {date_str} — {te.from_name or te.from_address}: {snippet}")
+                    thread_context = (
+                        "\nThread context (other messages in this conversation, oldest first):\n"
+                        + "\n".join(lines) + "\n"
+                    )
+
+            prompt = f"""Does this sent email expect a reply from the recipient?
+
+From: {email.from_name or ''} <{email.from_address or ''}>
+To: {json.dumps(email.to_addresses or [])}
+Subject: {email.subject or '(no subject)'}
+Date: {email.date}
+{thread_context}
+Body (quoted text removed):
+{body}
+
+Respond with ONLY valid JSON:
+{{"expects_reply": <true if the sender is asking a question, making a request, or otherwise expects the recipient to respond; false if this is a closing message, confirmation, acknowledgment, or statement that does not require a response>}}"""
+
+            response = await self._call_claude(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=50,
+                messages=[{"role": "user", "content": prompt}],
+            )
+
+            response_text = response.content[0].text.strip()
+            if response_text.startswith("```"):
+                lines = response_text.split("\n")
+                response_text = "\n".join(lines[1:-1])
+
+            data = json.loads(response_text)
+            expects_reply = bool(data.get("expects_reply", True))
+
+            tokens_used = getattr(response, "usage", None)
+            tokens_used = (tokens_used.input_tokens + tokens_used.output_tokens) if tokens_used else 0
+
+            if existing:
+                existing.expects_reply = expects_reply
+                existing.model_used = existing.model_used or "claude-haiku-4-5-20251001"
+                await db.commit()
+                await db.refresh(existing)
+                return existing
+            else:
+                analysis = AIAnalysis(
+                    email_id=email_id,
+                    expects_reply=expects_reply,
+                    analyzed_at=datetime.now(timezone.utc),
+                    model_used="claude-haiku-4-5-20251001",
+                    tokens_used=tokens_used,
+                )
+                db.add(analysis)
+                await db.commit()
+                await db.refresh(analysis)
+                return analysis
+
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse sent-email classification for {email_id}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Sent-email classification error for {email_id}: {e}")
             return None
         finally:
             if close_session:

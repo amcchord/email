@@ -6,8 +6,9 @@
     emails, emailsLoading, emailsTotal, currentPageNum,
     currentMailbox, selectedEmailId, selectedAccountId,
     searchQuery, showToast, pageSize, viewMode, smartFilter,
-    hideIgnored,
+    hideIgnored, sidebarCollapsed,
   } from '../lib/stores.js';
+  import { registerActions } from '../lib/shortcutStore.js';
   import EmailList from '../components/email/EmailList.svelte';
   import EmailTable from '../components/email/EmailTable.svelte';
   import EmailView from '../components/email/EmailView.svelte';
@@ -27,7 +28,70 @@
   onMount(() => {
     mounted = true;
     loadEmails(false);
+
+    // Register keyboard shortcut actions for the inbox
+    const cleanupShortcuts = registerActions({
+      'inbox.next': () => navigateEmails(1),
+      'inbox.prev': () => navigateEmails(-1),
+      'inbox.open': () => { /* email opens on selection via the effect */ },
+      'inbox.archive': () => {
+        if ($selectedEmailId) handleAction('archive', [$selectedEmailId]);
+      },
+      'inbox.trash': () => {
+        if ($selectedEmailId) handleAction('trash', [$selectedEmailId]);
+      },
+      'inbox.star': () => {
+        if ($selectedEmailId) handleAction('star', [$selectedEmailId]);
+      },
+      'inbox.read': () => {
+        if ($selectedEmailId) handleAction('mark_read', [$selectedEmailId]);
+      },
+      'inbox.unread': () => {
+        if ($selectedEmailId) handleAction('mark_unread', [$selectedEmailId]);
+      },
+      'inbox.spam': () => {
+        if ($selectedEmailId) handleAction('spam', [$selectedEmailId]);
+      },
+      'inbox.reply': () => {
+        // Handled by EmailView internally if open
+      },
+      'inbox.forward': () => {
+        // Handled by EmailView internally if open
+      },
+      'inbox.viewMode': () => {
+        const current = get(viewMode);
+        const next = current === 'table' ? 'column' : 'table';
+        viewMode.set(next);
+        localStorage.setItem('viewMode', next);
+      },
+      'inbox.sidebar': () => {
+        sidebarCollapsed.update(v => !v);
+      },
+      'inbox.focused': () => {
+        hideIgnored.update(v => !v);
+      },
+    });
+
+    return () => {
+      cleanupShortcuts();
+    };
   });
+
+  function navigateEmails(direction) {
+    const list = get(emails);
+    if (!list || list.length === 0) return;
+    const currentId = get(selectedEmailId);
+    const currentIdx = list.findIndex(e => e.id === currentId);
+    let nextIdx;
+    if (currentIdx === -1) {
+      nextIdx = direction > 0 ? 0 : list.length - 1;
+    } else {
+      nextIdx = currentIdx + direction;
+    }
+    if (nextIdx >= 0 && nextIdx < list.length) {
+      selectedEmailId.set(list[nextIdx].id);
+    }
+  }
 
   $effect(() => {
     void $currentMailbox;

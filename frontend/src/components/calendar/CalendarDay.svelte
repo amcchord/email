@@ -117,7 +117,7 @@
       <!-- Hour labels -->
       <div>
         {#each HOURS as h}
-          <div class="flex items-start justify-end pr-3 -mt-2" style="height: 60px">
+          <div class="flex items-start justify-end pr-3 -translate-y-2" style="height: 60px">
             <span class="text-xs" style="color: var(--text-tertiary)">{formatHour(h)}</span>
           </div>
         {/each}

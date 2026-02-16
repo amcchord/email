@@ -16,7 +16,7 @@ from backend.models.email import Email
 from backend.models.account import GoogleAccount
 from backend.models.ai import AIAnalysis
 from backend.routers.auth import get_current_user
-from backend.services.ai import AIService, get_model_for_user
+from backend.services.ai import AIService, get_model_for_user, get_custom_prompt_model_for_user
 from backend.services.credentials import get_google_credentials
 from backend.schemas.auth import DEFAULT_AI_PREFERENCES
 
@@ -700,10 +700,14 @@ async def get_awaiting_response(
         .exists()
     )
 
-    # Heuristic: detect short closing replies that don't expect a response.
-    # If the sent email is a reply in a thread (there's a received email
-    # before it) AND the snippet is very short, it's likely a closing
-    # message like "sounds good", "let's do it", "thanks!" etc.
+    # AI classification: if expects_reply has been set to False, exclude.
+    # LEFT JOIN with AIAnalysis to check the expects_reply field.
+    SentAnalysis = aliased(AIAnalysis, flat=True)
+
+    # Heuristic fallback for emails not yet classified by AI.
+    # Strips quoted reply text from body_text before measuring length,
+    # so replies like "Yes okay to lock it in!" aren't inflated by
+    # quoted "On ... wrote:" blocks.
     PriorEmail = aliased(Email, flat=True)
     has_prior_received = (
         select(literal(1))
@@ -717,15 +721,44 @@ async def get_awaiting_response(
         .correlate(Email)
         .exists()
     )
+    # Strip quoted content: remove everything after "On ... wrote:" and
+    # lines starting with ">", then measure the remaining length.
+    raw_body = sqla_func.coalesce(Email.body_text, Email.snippet, '')
+    stripped_body = sqla_func.regexp_replace(
+        raw_body,
+        r'\r?\nOn [^\n]+wrote:\s*[\s\S]*$',
+        '',
+        'n',
+    )
+    stripped_body = sqla_func.regexp_replace(
+        stripped_body,
+        r'\r?\n-- ?\r?\n[\s\S]*$',
+        '',
+        'n',
+    )
+    stripped_len = sqla_func.length(sqla_func.trim(stripped_body))
+
     is_short_closing_reply = and_(
         has_prior_received,
-        sqla_func.length(sqla_func.coalesce(Email.snippet, '')) < 50,
+        stripped_len < 120,
     )
+
+    # An email should be excluded when either:
+    # (a) AI classified it as not expecting a reply, OR
+    # (b) AI hasn't classified it yet but the heuristic says it's a
+    #     short closing reply.
+    ai_says_no_reply = (SentAnalysis.expects_reply == False)
+    heuristic_closing = and_(
+        SentAnalysis.expects_reply.is_(None),
+        is_short_closing_reply,
+    )
+    should_exclude = or_(ai_says_no_reply, heuristic_closing)
 
     seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
 
     # Use DISTINCT ON to get only the latest sent email per thread.
-    # Also LEFT JOIN with ThreadDigest to exclude resolved threads.
+    # LEFT JOIN with ThreadDigest to exclude resolved threads and
+    # LEFT JOIN with AIAnalysis to check expects_reply.
     deduped_by_thread = (
         select(
             Email.id,
@@ -744,6 +777,10 @@ async def get_awaiting_response(
                 ThreadDigest.account_id == Email.account_id,
             ),
         )
+        .outerjoin(
+            SentAnalysis,
+            SentAnalysis.email_id == Email.id,
+        )
         .where(
             account_filter,
             Email.is_sent == True,
@@ -756,8 +793,8 @@ async def get_awaiting_response(
                 ThreadDigest.is_resolved == False,
                 ThreadDigest.is_resolved.is_(None),
             ),
-            # Exclude short closing replies (heuristic fallback)
-            ~is_short_closing_reply,
+            # Exclude emails that don't expect a reply (AI or heuristic)
+            ~should_exclude,
         )
         .distinct(Email.gmail_thread_id)
         .order_by(Email.gmail_thread_id, desc(Email.date))
@@ -1410,7 +1447,7 @@ async def generate_reply(
     acct_email = acct_row[1] if acct_row else None
 
     try:
-        model = await get_model_for_user(user.id)
+        model = await get_custom_prompt_model_for_user(user.id)
         ai = AIService(model=model)
         result = await ai.generate_custom_reply(
             email_id,

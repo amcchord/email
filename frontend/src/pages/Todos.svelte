@@ -3,6 +3,7 @@
   import Icon from '../components/common/Icon.svelte';
   import { api } from '../lib/api.js';
   import { showToast, todos, selectedEmailId, currentPage, currentMailbox } from '../lib/stores.js';
+  import { registerActions } from '../lib/shortcutStore.js';
 
   let loading = $state(true);
   let newTodoText = $state('');
@@ -13,9 +14,43 @@
   let editingDraftId = $state(null);
   let editDraftBody = $state('');
 
+  let selectedTodoIndex = $state(-1);
+
   onMount(async () => {
     await loadTodos();
     loading = false;
+
+    const cleanupShortcuts = registerActions({
+      'todos.new': () => {
+        const input = document.querySelector('[data-shortcut="todos.new"]');
+        if (input) input.focus();
+      },
+      'todos.next': () => {
+        const pending = ($todos || []).filter(t => t.status === 'pending');
+        if (pending.length > 0) {
+          selectedTodoIndex = Math.min(selectedTodoIndex + 1, pending.length - 1);
+        }
+      },
+      'todos.prev': () => {
+        if (selectedTodoIndex > 0) {
+          selectedTodoIndex = selectedTodoIndex - 1;
+        }
+      },
+      'todos.toggle': () => {
+        const pending = ($todos || []).filter(t => t.status === 'pending');
+        if (selectedTodoIndex >= 0 && selectedTodoIndex < pending.length) {
+          toggleTodo(pending[selectedTodoIndex]);
+        }
+      },
+      'todos.delete': () => {
+        const pending = ($todos || []).filter(t => t.status === 'pending');
+        if (selectedTodoIndex >= 0 && selectedTodoIndex < pending.length) {
+          deleteTodo(pending[selectedTodoIndex]);
+        }
+      },
+    });
+
+    return cleanupShortcuts;
   });
 
   async function loadTodos() {
@@ -158,6 +193,7 @@
           class="flex-1 px-3 py-2 rounded-lg border text-sm focus:outline-none focus:ring-2 focus:ring-accent-500/40"
           style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary)"
           onkeydown={(e) => { if (e.key === 'Enter') addManualTodo(); }}
+          data-shortcut="todos.new"
         />
         <button
           onclick={addManualTodo}

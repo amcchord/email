@@ -116,6 +116,7 @@
     <button
       onclick={() => { composeOpen.set(true); currentPage.set('compose'); }}
       class="w-full h-9 flex items-center justify-center gap-2 rounded-lg text-sm font-medium bg-accent-600 text-white hover:bg-accent-700 transition-fast"
+      data-shortcut="nav.compose"
     >
       {#if !$sidebarCollapsed}
         <Icon name="plus" size={16} />
@@ -344,6 +345,7 @@
       onclick={() => currentPage.set('todos')}
       class="w-full flex items-center gap-3 px-3 h-8 rounded-md text-sm transition-fast"
       style="color: {$currentPage === 'todos' ? 'var(--text-primary)' : 'var(--text-secondary)'}; background: {$currentPage === 'todos' ? 'var(--bg-hover)' : 'transparent'}"
+      data-shortcut="nav.todos"
     >
       <Icon name="check-circle" size={18} class="shrink-0" />
       {#if !$sidebarCollapsed}
@@ -357,6 +359,7 @@
       onclick={() => currentPage.set('stats')}
       class="w-full flex items-center gap-3 px-3 h-8 rounded-md text-sm transition-fast"
       style="color: {$currentPage === 'stats' ? 'var(--text-primary)' : 'var(--text-secondary)'}; background: {$currentPage === 'stats' ? 'var(--bg-hover)' : 'transparent'}"
+      data-shortcut="nav.stats"
     >
       <Icon name="bar-chart-2" size={18} class="shrink-0" />
       {#if !$sidebarCollapsed}
