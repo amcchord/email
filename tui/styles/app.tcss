@@ -1,0 +1,107 @@
+/* Main Textual CSS for the Mail TUI */
+
+/* ── Dark Theme (default) ─────────────────────────────────── */
+
+Screen {
+    background: #1a1a2e;
+    color: #eaeaea;
+}
+
+/* ── Login Screen ─────────────────────────────────────────── */
+
+LoginScreen {
+    align: center middle;
+    background: #1a1a2e;
+}
+
+.login-card {
+    width: 60;
+    height: auto;
+    max-height: 24;
+    padding: 1 2;
+    background: #16213e;
+    border: round #4f46e5;
+}
+
+.login-banner {
+    width: 100%;
+    content-align: center middle;
+    text-align: center;
+    color: #4f46e5;
+    text-style: bold;
+    padding: 1 0;
+}
+
+.login-form {
+    width: 100%;
+    height: auto;
+    padding: 1 2;
+}
+
+.login-form Input {
+    width: 100%;
+    margin: 1 0;
+}
+
+.login-form Button {
+    width: 100%;
+    margin: 1 0;
+    background: #4f46e5;
+    color: #ffffff;
+}
+
+.login-form Button:hover {
+    background: #6366f1;
+}
+
+.login-error {
+    width: 100%;
+    color: #ef4444;
+    text-align: center;
+    padding: 0 1;
+    display: none;
+}
+
+.login-error.visible {
+    display: block;
+}
+
+/* ── App Shell Layout ─────────────────────────────────────── */
+
+.app-content {
+    width: 1fr;
+    height: 1fr;
+}
+
+.content-area {
+    width: 1fr;
+    height: 1fr;
+    padding: 1 2;
+}
+
+/* ── Placeholder Screens ──────────────────────────────────── */
+
+.placeholder-label {
+    width: 100%;
+    height: 100%;
+    content-align: center middle;
+    text-align: center;
+    color: #8888aa;
+    text-style: italic;
+}
+
+/* ── Light theme overrides ────────────────────────────────── */
+
+.light Screen {
+    background: #ffffff;
+    color: #1a1a2e;
+}
+
+.light .login-card {
+    background: #f8f9fa;
+    border: round #4f46e5;
+}
+
+.light .login-banner {
+    color: #4f46e5;
+}
