@@ -1,16 +1,20 @@
 """SSH server that spawns a Mail TUI instance per connection.
 
 Uses asyncssh to create an SSH server. Each connecting client gets
-a PTY with a subprocess running ``python -m tui``, so the full
-Textual application renders over the SSH channel.
+a real PTY with ``python -m tui``, so the full Textual application
+renders correctly over the SSH channel.
 """
 
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import logging
 import os
+import pty
+import struct
 import sys
+import termios
 
 logger = logging.getLogger(__name__)
 
@@ -73,78 +77,118 @@ async def start_ssh_server(
             return True
 
         def validate_password(self, username: str, password: str) -> bool:
-            # Accept any credentials - the TUI login screen handles real auth
             return True
 
-    class TUISSHProcess(asyncssh.SSHServerProcess):  # type: ignore[type-arg]
-        """Process handler that spawns ``python -m tui`` in a PTY."""
+    async def handle_session(process: asyncssh.SSHServerProcess) -> None:
+        """Handle an SSH session by spawning python -m tui in a real PTY."""
+        master_fd = None
+        child_pid = None
+        try:
+            python = sys.executable or "/opt/mail/venv/bin/python"
+            term_type = process.get_terminal_type() or "xterm-256color"
+            size = process.get_terminal_size()
+            width = size[0] if size else 80
+            height = size[1] if size else 24
 
-        async def begin(self) -> None:
-            """Called when a session channel is opened."""
+            # Create a real PTY
+            master_fd, slave_fd = pty.openpty()
+
+            # Set terminal size on the PTY
+            winsize = struct.pack("HHHH", height, width, 0, 0)
+            fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, winsize)
+
+            env = os.environ.copy()
+            env["TERM"] = term_type
+            env["COLUMNS"] = str(width)
+            env["LINES"] = str(height)
+            env["HOME"] = os.environ.get("HOME", "/opt/mail")
+            env["PATH"] = "/opt/mail/venv/bin:" + env.get("PATH", "/usr/bin")
+
+            # Fork a child process attached to the PTY
+            child_pid = os.fork()
+            if child_pid == 0:
+                # Child process
+                os.close(master_fd)
+                os.setsid()
+                fcntl.ioctl(slave_fd, termios.TIOCSCTTY, 0)
+                os.dup2(slave_fd, 0)
+                os.dup2(slave_fd, 1)
+                os.dup2(slave_fd, 2)
+                if slave_fd > 2:
+                    os.close(slave_fd)
+                os.chdir("/opt/mail")
+                os.execve(python, [python, "-m", "tui"], env)
+                # execve never returns on success
+                os._exit(1)
+
+            # Parent process
+            os.close(slave_fd)
+
+            loop = asyncio.get_event_loop()
+
+            # Make master_fd non-blocking
+            flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+            fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+            # Read from PTY master → SSH channel
+            read_done = asyncio.Event()
+
+            def on_pty_readable():
+                try:
+                    data = os.read(master_fd, 65536)
+                    if data:
+                        process.stdout.write(data.decode("utf-8", errors="replace"))
+                    else:
+                        read_done.set()
+                except OSError:
+                    read_done.set()
+
+            loop.add_reader(master_fd, on_pty_readable)
+
+            # Read from SSH channel → PTY master
+            async def ssh_to_pty():
+                try:
+                    while True:
+                        data = await process.stdin.read(65536)
+                        if not data:
+                            break
+                        raw = data.encode("utf-8") if isinstance(data, str) else data
+                        os.write(master_fd, raw)
+                except (OSError, asyncio.CancelledError, ConnectionError):
+                    pass
+
+            ssh_task = asyncio.create_task(ssh_to_pty())
+
+            # Wait for child process to exit
+            _, status = await loop.run_in_executor(None, os.waitpid, child_pid, 0)
+            child_pid = None  # Already reaped
+            exit_code = os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1
+
+            # Clean up
+            loop.remove_reader(master_fd)
+            ssh_task.cancel()
             try:
-                # Get the Python interpreter path
-                python = sys.executable or "python3"
-                # Spawn the TUI as a subprocess
-                term_type = self.get_terminal_type() or "xterm-256color"
-                width, height = self.get_terminal_size()[:2]
+                await ssh_task
+            except asyncio.CancelledError:
+                pass
 
-                env = os.environ.copy()
-                env["TERM"] = term_type
-                env["COLUMNS"] = str(width)
-                env["LINES"] = str(height)
+            process.exit(exit_code)
 
-                process = await asyncio.create_subprocess_exec(
-                    python, "-m", "tui",
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=env,
-                )
-
-                # Pipe SSH channel <-> subprocess stdio
-                async def pipe_to_process() -> None:
-                    """Read from SSH stdin and write to subprocess stdin."""
-                    try:
-                        while True:
-                            data = await self.stdin.read(4096)
-                            if not data:
-                                break
-                            if process.stdin:
-                                process.stdin.write(data.encode() if isinstance(data, str) else data)
-                                await process.stdin.drain()
-                    except (asyncio.CancelledError, ConnectionError):
-                        pass
-                    finally:
-                        if process.stdin:
-                            process.stdin.close()
-
-                async def pipe_from_process() -> None:
-                    """Read from subprocess stdout and write to SSH channel."""
-                    try:
-                        while True:
-                            if process.stdout is None:
-                                break
-                            data = await process.stdout.read(4096)
-                            if not data:
-                                break
-                            self.stdout.write(data.decode("utf-8", errors="replace"))
-                    except (asyncio.CancelledError, ConnectionError):
-                        pass
-
-                # Run both pipes concurrently
-                await asyncio.gather(
-                    pipe_to_process(),
-                    pipe_from_process(),
-                    return_exceptions=True,
-                )
-
-                # Wait for subprocess to finish
-                await process.wait()
-                self.exit(process.returncode or 0)
-
-            except Exception:
-                logger.exception("Error in SSH session")
-                self.exit(1)
+        except Exception:
+            logger.exception("Error in SSH session")
+            process.exit(1)
+        finally:
+            if master_fd is not None:
+                try:
+                    os.close(master_fd)
+                except OSError:
+                    pass
+            if child_pid is not None:
+                try:
+                    os.kill(child_pid, 9)
+                    os.waitpid(child_pid, 0)
+                except OSError:
+                    pass
 
     async def _start() -> None:
         await asyncssh.create_server(
@@ -152,7 +196,7 @@ async def start_ssh_server(
             host=host,
             port=port,
             server_host_keys=[host_key_path],
-            process_factory=lambda: TUISSHProcess(),  # type: ignore[call-arg]
+            process_factory=handle_session,
         )
         logger.info("SSH server listening on %s:%d", host, port)
         print(f"SSH server listening on {host}:{port}")
