@@ -8,30 +8,6 @@ from textual.widgets import Static
 from tui.screens.base import BaseScreen
 
 
-class StatsScreen(BaseScreen):
-    SCREEN_TITLE = "Stats"
-    SCREEN_NAV_ID = "stats"
-
-    def compose_content(self) -> ComposeResult:
-        yield Static("Stats - Coming Soon", classes="placeholder-label")
-
-
-class AIInsightsScreen(BaseScreen):
-    SCREEN_TITLE = "AI Insights"
-    SCREEN_NAV_ID = "ai_insights"
-
-    def compose_content(self) -> ComposeResult:
-        yield Static("AI Insights - Coming Soon", classes="placeholder-label")
-
-
-class ChatScreen(BaseScreen):
-    SCREEN_TITLE = "Chat"
-    SCREEN_NAV_ID = "chat"
-
-    def compose_content(self) -> ComposeResult:
-        yield Static("Chat - Coming Soon", classes="placeholder-label")
-
-
 class SettingsScreen(BaseScreen):
     SCREEN_TITLE = "Settings"
     SCREEN_NAV_ID = "settings"

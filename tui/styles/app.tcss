@@ -262,6 +262,151 @@ LoginScreen {
     dock: bottom;
 }
 
+/* ── Chat Screen ────────────────────────────────────────── */
+
+#chat-layout {
+    width: 100%;
+    height: 100%;
+}
+
+#chat-sidebar {
+    width: 25%;
+    min-width: 20;
+    max-width: 40;
+    height: 100%;
+    background: $surface;
+    border-right: solid $primary-background-darken-2;
+}
+
+#chat-sidebar-header {
+    width: 100%;
+    height: 1;
+    padding: 0 1;
+    background: $surface;
+    color: $accent;
+}
+
+#chat-conv-list {
+    width: 100%;
+    height: 1fr;
+    padding: 0;
+}
+
+#chat-main {
+    width: 1fr;
+    height: 100%;
+}
+
+#chat-messages {
+    width: 100%;
+    height: 1fr;
+    padding: 1 1;
+}
+
+#chat-input {
+    width: 100%;
+    height: 3;
+    margin: 0;
+    dock: bottom;
+}
+
+#chat-status {
+    width: 100%;
+    height: 1;
+    padding: 0 1;
+    background: $surface;
+    color: $text-muted;
+    dock: bottom;
+}
+
+/* ── Stats Screen ───────────────────────────────────────── */
+
+#stats-scroll {
+    width: 100%;
+    height: 100%;
+}
+
+#stats-cards {
+    width: 100%;
+    height: auto;
+    min-height: 5;
+    padding: 0;
+}
+
+#stats-volume-header,
+#stats-category-header,
+#stats-coverage-header {
+    width: 100%;
+    height: 1;
+    padding: 0 1;
+    margin: 1 0 0 0;
+    background: $accent 30%;
+    color: $text;
+    text-style: bold;
+}
+
+#stats-volume-chart,
+#stats-category-chart,
+#stats-coverage-info {
+    width: 100%;
+    height: auto;
+    min-height: 3;
+    padding: 0 1;
+}
+
+#stats-status {
+    width: 100%;
+    height: 1;
+    padding: 0 1;
+    background: $surface;
+    color: $text-muted;
+    margin: 1 0 0 0;
+}
+
+/* ── AI Insights Screen ─────────────────────────────────── */
+
+#insights-tabs {
+    width: 100%;
+    height: 100%;
+}
+
+#trends-scroll,
+#subs-scroll,
+#threads-scroll,
+#coverage-scroll {
+    width: 100%;
+    height: 1fr;
+    padding: 0 1;
+}
+
+#subs-table {
+    width: 100%;
+    height: 1fr;
+}
+
+#trends-content,
+#threads-content,
+#coverage-content {
+    width: 100%;
+    height: auto;
+    min-height: 3;
+    padding: 0;
+}
+
+#btn-categorize-30,
+#btn-categorize-all {
+    margin: 1 1;
+}
+
+#insights-status {
+    width: 100%;
+    height: 1;
+    padding: 0 1;
+    background: $surface;
+    color: $text-muted;
+    dock: bottom;
+}
+
 /* ── Light theme overrides ────────────────────────────────── */
 
 .light Screen {

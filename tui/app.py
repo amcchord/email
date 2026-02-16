@@ -79,10 +79,10 @@ class MailApp(App):
         from tui.screens.compose import ComposeScreen
         from tui.screens.calendar import CalendarScreen
         from tui.screens.todos import TodoScreen
+        from tui.screens.stats import StatsScreen
+        from tui.screens.ai_insights import AIInsightsScreen
+        from tui.screens.chat import ChatScreen
         from tui.screens.placeholders import (
-            StatsScreen,
-            AIInsightsScreen,
-            ChatScreen,
             SettingsScreen,
             HelpScreen,
         )
