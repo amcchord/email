@@ -5,6 +5,7 @@ alembic.ini
 
 # Python
 venv/
+.setup_venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -43,5 +44,6 @@ data/
 .local/
 .config/
 .build_version
+.setup_progress
 .claude.json
 .claude.json.backup.*

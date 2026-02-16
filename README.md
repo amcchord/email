@@ -40,24 +40,69 @@ Caddy terminates TLS and serves the built frontend static files. All `/api/*` re
 | Reverse Proxy  | Caddy 2 (automatic HTTPS)                                        |
 | AI / APIs      | Anthropic Claude, Google Gmail API, Google Calendar API           |
 
+## Quick Start (One-Liner)
+
+Install everything on a fresh Linux server with a single command:
+
+```bash
+bash <(curl -sSL https://raw.githubusercontent.com/amcchord/email/main/scripts/install.sh)
+```
+
+This downloads the repo, then launches an interactive setup wizard that walks you through every step -- system dependencies, Google Cloud OAuth, database, domain/TLS, and service configuration.
+
+To install to a custom directory:
+
+```bash
+bash <(curl -sSL https://raw.githubusercontent.com/amcchord/email/main/scripts/install.sh) --install-dir=/srv/mail
+```
+
+### What the wizard does
+
+The setup wizard is a 9-step interactive TUI powered by [Rich](https://github.com/Textualize/rich) and [InquirerPy](https://github.com/kazhala/InquirerPy):
+
+| Step | What it does |
+| ---- | ------------ |
+| 1. Pre-flight checks | Detects OS/distro, checks installed software, verifies port availability |
+| 2. System dependencies | Installs PostgreSQL, Redis, Caddy, Node.js, and build tools via your package manager |
+| 3. Google Cloud & OAuth | Automates GCP project creation and API enabling via `gcloud` CLI; guides you through OAuth consent screen and credential setup with direct links to the right Google Console pages |
+| 4. Domain & SSL | Configures your domain, checks DNS, generates the Caddyfile |
+| 5. Database setup | Creates the PostgreSQL user and database, generates a secure password |
+| 6. Configuration | Generates `.env` with auto-generated secrets, prompts for admin credentials and API keys |
+| 7. Application build | Creates Python venv, installs dependencies, builds the Svelte frontend, runs migrations |
+| 8. Service installation | Generates and installs systemd unit files, enables and starts all services |
+| 9. Verification | Runs 18 health checks covering infrastructure, services, TLS, DNS, and API connectivity |
+
+The wizard is **idempotent** (safe to re-run), **resumable** (saves progress if interrupted), and **non-destructive** (asks before overwriting any existing configuration).
+
+### Health checks
+
+Run the health check suite at any time to verify your installation:
+
+```bash
+bash scripts/install.sh --verify
+```
+
+This produces a pass/fail table covering PostgreSQL, Redis, the API, frontend build, systemd services, DNS, HTTPS, SSL certificates, file permissions, and configuration completeness.
+
 ## Prerequisites
 
-- **OS:** Linux server (Debian/Ubuntu recommended)
-- **Python:** 3.13+
-- **Node.js:** 22+ (with npm)
-- **PostgreSQL:** 17
-- **Redis:** 8+
-- **Caddy:** 2.x
+- **OS:** Linux server (Debian/Ubuntu recommended; Fedora/RHEL and Arch also supported)
+- **Python:** 3.11+ (the wizard checks for this and guides installation)
+- **Git:** required for cloning the repository
 - **Domain name** pointed at your server (Caddy uses this for automatic TLS)
 - **Google Cloud project** with Gmail API enabled and OAuth 2.0 credentials
-- **Anthropic API key** (for AI features -- categorization, summarization, chat)
+- **Anthropic API key** (optional, for AI features -- can be added later)
 
-## Installation
+All other dependencies (Node.js, PostgreSQL, Redis, Caddy) are installed automatically by the setup wizard.
+
+## Manual Installation
+
+If you prefer to install manually instead of using the wizard:
 
 ### 1. Clone the repository
 
 ```bash
-git clone <your-repo-url> /opt/mail
+git clone https://github.com/amcchord/email.git /opt/mail
 cd /opt/mail
 ```
 
@@ -99,7 +144,7 @@ sudo apt install -y caddy
 
 ```bash
 sudo -u postgres psql <<SQL
-CREATE USER mailapp WITH PASSWORD 'mailapp_secure_2024';
+CREATE USER mailapp WITH PASSWORD 'your-secure-password';
 CREATE DATABASE maildb OWNER mailapp;
 GRANT ALL PRIVILEGES ON DATABASE maildb TO mailapp;
 SQL
@@ -415,7 +460,21 @@ alembic downgrade -1
 │   ├── env.py
 │   └── versions/            # Individual migration files
 ├── scripts/
-│   ├── setup.sh             # First-time setup (venv, deps, migrations, build)
+│   ├── install.sh           # One-liner bootstrap: clones repo, launches setup wizard
+│   ├── setup/               # Interactive TUI setup wizard (Python)
+│   │   ├── __main__.py      #   CLI entry point (full wizard or --verify)
+│   │   ├── wizard.py        #   Step sequencing, progress tracking, resume
+│   │   ├── ui.py            #   Rich console helpers, prompts, status tables
+│   │   └── steps/           #   Individual setup steps
+│   │       ├── preflight.py     # OS detection, version checks
+│   │       ├── system_deps.py   # Package installation (apt/dnf/pacman)
+│   │       ├── google_cloud.py  # GCP project, APIs, OAuth automation
+│   │       ├── database.py      # PostgreSQL user/database creation
+│   │       ├── config.py        # .env generation, Caddyfile, domain setup
+│   │       ├── application.py   # venv, pip, npm, migrations, build
+│   │       ├── services.py      # systemd unit generation and management
+│   │       └── verify.py        # 18-point health check suite
+│   ├── setup.sh             # Legacy setup (venv, deps, migrations, build)
 │   ├── start.sh             # Start all services via systemd
 │   └── restart.sh           # Restart services after code changes
 ├── Caddyfile                # Caddy reverse proxy configuration
