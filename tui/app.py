@@ -8,6 +8,7 @@ from textual.events import Key
 from tui.client.base import APIClient
 from tui.config import TUIConfig
 from tui.utils.keybindings import KeySequenceHandler
+from tui.widgets.sidebar import SidebarItem
 
 
 class MailApp(App):
@@ -113,6 +114,22 @@ class MailApp(App):
             return True
 
         return False
+
+    def on_sidebar_item_selected(self, message: SidebarItem.Selected) -> None:
+        """Handle sidebar navigation clicks."""
+        nav_to_action = {
+            "flow": "g_f",
+            "inbox": "g_i",
+            "calendar": "g_l",
+            "todos": "g_t",
+            "stats": "g_s",
+            "ai_insights": "g_a",
+            "chat": "g_h",
+            "settings": "g_comma",
+        }
+        action = nav_to_action.get(message.item_id)
+        if action:
+            self._handle_action(action)
 
     async def action_quit(self) -> None:
         """Clean up and quit."""

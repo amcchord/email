@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import logging
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class APIError(Exception):
@@ -87,7 +90,7 @@ class APIClient:
                 self.refresh_token = data["refresh_token"]
                 return True
         except Exception:
-            pass
+            logger.debug("Token refresh failed", exc_info=True)
         return False
 
     def _raise_for_status(self, response: httpx.Response) -> None:
@@ -205,53 +208,51 @@ class APIClient:
         self,
         path: str,
         json_data: Any = None,
-    ) -> AsyncIterator[tuple[str, str]]:
+    ) -> AsyncGenerator[tuple[str, str], None]:
         """Stream a POST request for SSE endpoints.
 
         Yields (event_type, data) tuples. The event_type defaults to
         "message" when not specified in the SSE stream.
+        On 401, refreshes the token and retries once.
         """
-        client = await self._get_client()
-        headers = self._auth_headers()
-        headers["Accept"] = "text/event-stream"
+        for attempt in range(2):
+            client = await self._get_client()
+            headers = self._auth_headers()
+            headers["Accept"] = "text/event-stream"
 
-        async with client.stream(
-            "POST",
-            path,
-            json=json_data,
-            headers=headers,
-            timeout=120.0,
-        ) as response:
-            if response.status_code == 401:
-                # Try refresh
-                if await self._refresh_access_token():
-                    # Re-open the stream with new token
-                    pass
-                else:
+            async with client.stream(
+                "POST",
+                path,
+                json=json_data,
+                headers=headers,
+                timeout=120.0,
+            ) as response:
+                if response.status_code == 401 and attempt == 0:
+                    if await self._refresh_access_token():
+                        continue  # retry with new token
+                    else:
+                        self._raise_for_status(response)
+                        return
+
+                if response.status_code >= 400:
+                    await response.aread()
                     self._raise_for_status(response)
                     return
 
-            if response.status_code >= 400:
-                # Read the body for error details
-                await response.aread()
-                self._raise_for_status(response)
-                return
+                event_type = "message"
+                data_lines: list[str] = []
 
-            event_type = "message"
-            data_lines: list[str] = []
+                async for line in response.aiter_lines():
+                    if line.startswith("event:"):
+                        event_type = line[6:].strip()
+                    elif line.startswith("data:"):
+                        data_lines.append(line[5:].strip())
+                    elif line == "":
+                        if data_lines:
+                            yield (event_type, "\n".join(data_lines))
+                        event_type = "message"
+                        data_lines = []
 
-            async for line in response.aiter_lines():
-                if line.startswith("event:"):
-                    event_type = line[6:].strip()
-                elif line.startswith("data:"):
-                    data_lines.append(line[5:].strip())
-                elif line == "":
-                    # End of event
-                    if data_lines:
-                        yield (event_type, "\n".join(data_lines))
-                    event_type = "message"
-                    data_lines = []
-
-            # Yield any remaining data
-            if data_lines:
-                yield (event_type, "\n".join(data_lines))
+                if data_lines:
+                    yield (event_type, "\n".join(data_lines))
+                return  # success, don't retry
