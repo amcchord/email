@@ -12,6 +12,23 @@ A self-hosted, AI-augmented email client built on Svelte 5, FastAPI, and Postgre
 - Modern SPA with dark/light themes, column and table views, and a dedicated "Flow" triage queue
 - Self-hosted and private -- all data stored locally, no third-party analytics
 
+## Screenshots
+
+### Classic Inbox
+The traditional inbox view with sidebar navigation, smart views (Needs Reply, Urgent, Waiting On, FYI), and AI-powered category badges on each email.
+
+![Classic Inbox](screenshots/ClassicInbox.png)
+
+### Flow — AI Triage Queue
+Flow presents emails one at a time with AI-generated summaries and context-aware suggested actions, making it easy to process your inbox quickly.
+
+![Flow Triage View](screenshots/Flow.png)
+
+### Calendar
+A full weekly calendar view with color-coded events pulled from Google Calendar, supporting multiple calendar categories and day/week/month views.
+
+![Calendar View](screenshots/Calendar.png)
+
 ## Architecture
 
 ```
