@@ -311,12 +311,6 @@ export const api = {
   getAboutMe: () => request('GET', '/auth/about-me'),
   updateAboutMe: (aboutMe) => request('PUT', '/auth/about-me', { about_me: aboutMe }),
 
-  // TUI Password
-  setTuiPassword: (password) => request('PUT', '/auth/tui-password', { password }),
-
-  // Device-Code Auth (TUI)
-  deviceAuthorize: (userCode) => request('POST', '/auth/device/authorize', { user_code: userCode }),
-
   // Keyboard Shortcuts
   getKeyboardShortcuts: () => request('GET', '/auth/keyboard-shortcuts'),
   updateKeyboardShortcuts: (shortcuts) => request('PUT', '/auth/keyboard-shortcuts', { shortcuts }),

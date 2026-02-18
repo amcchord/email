@@ -3,12 +3,11 @@
 # restart.sh — Restart services after code changes
 #
 # Usage:
-#   bash scripts/restart.sh              # Restart everything (frontend + backend + worker + tui)
+#   bash scripts/restart.sh              # Restart everything (frontend + backend + worker)
 #   bash scripts/restart.sh --all        # Same as above
 #   bash scripts/restart.sh --frontend   # Rebuild frontend only
 #   bash scripts/restart.sh --backend    # Restart API server only
 #   bash scripts/restart.sh --worker     # Restart background worker only
-#   bash scripts/restart.sh --tui        # Restart TUI web server only
 #   bash scripts/restart.sh --backend --worker   # Restart both backend services
 #   bash scripts/restart.sh --frontend --backend # Rebuild frontend + restart API
 #
@@ -24,7 +23,6 @@ cd /opt/mail
 DO_FRONTEND=false
 DO_BACKEND=false
 DO_WORKER=false
-DO_TUI=false
 GOT_FLAGS=false
 
 for arg in "$@"; do
@@ -41,20 +39,15 @@ for arg in "$@"; do
             DO_WORKER=true
             GOT_FLAGS=true
             ;;
-        --tui)
-            DO_TUI=true
-            GOT_FLAGS=true
-            ;;
         --all)
             DO_FRONTEND=true
             DO_BACKEND=true
             DO_WORKER=true
-            DO_TUI=true
             GOT_FLAGS=true
             ;;
         *)
             echo "Unknown flag: $arg"
-            echo "Usage: bash scripts/restart.sh [--frontend] [--backend] [--worker] [--tui] [--all]"
+            echo "Usage: bash scripts/restart.sh [--frontend] [--backend] [--worker] [--all]"
             exit 1
             ;;
     esac
@@ -65,7 +58,6 @@ if [ "$GOT_FLAGS" = false ]; then
     DO_FRONTEND=true
     DO_BACKEND=true
     DO_WORKER=true
-    DO_TUI=true
 fi
 
 echo "=== Restarting Services ==="
@@ -96,15 +88,6 @@ if [ "$DO_WORKER" = true ]; then
     sudo systemctl restart mailworker
     echo "[worker] Done."
     RESTARTED="${RESTARTED} worker"
-fi
-
-# --- TUI (SSH + Web servers) ---
-if [ "$DO_TUI" = true ]; then
-    echo "[tui] Restarting TUI servers (SSH + Web)..."
-    sudo systemctl restart mailtui-ssh || true
-    sudo systemctl restart mailtui-web || true
-    echo "[tui] Done."
-    RESTARTED="${RESTARTED} tui"
 fi
 
 # --- Write build version so open browser tabs auto-refresh ---

@@ -61,7 +61,7 @@
   let adminAccounts = $derived($syncStatus.length > 0 ? $syncStatus : []);
 
   // Feature flags
-  let featureFlags = $state({ tui_enabled: true, desktop_app_enabled: false });
+  let featureFlags = $state({ desktop_app_enabled: false });
   let featureFlagsLoaded = $state(false);
 
   // New setting form
@@ -275,11 +275,6 @@
   let aboutMeLoaded = $state(false);
   let aboutMeSaving = $state(false);
 
-  // TUI Password
-  let tuiPassword = $state('');
-  let tuiPasswordSaving = $state(false);
-  let tuiPasswordMessage = $state('');
-
   // UI Preferences
   let uiPrefsLoaded = $state(false);
   let uiPrefsSaving = $state(false);
@@ -412,7 +407,7 @@
         key,
         value: String(newValue),
         is_secret: false,
-        description: key === 'tui_enabled' ? 'Enable the TUI (terminal interface)' : 'Enable the desktop app downloads',
+        description: 'Enable the desktop app downloads',
       });
       featureFlags = { ...featureFlags, [key]: newValue };
       // Refresh the settings table if admin is viewing it
@@ -598,21 +593,6 @@
     aboutMeSaving = false;
   }
 
-  async function saveTuiPassword() {
-    if (tuiPassword.length < 6) return;
-    tuiPasswordSaving = true;
-    tuiPasswordMessage = '';
-    try {
-      const data = await api.setTuiPassword(tuiPassword);
-      tuiPassword = '';
-      tuiPasswordMessage = data.message || 'TUI password set successfully.';
-      showToast('TUI password set', 'success');
-    } catch (err) {
-      showToast(err.message || 'Failed to set TUI password', 'error');
-    }
-    tuiPasswordSaving = false;
-  }
-
   // ── Keyboard Shortcuts ────────────────────────────────────────────
   let shortcutSearchFilter = $state('');
   let recordingActionId = $state(null);
@@ -751,32 +731,6 @@
               This context is used when analyzing emails, suggesting replies, and chatting about your inbox.
             </span>
           </div>
-        </div>
-
-        <!-- TUI / SSH Password section -->
-        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
-          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">TUI / SSH Password</h3>
-          <p class="text-xs mb-3" style="color: var(--text-tertiary)">
-            Set a password to log into the terminal interface via SSH. Use your email as the username.
-            Connect with: <code style="color: var(--text-secondary)">ssh -p 2222 {$user?.email || 'you'}@email.mcchord.net</code>
-          </p>
-          <div class="flex gap-3 items-end">
-            <div class="flex-1">
-              <input
-                type="password"
-                bind:value={tuiPassword}
-                placeholder="New TUI password (min 6 characters)"
-                class="w-full h-9 px-3 rounded-lg text-sm outline-none border"
-                style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
-              />
-            </div>
-            <Button variant="primary" size="sm" onclick={saveTuiPassword} disabled={tuiPasswordSaving || tuiPassword.length < 6}>
-              {tuiPasswordSaving ? 'Saving...' : 'Set Password'}
-            </Button>
-          </div>
-          {#if tuiPasswordMessage}
-            <p class="text-xs mt-2" style="color: var(--color-accent-500)">{tuiPasswordMessage}</p>
-          {/if}
         </div>
 
         <!-- Connected Accounts section -->
@@ -1797,26 +1751,6 @@
           <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Feature Flags</h3>
           <p class="text-xs mb-4" style="color: var(--text-tertiary)">Enable or disable optional features for all users.</p>
           <div class="space-y-3">
-            <label class="flex items-center justify-between gap-3 cursor-pointer">
-              <div>
-                <div class="text-sm font-medium" style="color: var(--text-primary)">TUI (Terminal Interface)</div>
-                <div class="text-xs" style="color: var(--text-tertiary)">Web-based terminal UI and SSH access</div>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={featureFlags.tui_enabled}
-                aria-label="Toggle TUI"
-                onclick={() => toggleFeatureFlag('tui_enabled')}
-                class="relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
-                style="background: {featureFlags.tui_enabled ? 'var(--color-accent-500)' : 'var(--bg-tertiary)'}"
-              >
-                <span
-                  class="pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition duration-200 ease-in-out"
-                  style="transform: translateX({featureFlags.tui_enabled ? '20px' : '0px'})"
-                ></span>
-              </button>
-            </label>
             <label class="flex items-center justify-between gap-3 cursor-pointer">
               <div>
                 <div class="text-sm font-medium" style="color: var(--text-primary)">Desktop App (Electron)</div>
