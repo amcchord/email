@@ -124,13 +124,11 @@ class AIInsightsScreen(BaseScreen):
             return
         try:
             data = await self._ai_client.get_trends()
-            self.call_from_thread(self._render_trends, data)
+            self._render_trends(data)
             self._loaded_tabs.add("trends")
         except Exception as e:
             logger.debug("Failed to load trends", exc_info=True)
-            self.call_from_thread(
-                self._set_content, "#trends-content", f"[red]Error: {e}[/red]"
-            )
+            self._set_content("#trends-content", f"[red]Error: {e}[/red]")
 
     def _render_trends(self, data: dict[str, Any]) -> None:
         """Render trends data."""
@@ -220,13 +218,11 @@ class AIInsightsScreen(BaseScreen):
             return
         try:
             data = await self._ai_client.get_subscriptions()
-            self.call_from_thread(self._render_subscriptions, data)
+            self._render_subscriptions(data)
             self._loaded_tabs.add("subscriptions")
         except Exception as e:
             logger.debug("Failed to load subscriptions", exc_info=True)
-            self.call_from_thread(
-                self._update_status, f"Subscriptions error: {e}"
-            )
+            self._update_status(f"Subscriptions error: {e}")
 
     def _render_subscriptions(self, data: dict[str, Any]) -> None:
         """Render subscriptions into the DataTable."""
@@ -261,13 +257,11 @@ class AIInsightsScreen(BaseScreen):
             return
         try:
             data = await self._ai_client.get_digests(page_size=30)
-            self.call_from_thread(self._render_threads, data)
+            self._render_threads(data)
             self._loaded_tabs.add("threads")
         except Exception as e:
             logger.debug("Failed to load threads", exc_info=True)
-            self.call_from_thread(
-                self._set_content, "#threads-content", f"[red]Error: {e}[/red]"
-            )
+            self._set_content("#threads-content", f"[red]Error: {e}[/red]")
 
     def _render_threads(self, data: dict[str, Any]) -> None:
         """Render thread digests."""
@@ -318,15 +312,11 @@ class AIInsightsScreen(BaseScreen):
             return
         try:
             data = await self._ai_client.get_stats()
-            self.call_from_thread(self._render_coverage, data)
+            self._render_coverage(data)
             self._loaded_tabs.add("coverage")
         except Exception as e:
             logger.debug("Failed to load coverage", exc_info=True)
-            self.call_from_thread(
-                self._set_content,
-                "#coverage-content",
-                f"[red]Error: {e}[/red]",
-            )
+            self._set_content("#coverage-content", f"[red]Error: {e}[/red]")
 
     def _render_coverage(self, data: dict[str, Any]) -> None:
         """Render AI analysis coverage information."""
@@ -384,12 +374,10 @@ class AIInsightsScreen(BaseScreen):
         try:
             result = await self._ai_client.auto_categorize(days=days)
             msg = result.get("message", "Categorization queued")
-            self.call_from_thread(self.notify, msg, severity="information")
-            self.call_from_thread(self._update_status, msg)
+            self.notify(msg, severity="information")
+            self._update_status(msg)
         except Exception as e:
-            self.call_from_thread(
-                self.notify, f"Categorize failed: {e}", severity="error"
-            )
+            self.notify(f"Categorize failed: {e}", severity="error")
 
     # ── Helpers ──────────────────────────────────────────────
 

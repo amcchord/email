@@ -27,7 +27,7 @@
     <div class="absolute inset-0 bg-black/40 dark:bg-black/60"></div>
     <div
       class="relative w-full max-w-lg rounded-xl shadow-xl border animate-modal"
-      style="background: var(--bg-secondary); border-color: var(--border-color)"
+      style="background: var(--bg-elevated); border-color: var(--border-color); box-shadow: var(--shadow-lg)"
     >
       {#if title}
         <div class="flex items-center justify-between px-5 py-4 border-b" style="border-color: var(--border-color)">

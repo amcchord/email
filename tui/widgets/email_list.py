@@ -1,4 +1,4 @@
-"""Email list DataTable widget for displaying emails."""
+"""Email list DataTable widget with modern styling and colored category pills."""
 
 from __future__ import annotations
 
@@ -9,25 +9,28 @@ from textual.widgets import DataTable
 from tui.utils.date_format import relative_date
 
 
-# AI category short labels with Rich markup
+# AI category display with colored Rich markup pills
 CATEGORY_MARKUP: dict[str, str] = {
-    "urgent": "[bold red]URGENT[/bold red]",
-    "fyi": "[cyan]FYI[/cyan]",
-    "can_ignore": "[dim]ignore[/dim]",
-    "awaiting_reply": "[yellow]await[/yellow]",
+    "urgent": "[on #ef4444][#ffffff] URGENT [/#ffffff][/on #ef4444]",
+    "fyi": "[on #0891b2][#ffffff] FYI [/#ffffff][/on #0891b2]",
+    "can_ignore": "[#64748b]ignore[/#64748b]",
+    "awaiting_reply": "[on #f59e0b][#0f0f1a] AWAIT [/#0f0f1a][/on #f59e0b]",
+    "needs_action": "[on #6366f1][#ffffff] ACTION [/#ffffff][/on #6366f1]",
 }
 
 
 class EmailListWidget(DataTable):
-    """DataTable displaying a list of emails.
+    """DataTable displaying a list of emails with rich formatting.
 
     Columns: status indicator, from, subject, date, AI category.
-    Rows are formatted with bold for unread, star/read indicators.
+    Unread emails are bold, starred emails show a yellow star.
+    Categories are displayed as colored pills.
     """
 
     DEFAULT_CSS = """
     EmailListWidget {
         height: 1fr;
+        background: #0f0f1a;
     }
     """
 
@@ -35,14 +38,14 @@ class EmailListWidget(DataTable):
         super().__init__(**kwargs)
         self.cursor_type = "row"
         self.zebra_stripes = True
-        self._email_id_map: dict[Any, int] = {}  # row_key -> email_id
-        self._row_key_map: dict[int, Any] = {}  # email_id -> row_key
+        self._email_id_map: dict[Any, int] = {}
+        self._row_key_map: dict[int, Any] = {}
         self._columns_added = False
 
     def on_mount(self) -> None:
         """Add columns on mount."""
         if not self._columns_added:
-            self.add_columns("", "From", "Subject", "Date", "Cat")
+            self.add_columns(" ", "From", "Subject", "Date", "Category")
             self._columns_added = True
 
     def load_emails(self, emails: list[dict[str, Any]]) -> None:
@@ -52,7 +55,7 @@ class EmailListWidget(DataTable):
         self._row_key_map.clear()
 
         if not self._columns_added:
-            self.add_columns("", "From", "Subject", "Date", "Cat")
+            self.add_columns(" ", "From", "Subject", "Date", "Category")
             self._columns_added = True
 
         for email in emails:
@@ -62,16 +65,18 @@ class EmailListWidget(DataTable):
 
             # Status indicator
             if is_starred:
-                indicator = "[yellow]\u2605[/yellow]"
+                indicator = "[#f59e0b]\u2605[/#f59e0b]"
             elif is_read:
-                indicator = "[dim]\u00b7[/dim]"
+                indicator = "[#3d3f5c]\u00b7[/#3d3f5c]"
             else:
-                indicator = "[bold blue]\u25cf[/bold blue]"
+                indicator = "[#6366f1]\u25cf[/#6366f1]"
 
-            # From field
+            # From field (wider)
             from_name = email.get("from_name") or email.get("from_address") or ""
-            if len(from_name) > 20:
-                from_name = from_name[:18] + ".."
+            if len(from_name) > 24:
+                from_name = from_name[:22] + ".."
+            if not is_read:
+                from_name = f"[bold]{from_name}[/bold]"
 
             # Subject
             subject = email.get("subject") or "(no subject)"
@@ -79,11 +84,11 @@ class EmailListWidget(DataTable):
                 subject = f"[bold]{subject}[/bold]"
 
             # Date
-            date_str = relative_date(email.get("date"))
+            date_str = f"[#94a3b8]{relative_date(email.get('date'))}[/#94a3b8]"
 
-            # AI category
+            # AI category as colored pill
             cat = email.get("ai_category") or ""
-            cat_display = CATEGORY_MARKUP.get(cat, cat)
+            cat_display = CATEGORY_MARKUP.get(cat, f"[#64748b]{cat}[/#64748b]" if cat else "")
 
             row_key = self.add_row(
                 indicator,

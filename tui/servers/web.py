@@ -35,6 +35,12 @@ def start_web_server(
         )
         sys.exit(1)
 
+    import os
+
+    # Set marker so the child Textual app can detect web mode and
+    # disable mouse support (avoids xterm.js mouse conflicts).
+    os.environ["TEXTUAL_WEB"] = "1"
+
     python = sys.executable or "/opt/mail/venv/bin/python"
     command = f"{python} -m tui"
 

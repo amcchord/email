@@ -29,6 +29,7 @@ class EmailSummary(BaseModel):
     ai_email_type: Optional[str] = None
     is_subscription: Optional[bool] = None
     needs_reply: Optional[bool] = None
+    needs_reply_ignored: Optional[bool] = None
     unsubscribe_info: Optional[dict] = None
 
     # Thread digest fields (populated when a ThreadDigest exists for this thread)

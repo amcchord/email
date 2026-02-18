@@ -1,69 +1,26 @@
-/* Main Textual CSS for the Mail TUI */
+/* ══════════════════════════════════════════════════════════════
+   Mail TUI -- Modern Theme (Superfile-inspired)
+   ══════════════════════════════════════════════════════════════
+   Color palette (dark):
+     Background  #0f0f1a   Deepest layer
+     Surface     #1a1b2e   Sidebar, status bars
+     Panel       #232440   Cards, sections
+     Border      #3d3f5c   Subtle borders
+     Accent      #6366f1   Active, links
+     AccentBrt   #818cf8   Hover
+     Teal        #2dd4bf   Success, counts
+     Amber       #f59e0b   Warnings, stars
+     Red         #ef4444   Errors, urgent
+     Text        #e2e8f0   Primary
+     TextMuted   #94a3b8   Secondary
+     TextDim     #64748b   Tertiary
+   ══════════════════════════════════════════════════════════════ */
 
-/* ── Dark Theme (default) ─────────────────────────────────── */
+/* ── Global Defaults ──────────────────────────────────────── */
 
 Screen {
-    background: #1a1a2e;
-    color: #eaeaea;
-}
-
-/* ── Login Screen ─────────────────────────────────────────── */
-
-LoginScreen {
-    align: center middle;
-    background: #1a1a2e;
-}
-
-.login-card {
-    width: 60;
-    height: auto;
-    max-height: 24;
-    padding: 1 2;
-    background: #16213e;
-    border: round #4f46e5;
-}
-
-.login-banner {
-    width: 100%;
-    content-align: center middle;
-    text-align: center;
-    color: #4f46e5;
-    text-style: bold;
-    padding: 1 0;
-}
-
-.login-form {
-    width: 100%;
-    height: auto;
-    padding: 1 2;
-}
-
-.login-form Input {
-    width: 100%;
-    margin: 1 0;
-}
-
-.login-form Button {
-    width: 100%;
-    margin: 1 0;
-    background: #4f46e5;
-    color: #ffffff;
-}
-
-.login-form Button:hover {
-    background: #6366f1;
-}
-
-.login-error {
-    width: 100%;
-    color: #ef4444;
-    text-align: center;
-    padding: 0 1;
-    display: none;
-}
-
-.login-error.visible {
-    display: block;
+    background: #0f0f1a;
+    color: #e2e8f0;
 }
 
 /* ── App Shell Layout ─────────────────────────────────────── */
@@ -73,20 +30,18 @@ LoginScreen {
     height: 1fr;
 }
 
-.content-area {
-    width: 1fr;
-    height: 1fr;
-    padding: 1 2;
-}
+/* Content widgets are yielded directly into the Screen.
+   The Screen handles dock layout: header (top), footer (bottom),
+   sidebar (left).  Non-docked children fill the remaining space. */
 
 /* ── Placeholder Screens ──────────────────────────────────── */
 
 .placeholder-label {
     width: 100%;
-    height: 100%;
+    height: 1fr;
     content-align: center middle;
     text-align: center;
-    color: #8888aa;
+    color: #64748b;
     text-style: italic;
 }
 
@@ -94,14 +49,14 @@ LoginScreen {
 
 #inbox-layout {
     width: 100%;
-    height: 100%;
+    height: 1fr;
 }
 
 #mailbox-sidebar {
-    width: 24;
-    height: 100%;
-    background: $surface;
-    border-right: solid $primary-background-darken-2;
+    width: 26;
+    height: 1fr;
+    background: #1a1b2e;
+    border-right: tall #3d3f5c;
     padding: 0;
 }
 
@@ -109,25 +64,36 @@ LoginScreen {
     width: 100%;
     height: 1;
     padding: 0 1;
-    background: $surface;
-    color: $accent;
+    background: #1a1b2e;
+    color: #6366f1;
+    text-style: bold;
 }
 
 #mailbox-tree {
     width: 100%;
     height: 1fr;
     padding: 0 1;
+    background: #1a1b2e;
+}
+
+#mailbox-tree > .tree--cursor {
+    background: #6366f1 30%;
 }
 
 #inbox-main {
     width: 1fr;
-    height: 100%;
+    height: 1fr;
 }
 
 #search-input {
     width: 100%;
     height: 3;
     margin: 0;
+    border: round #3d3f5c;
+}
+
+#search-input:focus {
+    border: round #6366f1;
 }
 
 #email-table {
@@ -139,44 +105,39 @@ LoginScreen {
     width: 100%;
     height: 1;
     padding: 0 1;
-    background: $surface;
-    color: $text-muted;
-    dock: bottom;
+    background: #1a1b2e;
+    color: #94a3b8;
 }
 
 /* ── Flow Screen ─────────────────────────────────────────── */
 
 #flow-scroll {
     width: 100%;
-    height: 100%;
+    height: 1fr;
+    padding: 0 1;
 }
 
-#flow-needs-reply,
-#flow-awaiting,
-#flow-threads,
-#flow-events,
-#flow-todos {
+.flow-section-panel {
     width: 100%;
     height: auto;
-    max-height: 16;
+    max-height: 22;
     min-height: 3;
+    margin: 1 0 0 0;
+    border: round #3d3f5c;
+    background: #1a1b2e;
     padding: 0;
 }
 
-#flow-needs-reply:focus-within,
-#flow-awaiting:focus-within,
-#flow-threads:focus-within,
-#flow-events:focus-within,
-#flow-todos:focus-within {
-    border: tall $accent;
+.flow-section-panel:focus-within {
+    border: round #6366f1;
 }
 
 #flow-status {
     width: 100%;
     height: 1;
     padding: 0 1;
-    background: $surface;
-    color: $text-muted;
+    background: #1a1b2e;
+    color: #94a3b8;
     margin: 1 0 0 0;
 }
 
@@ -184,7 +145,7 @@ LoginScreen {
 
 #compose-container {
     width: 100%;
-    height: 100%;
+    height: 1fr;
 }
 
 #compose-editor {
@@ -196,15 +157,16 @@ LoginScreen {
 
 #calendar-container {
     width: 100%;
-    height: 100%;
+    height: 1fr;
 }
 
 #calendar-header {
     width: 100%;
     height: 1;
     padding: 0 1;
-    background: $surface;
-    color: $text;
+    background: #1a1b2e;
+    color: #e2e8f0;
+    text-style: bold;
 }
 
 #calendar-scroll {
@@ -223,29 +185,33 @@ LoginScreen {
     width: 100%;
     height: 1;
     padding: 0 1;
-    background: $surface;
-    color: $text-muted;
-    dock: bottom;
+    background: #1a1b2e;
+    color: #94a3b8;
 }
 
 /* ── Todos Screen ───────────────────────────────────────── */
 
 #todos-container {
     width: 100%;
-    height: 100%;
+    height: 1fr;
 }
 
 #todo-input {
     width: 100%;
     height: 3;
     margin: 0;
+    border: round #3d3f5c;
+}
+
+#todo-input:focus {
+    border: round #6366f1;
 }
 
 #todo-filter-bar {
     width: 100%;
     height: 1;
     padding: 0 1;
-    background: $surface;
+    background: #1a1b2e;
 }
 
 #todo-list {
@@ -257,33 +223,33 @@ LoginScreen {
     width: 100%;
     height: 1;
     padding: 0 1;
-    background: $surface;
-    color: $text-muted;
-    dock: bottom;
+    background: #1a1b2e;
+    color: #94a3b8;
 }
 
 /* ── Chat Screen ────────────────────────────────────────── */
 
 #chat-layout {
     width: 100%;
-    height: 100%;
+    height: 1fr;
 }
 
 #chat-sidebar {
     width: 25%;
     min-width: 20;
     max-width: 40;
-    height: 100%;
-    background: $surface;
-    border-right: solid $primary-background-darken-2;
+    height: 1fr;
+    background: #1a1b2e;
+    border-right: tall #3d3f5c;
 }
 
 #chat-sidebar-header {
     width: 100%;
     height: 1;
     padding: 0 1;
-    background: $surface;
-    color: $accent;
+    background: #1a1b2e;
+    color: #6366f1;
+    text-style: bold;
 }
 
 #chat-conv-list {
@@ -294,7 +260,7 @@ LoginScreen {
 
 #chat-main {
     width: 1fr;
-    height: 100%;
+    height: 1fr;
 }
 
 #chat-messages {
@@ -307,30 +273,33 @@ LoginScreen {
     width: 100%;
     height: 3;
     margin: 0;
-    dock: bottom;
+    border: round #3d3f5c;
+}
+
+#chat-input:focus {
+    border: round #6366f1;
 }
 
 #chat-status {
     width: 100%;
     height: 1;
     padding: 0 1;
-    background: $surface;
-    color: $text-muted;
-    dock: bottom;
+    background: #1a1b2e;
+    color: #94a3b8;
 }
 
 /* ── Stats Screen ───────────────────────────────────────── */
 
 #stats-scroll {
     width: 100%;
-    height: 100%;
+    height: 1fr;
 }
 
 #stats-cards {
     width: 100%;
     height: auto;
     min-height: 5;
-    padding: 0;
+    padding: 0 1;
 }
 
 #stats-volume-header,
@@ -340,8 +309,8 @@ LoginScreen {
     height: 1;
     padding: 0 1;
     margin: 1 0 0 0;
-    background: $accent 30%;
-    color: $text;
+    background: #6366f1 25%;
+    color: #e2e8f0;
     text-style: bold;
 }
 
@@ -358,8 +327,8 @@ LoginScreen {
     width: 100%;
     height: 1;
     padding: 0 1;
-    background: $surface;
-    color: $text-muted;
+    background: #1a1b2e;
+    color: #94a3b8;
     margin: 1 0 0 0;
 }
 
@@ -367,7 +336,7 @@ LoginScreen {
 
 #insights-tabs {
     width: 100%;
-    height: 100%;
+    height: 1fr;
 }
 
 #trends-scroll,
@@ -402,16 +371,15 @@ LoginScreen {
     width: 100%;
     height: 1;
     padding: 0 1;
-    background: $surface;
-    color: $text-muted;
-    dock: bottom;
+    background: #1a1b2e;
+    color: #94a3b8;
 }
 
 /* ── Settings Screen ────────────────────────────────────── */
 
 #settings-tabs {
     width: 100%;
-    height: 100%;
+    height: 1fr;
 }
 
 #profile-scroll,
@@ -429,6 +397,7 @@ LoginScreen {
     height: auto;
     padding: 0;
     margin: 1 0 0 0;
+    color: #6366f1;
 }
 
 .settings-row {
@@ -445,6 +414,7 @@ LoginScreen {
     height: 3;
     content-align: left middle;
     padding: 1 1 0 0;
+    color: #94a3b8;
 }
 
 .settings-row Static {
@@ -489,23 +459,203 @@ LoginScreen {
     width: 100%;
     height: 1;
     padding: 0 1;
-    background: $surface;
-    color: $text-muted;
-    dock: bottom;
+    background: #1a1b2e;
+    color: #94a3b8;
+}
+
+/* ── Global Button Styles ────────────────────────────────── */
+
+Button {
+    background: #6366f1;
+    color: #ffffff;
+    border: none;
+}
+
+Button:hover {
+    background: #818cf8;
+}
+
+Button.-primary {
+    background: #6366f1;
+    color: #ffffff;
+}
+
+Button.-primary:hover {
+    background: #818cf8;
+}
+
+Button.-warning {
+    background: #f59e0b;
+    color: #0f0f1a;
+}
+
+Button.-error {
+    background: #ef4444;
+    color: #ffffff;
+}
+
+/* ── Global Input Styles ─────────────────────────────────── */
+
+Input {
+    border: round #3d3f5c;
+    background: #232440;
+}
+
+Input:focus {
+    border: round #6366f1;
+}
+
+/* ── Global DataTable Styles ─────────────────────────────── */
+
+DataTable {
+    background: #0f0f1a;
+}
+
+DataTable > .datatable--header {
+    background: #1a1b2e;
+    color: #94a3b8;
+    text-style: bold;
+}
+
+DataTable > .datatable--cursor {
+    background: #6366f1 30%;
+    color: #e2e8f0;
+}
+
+DataTable > .datatable--even-row {
+    background: #0f0f1a;
+}
+
+DataTable > .datatable--odd-row {
+    background: #1a1b2e 30%;
+}
+
+/* ── Global TabbedContent Styles ─────────────────────────── */
+
+TabbedContent {
+    background: #0f0f1a;
+}
+
+Tabs {
+    background: #1a1b2e;
+}
+
+Tab {
+    color: #94a3b8;
+    background: #1a1b2e;
+}
+
+Tab.-active {
+    color: #e2e8f0;
+    text-style: bold;
+}
+
+Underline > .underline--bar {
+    color: #6366f1;
+}
+
+TabPane {
+    background: #0f0f1a;
+}
+
+/* ── Global TextArea Styles ──────────────────────────────── */
+
+TextArea {
+    border: round #3d3f5c;
+    background: #232440;
+}
+
+TextArea:focus {
+    border: round #6366f1;
+}
+
+/* ── Global Select Styles ────────────────────────────────── */
+
+Select {
+    border: round #3d3f5c;
+}
+
+Select:focus {
+    border: round #6366f1;
+}
+
+/* ── Global Tree Styles ──────────────────────────────────── */
+
+Tree {
+    background: #1a1b2e;
+}
+
+Tree > .tree--cursor {
+    background: #6366f1 30%;
+}
+
+Tree > .tree--highlight-line {
+    background: #232440;
+}
+
+/* ── Global ListView Styles ──────────────────────────────── */
+
+ListView {
+    background: #1a1b2e;
+}
+
+ListView > .listview--highlight {
+    background: #6366f1 25%;
+}
+
+ListItem {
+    background: #1a1b2e;
+}
+
+ListItem:hover {
+    background: #232440;
 }
 
 /* ── Light theme overrides ────────────────────────────────── */
 
 .light Screen {
+    background: #f8fafc;
+    color: #1e293b;
+}
+
+.light Input {
     background: #ffffff;
-    color: #1a1a2e;
+    border: round #cbd5e1;
 }
 
-.light .login-card {
-    background: #f8f9fa;
-    border: round #4f46e5;
+.light Input:focus {
+    border: round #6366f1;
 }
 
-.light .login-banner {
-    color: #4f46e5;
+.light DataTable {
+    background: #f8fafc;
+}
+
+.light DataTable > .datatable--header {
+    background: #e2e8f0;
+    color: #475569;
+}
+
+.light DataTable > .datatable--cursor {
+    background: #6366f1 20%;
+}
+
+.light DataTable > .datatable--even-row {
+    background: #f8fafc;
+}
+
+.light DataTable > .datatable--odd-row {
+    background: #f1f5f9;
+}
+
+.light Tree {
+    background: #f1f5f9;
+}
+
+.light ListView {
+    background: #f1f5f9;
+}
+
+.light ListItem {
+    background: #f1f5f9;
 }

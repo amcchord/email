@@ -17,15 +17,15 @@ from tui.widgets.email_list import EmailListWidget
 
 logger = logging.getLogger(__name__)
 
-# Standard mailboxes shown in the sidebar tree
+# Standard mailboxes with Unicode icons
 MAILBOXES = [
-    ("INBOX", "Inbox"),
-    ("STARRED", "Starred"),
-    ("SENT", "Sent"),
-    ("DRAFTS", "Drafts"),
-    ("SPAM", "Spam"),
-    ("TRASH", "Trash"),
-    ("ALL", "All Mail"),
+    ("INBOX", "\u2709 Inbox"),
+    ("STARRED", "\u2605 Starred"),
+    ("SENT", "\u27a4 Sent"),
+    ("DRAFTS", "\u270e Drafts"),
+    ("SPAM", "\u26a0 Spam"),
+    ("TRASH", "\u2717 Trash"),
+    ("ALL", "\u2261 All Mail"),
 ]
 
 
@@ -41,7 +41,7 @@ class InboxScreen(BaseScreen):
         ("s", "Star"),
         ("#", "Trash"),
         ("/", "Search"),
-        ("?", "Help"),
+        ("F", "Focus"),
     ]
 
     BINDINGS = [
@@ -80,16 +80,14 @@ class InboxScreen(BaseScreen):
 
     def compose_content(self) -> ComposeResult:
         with Horizontal(id="inbox-layout"):
-            # Mailbox sidebar tree
             with Vertical(id="mailbox-sidebar"):
-                yield Static("[bold]Mailboxes[/bold]", id="mailbox-header")
+                yield Static("[bold #6366f1]\u2709 Mailboxes[/bold #6366f1]", id="mailbox-header")
                 tree: Tree[str] = Tree("Mail", id="mailbox-tree")
                 tree.show_root = False
                 yield tree
-            # Main content area
             with Vertical(id="inbox-main"):
                 yield Input(
-                    placeholder="Search emails... (press / to focus)",
+                    placeholder="\u2315  Search emails...",
                     id="search-input",
                 )
                 yield EmailListWidget(id="email-table")
@@ -136,19 +134,23 @@ class InboxScreen(BaseScreen):
             self._total_pages = result.get("total_pages", 1)
             self._current_page = result.get("page", 1)
 
-            # Update the email list widget
-            email_table = self.query_one("#email-table", EmailListWidget)
-            email_table.load_emails(self._emails)
-
-            # Update status bar
-            self._update_status()
-
-            # Also load labels for the sidebar
+            self._render_email_list(self._emails)
             self._load_labels()
 
         except Exception as e:
-            logger.debug("Failed to load emails", exc_info=True)
-            self._update_status(error=str(e))
+            err_msg = str(e)
+            if hasattr(e, "detail") and e.detail:
+                err_msg = e.detail
+            self._update_status(error=err_msg)
+
+    def _render_email_list(self, emails: list[dict[str, Any]]) -> None:
+        """Render the email list and status on the main thread."""
+        try:
+            table = self.query_one("#email-table", EmailListWidget)
+            table.load_emails(emails)
+            self._update_status()
+        except Exception:
+            logger.debug("Failed to render email list", exc_info=True)
 
     @work(exclusive=True, group="labels")
     async def _load_labels(self) -> None:
@@ -157,16 +159,20 @@ class InboxScreen(BaseScreen):
             return
         try:
             self._labels = await self._email_client.get_labels()
-            # Add user labels to the tree below standard mailboxes
+            labels = self._labels
+            self._render_labels(labels)
+        except Exception:
+            logger.debug("Failed to load labels", exc_info=True)
+
+    def _render_labels(self, labels: list[dict[str, Any]]) -> None:
+        """Render user labels into the mailbox tree on the main thread."""
+        try:
             tree = self.query_one("#mailbox-tree", Tree)
-            # Remove any previously added label nodes beyond the standard ones
-            # We rebuild by checking existing leaves
             user_labels = [
-                lbl for lbl in self._labels
+                lbl for lbl in labels
                 if lbl.get("label_type") == "user"
             ]
             if user_labels:
-                # Check if we already have a "Labels" section
                 has_labels_section = False
                 for child in tree.root.children:
                     if hasattr(child, "data") and child.data == "__labels_header__":
@@ -174,28 +180,32 @@ class InboxScreen(BaseScreen):
                         break
 
                 if not has_labels_section:
-                    labels_node = tree.root.add("Labels", data="__labels_header__")
+                    labels_node = tree.root.add("\u2630 Labels", data="__labels_header__")
                     for lbl in user_labels:
                         name = lbl.get("name", "")
                         count = lbl.get("messages_total", 0)
-                        display = f"{name} ({count})" if count else name
+                        display = f"  {name}" if not count else f"  {name} [#2dd4bf]({count})[/#2dd4bf]"
                         labels_node.add_leaf(display, data=lbl.get("name", ""))
                     labels_node.expand()
         except Exception:
-            logger.debug("Failed to load labels", exc_info=True)
+            logger.debug("Failed to render labels", exc_info=True)
 
     def _update_status(self, error: str | None = None) -> None:
         """Update the status bar at the bottom of the inbox."""
         try:
             status = self.query_one("#inbox-status", Static)
             if error:
-                status.update(f"[red]Error: {error}[/red]")
+                status.update(f"[#ef4444]\u26a0 Error: {error}[/#ef4444]")
                 return
 
             unread_count = sum(
                 1 for e in self._emails if not e.get("is_read", True)
             )
-            focused_indicator = " [yellow][FOCUSED][/yellow]" if self._focused_mode else ""
+
+            focused_indicator = ""
+            if self._focused_mode:
+                focused_indicator = " [on #2dd4bf][#0f0f1a] FOCUSED [/#0f0f1a][/on #2dd4bf]"
+
             mailbox_name = self._current_mailbox
             for mid, mname in MAILBOXES:
                 if mid == self._current_mailbox:
@@ -203,55 +213,49 @@ class InboxScreen(BaseScreen):
                     break
 
             text = (
-                f"{mailbox_name} | "
-                f"Page {self._current_page}/{self._total_pages} | "
-                f"{self._total_emails} emails | "
-                f"{unread_count} unread"
+                f"{mailbox_name} \u2502 "
+                f"Page {self._current_page}/{self._total_pages} \u2502 "
+                f"[#2dd4bf]{self._total_emails}[/#2dd4bf] emails \u2502 "
+                f"[#f59e0b]{unread_count}[/#f59e0b] unread"
                 f"{focused_indicator}"
             )
             if self._search_query:
-                text += f" | Search: {self._search_query}"
+                text += f" \u2502 \u2315 {self._search_query}"
             status.update(text)
         except Exception:
             pass
 
-    # ── Tree selection ─────────────────────────────────────────
+    # ── Tree selection ----
 
     def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
-        """Handle mailbox selection in the sidebar tree."""
         node = event.node
         if node.data and node.data != "__labels_header__":
             mailbox = node.data
-            # Check if this is a standard mailbox
             is_standard = any(m[0] == mailbox for m in MAILBOXES)
             if is_standard:
                 self._current_mailbox = mailbox
             else:
-                # User label: search within INBOX with that label
                 self._current_mailbox = mailbox
             self._current_page = 1
             self._search_query = None
             self._load_emails()
 
-    # ── Search ─────────────────────────────────────────────────
+    # ── Search ----
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Handle search submission."""
         if event.input.id == "search-input":
             query = event.input.value.strip()
             self._search_query = query if query else None
             self._current_page = 1
             self._load_emails()
-            # Move focus back to the email list
             try:
                 self.query_one("#email-table", EmailListWidget).focus()
             except Exception:
                 pass
 
-    # ── Keyboard actions ───────────────────────────────────────
+    # ── Keyboard actions ----
 
     def action_cursor_down(self) -> None:
-        """Move cursor down in the email list."""
         try:
             table = self.query_one("#email-table", EmailListWidget)
             table.action_cursor_down()
@@ -259,7 +263,6 @@ class InboxScreen(BaseScreen):
             pass
 
     def action_cursor_up(self) -> None:
-        """Move cursor up in the email list."""
         try:
             table = self.query_one("#email-table", EmailListWidget)
             table.action_cursor_up()
@@ -267,7 +270,6 @@ class InboxScreen(BaseScreen):
             pass
 
     def action_open_email(self) -> None:
-        """Open the selected email in detail view."""
         try:
             table = self.query_one("#email-table", EmailListWidget)
             email_id = table.get_selected_email_id()
@@ -278,23 +280,18 @@ class InboxScreen(BaseScreen):
             logger.debug("Failed to open email", exc_info=True)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Handle double-click / Enter on a row."""
         self.action_open_email()
 
     def action_archive(self) -> None:
-        """Archive the selected email(s)."""
         self._perform_action("archive")
 
     def action_trash(self) -> None:
-        """Trash the selected email(s)."""
         self._perform_action("trash")
 
     def action_toggle_star(self) -> None:
-        """Toggle star on the selected email."""
         email_id = self._get_selected_email_id()
         if email_id is None:
             return
-        # Find the email to check current star state
         email = self._find_email(email_id)
         if email and email.get("is_starred"):
             self._perform_action("unstar")
@@ -302,19 +299,15 @@ class InboxScreen(BaseScreen):
             self._perform_action("star")
 
     def action_mark_read(self) -> None:
-        """Mark selected email(s) as read."""
         self._perform_action("mark_read")
 
     def action_mark_unread(self) -> None:
-        """Mark selected email(s) as unread."""
         self._perform_action("mark_unread")
 
     def action_spam(self) -> None:
-        """Mark selected email(s) as spam."""
         self._perform_action("spam")
 
     def action_reply(self) -> None:
-        """Reply to the selected email."""
         email_id = self._get_selected_email_id()
         if email_id is None:
             return
@@ -324,7 +317,6 @@ class InboxScreen(BaseScreen):
             self.app.push_screen(ComposeScreen(reply_data=email))
 
     def action_forward(self) -> None:
-        """Forward the selected email."""
         email_id = self._get_selected_email_id()
         if email_id is None:
             return
@@ -334,34 +326,29 @@ class InboxScreen(BaseScreen):
             self.app.push_screen(ComposeScreen(forward_data=email))
 
     def action_focus_search(self) -> None:
-        """Focus the search input."""
         try:
             self.query_one("#search-input", Input).focus()
         except Exception:
             pass
 
     def action_toggle_focused(self) -> None:
-        """Toggle focused filter (exclude can_ignore category)."""
         self._focused_mode = not self._focused_mode
         self._current_page = 1
         self._load_emails()
 
     def action_next_page(self) -> None:
-        """Go to the next page of emails."""
         if self._current_page < self._total_pages:
             self._current_page += 1
             self._load_emails()
 
     def action_prev_page(self) -> None:
-        """Go to the previous page of emails."""
         if self._current_page > 1:
             self._current_page -= 1
             self._load_emails()
 
-    # ── Helpers ─────────────────────────────────────────────────
+    # ── Helpers ----
 
     def _get_selected_email_id(self) -> int | None:
-        """Get the email_id of the currently selected row."""
         try:
             table = self.query_one("#email-table", EmailListWidget)
             return table.get_selected_email_id()
@@ -369,7 +356,6 @@ class InboxScreen(BaseScreen):
             return None
 
     def _find_email(self, email_id: int) -> dict[str, Any] | None:
-        """Find an email dict in the current list by id."""
         for email in self._emails:
             if email.get("id") == email_id:
                 return email
@@ -377,7 +363,6 @@ class InboxScreen(BaseScreen):
 
     @work(exclusive=True, group="action")
     async def _perform_action(self, action: str) -> None:
-        """Perform an email action and reload the list."""
         if self._email_client is None:
             return
         email_id = self._get_selected_email_id()
@@ -385,8 +370,8 @@ class InboxScreen(BaseScreen):
             return
         try:
             await self._email_client.perform_actions([email_id], action)
-            self.notify(f"{action.replace('_', ' ').title()}", severity="information")
-            # Reload emails to reflect the change
+            msg = action.replace('_', ' ').title()
+            self.notify(f"\u2713 {msg}", severity="information")
             self._load_emails()
         except Exception as e:
             self.notify(f"Action failed: {e}", severity="error")

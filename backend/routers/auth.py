@@ -448,6 +448,8 @@ async def get_ui_preferences(user: User = Depends(get_current_user)):
     prefs = user.ui_preferences or {}
     return UIPreferencesResponse(
         thread_order=prefs.get("thread_order", DEFAULT_UI_PREFERENCES["thread_order"]),
+        theme=prefs.get("theme", DEFAULT_UI_PREFERENCES["theme"]),
+        color_scheme=prefs.get("color_scheme", DEFAULT_UI_PREFERENCES["color_scheme"]),
     )
 
 
@@ -461,6 +463,10 @@ async def update_ui_preferences(
     current = user.ui_preferences or {}
     if body.thread_order is not None:
         current["thread_order"] = body.thread_order
+    if body.theme is not None:
+        current["theme"] = body.theme
+    if body.color_scheme is not None:
+        current["color_scheme"] = body.color_scheme
     user.ui_preferences = current
     from sqlalchemy.orm.attributes import flag_modified
     flag_modified(user, "ui_preferences")
@@ -470,6 +476,8 @@ async def update_ui_preferences(
     prefs = user.ui_preferences or {}
     return UIPreferencesResponse(
         thread_order=prefs.get("thread_order", DEFAULT_UI_PREFERENCES["thread_order"]),
+        theme=prefs.get("theme", DEFAULT_UI_PREFERENCES["theme"]),
+        color_scheme=prefs.get("color_scheme", DEFAULT_UI_PREFERENCES["color_scheme"]),
     )
 
 
@@ -495,3 +503,141 @@ async def set_tui_password(
     user.hashed_password = hash_password(password)
     await db.commit()
     return {"status": "ok", "message": "TUI password set. Log in with your email and this password."}
+
+
+# ── Device-Code Auth Flow (for TUI) ─────────────────────────────
+
+import secrets
+import time as _time
+
+# In-memory store: { device_code: { user_code, created_at, status, tokens } }
+# status: "pending" | "authorized" | "expired"
+_device_codes: dict[str, dict] = {}
+_DEVICE_CODE_TTL = 600  # 10 minutes
+
+
+def _clean_expired_codes():
+    """Remove expired device codes from the store."""
+    now = _time.time()
+    expired = [k for k, v in _device_codes.items() if now - v["created_at"] > _DEVICE_CODE_TTL]
+    for k in expired:
+        del _device_codes[k]
+
+
+@router.post("/device/start")
+async def device_start():
+    """Start a device-code auth flow.
+
+    Returns a device_code (secret, for polling), user_code (short, human-readable),
+    and a verification URL. The TUI shows the user_code and URL, then polls
+    /device/status with the device_code until authorized.
+    """
+    _clean_expired_codes()
+
+    device_code = secrets.token_urlsafe(32)
+    # Generate a short human-friendly code: XXXX-XXXX
+    raw = secrets.token_hex(4).upper()
+    user_code = f"{raw[:4]}-{raw[4:]}"
+
+    allowed_origins = settings.allowed_origins or "https://email.mcchord.net"
+    base_url = allowed_origins.split(",")[0].strip()
+    verification_url = f"{base_url}/auth/device?code={user_code}"
+
+    _device_codes[device_code] = {
+        "user_code": user_code,
+        "created_at": _time.time(),
+        "status": "pending",
+        "tokens": None,
+    }
+
+    return {
+        "device_code": device_code,
+        "user_code": user_code,
+        "verification_url": verification_url,
+        "expires_in": _DEVICE_CODE_TTL,
+        "interval": 5,
+    }
+
+
+@router.get("/device/status")
+async def device_status(device_code: str):
+    """Poll for device-code authorization status.
+
+    Returns:
+      - {"status": "pending"} while waiting
+      - {"status": "authorized", "access_token": ..., "refresh_token": ..., "user": ...} on success
+      - {"status": "expired"} if timed out
+    """
+    _clean_expired_codes()
+
+    entry = _device_codes.get(device_code)
+    if not entry:
+        return {"status": "expired"}
+
+    if _time.time() - entry["created_at"] > _DEVICE_CODE_TTL:
+        del _device_codes[device_code]
+        return {"status": "expired"}
+
+    if entry["status"] == "authorized" and entry["tokens"]:
+        tokens = entry["tokens"]
+        del _device_codes[device_code]
+        return {
+            "status": "authorized",
+            "access_token": tokens["access_token"],
+            "refresh_token": tokens["refresh_token"],
+            "user": tokens.get("user", {}),
+        }
+
+    return {"status": "pending"}
+
+
+@router.post("/device/authorize")
+async def device_authorize(
+    body: dict,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Authorize a device code from the web app.
+
+    The logged-in user submits the user_code they see on the TUI.
+    This generates tokens for that user and marks the device code as authorized.
+    """
+    user_code = (body.get("user_code") or "").strip().upper()
+    if not user_code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="user_code is required",
+        )
+
+    # Find the matching device code entry
+    matched_device_code = None
+    for dc, entry in _device_codes.items():
+        if entry["user_code"] == user_code and entry["status"] == "pending":
+            if _time.time() - entry["created_at"] <= _DEVICE_CODE_TTL:
+                matched_device_code = dc
+                break
+
+    if not matched_device_code:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invalid or expired code",
+        )
+
+    # Generate tokens for this user
+    access_token = create_access_token({"sub": str(user.id)})
+    refresh_token = create_refresh_token({"sub": str(user.id)})
+
+    _device_codes[matched_device_code]["status"] = "authorized"
+    _device_codes[matched_device_code]["tokens"] = {
+        "access_token": access_token,
+        "refresh_token": refresh_token,
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "username": user.username,
+            "display_name": user.display_name,
+            "is_admin": user.is_admin,
+        },
+    }
+
+    return {"status": "ok", "message": f"TUI session authorized for {user.email}"}

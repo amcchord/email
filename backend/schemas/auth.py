@@ -89,21 +89,44 @@ class KeyboardShortcutsUpdate(BaseModel):
     shortcuts: dict[str, str] = {}
 
 
+ALLOWED_THEMES = ["amber", "blue", "rose", "emerald", "purple", "mono"]
+ALLOWED_COLOR_SCHEMES = ["light", "dark", "system"]
+
 DEFAULT_UI_PREFERENCES = {
     "thread_order": "newest_first",
+    "theme": "amber",
+    "color_scheme": "light",
 }
 
 
 class UIPreferencesResponse(BaseModel):
     thread_order: str = "newest_first"
+    theme: str = "amber"
+    color_scheme: str = "light"
 
 
 class UIPreferencesUpdate(BaseModel):
     thread_order: Optional[str] = None
+    theme: Optional[str] = None
+    color_scheme: Optional[str] = None
 
     @field_validator("thread_order")
     @classmethod
     def validate_thread_order(cls, v):
         if v is not None and v not in ("newest_first", "oldest_first"):
             raise ValueError("thread_order must be 'newest_first' or 'oldest_first'")
+        return v
+
+    @field_validator("theme")
+    @classmethod
+    def validate_theme(cls, v):
+        if v is not None and v not in ALLOWED_THEMES:
+            raise ValueError(f"theme must be one of: {', '.join(ALLOWED_THEMES)}")
+        return v
+
+    @field_validator("color_scheme")
+    @classmethod
+    def validate_color_scheme(cls, v):
+        if v is not None and v not in ALLOWED_COLOR_SCHEMES:
+            raise ValueError(f"color_scheme must be one of: {', '.join(ALLOWED_COLOR_SCHEMES)}")
         return v

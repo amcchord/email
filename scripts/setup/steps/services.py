@@ -54,6 +54,25 @@ Environment=OAUTHLIB_RELAX_TOKEN_SCOPE=1
 WantedBy=multi-user.target
 """
 
+MAILTUI_SERVICE = """\
+[Unit]
+Description=Mail Client TUI Web Server
+After=network.target mailapp.service
+
+[Service]
+Type=simple
+User=mailapp
+Group=mailapp
+WorkingDirectory={project_root}
+ExecStart={project_root}/venv/bin/python -m tui --web
+Restart=always
+RestartSec=5
+Environment=PATH={project_root}/venv/bin:/usr/local/bin:/usr/bin
+
+[Install]
+WantedBy=multi-user.target
+"""
+
 SYSTEMD_DIR = "/etc/systemd/system"
 
 
@@ -172,6 +191,7 @@ def run(state) -> str | None:
 
     mailapp_content = MAILAPP_SERVICE.format(project_root=project_root)
     mailworker_content = MAILWORKER_SERVICE.format(project_root=project_root)
+    mailtui_content = MAILTUI_SERVICE.format(project_root=project_root)
 
     # Show service files
     show_details = ui.ask_confirm("Show service file contents?", default=False)
@@ -182,9 +202,13 @@ def run(state) -> str | None:
         ui.console.print(
             ui.Panel(mailworker_content, title="[bold]mailworker.service[/bold]", border_style="blue")
         )
+        ui.console.print(
+            ui.Panel(mailtui_content, title="[bold]mailtui.service[/bold]", border_style="blue")
+        )
 
     install_service_file("mailapp", mailapp_content)
     install_service_file("mailworker", mailworker_content)
+    install_service_file("mailtui", mailtui_content)
 
     # --- Configure Caddy ---
     ui.console.print()
@@ -204,7 +228,7 @@ def run(state) -> str | None:
     ui.console.print()
     ui.info("[bold]Enabling services...[/bold]")
 
-    services_to_enable = ["mailapp", "mailworker", "caddy"]
+    services_to_enable = ["mailapp", "mailworker", "mailtui", "caddy"]
 
     # Also ensure PostgreSQL and Redis are enabled
     pg_service = "postgresql"
@@ -233,7 +257,7 @@ def run(state) -> str | None:
         ui.info("[bold]Starting services...[/bold]")
 
         # Start in dependency order
-        start_order = [pg_service, redis_service, "mailapp", "mailworker", "caddy"]
+        start_order = [pg_service, redis_service, "mailapp", "mailworker", "mailtui", "caddy"]
 
         for svc in start_order:
             ui.info(f"  Starting {svc}...")

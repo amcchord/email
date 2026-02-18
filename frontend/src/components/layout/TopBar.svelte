@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { theme } from '../../lib/theme.js';
+  import { theme, getEffectiveMode } from '../../lib/theme.js';
   import Icon from '../common/Icon.svelte';
   import { api } from '../../lib/api.js';
   import { user, sidebarCollapsed, searchQuery, currentPage, currentMailbox, viewMode, overallSyncState, syncStatus, showToast, forceSyncPoll, selectedAccountId, accounts, accountColorMap, hideIgnored } from '../../lib/stores.js';
@@ -332,21 +332,21 @@
           </span>
           <span class="hidden sm:inline" style="color: var(--color-accent-500)">{getOverallProgress() || $overallSyncState.message}</span>
         {:else if $overallSyncState.state === 'rate_limited'}
-          <span style="color: #f59e0b">
+          <span style="color: var(--status-warning)">
             <Icon name="clock" size={16} />
           </span>
-          <span class="hidden sm:inline" style="color: #f59e0b">{countdownText || 'Rate limited'}</span>
+          <span class="hidden sm:inline" style="color: var(--status-warning)">{countdownText || 'Rate limited'}</span>
         {:else if $overallSyncState.state === 'partial'}
-          <span class="w-2 h-2 rounded-full shrink-0" style="background: #22c55e"></span>
+          <span class="w-2 h-2 rounded-full shrink-0" style="background: var(--status-success)"></span>
           <span class="hidden sm:inline">{$overallSyncState.message}</span>
           {#if $overallSyncState.rateLimitedCount > 0}
-            <span class="hidden sm:inline text-[10px] px-1 rounded" style="color: #f59e0b">{countdownText}</span>
+            <span class="hidden sm:inline text-[10px] px-1 rounded" style="color: var(--status-warning)">{countdownText}</span>
           {/if}
         {:else if $overallSyncState.state === 'error'}
-          <span class="w-2 h-2 rounded-full shrink-0" style="background: #ef4444"></span>
-          <span class="hidden sm:inline" style="color: #ef4444">Sync Error</span>
+          <span class="w-2 h-2 rounded-full shrink-0" style="background: var(--status-error)"></span>
+          <span class="hidden sm:inline" style="color: var(--status-error)">Sync Error</span>
         {:else}
-          <span class="w-2 h-2 rounded-full shrink-0" style="background: #22c55e"></span>
+          <span class="w-2 h-2 rounded-full shrink-0" style="background: var(--status-success)"></span>
           <span class="hidden sm:inline">{$overallSyncState.message}</span>
         {/if}
       </button>
@@ -370,11 +370,11 @@
                 {#if getAccountSyncState(acct) === 'syncing'}
                   <span class="w-2 h-2 rounded-full shrink-0 animate-pulse" style="background: var(--color-accent-500)"></span>
                 {:else if getAccountSyncState(acct) === 'rate_limited'}
-                  <span class="w-2 h-2 rounded-full shrink-0" style="background: #f59e0b"></span>
+                  <span class="w-2 h-2 rounded-full shrink-0" style="background: var(--status-warning)"></span>
                 {:else if getAccountSyncState(acct) === 'error'}
-                  <span class="w-2 h-2 rounded-full shrink-0" style="background: #ef4444"></span>
+                  <span class="w-2 h-2 rounded-full shrink-0" style="background: var(--status-error)"></span>
                 {:else}
-                  <span class="w-2 h-2 rounded-full shrink-0" style="background: #22c55e"></span>
+                  <span class="w-2 h-2 rounded-full shrink-0" style="background: var(--status-success)"></span>
                 {/if}
                 <div class="flex-1 min-w-0">
                   <div class="text-xs font-medium truncate" style="color: var(--text-primary)">{acct.email}</div>
@@ -389,9 +389,9 @@
                       </div>
                     {/if}
                   {:else if getAccountSyncState(acct) === 'rate_limited'}
-                    <div class="text-[10px]" style="color: #f59e0b">{getAccountCountdown(acct)}</div>
+                    <div class="text-[10px]" style="color: var(--status-warning)">{getAccountCountdown(acct)}</div>
                   {:else if getAccountSyncState(acct) === 'error' && acct.sync_status.error_message}
-                    <div class="text-[10px] truncate" style="color: #ef4444" title={acct.sync_status.error_message}>{acct.sync_status.error_message}</div>
+                    <div class="text-[10px] truncate" style="color: var(--status-error)" title={acct.sync_status.error_message}>{acct.sync_status.error_message}</div>
                   {:else}
                     <div class="text-[10px]" style="color: var(--text-tertiary)">{formatSyncTime(acct)}{#if acct.sync_status && acct.sync_status.messages_synced} -- {acct.sync_status.messages_synced.toLocaleString()} emails{/if}</div>
                   {/if}
@@ -423,7 +423,7 @@
       aria-label="Toggle theme"
       data-shortcut="nav.theme"
     >
-      {#if $theme === 'dark'}
+      {#if getEffectiveMode($theme) === 'dark'}
         <Icon name="sun" size={16} />
       {:else}
         <Icon name="moon" size={16} />
@@ -472,6 +472,14 @@
   }
   .tab-inactive:hover {
     background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+  /* Hover states for icon buttons */
+  header button:not(.tab-active):not(.tab-inactive) {
+    transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  header button:not(.tab-active):not(.tab-inactive):hover {
+    background: var(--bg-hover);
     color: var(--text-primary);
   }
 </style>

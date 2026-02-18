@@ -641,11 +641,11 @@
                         {:else if status.status === 'in_progress'}
                           <div class="w-5 h-5 rounded-full border-2 border-t-transparent animate-spin" style="border-color: var(--color-accent-500)"></div>
                         {:else if status.status === 'completed'}
-                          <div class="w-5 h-5 rounded-full flex items-center justify-center" style="background: #22c55e">
+                          <div class="w-5 h-5 rounded-full flex items-center justify-center" style="background: var(--status-success)">
                             <Icon name="check" size={12} class="text-white" strokeWidth={3} />
                           </div>
                         {:else if status.status === 'failed'}
-                          <div class="w-5 h-5 rounded-full flex items-center justify-center" style="background: #ef4444">
+                          <div class="w-5 h-5 rounded-full flex items-center justify-center" style="background: var(--status-error)">
                             <Icon name="x" size={12} class="text-white" strokeWidth={3} />
                           </div>
                         {/if}
@@ -684,7 +684,7 @@
 
                         <!-- Error (when failed) -->
                         {#if status.status === 'failed' && status.error}
-                          <div class="mt-1 text-xs" style="color: #ef4444">
+                          <div class="mt-1 text-xs" style="color: var(--status-error)">
                             {status.error}
                           </div>
                         {/if}
@@ -746,7 +746,7 @@
 
             <!-- Error -->
             {#if errorMessage}
-              <div class="rounded-xl border p-4 text-sm" style="border-color: #ef4444/30; background: #ef4444/5; color: #ef4444">
+              <div class="rounded-xl border p-4 text-sm" style="border-color: color-mix(in srgb, var(--status-error) 30%, transparent); background: color-mix(in srgb, var(--status-error) 5%, transparent); color: var(--status-error)">
                 {errorMessage}
               </div>
             {/if}

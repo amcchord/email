@@ -131,15 +131,15 @@
   }
 
   const categoryColors = {
-    urgent: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400',
+    urgent: 'bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300',
     can_ignore: 'bg-surface-100 text-surface-500 dark:bg-surface-800 dark:text-surface-500',
-    fyi: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400',
-    awaiting_reply: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400',
+    fyi: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300',
+    awaiting_reply: 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300',
   };
 
   const emailTypeColors = {
-    work: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400',
-    personal: 'bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-400',
+    work: 'bg-purple-100 text-purple-700 dark:bg-purple-500/20 dark:text-purple-300',
+    personal: 'bg-teal-100 text-teal-700 dark:bg-teal-500/20 dark:text-teal-300',
   };
 
   function colStyle(col) {
@@ -216,11 +216,11 @@
   });
 
   const digestTypeConfig = {
-    scheduling: { label: 'Scheduling', classes: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400' },
-    discussion: { label: 'Discussion', classes: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400' },
-    notification: { label: 'Notification', classes: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400' },
-    transactional: { label: 'Transactional', classes: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400' },
-    other: { label: 'Thread', classes: 'bg-stone-100 text-stone-600 dark:bg-stone-800 dark:text-stone-400' },
+    scheduling: { label: 'Scheduling', classes: 'bg-purple-100 text-purple-700 dark:bg-purple-500/20 dark:text-purple-300' },
+    discussion: { label: 'Discussion', classes: 'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300' },
+    notification: { label: 'Notification', classes: 'bg-gray-100 text-gray-600 dark:bg-gray-700/50 dark:text-gray-300' },
+    transactional: { label: 'Transactional', classes: 'bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-300' },
+    other: { label: 'Thread', classes: 'bg-stone-100 text-stone-600 dark:bg-stone-700/50 dark:text-stone-300' },
   };
 
   function getDigestConfig(type) {
@@ -385,7 +385,7 @@
                   <div class="flex items-center gap-1.5">
                     <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap {dConf.classes}">{dConf.label}</span>
                     {#if email.thread_digest_resolved}
-                      <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400">Resolved</span>
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-300">Resolved</span>
                     {/if}
                   </div>
                 </td>
@@ -512,12 +512,12 @@
                       </span>
                     {/if}
                     {#if email.needs_reply}
-                      <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400">
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300">
                         reply
                       </span>
                     {/if}
                     {#if email.is_subscription}
-                      <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400">
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300">
                         sub
                       </span>
                     {/if}

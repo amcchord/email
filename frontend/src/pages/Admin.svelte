@@ -2,6 +2,8 @@
   import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
   import { user, showToast, syncStatus, forceSyncPoll, threadOrder } from '../lib/stores.js';
+  import { theme, activeTheme, getEffectiveMode } from '../lib/theme.js';
+  import { getThemeList } from '../lib/themes.js';
   import {
     activeShortcuts,
     shortcutsByCategory,
@@ -18,7 +20,38 @@
   import Input from '../components/common/Input.svelte';
   import Icon from '../components/common/Icon.svelte';
 
-  let activeTab = $state('about-me');
+  // Theme state
+  let themeList = getThemeList();
+  let selectedThemeId = $state($activeTheme);
+  let selectedColorScheme = $state($theme);
+
+  function selectTheme(id) {
+    selectedThemeId = id;
+    activeTheme.set(id);
+  }
+
+  function selectColorScheme(scheme) {
+    selectedColorScheme = scheme;
+    theme.set(scheme);
+  }
+
+  async function saveAppearancePreferences() {
+    appearanceSaving = true;
+    try {
+      await api.updateUIPreferences({
+        theme: selectedThemeId,
+        color_scheme: selectedColorScheme,
+      });
+      showToast('Appearance saved', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    appearanceSaving = false;
+  }
+
+  let appearanceSaving = $state(false);
+
+  let activeTab = $state('profile');
   let dashboard = $state(null);
   let settings = $state([]);
   let loading = $state(true);
@@ -27,6 +60,10 @@
   // Use the live syncStatus store for real-time updates
   let adminAccounts = $derived($syncStatus.length > 0 ? $syncStatus : []);
 
+  // Feature flags
+  let featureFlags = $state({ tui_enabled: true, desktop_app_enabled: false });
+  let featureFlagsLoaded = $state(false);
+
   // New setting form
   let newKey = $state('');
   let newValue = $state('');
@@ -34,18 +71,21 @@
   let newDescription = $state('');
 
   let allTabs = [
-    { id: 'about-me', label: 'About Me', adminOnly: false },
-    { id: 'accounts', label: 'My Accounts', adminOnly: false },
+    { id: 'profile', label: 'Profile & Accounts', adminOnly: false },
     { id: 'ai-models', label: 'AI Models', adminOnly: false },
     { id: 'preferences', label: 'Preferences', adminOnly: false },
-    { id: 'shortcuts', label: 'Keyboard Shortcuts', adminOnly: false },
     { id: 'data', label: 'Data Management', adminOnly: false },
     { id: 'dashboard', label: 'Dashboard', adminOnly: true },
     { id: 'apikeys', label: 'API Keys', adminOnly: true },
     { id: 'settings', label: 'Settings', adminOnly: true },
+    { id: 'desktop-app', label: 'Desktop App', adminOnly: false, featureFlag: 'desktop_app_enabled' },
   ];
 
-  let tabs = $derived(allTabs.filter(t => !t.adminOnly || isAdmin));
+  let tabs = $derived(allTabs.filter(t => {
+    if (t.adminOnly && !isAdmin) return false;
+    if (t.featureFlag && !featureFlags[t.featureFlag] && !isAdmin) return false;
+    return true;
+  }));
 
   onMount(async () => {
     await loadData();
@@ -108,8 +148,8 @@
       allowedAccounts = allowed.allowed_accounts || '';
       allowedLoaded = true;
 
-      // Always load AI preferences, About Me, and UI preferences (available to all users)
-      await Promise.all([loadAIPreferences(), loadAboutMe(), loadUIPreferences()]);
+      // Always load AI preferences, About Me, UI preferences, and feature flags (available to all users)
+      await Promise.all([loadAIPreferences(), loadAboutMe(), loadUIPreferences(), loadFeatureFlags()]);
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -235,6 +275,11 @@
   let aboutMeLoaded = $state(false);
   let aboutMeSaving = $state(false);
 
+  // TUI Password
+  let tuiPassword = $state('');
+  let tuiPasswordSaving = $state(false);
+  let tuiPasswordMessage = $state('');
+
   // UI Preferences
   let uiPrefsLoaded = $state(false);
   let uiPrefsSaving = $state(false);
@@ -336,9 +381,47 @@
     try {
       const data = await api.getUIPreferences();
       threadOrder.set(data.thread_order || 'newest_first');
+      if (data.theme) {
+        selectedThemeId = data.theme;
+        activeTheme.set(data.theme);
+      }
+      if (data.color_scheme) {
+        selectedColorScheme = data.color_scheme;
+        theme.set(data.color_scheme);
+      }
       uiPrefsLoaded = true;
     } catch (err) {
       showToast('Failed to load UI preferences', 'error');
+    }
+  }
+
+  async function loadFeatureFlags() {
+    try {
+      featureFlags = await api.getFeatureFlags();
+      featureFlagsLoaded = true;
+    } catch (err) {
+      // Use defaults on failure
+      featureFlagsLoaded = true;
+    }
+  }
+
+  async function toggleFeatureFlag(key) {
+    const newValue = !featureFlags[key];
+    try {
+      await api.updateSetting({
+        key,
+        value: String(newValue),
+        is_secret: false,
+        description: key === 'tui_enabled' ? 'Enable the TUI (terminal interface)' : 'Enable the desktop app downloads',
+      });
+      featureFlags = { ...featureFlags, [key]: newValue };
+      // Refresh the settings table if admin is viewing it
+      if (isAdmin) {
+        settings = await api.getSettings();
+      }
+      showToast(`${key} ${newValue ? 'enabled' : 'disabled'}`, 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
     }
   }
 
@@ -515,6 +598,21 @@
     aboutMeSaving = false;
   }
 
+  async function saveTuiPassword() {
+    if (tuiPassword.length < 6) return;
+    tuiPasswordSaving = true;
+    tuiPasswordMessage = '';
+    try {
+      const data = await api.setTuiPassword(tuiPassword);
+      tuiPassword = '';
+      tuiPasswordMessage = data.message || 'TUI password set successfully.';
+      showToast('TUI password set', 'success');
+    } catch (err) {
+      showToast(err.message || 'Failed to set TUI password', 'error');
+    }
+    tuiPasswordSaving = false;
+  }
+
   // ── Keyboard Shortcuts ────────────────────────────────────────────
   let shortcutSearchFilter = $state('');
   let recordingActionId = $state(null);
@@ -592,7 +690,7 @@
   }
 
   function handleShortcutSettingsNavigate() {
-    activeTab = 'shortcuts';
+    activeTab = 'preferences';
   }
 
   // Account descriptions
@@ -628,9 +726,10 @@
       <div class="flex justify-center py-12">
         <div class="w-6 h-6 border-2 rounded-full animate-spin" style="border-color: var(--border-color); border-top-color: var(--color-accent-500)"></div>
       </div>
-    {:else if activeTab === 'about-me'}
-      <!-- About Me -->
+    {:else if activeTab === 'profile'}
+      <!-- Profile & Accounts -->
       <div class="space-y-6">
+        <!-- About Me section -->
         <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
           <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">About Me</h3>
           <p class="text-xs mb-4" style="color: var(--text-tertiary)">
@@ -654,26 +753,246 @@
           </div>
         </div>
 
+        <!-- TUI / SSH Password section -->
         <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
-          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Tips</h3>
-          <ul class="text-xs space-y-2 mt-3" style="color: var(--text-secondary)">
-            <li class="flex gap-2">
-              <span class="shrink-0 w-1.5 h-1.5 rounded-full mt-1.5" style="background: var(--color-accent-500)"></span>
-              <span>Describe your job role and industry so the AI can prioritize relevant emails.</span>
-            </li>
-            <li class="flex gap-2">
-              <span class="shrink-0 w-1.5 h-1.5 rounded-full mt-1.5" style="background: var(--color-accent-500)"></span>
-              <span>Mention key topics or projects you care about for better categorization.</span>
-            </li>
-            <li class="flex gap-2">
-              <span class="shrink-0 w-1.5 h-1.5 rounded-full mt-1.5" style="background: var(--color-accent-500)"></span>
-              <span>Explain your communication style (e.g., "I prefer concise, direct replies") for smarter reply suggestions.</span>
-            </li>
-            <li class="flex gap-2">
-              <span class="shrink-0 w-1.5 h-1.5 rounded-full mt-1.5" style="background: var(--color-accent-500)"></span>
-              <span>You can also describe each connected email account's purpose in the My Accounts tab.</span>
-            </li>
-          </ul>
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">TUI / SSH Password</h3>
+          <p class="text-xs mb-3" style="color: var(--text-tertiary)">
+            Set a password to log into the terminal interface via SSH. Use your email as the username.
+            Connect with: <code style="color: var(--text-secondary)">ssh -p 2222 {$user?.email || 'you'}@email.mcchord.net</code>
+          </p>
+          <div class="flex gap-3 items-end">
+            <div class="flex-1">
+              <input
+                type="password"
+                bind:value={tuiPassword}
+                placeholder="New TUI password (min 6 characters)"
+                class="w-full h-9 px-3 rounded-lg text-sm outline-none border"
+                style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+              />
+            </div>
+            <Button variant="primary" size="sm" onclick={saveTuiPassword} disabled={tuiPasswordSaving || tuiPassword.length < 6}>
+              {tuiPasswordSaving ? 'Saving...' : 'Set Password'}
+            </Button>
+          </div>
+          {#if tuiPasswordMessage}
+            <p class="text-xs mt-2" style="color: var(--color-accent-500)">{tuiPasswordMessage}</p>
+          {/if}
+        </div>
+
+        <!-- Connected Accounts section -->
+        <div class="space-y-4">
+          <!-- Allowed Accounts -->
+          <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+            <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Allowed Accounts</h3>
+            <p class="text-xs mb-3" style="color: var(--text-tertiary)">
+              Only these emails and domains can connect via Google OAuth. Use full emails (<code style="color: var(--text-secondary)">user@example.com</code>) or domains with @ prefix (<code style="color: var(--text-secondary)">@example.com</code>). Comma-separated. Leave empty to allow any account.
+            </p>
+            <div class="flex gap-3">
+              <input
+                type="text"
+                bind:value={allowedAccounts}
+                placeholder="user@company.com, @company.com, other@gmail.com"
+                class="flex-1 h-9 px-3 rounded-lg text-sm outline-none border font-mono"
+                style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+              />
+              <Button variant="primary" size="sm" onclick={saveAllowedAccounts}>
+                Save
+              </Button>
+            </div>
+          </div>
+
+          <div class="flex justify-between items-center">
+            <h3 class="text-sm font-semibold" style="color: var(--text-primary)">Connected Google Accounts</h3>
+            <Button variant="primary" size="sm" onclick={connectGoogle}>
+              Connect Account
+            </Button>
+          </div>
+
+          {#if adminAccounts.length === 0}
+            <div class="rounded-xl border p-8 text-center" style="background: var(--bg-secondary); border-color: var(--border-color)">
+              <p class="text-sm font-medium" style="color: var(--text-primary)">No accounts connected</p>
+              <p class="text-xs mt-1" style="color: var(--text-secondary)">
+                First configure Google OAuth credentials in API Keys, then connect an account.
+              </p>
+            </div>
+          {:else}
+            {#each adminAccounts as acct}
+              {@const hasError = acct.sync_status && acct.sync_status.status === 'error'}
+              {@const isRateLimited = acct.sync_status && acct.sync_status.status === 'rate_limited'}
+              {@const isSyncing = acct.sync_status && acct.sync_status.status === 'syncing'}
+              <div
+                class="rounded-xl border p-4"
+                style="background: var(--bg-secondary); border-color: {hasError ? 'var(--status-error-border)' : isRateLimited ? 'var(--status-warning-border)' : 'var(--border-color)'}"
+              >
+                <!-- Header row: avatar + email + status + actions -->
+                <div class="flex items-center gap-4">
+                  <div
+                    class="w-10 h-10 rounded-full flex items-center justify-center text-lg font-bold shrink-0"
+                    style="background: {hasError ? 'var(--status-error-bg)' : 'var(--color-accent-500-alpha, rgba(99,102,241,0.12))'}; color: {hasError ? 'var(--status-error)' : 'var(--color-accent-600)'}"
+                  >
+                    {#if hasError}
+                      <Icon name="alert-triangle" size={20} />
+                    {:else}
+                      {acct.email[0].toUpperCase()}
+                    {/if}
+                  </div>
+                  <div class="flex-1 min-w-0">
+                    <div class="text-sm font-medium truncate" style="color: var(--text-primary)">{acct.email}</div>
+                    <div class="text-xs mt-0.5" style="color: var(--text-secondary)">
+                      {#if !acct.sync_status}
+                        Not synced yet
+                      {:else if isSyncing}
+                        <span class="flex items-center gap-1.5" style="color: var(--color-accent-500)">
+                          <span class="inline-block w-2 h-2 rounded-full animate-pulse" style="background: var(--color-accent-500)"></span>
+                          {#if acct.sync_status.current_phase}
+                            {acct.sync_status.current_phase}
+                          {:else}
+                            Syncing...
+                          {/if}
+                        </span>
+                      {:else if isRateLimited}
+                        <span style="color: var(--status-warning)">Rate limited by Gmail</span>
+                      {:else if hasError}
+                        <span style="color: var(--status-error)">{getFriendlyError(acct.sync_status.error_message)}</span>
+                      {:else if acct.sync_status.status === 'completed'}
+                        {#if acct.sync_status.messages_synced}
+                          {acct.sync_status.messages_synced.toLocaleString()} messages synced
+                        {:else}
+                          Sync complete
+                        {/if}
+                      {:else}
+                        {acct.sync_status.status || 'Idle'}
+                        {#if acct.sync_status.messages_synced}
+                          &middot; {acct.sync_status.messages_synced.toLocaleString()} messages
+                        {/if}
+                      {/if}
+                    </div>
+                  </div>
+                  <div class="flex gap-2 shrink-0">
+                    <Button size="sm" onclick={() => triggerSync(acct.id)} disabled={isSyncing}>
+                      {#if isSyncing}
+                        Syncing...
+                      {:else}
+                        Sync
+                      {/if}
+                    </Button>
+                    <Button size="sm" onclick={() => reauthorizeAccount(acct.id)}>
+                      Reauthorize
+                    </Button>
+                    <Button size="sm" variant="danger" onclick={() => removeAccount(acct.id)}>
+                      Remove
+                    </Button>
+                  </div>
+                </div>
+
+                <!-- Error banner with expandable details -->
+                {#if hasError && acct.sync_status.error_message}
+                  <div class="mt-3 rounded-lg overflow-hidden" style="border: 1px solid var(--status-error-border); background: var(--status-error-bg)">
+                    <button
+                      onclick={() => toggleErrorDetails(acct.id)}
+                      class="w-full flex items-center gap-2 px-3 py-2 text-xs text-left transition-colors"
+                      style="color: var(--status-error-text)"
+                    >
+                      <span class="shrink-0" style="color: var(--status-error)">
+                        <Icon name="alert-triangle" size={16} />
+                      </span>
+                      <span class="flex-1 font-medium">{getFriendlyError(acct.sync_status.error_message)}</span>
+                      <span
+                        class="shrink-0 transition-transform duration-200"
+                        style="transform: rotate({expandedErrors[acct.id] ? '180' : '0'}deg); color: var(--status-error-text)"
+                      >
+                        <Icon name="chevron-down" size={16} />
+                      </span>
+                    </button>
+                    {#if expandedErrors[acct.id]}
+                      <div class="px-3 pb-3">
+                        <div class="px-3 py-2 rounded text-[11px] font-mono break-all leading-relaxed" style="background: var(--status-error-border); color: var(--status-error-text); max-height: 120px; overflow-y: auto">
+                          {acct.sync_status.error_message}
+                        </div>
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
+
+                <!-- Rate limit notice -->
+                {#if isRateLimited && acct.sync_status.retry_after}
+                  <div class="mt-3 px-3 py-2.5 rounded-lg text-xs flex items-center gap-2.5" style="background: var(--status-warning-bg); color: var(--status-warning-text); border: 1px solid var(--status-warning-border)">
+                    <span class="shrink-0" style="color: var(--status-warning)">
+                      <Icon name="clock" size={16} />
+                    </span>
+                    <span>Gmail rate limit reached. Will automatically retry at <strong>{new Date(acct.sync_status.retry_after).toLocaleTimeString()}</strong>.</span>
+                  </div>
+                {/if}
+
+                <!-- Progress bar during sync -->
+                {#if isSyncing && acct.sync_status.total_messages > 0}
+                  <div class="mt-3">
+                    <div class="flex justify-between text-[10px] mb-1" style="color: var(--text-tertiary)">
+                      <span>{(acct.sync_status.messages_synced || 0).toLocaleString()} of {acct.sync_status.total_messages.toLocaleString()} messages</span>
+                      <span>{Math.round((acct.sync_status.messages_synced || 0) / acct.sync_status.total_messages * 100)}%</span>
+                    </div>
+                    <div class="h-1.5 rounded-full overflow-hidden" style="background: var(--border-color)">
+                      <div
+                        class="h-full rounded-full transition-all duration-700 ease-out"
+                        style="background: var(--color-accent-500); width: {Math.min(100, Math.round((acct.sync_status.messages_synced || 0) / acct.sync_status.total_messages * 100))}%"
+                      ></div>
+                    </div>
+                  </div>
+                {/if}
+
+                <!-- Account description -->
+                <div class="mt-3 pt-3" style="border-top: 1px solid var(--border-color)">
+                  <label class="block text-[10px] font-semibold uppercase tracking-wider mb-1" style="color: var(--text-tertiary)">
+                    Account Purpose
+                  </label>
+                  <div class="flex gap-2">
+                    <input
+                      type="text"
+                      bind:value={accountDescriptions[acct.id]}
+                      placeholder="e.g., Work email, Personal, Side project, Junk..."
+                      class="flex-1 h-8 px-3 rounded-lg text-xs outline-none border"
+                      style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+                    />
+                    <Button size="sm" onclick={() => saveAccountDescription(acct.id)} disabled={accountDescSaving[acct.id]}>
+                      {accountDescSaving[acct.id] ? 'Saving...' : 'Save'}
+                    </Button>
+                  </div>
+                  <p class="text-[10px] mt-1" style="color: var(--text-tertiary)">
+                    Helps the AI understand what kind of emails to expect from this account.
+                  </p>
+                </div>
+
+                <!-- Calendar scope notice -->
+                {#if acct.has_calendar_scope === false}
+                  <div class="mt-3 px-3 py-2.5 rounded-lg text-xs flex items-center gap-2.5" style="background: var(--status-info-bg); color: var(--status-info-text); border: 1px solid var(--status-info-border)">
+                    <span class="shrink-0" style="color: var(--status-info)">
+                      <Icon name="calendar" size={16} />
+                    </span>
+                    <span class="flex-1">Calendar access not granted. Reauthorize to enable calendar sync.</span>
+                    <button
+                      onclick={() => reauthorizeAccount(acct.id)}
+                      class="shrink-0 px-2.5 py-1 rounded-md text-[11px] font-medium transition-fast"
+                      style="background: var(--status-info-bg); color: var(--status-info)"
+                    >
+                      Reauthorize
+                    </button>
+                  </div>
+                {/if}
+
+                <!-- Last sync info -->
+                {#if acct.sync_status && !isSyncing}
+                  <div class="mt-2 flex gap-4 text-[10px]" style="color: var(--text-tertiary)">
+                    {#if acct.sync_status.last_full_sync}
+                      <span>Full sync: {new Date(acct.sync_status.last_full_sync).toLocaleString()}</span>
+                    {/if}
+                    {#if acct.sync_status.last_incremental_sync}
+                      <span>Last update: {new Date(acct.sync_status.last_incremental_sync).toLocaleString()}</span>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          {/if}
         </div>
       </div>
 
@@ -781,223 +1100,6 @@
             {/each}
           </div>
         </div>
-      </div>
-
-    {:else if activeTab === 'accounts'}
-      <!-- Google Accounts -->
-      <div class="space-y-4">
-        <!-- Allowed Accounts -->
-        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
-          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Allowed Accounts</h3>
-          <p class="text-xs mb-3" style="color: var(--text-tertiary)">
-            Only these emails and domains can connect via Google OAuth. Use full emails (<code style="color: var(--text-secondary)">user@example.com</code>) or domains with @ prefix (<code style="color: var(--text-secondary)">@example.com</code>). Comma-separated. Leave empty to allow any account.
-          </p>
-          <div class="flex gap-3">
-            <input
-              type="text"
-              bind:value={allowedAccounts}
-              placeholder="user@company.com, @company.com, other@gmail.com"
-              class="flex-1 h-9 px-3 rounded-lg text-sm outline-none border font-mono"
-              style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
-            />
-            <Button variant="primary" size="sm" onclick={saveAllowedAccounts}>
-              Save
-            </Button>
-          </div>
-        </div>
-
-        <div class="flex justify-between items-center">
-          <h3 class="text-sm font-semibold" style="color: var(--text-primary)">Connected Google Accounts</h3>
-          <Button variant="primary" size="sm" onclick={connectGoogle}>
-            Connect Account
-          </Button>
-        </div>
-
-        {#if adminAccounts.length === 0}
-          <div class="rounded-xl border p-8 text-center" style="background: var(--bg-secondary); border-color: var(--border-color)">
-            <p class="text-sm font-medium" style="color: var(--text-primary)">No accounts connected</p>
-            <p class="text-xs mt-1" style="color: var(--text-secondary)">
-              First configure Google OAuth credentials in API Keys, then connect an account.
-            </p>
-          </div>
-        {:else}
-          {#each adminAccounts as acct}
-            {@const hasError = acct.sync_status && acct.sync_status.status === 'error'}
-            {@const isRateLimited = acct.sync_status && acct.sync_status.status === 'rate_limited'}
-            {@const isSyncing = acct.sync_status && acct.sync_status.status === 'syncing'}
-            <div
-              class="rounded-xl border p-4"
-              style="background: var(--bg-secondary); border-color: {hasError ? '#fecaca' : isRateLimited ? '#fde68a' : 'var(--border-color)'}"
-            >
-              <!-- Header row: avatar + email + status + actions -->
-              <div class="flex items-center gap-4">
-                <div
-                  class="w-10 h-10 rounded-full flex items-center justify-center text-lg font-bold shrink-0"
-                  style="background: {hasError ? '#fef2f2' : 'var(--color-accent-500-alpha, rgba(99,102,241,0.12))'}; color: {hasError ? '#dc2626' : 'var(--color-accent-600)'}"
-                >
-                  {#if hasError}
-                    <Icon name="alert-triangle" size={20} />
-                  {:else}
-                    {acct.email[0].toUpperCase()}
-                  {/if}
-                </div>
-                <div class="flex-1 min-w-0">
-                  <div class="text-sm font-medium truncate" style="color: var(--text-primary)">{acct.email}</div>
-                  <div class="text-xs mt-0.5" style="color: var(--text-secondary)">
-                    {#if !acct.sync_status}
-                      Not synced yet
-                    {:else if isSyncing}
-                      <span class="flex items-center gap-1.5" style="color: var(--color-accent-500)">
-                        <span class="inline-block w-2 h-2 rounded-full animate-pulse" style="background: var(--color-accent-500)"></span>
-                        {#if acct.sync_status.current_phase}
-                          {acct.sync_status.current_phase}
-                        {:else}
-                          Syncing...
-                        {/if}
-                      </span>
-                    {:else if isRateLimited}
-                      <span style="color: #d97706">Rate limited by Gmail</span>
-                    {:else if hasError}
-                      <span style="color: #dc2626">{getFriendlyError(acct.sync_status.error_message)}</span>
-                    {:else if acct.sync_status.status === 'completed'}
-                      {#if acct.sync_status.messages_synced}
-                        {acct.sync_status.messages_synced.toLocaleString()} messages synced
-                      {:else}
-                        Sync complete
-                      {/if}
-                    {:else}
-                      {acct.sync_status.status || 'Idle'}
-                      {#if acct.sync_status.messages_synced}
-                        &middot; {acct.sync_status.messages_synced.toLocaleString()} messages
-                      {/if}
-                    {/if}
-                  </div>
-                </div>
-                <div class="flex gap-2 shrink-0">
-                  <Button size="sm" onclick={() => triggerSync(acct.id)} disabled={isSyncing}>
-                    {#if isSyncing}
-                      Syncing...
-                    {:else}
-                      Sync
-                    {/if}
-                  </Button>
-                  <Button size="sm" onclick={() => reauthorizeAccount(acct.id)}>
-                    Reauthorize
-                  </Button>
-                  <Button size="sm" variant="danger" onclick={() => removeAccount(acct.id)}>
-                    Remove
-                  </Button>
-                </div>
-              </div>
-
-              <!-- Error banner with expandable details -->
-              {#if hasError && acct.sync_status.error_message}
-                <div class="mt-3 rounded-lg overflow-hidden" style="border: 1px solid #fecaca; background: #fef2f2">
-                  <button
-                    onclick={() => toggleErrorDetails(acct.id)}
-                    class="w-full flex items-center gap-2 px-3 py-2 text-xs text-left transition-colors"
-                    style="color: #991b1b"
-                  >
-                    <span class="shrink-0" style="color: #dc2626">
-                      <Icon name="alert-triangle" size={16} />
-                    </span>
-                    <span class="flex-1 font-medium">{getFriendlyError(acct.sync_status.error_message)}</span>
-                    <span
-                      class="shrink-0 transition-transform duration-200"
-                      style="transform: rotate({expandedErrors[acct.id] ? '180' : '0'}deg); color: #991b1b"
-                    >
-                      <Icon name="chevron-down" size={16} />
-                    </span>
-                  </button>
-                  {#if expandedErrors[acct.id]}
-                    <div class="px-3 pb-3">
-                      <div class="px-3 py-2 rounded text-[11px] font-mono break-all leading-relaxed" style="background: #fee2e2; color: #7f1d1d; max-height: 120px; overflow-y: auto">
-                        {acct.sync_status.error_message}
-                      </div>
-                    </div>
-                  {/if}
-                </div>
-              {/if}
-
-              <!-- Rate limit notice -->
-              {#if isRateLimited && acct.sync_status.retry_after}
-                <div class="mt-3 px-3 py-2.5 rounded-lg text-xs flex items-center gap-2.5" style="background: #fffbeb; color: #92400e; border: 1px solid #fde68a">
-                  <span class="shrink-0" style="color: #d97706">
-                    <Icon name="clock" size={16} />
-                  </span>
-                  <span>Gmail rate limit reached. Will automatically retry at <strong>{new Date(acct.sync_status.retry_after).toLocaleTimeString()}</strong>.</span>
-                </div>
-              {/if}
-
-              <!-- Progress bar during sync -->
-              {#if isSyncing && acct.sync_status.total_messages > 0}
-                <div class="mt-3">
-                  <div class="flex justify-between text-[10px] mb-1" style="color: var(--text-tertiary)">
-                    <span>{(acct.sync_status.messages_synced || 0).toLocaleString()} of {acct.sync_status.total_messages.toLocaleString()} messages</span>
-                    <span>{Math.round((acct.sync_status.messages_synced || 0) / acct.sync_status.total_messages * 100)}%</span>
-                  </div>
-                  <div class="h-1.5 rounded-full overflow-hidden" style="background: var(--border-color)">
-                    <div
-                      class="h-full rounded-full transition-all duration-700 ease-out"
-                      style="background: var(--color-accent-500); width: {Math.min(100, Math.round((acct.sync_status.messages_synced || 0) / acct.sync_status.total_messages * 100))}%"
-                    ></div>
-                  </div>
-                </div>
-              {/if}
-
-              <!-- Account description -->
-              <div class="mt-3 pt-3" style="border-top: 1px solid var(--border-color)">
-                <label class="block text-[10px] font-semibold uppercase tracking-wider mb-1" style="color: var(--text-tertiary)">
-                  Account Purpose
-                </label>
-                <div class="flex gap-2">
-                  <input
-                    type="text"
-                    bind:value={accountDescriptions[acct.id]}
-                    placeholder="e.g., Work email, Personal, Side project, Junk..."
-                    class="flex-1 h-8 px-3 rounded-lg text-xs outline-none border"
-                    style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
-                  />
-                  <Button size="sm" onclick={() => saveAccountDescription(acct.id)} disabled={accountDescSaving[acct.id]}>
-                    {accountDescSaving[acct.id] ? 'Saving...' : 'Save'}
-                  </Button>
-                </div>
-                <p class="text-[10px] mt-1" style="color: var(--text-tertiary)">
-                  Helps the AI understand what kind of emails to expect from this account.
-                </p>
-              </div>
-
-              <!-- Calendar scope notice -->
-              {#if acct.has_calendar_scope === false}
-                <div class="mt-3 px-3 py-2.5 rounded-lg text-xs flex items-center gap-2.5" style="background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe">
-                  <span class="shrink-0" style="color: #6366f1">
-                    <Icon name="calendar" size={16} />
-                  </span>
-                  <span class="flex-1">Calendar access not granted. Reauthorize to enable calendar sync.</span>
-                  <button
-                    onclick={() => reauthorizeAccount(acct.id)}
-                    class="shrink-0 px-2.5 py-1 rounded-md text-[11px] font-medium transition-fast"
-                    style="background: #6366f120; color: #4f46e5"
-                  >
-                    Reauthorize
-                  </button>
-                </div>
-              {/if}
-
-              <!-- Last sync info -->
-              {#if acct.sync_status && !isSyncing}
-                <div class="mt-2 flex gap-4 text-[10px]" style="color: var(--text-tertiary)">
-                  {#if acct.sync_status.last_full_sync}
-                    <span>Full sync: {new Date(acct.sync_status.last_full_sync).toLocaleString()}</span>
-                  {/if}
-                  {#if acct.sync_status.last_incremental_sync}
-                    <span>Last update: {new Date(acct.sync_status.last_incremental_sync).toLocaleString()}</span>
-                  {/if}
-                </div>
-              {/if}
-            </div>
-          {/each}
-        {/if}
       </div>
 
     {:else if activeTab === 'ai-models'}
@@ -1178,7 +1280,7 @@
             <tbody>
               <tr class="border-b" style="border-color: var(--border-color)">
                 <td class="py-2 font-medium" style="color: var(--text-primary)">Opus 4.6</td>
-                <td class="py-2" style="color: #22c55e">Highest</td>
+                <td class="py-2" style="color: var(--status-success)">Highest</td>
                 <td class="py-2" style="color: var(--text-secondary)">Slower</td>
                 <td class="py-2" style="color: var(--text-secondary)">$$$</td>
               </tr>
@@ -1191,8 +1293,8 @@
               <tr>
                 <td class="py-2 font-medium" style="color: var(--text-primary)">Haiku 4.5</td>
                 <td class="py-2" style="color: var(--text-secondary)">Good</td>
-                <td class="py-2" style="color: #22c55e">Fastest</td>
-                <td class="py-2" style="color: #22c55e">$</td>
+                <td class="py-2" style="color: var(--status-success)">Fastest</td>
+                <td class="py-2" style="color: var(--status-success)">$</td>
               </tr>
             </tbody>
           </table>
@@ -1200,8 +1302,79 @@
       </div>
 
     {:else if activeTab === 'preferences'}
-      <!-- UI Preferences -->
+      <!-- Preferences & Keyboard Shortcuts -->
       <div class="space-y-6">
+        <!-- Appearance -->
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Appearance</h3>
+          <p class="text-xs mb-5" style="color: var(--text-tertiary)">Choose a color theme and light/dark mode. Changes preview instantly.</p>
+
+          <!-- Color Theme -->
+          <div class="mb-5">
+            <span class="text-xs font-medium mb-2.5 block" style="color: var(--text-secondary)">Color Theme</span>
+            <div class="grid grid-cols-3 sm:grid-cols-6 gap-3">
+              {#each themeList as t}
+                <button
+                  onclick={() => selectTheme(t.id)}
+                  class="group relative flex flex-col items-center gap-2 p-3 rounded-xl border-2 transition-fast"
+                  style="border-color: {selectedThemeId === t.id ? t.accent['500'] : 'var(--border-color)'}; background: {selectedThemeId === t.id ? 'var(--bg-tertiary)' : 'var(--bg-primary)'}"
+                  title={t.description}
+                >
+                  <!-- Swatch -->
+                  <div class="flex gap-1">
+                    <div class="w-5 h-5 rounded-full" style="background: {t.accent['500']}"></div>
+                    <div class="w-5 h-5 rounded-full" style="background: {t.surface['700']}"></div>
+                  </div>
+                  <!-- Label -->
+                  <span class="text-[11px] font-medium" style="color: {selectedThemeId === t.id ? 'var(--text-primary)' : 'var(--text-secondary)'}">{t.name}</span>
+                  <!-- Check indicator -->
+                  {#if selectedThemeId === t.id}
+                    <div class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full flex items-center justify-center" style="background: {t.accent['500']}">
+                      <svg class="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" /></svg>
+                    </div>
+                  {/if}
+                </button>
+              {/each}
+            </div>
+          </div>
+
+          <!-- Color Scheme (Light / Dark / System) -->
+          <div class="mb-5">
+            <span class="text-xs font-medium mb-2 block" style="color: var(--text-secondary)">Mode</span>
+            <div class="flex gap-2">
+              {#each [
+                { id: 'light', label: 'Light', icon: 'sun' },
+                { id: 'dark', label: 'Dark', icon: 'moon' },
+                { id: 'system', label: 'System', icon: 'monitor' },
+              ] as mode}
+                <button
+                  onclick={() => selectColorScheme(mode.id)}
+                  class="flex items-center gap-2 px-4 py-2 rounded-lg border text-xs font-medium transition-fast"
+                  style="{selectedColorScheme === mode.id
+                    ? 'background: var(--color-accent-500); color: white; border-color: var(--color-accent-500)'
+                    : 'background: var(--bg-primary); color: var(--text-secondary); border-color: var(--border-color)'}"
+                >
+                  <Icon name={mode.icon} size={14} />
+                  {mode.label}
+                </button>
+              {/each}
+            </div>
+            {#if selectedColorScheme === 'system'}
+              <p class="text-[10px] mt-2" style="color: var(--text-tertiary)">Follows your operating system preference.</p>
+            {/if}
+          </div>
+
+          <div class="flex items-center gap-3">
+            <Button variant="primary" size="sm" onclick={saveAppearancePreferences} disabled={appearanceSaving}>
+              {appearanceSaving ? 'Saving...' : 'Save Appearance'}
+            </Button>
+            <span class="text-[10px]" style="color: var(--text-tertiary)">
+              Synced across all your devices.
+            </span>
+          </div>
+        </div>
+
+        <!-- Thread Display -->
         <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
           <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Thread Display</h3>
           <p class="text-xs mb-4" style="color: var(--text-tertiary)">Configure how email threads are displayed throughout the app.</p>
@@ -1239,6 +1412,128 @@
             </Button>
           </div>
         </div>
+
+        <!-- Keyboard Shortcuts -->
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_no_static_element_interactions -->
+        <div class="space-y-4" onkeydown={handleShortcutKeydown}>
+          <div class="flex items-center justify-between gap-4">
+            <h3 class="text-sm font-semibold" style="color: var(--text-primary)">Keyboard Shortcuts</h3>
+            <button
+              onclick={handleResetAll}
+              class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-fast border"
+              style="border-color: var(--border-color); color: var(--text-secondary); background: var(--bg-secondary)"
+            >
+              <Icon name="refresh-cw" size={14} />
+              Reset All
+            </button>
+          </div>
+
+          <div class="flex items-center gap-3">
+            <div class="flex-1">
+              <input
+                type="text"
+                placeholder="Search shortcuts..."
+                bind:value={shortcutSearchFilter}
+                class="w-full h-9 px-3 rounded-lg text-sm outline-none border"
+                style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary)"
+              />
+            </div>
+          </div>
+
+          <p class="text-xs" style="color: var(--text-tertiary)">
+            Click a shortcut key to re-record it. Press <kbd class="px-1.5 py-0.5 rounded text-[10px] font-semibold" style="background: var(--bg-secondary); border: 1px solid var(--border-color)">Esc</kbd> to cancel recording. Hold <kbd class="px-1.5 py-0.5 rounded text-[10px] font-semibold" style="background: var(--bg-secondary); border: 1px solid var(--border-color)">Option/Alt</kbd> on any page to see shortcut badges on screen.
+          </p>
+
+          {#each filteredShortcutCategories as category (category.name)}
+            <div class="rounded-xl border overflow-hidden" style="background: var(--bg-secondary); border-color: var(--border-color)">
+              <div class="px-4 py-2.5 border-b" style="border-color: var(--border-color)">
+                <h3 class="text-xs font-bold uppercase tracking-wider" style="color: var(--text-secondary)">{category.name}</h3>
+              </div>
+              <div>
+                {#each category.shortcuts as shortcut, i (shortcut.id)}
+                  <div
+                    class="flex items-center gap-3 px-4 py-2.5 {i < category.shortcuts.length - 1 ? 'border-b' : ''}"
+                    style="border-color: var(--border-color)"
+                  >
+                    <!-- Label -->
+                    <div class="flex-1 min-w-0">
+                      <span class="text-sm" style="color: var(--text-primary)">{shortcut.label}</span>
+                      <span class="text-[10px] ml-2 font-mono" style="color: var(--text-tertiary)">{shortcut.id}</span>
+                    </div>
+
+                    <!-- Current binding -->
+                    {#if recordingActionId === shortcut.id}
+                      <!-- Recording mode -->
+                      <div class="flex items-center gap-2">
+                        <div
+                          class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm min-w-[80px] justify-center border-2 animate-pulse"
+                          style="border-color: var(--color-accent-500); background: var(--bg-primary); color: var(--text-primary)"
+                        >
+                          {#if recordedCombo}
+                            <span class="font-semibold">{formatComboForDisplay(recordedCombo)}</span>
+                          {:else}
+                            <span class="text-xs" style="color: var(--text-tertiary)">Press a key...</span>
+                          {/if}
+                        </div>
+                        {#if shortcutConflict}
+                          <span class="text-[10px]" style="color: var(--status-error)">Conflicts with: {shortcutConflict.label}</span>
+                        {/if}
+                        {#if recordedCombo}
+                          <button
+                            onclick={saveRecordedShortcut}
+                            class="px-2 py-1 rounded text-xs font-medium"
+                            style="background: var(--color-accent-500); color: white"
+                          >Save</button>
+                        {/if}
+                        <button
+                          onclick={cancelRecording}
+                          class="px-2 py-1 rounded text-xs font-medium"
+                          style="background: var(--bg-tertiary, var(--bg-primary)); color: var(--text-secondary)"
+                        >Cancel</button>
+                      </div>
+                    {:else}
+                      <!-- Display mode -->
+                      <div class="flex items-center gap-2">
+                        <button
+                          onclick={() => startRecording(shortcut.id)}
+                          class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm min-w-[60px] justify-center cursor-pointer transition-fast border"
+                          style="border-color: var(--border-color); background: var(--bg-primary); color: var(--text-primary)"
+                          title="Click to change this shortcut"
+                        >
+                          {#each shortcut.key.split('+') as part, pi}
+                            {#if pi > 0}
+                              <span class="text-[10px] mx-0.5" style="color: var(--text-tertiary)">+</span>
+                            {/if}
+                            <kbd class="px-1.5 py-0.5 rounded text-xs font-semibold" style="background: var(--bg-secondary); border: 1px solid var(--border-color)">{formatComboForDisplay(part)}</kbd>
+                          {/each}
+                          {#if shortcut.isCustom}
+                            <span class="text-[10px] font-bold ml-1" style="color: var(--color-accent-500)">*</span>
+                          {/if}
+                        </button>
+                        {#if shortcut.isCustom}
+                          <button
+                            onclick={() => handleResetShortcut(shortcut.id)}
+                            class="p-1 rounded transition-fast"
+                            style="color: var(--text-tertiary)"
+                            title="Reset to default ({shortcut.defaultKey})"
+                          >
+                            <Icon name="refresh-cw" size={12} />
+                          </button>
+                        {/if}
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/each}
+
+          {#if filteredShortcutCategories.length === 0}
+            <div class="rounded-xl border p-8 text-center" style="background: var(--bg-secondary); border-color: var(--border-color)">
+              <p class="text-sm" style="color: var(--text-secondary)">No shortcuts match "{shortcutSearchFilter}"</p>
+            </div>
+          {/if}
+        </div>
       </div>
 
     {:else if activeTab === 'data'}
@@ -1272,7 +1567,7 @@
 
         <!-- Just finished banner -->
         {#if processingJustFinished}
-          <div class="rounded-xl border px-5 py-3 flex items-center gap-2" style="background: #ecfdf5; border-color: #a7f3d0; color: #065f46">
+          <div class="rounded-xl border px-5 py-3 flex items-center gap-2" style="background: var(--status-success-bg); border-color: var(--status-success-border); color: var(--status-success-text)">
             <Icon name="check-circle" size={16} />
             <span class="text-sm font-medium">Processing complete! Data has been refreshed.</span>
           </div>
@@ -1424,11 +1719,11 @@
                 onclick={() => { showDropOnlyConfirm = !showDropOnlyConfirm; showBackfillMenu = false; showDropConfirm = false; }}
                 disabled={dropping || (processingStatus && processingStatus.active)}
                 class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-fast disabled:opacity-50 border"
-                style="border-color: #fecaca; color: #dc2626; background: var(--bg-primary)"
+                style="border-color: var(--status-error-border); color: var(--status-error); background: var(--bg-primary)"
                 title="Drop all AI data without rebuilding"
               >
                 {#if dropping}
-                  <div class="w-4 h-4 border-2 rounded-full animate-spin" style="border-color: #fecaca; border-top-color: #dc2626"></div>
+                  <div class="w-4 h-4 border-2 rounded-full animate-spin" style="border-color: var(--status-error-border); border-top-color: var(--status-error)"></div>
                 {:else}
                   <Icon name="trash-2" size={16} />
                 {/if}
@@ -1451,7 +1746,7 @@
                     <button
                       onclick={dropOnly}
                       class="flex-1 px-3 py-1.5 rounded-md text-xs font-medium transition-fast"
-                      style="background: #ef4444; color: white"
+                      style="background: var(--status-error); color: white"
                     >
                       Yes, Drop All
                     </button>
@@ -1494,128 +1789,57 @@
         </div>
       </div>
 
-    {:else if activeTab === 'shortcuts'}
-      <!-- Keyboard Shortcuts Customization -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_no_static_element_interactions -->
-      <div class="space-y-4" onkeydown={handleShortcutKeydown}>
-        <div class="flex items-center justify-between gap-4">
-          <div class="flex-1">
-            <input
-              type="text"
-              placeholder="Search shortcuts..."
-              bind:value={shortcutSearchFilter}
-              class="w-full h-9 px-3 rounded-lg text-sm outline-none border"
-              style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary)"
-            />
-          </div>
-          <button
-            onclick={handleResetAll}
-            class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-fast border"
-            style="border-color: var(--border-color); color: var(--text-secondary); background: var(--bg-secondary)"
-          >
-            <Icon name="refresh-cw" size={14} />
-            Reset All to Defaults
-          </button>
-        </div>
-
-        <p class="text-xs" style="color: var(--text-tertiary)">
-          Click a shortcut key to re-record it. Press <kbd class="px-1.5 py-0.5 rounded text-[10px] font-semibold" style="background: var(--bg-secondary); border: 1px solid var(--border-color)">Esc</kbd> to cancel recording. Hold <kbd class="px-1.5 py-0.5 rounded text-[10px] font-semibold" style="background: var(--bg-secondary); border: 1px solid var(--border-color)">Option/Alt</kbd> on any page to see shortcut badges on screen.
-        </p>
-
-        {#each filteredShortcutCategories as category (category.name)}
-          <div class="rounded-xl border overflow-hidden" style="background: var(--bg-secondary); border-color: var(--border-color)">
-            <div class="px-4 py-2.5 border-b" style="border-color: var(--border-color)">
-              <h3 class="text-xs font-bold uppercase tracking-wider" style="color: var(--text-secondary)">{category.name}</h3>
-            </div>
-            <div>
-              {#each category.shortcuts as shortcut, i (shortcut.id)}
-                <div
-                  class="flex items-center gap-3 px-4 py-2.5 {i < category.shortcuts.length - 1 ? 'border-b' : ''}"
-                  style="border-color: var(--border-color)"
-                >
-                  <!-- Label -->
-                  <div class="flex-1 min-w-0">
-                    <span class="text-sm" style="color: var(--text-primary)">{shortcut.label}</span>
-                    <span class="text-[10px] ml-2 font-mono" style="color: var(--text-tertiary)">{shortcut.id}</span>
-                  </div>
-
-                  <!-- Current binding -->
-                  {#if recordingActionId === shortcut.id}
-                    <!-- Recording mode -->
-                    <div class="flex items-center gap-2">
-                      <div
-                        class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm min-w-[80px] justify-center border-2 animate-pulse"
-                        style="border-color: var(--color-accent-500); background: var(--bg-primary); color: var(--text-primary)"
-                      >
-                        {#if recordedCombo}
-                          <span class="font-semibold">{formatComboForDisplay(recordedCombo)}</span>
-                        {:else}
-                          <span class="text-xs" style="color: var(--text-tertiary)">Press a key...</span>
-                        {/if}
-                      </div>
-                      {#if shortcutConflict}
-                        <span class="text-[10px]" style="color: #ef4444">Conflicts with: {shortcutConflict.label}</span>
-                      {/if}
-                      {#if recordedCombo}
-                        <button
-                          onclick={saveRecordedShortcut}
-                          class="px-2 py-1 rounded text-xs font-medium"
-                          style="background: var(--color-accent-500); color: white"
-                        >Save</button>
-                      {/if}
-                      <button
-                        onclick={cancelRecording}
-                        class="px-2 py-1 rounded text-xs font-medium"
-                        style="background: var(--bg-tertiary, var(--bg-primary)); color: var(--text-secondary)"
-                      >Cancel</button>
-                    </div>
-                  {:else}
-                    <!-- Display mode -->
-                    <div class="flex items-center gap-2">
-                      <button
-                        onclick={() => startRecording(shortcut.id)}
-                        class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm min-w-[60px] justify-center cursor-pointer transition-fast border"
-                        style="border-color: var(--border-color); background: var(--bg-primary); color: var(--text-primary)"
-                        title="Click to change this shortcut"
-                      >
-                        {#each shortcut.key.split('+') as part, pi}
-                          {#if pi > 0}
-                            <span class="text-[10px] mx-0.5" style="color: var(--text-tertiary)">+</span>
-                          {/if}
-                          <kbd class="px-1.5 py-0.5 rounded text-xs font-semibold" style="background: var(--bg-secondary); border: 1px solid var(--border-color)">{formatComboForDisplay(part)}</kbd>
-                        {/each}
-                        {#if shortcut.isCustom}
-                          <span class="text-[10px] font-bold ml-1" style="color: var(--color-accent-500)">*</span>
-                        {/if}
-                      </button>
-                      {#if shortcut.isCustom}
-                        <button
-                          onclick={() => handleResetShortcut(shortcut.id)}
-                          class="p-1 rounded transition-fast"
-                          style="color: var(--text-tertiary)"
-                          title="Reset to default ({shortcut.defaultKey})"
-                        >
-                          <Icon name="refresh-cw" size={12} />
-                        </button>
-                      {/if}
-                    </div>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          </div>
-        {/each}
-
-        {#if filteredShortcutCategories.length === 0}
-          <div class="rounded-xl border p-8 text-center" style="background: var(--bg-secondary); border-color: var(--border-color)">
-            <p class="text-sm" style="color: var(--text-secondary)">No shortcuts match "{shortcutSearchFilter}"</p>
-          </div>
-        {/if}
-      </div>
-
     {:else if activeTab === 'settings'}
       <!-- General Settings -->
       <div class="space-y-4">
+        <!-- Feature Flags -->
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Feature Flags</h3>
+          <p class="text-xs mb-4" style="color: var(--text-tertiary)">Enable or disable optional features for all users.</p>
+          <div class="space-y-3">
+            <label class="flex items-center justify-between gap-3 cursor-pointer">
+              <div>
+                <div class="text-sm font-medium" style="color: var(--text-primary)">TUI (Terminal Interface)</div>
+                <div class="text-xs" style="color: var(--text-tertiary)">Web-based terminal UI and SSH access</div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={featureFlags.tui_enabled}
+                aria-label="Toggle TUI"
+                onclick={() => toggleFeatureFlag('tui_enabled')}
+                class="relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
+                style="background: {featureFlags.tui_enabled ? 'var(--color-accent-500)' : 'var(--bg-tertiary)'}"
+              >
+                <span
+                  class="pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition duration-200 ease-in-out"
+                  style="transform: translateX({featureFlags.tui_enabled ? '20px' : '0px'})"
+                ></span>
+              </button>
+            </label>
+            <label class="flex items-center justify-between gap-3 cursor-pointer">
+              <div>
+                <div class="text-sm font-medium" style="color: var(--text-primary)">Desktop App (Electron)</div>
+                <div class="text-xs" style="color: var(--text-tertiary)">Show download links for macOS and Windows desktop clients</div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={featureFlags.desktop_app_enabled}
+                aria-label="Toggle Desktop App"
+                onclick={() => toggleFeatureFlag('desktop_app_enabled')}
+                class="relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
+                style="background: {featureFlags.desktop_app_enabled ? 'var(--color-accent-500)' : 'var(--bg-tertiary)'}"
+              >
+                <span
+                  class="pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow transform transition duration-200 ease-in-out"
+                  style="transform: translateX({featureFlags.desktop_app_enabled ? '20px' : '0px'})"
+                ></span>
+              </button>
+            </label>
+          </div>
+        </div>
+
         <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
           <h3 class="text-sm font-semibold mb-4" style="color: var(--text-primary)">Add Setting</h3>
           <div class="grid grid-cols-2 gap-3 mb-3">
@@ -1664,6 +1888,49 @@
             </table>
           </div>
         {/if}
+      </div>
+
+    {:else if activeTab === 'desktop-app'}
+      <!-- Desktop App -->
+      <div class="space-y-6">
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Desktop App</h3>
+          <p class="text-xs mb-5" style="color: var(--text-tertiary)">
+            A native desktop app that wraps the web UI with OS integration: persistent login, pop-out windows, native menus, and secure credential storage.
+          </p>
+
+          <div class="flex flex-wrap gap-3 mb-5">
+            <a
+              href="/downloads/Mail-1.0.0-mac.zip"
+              class="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-fast no-underline"
+              style="background: var(--color-accent-500); color: white"
+            >
+              <Icon name="download" size={18} />
+              Download for macOS (.zip)
+            </a>
+            <a
+              href="/downloads/Mail-1.0.0-win-setup.exe"
+              class="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium transition-fast no-underline"
+              style="background: var(--color-accent-500); color: white"
+            >
+              <Icon name="download" size={18} />
+              Download for Windows (.exe)
+            </a>
+          </div>
+
+          <div class="text-xs space-y-3" style="color: var(--text-tertiary)">
+            <div>
+              <p class="font-semibold mb-1" style="color: var(--text-secondary)">macOS</p>
+              <p><strong style="color: var(--text-secondary)">System requirements:</strong> macOS 12 (Monterey) or later, Intel or Apple Silicon.</p>
+              <p><strong style="color: var(--text-secondary)">First launch:</strong> The app is unsigned. Right-click the app and choose "Open" to bypass Gatekeeper on first launch.</p>
+            </div>
+            <div>
+              <p class="font-semibold mb-1" style="color: var(--text-secondary)">Windows</p>
+              <p><strong style="color: var(--text-secondary)">System requirements:</strong> Windows 10 or later, 64-bit.</p>
+              <p><strong style="color: var(--text-secondary)">First launch:</strong> The installer is unsigned. You may need to click "More info" then "Run anyway" in Windows SmartScreen.</p>
+            </div>
+          </div>
+        </div>
       </div>
     {/if}
   </div>

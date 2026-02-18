@@ -65,6 +65,7 @@ class SummaryCard(Static):
     DEFAULT_CSS = """
     SummaryCard {
         width: 1fr;
+        min-width: 12;
         height: 5;
         padding: 1 2;
         margin: 0 1;
@@ -76,19 +77,13 @@ class SummaryCard(Static):
     """
 
     def __init__(self, label: str, value: str = "...", **kwargs) -> None:
-        super().__init__(**kwargs)
+        super().__init__(f"[bold]{value}[/bold]\n[dim]{label}[/dim]", **kwargs)
         self._label = label
         self._value = value
-
-    def on_mount(self) -> None:
-        self._render()
 
     def set_value(self, value: str) -> None:
         """Update the displayed value."""
         self._value = value
-        self._render()
-
-    def _render(self) -> None:
         self.update(f"[bold]{self._value}[/bold]\n[dim]{self._label}[/dim]")
 
 
@@ -163,7 +158,7 @@ class StatsScreen(BaseScreen):
         """Fetch all stats data in parallel."""
         import asyncio
 
-        self.call_from_thread(self._update_status, "Loading statistics...")
+        self._update_status("Loading statistics...")
 
         results = await asyncio.gather(
             self._fetch_admin_stats(),
@@ -175,24 +170,22 @@ class StatsScreen(BaseScreen):
         errors = [r for r in results if isinstance(r, Exception)]
         if errors:
             error_msgs = "; ".join(str(e)[:50] for e in errors)
-            self.call_from_thread(
-                self._update_status, f"Some data failed: {error_msgs}"
-            )
+            self._update_status(f"Some data failed: {error_msgs}")
         else:
-            self.call_from_thread(self._update_status, "")
+            self._update_status("")
 
     async def _fetch_admin_stats(self) -> None:
         """Fetch admin/stats data for summary cards and volume chart."""
         try:
             data = await self.app.api_client.get("/admin/stats")
-            self.call_from_thread(self._render_summary_cards, data)
-            self.call_from_thread(self._render_volume_chart, data)
+            self._render_summary_cards(data)
+            self._render_volume_chart(data)
         except Exception as e:
             logger.debug("Failed to fetch admin stats, trying dashboard", exc_info=True)
             # Fall back to dashboard endpoint
             try:
                 data = await self.app.api_client.get("/admin/dashboard")
-                self.call_from_thread(self._render_summary_cards_dashboard, data)
+                self._render_summary_cards_dashboard(data)
             except Exception as e2:
                 logger.debug("Failed to fetch dashboard too", exc_info=True)
                 raise e
@@ -201,7 +194,7 @@ class StatsScreen(BaseScreen):
         """Fetch AI analysis statistics."""
         try:
             data = await self._ai_client.get_stats()
-            self.call_from_thread(self._render_coverage_info, data)
+            self._render_coverage_info(data)
         except Exception as e:
             logger.debug("Failed to fetch AI stats", exc_info=True)
             raise
@@ -210,7 +203,7 @@ class StatsScreen(BaseScreen):
         """Fetch AI trends for category breakdown."""
         try:
             data = await self._ai_client.get_trends()
-            self.call_from_thread(self._render_category_chart, data)
+            self._render_category_chart(data)
         except Exception as e:
             logger.debug("Failed to fetch AI trends", exc_info=True)
             raise

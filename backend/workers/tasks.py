@@ -236,6 +236,169 @@ async def _refresh_digests_for_replied_threads(new_email_ids: list[int]):
             )
 
 
+async def _check_llm_thread_merges(account_id: int, new_email_ids: list[int]):
+    """Use LLM to detect thread merges that header-based logic missed.
+
+    Targets new single-message "threads" whose subjects look like replies
+    (Re:, Fwd:, etc.) but were not caught by In-Reply-To header matching.
+    For each candidate, finds recent threads with similar subjects and asks
+    the LLM whether they should be merged.
+    """
+    if not new_email_ids:
+        return
+
+    import re as _re
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+    from sqlalchemy import func as sqla_func, delete as sqla_delete
+
+    REPLY_PREFIX_RE = _re.compile(r'^(Re|Fwd|Fw)\s*:\s*', _re.IGNORECASE)
+    CONFIDENCE_THRESHOLD = 0.8
+
+    async with async_session() as db:
+        # Find new emails that started their own thread (thread_id == message_id)
+        # and whose subjects suggest they are replies
+        result = await db.execute(
+            select(Email).where(
+                Email.id.in_(new_email_ids),
+                Email.gmail_thread_id == Email.gmail_message_id,
+                Email.is_trash == False,
+                Email.is_spam == False,
+            )
+        )
+        lone_emails = result.scalars().all()
+
+        if not lone_emails:
+            return
+
+        # Filter to those with reply-like subjects
+        candidates = []
+        for email in lone_emails:
+            subj = email.subject or ""
+            if REPLY_PREFIX_RE.search(subj):
+                candidates.append(email)
+
+        if not candidates:
+            return
+
+        logger.info(
+            f"LLM thread merge: checking {len(candidates)} reply-like "
+            f"lone emails for account {account_id}"
+        )
+
+        ai_service = AIService()
+        merged_count = 0
+
+        for email in candidates:
+            try:
+                subj = email.subject or ""
+                # Strip reply prefixes and ticket numbers for fuzzy matching
+                stripped = REPLY_PREFIX_RE.sub("", subj).strip()
+                # Also strip common ticket patterns like [Ticket:123456]
+                stripped = _re.sub(r'\[Ticket:\d+\]', '', stripped).strip()
+
+                if not stripped:
+                    continue
+
+                # Find recent threads (last 7 days) with similar subjects
+                cutoff = email.date - _td(days=7) if email.date else _dt.now(_tz.utc) - _td(days=7)
+
+                # Use a LIKE query on subject after stripping prefixes.
+                # We search for threads that contain the core subject text.
+                search_term = f"%{stripped[:80]}%"
+                result = await db.execute(
+                    select(
+                        Email.gmail_thread_id,
+                        sqla_func.max(Email.subject).label("subject"),
+                        sqla_func.max(Email.snippet).label("snippet"),
+                        sqla_func.count(Email.id).label("msg_count"),
+                    )
+                    .where(
+                        Email.account_id == email.account_id,
+                        Email.gmail_thread_id != email.gmail_thread_id,
+                        Email.date >= cutoff,
+                        Email.is_trash == False,
+                        Email.is_spam == False,
+                        Email.subject.ilike(search_term),
+                    )
+                    .group_by(Email.gmail_thread_id)
+                    .having(sqla_func.count(Email.id) >= 1)
+                    .limit(3)
+                )
+                candidate_threads = result.all()
+
+                if not candidate_threads:
+                    continue
+
+                # Get participants for each candidate thread
+                for ct in candidate_threads:
+                    part_result = await db.execute(
+                        select(Email.from_address)
+                        .where(
+                            Email.gmail_thread_id == ct.gmail_thread_id,
+                            Email.account_id == email.account_id,
+                        )
+                        .distinct()
+                    )
+                    participants = [r[0] for r in part_result.all() if r[0]]
+
+                    merge_result = await ai_service.check_thread_merge(
+                        email_subject=subj,
+                        email_from=email.from_address or "",
+                        email_snippet=email.snippet or "",
+                        candidate_subject=ct.subject or "",
+                        candidate_participants=participants,
+                        candidate_snippet=ct.snippet or "",
+                    )
+
+                    should_merge = merge_result.get("should_merge", False)
+                    confidence = merge_result.get("confidence", 0.0)
+
+                    if should_merge and confidence >= CONFIDENCE_THRESHOLD:
+                        target_thread_id = ct.gmail_thread_id
+                        orphan_thread_id = email.gmail_thread_id
+                        reason = merge_result.get("reason", "")
+
+                        logger.info(
+                            f"LLM thread merge: merging thread {orphan_thread_id} "
+                            f"into {target_thread_id} (confidence={confidence:.2f}, "
+                            f"reason={reason!r})"
+                        )
+
+                        # Migrate all emails from the orphan thread
+                        await db.execute(
+                            update(Email)
+                            .where(
+                                Email.gmail_thread_id == orphan_thread_id,
+                                Email.account_id == email.account_id,
+                            )
+                            .values(gmail_thread_id=target_thread_id)
+                        )
+
+                        # Delete orphaned ThreadDigest
+                        from backend.models.ai import ThreadDigest
+                        await db.execute(
+                            sqla_delete(ThreadDigest)
+                            .where(
+                                ThreadDigest.gmail_thread_id == orphan_thread_id,
+                                ThreadDigest.account_id == email.account_id,
+                            )
+                        )
+
+                        merged_count += 1
+                        break  # Merged; stop checking other candidates
+
+            except Exception as e:
+                logger.warning(
+                    f"LLM thread merge check failed for email {email.id}: {e}"
+                )
+
+        if merged_count:
+            await db.commit()
+            logger.info(
+                f"LLM thread merge: merged {merged_count} threads for account {account_id}"
+            )
+
+
 async def sync_account_full(ctx, account_id: int):
     """Full sync for an account."""
     logger.info(f"Starting full sync task for account {account_id}")
@@ -277,6 +440,12 @@ async def sync_account_incremental(ctx, account_id: int):
         await _refresh_digests_for_replied_threads(new_email_ids)
     except Exception as e:
         logger.warning(f"Failed to refresh digests after sync for account {account_id}: {e}")
+
+    # LLM-based thread merge for reply-like emails that header matching missed
+    try:
+        await _check_llm_thread_merges(account_id, new_email_ids)
+    except Exception as e:
+        logger.warning(f"Failed LLM thread merge check after sync for account {account_id}: {e}")
 
 
 def _is_rate_limit_exception(exc: Exception) -> bool:
@@ -468,6 +637,12 @@ async def sync_all_accounts(ctx):
                     await _refresh_digests_for_replied_threads(new_email_ids)
                 except Exception as dig_err:
                     logger.warning(f"Failed to refresh digests after sync for account {account.id}: {dig_err}")
+
+                # LLM-based thread merge for reply-like emails that header matching missed
+                try:
+                    await _check_llm_thread_merges(account.id, new_email_ids)
+                except Exception as llm_err:
+                    logger.warning(f"Failed LLM thread merge check after sync for account {account.id}: {llm_err}")
 
             except Exception as e:
                 logger.error(f"Sync error for account {account.id}: {e}")

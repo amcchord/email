@@ -39,8 +39,14 @@ class TodoFilterBar(Static):
     """
 
     def __init__(self, active_filter: str = "all", **kwargs) -> None:
-        super().__init__("", **kwargs)
         self._active = active_filter
+        parts = []
+        for fid, label in FILTERS:
+            if fid == active_filter:
+                parts.append(f"[bold reverse] {label} [/bold reverse]")
+            else:
+                parts.append(f" [dim]{label}[/dim] ")
+        super().__init__("  ".join(parts), **kwargs)
 
     def set_active(self, filter_id: str) -> None:
         """Set the active filter and re-render."""
@@ -56,9 +62,6 @@ class TodoFilterBar(Static):
             else:
                 parts.append(f" [dim]{label}[/dim] ")
         self.update("  ".join(parts))
-
-    def on_mount(self) -> None:
-        self._render()
 
 
 class TodoScreen(BaseScreen):
@@ -152,14 +155,17 @@ class TodoScreen(BaseScreen):
             result = await self._todos_client.list_todos(status=status_filter)
             self._todos = result.get("todos", [])
 
-            todo_list = self._get_list()
-            if todo_list is not None:
-                todo_list.load_todos(self._todos)
-
+            self._apply_todos()
             self._update_status()
         except Exception as e:
             logger.debug("Failed to load todos", exc_info=True)
             self._update_status(f"[red]Error: {e}[/red]")
+
+    def _apply_todos(self) -> None:
+        """Apply loaded todos to the list widget (main thread only)."""
+        todo_list = self._get_list()
+        if todo_list is not None:
+            todo_list.load_todos(self._todos)
 
     def _get_selected_todo(self) -> dict[str, Any] | None:
         """Get the currently selected todo data."""
@@ -303,10 +309,7 @@ class TodoScreen(BaseScreen):
             return
         try:
             await self._todos_client.update_todo(todo_id, status=new_status)
-            self.notify(
-                f"Todo {new_status}",
-                severity="information",
-            )
+            self.notify(f"Todo {new_status}", severity="information")
             self._load_todos()
         except Exception as e:
             self.notify(f"Update failed: {e}", severity="error")

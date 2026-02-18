@@ -54,10 +54,20 @@ def main():
         sys.exit(0)
 
     # Default: run Textual app directly in terminal
+    import os
     from tui.app import MailApp
 
+    # Disable mouse tracking when running over SSH or in a web terminal.
+    # This prevents escape-sequence garbage, allows normal text selection
+    # and copy/paste, and makes URLs clickable via Cmd/Ctrl+click.
+    enable_mouse = not (
+        os.environ.get("TUI_SSH_SERVER") == "1"
+        or os.environ.get("TEXTUAL_WEB") == "1"
+        or "web_driver" in os.environ.get("TEXTUAL_DRIVER", "").lower()
+    )
+
     app = MailApp()
-    app.run()
+    app.run(mouse=enable_mouse)
 
 
 if __name__ == "__main__":

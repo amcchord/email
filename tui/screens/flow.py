@@ -1,4 +1,4 @@
-"""Flow dashboard screen - main workflow view with multiple sections."""
+"""Flow dashboard screen - main workflow view with modern paneled sections."""
 
 from __future__ import annotations
 
@@ -17,38 +17,52 @@ from tui.utils.date_format import relative_date
 
 logger = logging.getLogger(__name__)
 
-# Section identifiers
 SECTIONS = ["needs_reply", "awaiting", "threads", "events", "todos"]
+
+# Unicode icons for section headers
+SECTION_ICONS = {
+    "needs_reply": "\u2709",
+    "awaiting": "\u21bb",
+    "threads": "\u2637",
+    "events": "\u25a3",
+    "todos": "\u2611",
+}
 
 
 class FlowSectionHeader(Static):
-    """A styled section header for flow dashboard sections."""
+    """A styled section header inside a bordered panel."""
 
     DEFAULT_CSS = """
     FlowSectionHeader {
         width: 100%;
         height: 1;
-        background: $accent 30%;
-        color: $text;
+        background: #232440;
+        color: #e2e8f0;
         text-style: bold;
         padding: 0 1;
-        margin: 1 0 0 0;
     }
     """
 
 
 class FlowItem(ListItem):
-    """A single item in a flow section list."""
+    """A single item in a flow section list with priority support."""
 
     DEFAULT_CSS = """
     FlowItem {
         width: 100%;
         height: auto;
         padding: 0 1;
+        background: #1a1b2e;
     }
     FlowItem > .flow-item-content {
         width: 100%;
         height: auto;
+    }
+    FlowItem.priority-high {
+        border-left: tall #ef4444;
+    }
+    FlowItem.priority-medium {
+        border-left: tall #f59e0b;
     }
     """
 
@@ -56,20 +70,24 @@ class FlowItem(ListItem):
         self,
         content: str,
         item_data: dict[str, Any] | None = None,
+        priority_class: str = "",
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self._content = content
         self.item_data = item_data or {}
+        self._priority_class = priority_class
 
     def compose(self) -> ComposeResult:
         yield Static(self._content, classes="flow-item-content")
 
+    def on_mount(self) -> None:
+        if self._priority_class:
+            self.add_class(self._priority_class)
+
 
 class FlowScreen(BaseScreen):
-    """Flow dashboard with five sections: needs reply, awaiting response,
-    active threads, upcoming events, and pending todos.
-    """
+    """Flow dashboard with five sections in bordered panels."""
 
     SCREEN_TITLE = "Flow"
     SCREEN_NAV_ID = "flow"
@@ -77,10 +95,10 @@ class FlowScreen(BaseScreen):
         ("j/k", "Nav"),
         ("Tab", "Section"),
         ("Enter", "Open"),
+        ("1-4", "Reply"),
         ("i", "Ignore"),
         ("z", "Snooze"),
         ("c", "Compose"),
-        ("?", "Help"),
     ]
 
     BINDINGS = [
@@ -116,26 +134,45 @@ class FlowScreen(BaseScreen):
     def compose_content(self) -> ComposeResult:
         with VerticalScroll(id="flow-scroll"):
             # Section 1: Needs Reply
-            yield FlowSectionHeader("Needs Reply", id="section-header-needs-reply")
-            yield ListView(id="flow-needs-reply")
+            with Vertical(classes="flow-section-panel"):
+                yield FlowSectionHeader(
+                    "\u2709  Needs Reply",
+                    id="section-header-needs-reply",
+                )
+                yield ListView(id="flow-needs-reply")
 
             # Section 2: Awaiting Response
-            yield FlowSectionHeader("Awaiting Response", id="section-header-awaiting")
-            yield ListView(id="flow-awaiting")
+            with Vertical(classes="flow-section-panel"):
+                yield FlowSectionHeader(
+                    "\u21bb  Awaiting Response",
+                    id="section-header-awaiting",
+                )
+                yield ListView(id="flow-awaiting")
 
             # Section 3: Active Threads
-            yield FlowSectionHeader("Active Threads", id="section-header-threads")
-            yield ListView(id="flow-threads")
+            with Vertical(classes="flow-section-panel"):
+                yield FlowSectionHeader(
+                    "\u2637  Active Threads",
+                    id="section-header-threads",
+                )
+                yield ListView(id="flow-threads")
 
             # Section 4: Upcoming Events
-            yield FlowSectionHeader("Upcoming Events", id="section-header-events")
-            yield ListView(id="flow-events")
+            with Vertical(classes="flow-section-panel"):
+                yield FlowSectionHeader(
+                    "\u25a3  Upcoming Events",
+                    id="section-header-events",
+                )
+                yield ListView(id="flow-events")
 
             # Section 5: Pending Todos
-            yield FlowSectionHeader("Pending Todos", id="section-header-todos")
-            yield ListView(id="flow-todos")
+            with Vertical(classes="flow-section-panel"):
+                yield FlowSectionHeader(
+                    "\u2611  Pending Todos",
+                    id="section-header-todos",
+                )
+                yield ListView(id="flow-todos")
 
-            # Status bar
             yield Static("Loading...", id="flow-status")
 
     def on_mount(self) -> None:
@@ -146,13 +183,12 @@ class FlowScreen(BaseScreen):
 
     @work(exclusive=True)
     async def _load_all_data(self) -> None:
-        """Fetch all five data sources."""
+        """Fetch all five data sources in parallel."""
         import asyncio
 
         if self._ai_client is None:
             return
 
-        # Fetch all data in parallel
         results = await asyncio.gather(
             self._fetch_needs_reply(),
             self._fetch_awaiting(),
@@ -162,25 +198,47 @@ class FlowScreen(BaseScreen):
             return_exceptions=True,
         )
 
-        # Update status
         errors = [r for r in results if isinstance(r, Exception)]
-        if errors:
-            error_msgs = "; ".join(str(e) for e in errors)
-            self._update_status(f"Some sections failed: {error_msgs}")
-        else:
-            counts = []
-            if self._needs_reply_data:
-                counts.append(f"{len(self._needs_reply_data)} needs reply")
-            if self._awaiting_data:
-                counts.append(f"{len(self._awaiting_data)} awaiting")
-            if self._threads_data:
-                counts.append(f"{len(self._threads_data)} threads")
-            if self._events_data:
-                counts.append(f"{len(self._events_data)} events")
-            if self._todos_data:
-                counts.append(f"{len(self._todos_data)} todos")
-            status_text = " | ".join(counts) if counts else "All caught up!"
-            self._update_status(status_text)
+
+        def _update_ui_after_load():
+            if errors:
+                error_msgs = "; ".join(str(e) for e in errors)
+                self._update_status(f"[#ef4444]\u26a0[/#ef4444] Some sections failed: {error_msgs}")
+            else:
+                counts = []
+                if self._needs_reply_data:
+                    counts.append(f"[#2dd4bf]{len(self._needs_reply_data)}[/#2dd4bf] needs reply")
+                if self._awaiting_data:
+                    counts.append(f"[#2dd4bf]{len(self._awaiting_data)}[/#2dd4bf] awaiting")
+                if self._threads_data:
+                    counts.append(f"[#2dd4bf]{len(self._threads_data)}[/#2dd4bf] threads")
+                if self._events_data:
+                    counts.append(f"[#2dd4bf]{len(self._events_data)}[/#2dd4bf] events")
+                if self._todos_data:
+                    counts.append(f"[#2dd4bf]{len(self._todos_data)}[/#2dd4bf] todos")
+                if counts:
+                    status_text = " \u2502 ".join(counts)
+                else:
+                    status_text = "[#2dd4bf]\u2713[/#2dd4bf] All caught up!"
+                self._update_status(status_text)
+
+            self._update_section_header("needs-reply", "Needs Reply", len(self._needs_reply_data))
+            self._update_section_header("awaiting", "Awaiting Response", len(self._awaiting_data))
+            self._update_section_header("threads", "Active Threads", len(self._threads_data))
+            self._update_section_header("events", "Upcoming Events", len(self._events_data))
+            self._update_section_header("todos", "Pending Todos", len(self._todos_data))
+
+        _update_ui_after_load()
+
+    def _update_section_header(self, section_key: str, title: str, count: int) -> None:
+        """Update a section header with its count."""
+        icon = SECTION_ICONS.get(section_key.replace("-", "_"), "\u2022")
+        count_str = f" [#2dd4bf]({count})[/#2dd4bf]" if count else ""
+        try:
+            header = self.query_one(f"#section-header-{section_key}", FlowSectionHeader)
+            header.update(f"{icon}  {title}{count_str}")
+        except Exception:
+            pass
 
     async def _fetch_needs_reply(self) -> None:
         """Fetch needs-reply emails and populate the list."""
@@ -225,8 +283,7 @@ class FlowScreen(BaseScreen):
             self._populate_events()
         except Exception as e:
             logger.debug("Failed to fetch events", exc_info=True)
-            self._set_section_empty("flow-events", f"No events available")
-            # Don't re-raise; calendar is optional
+            self._set_section_empty("flow-events", "No events available")
 
     async def _fetch_todos(self) -> None:
         """Fetch pending todos and populate the list."""
@@ -238,19 +295,21 @@ class FlowScreen(BaseScreen):
             self._populate_todos()
         except Exception as e:
             logger.debug("Failed to fetch todos", exc_info=True)
-            self._set_section_empty("flow-todos", f"No todos available")
-            # Don't re-raise; todos are optional
+            self._set_section_empty("flow-todos", "No todos available")
 
     # ── Populate sections ─────────────────────────────────────
 
     def _populate_needs_reply(self) -> None:
-        """Render needs-reply emails into the list."""
+        """Render needs-reply emails with inline reply previews."""
         try:
             listview = self.query_one("#flow-needs-reply", ListView)
             listview.clear()
 
             if not self._needs_reply_data:
-                listview.append(FlowItem("  No emails needing reply", item_data={}))
+                listview.append(FlowItem(
+                    "  [#2dd4bf]\u2713[/#2dd4bf] All caught up! Press [reverse] c [/reverse] to compose",
+                    item_data={},
+                ))
                 return
 
             for email in self._needs_reply_data:
@@ -260,36 +319,53 @@ class FlowScreen(BaseScreen):
                 summary = email.get("summary", "")
                 priority = email.get("priority", 0)
 
-                # Build display with reply options hint
-                reply_options = email.get("reply_options") or []
-                options_hint = ""
-                if reply_options:
-                    options_hint = f"  [dim][1-{len(reply_options)}] reply options[/dim]"
+                # Priority class for left-bar indicator
+                priority_class = ""
+                if priority and priority >= 4:
+                    priority_class = "priority-high"
+                elif priority and priority >= 3:
+                    priority_class = "priority-medium"
 
                 priority_indicator = ""
                 if priority and priority >= 4:
-                    priority_indicator = "[red]![/red] "
+                    priority_indicator = "[#ef4444]\u25cf[/#ef4444] "
+                elif priority and priority >= 3:
+                    priority_indicator = "[#f59e0b]\u25cf[/#f59e0b] "
+
+                # Build reply options preview
+                reply_options = email.get("reply_options") or []
+                options_lines = ""
+                if reply_options:
+                    for i, opt in enumerate(reply_options[:4], 1):
+                        opt_text = opt
+                        if isinstance(opt, dict):
+                            opt_text = opt.get("text", opt.get("body", str(opt)))
+                        preview = str(opt_text)[:50].replace("\n", " ")
+                        options_lines += f"\n    [#64748b][reverse] {i} [/reverse] {preview}[/#64748b]"
 
                 content = (
-                    f"{priority_indicator}[bold]{from_name}[/bold]  "
-                    f"[dim]{time_ago}[/dim]\n"
+                    f"  {priority_indicator}[bold]{from_name}[/bold]  "
+                    f"[#94a3b8]{time_ago}[/#94a3b8]\n"
                     f"  {subject}\n"
-                    f"  [dim italic]{summary[:100]}[/dim italic]"
-                    f"{options_hint}"
+                    f"  [#64748b italic]{summary[:80]}[/#64748b italic]"
+                    f"{options_lines}"
                 )
 
-                listview.append(FlowItem(content, item_data=email))
+                listview.append(FlowItem(content, item_data=email, priority_class=priority_class))
         except Exception:
             logger.debug("Failed to populate needs-reply", exc_info=True)
 
     def _populate_awaiting(self) -> None:
-        """Render awaiting-response emails into the list."""
+        """Render awaiting-response emails."""
         try:
             listview = self.query_one("#flow-awaiting", ListView)
             listview.clear()
 
             if not self._awaiting_data:
-                listview.append(FlowItem("  No emails awaiting response", item_data={}))
+                listview.append(FlowItem(
+                    "  [#64748b]No emails awaiting response[/#64748b]",
+                    item_data={},
+                ))
                 return
 
             for email in self._awaiting_data:
@@ -298,7 +374,7 @@ class FlowScreen(BaseScreen):
                 time_ago = relative_date(email.get("date"))
 
                 content = (
-                    f"[bold]{to_name}[/bold]  [dim]{time_ago}[/dim]\n"
+                    f"  [bold]{to_name}[/bold]  [#94a3b8]{time_ago}[/#94a3b8]\n"
                     f"  {subject}"
                 )
 
@@ -307,13 +383,16 @@ class FlowScreen(BaseScreen):
             logger.debug("Failed to populate awaiting", exc_info=True)
 
     def _populate_threads(self) -> None:
-        """Render active threads into the list."""
+        """Render active threads."""
         try:
             listview = self.query_one("#flow-threads", ListView)
             listview.clear()
 
             if not self._threads_data:
-                listview.append(FlowItem("  No active threads", item_data={}))
+                listview.append(FlowItem(
+                    "  [#64748b]No active threads[/#64748b]",
+                    item_data={},
+                ))
                 return
 
             for thread in self._threads_data:
@@ -324,8 +403,8 @@ class FlowScreen(BaseScreen):
                 time_ago = relative_date(thread.get("latest_date"))
                 has_unread = thread.get("has_unread", False)
 
-                unread_marker = "[bold yellow]*[/bold yellow] " if has_unread else "  "
-                needs_reply = "[red]![/red] " if thread.get("needs_reply") else ""
+                unread_marker = "[#f59e0b bold]\u25cf[/#f59e0b bold] " if has_unread else "  "
+                needs_reply = "[#ef4444]\u25cf[/#ef4444] " if thread.get("needs_reply") else ""
 
                 participant_names = ", ".join(
                     p.get("name", p.get("address", ""))[:15]
@@ -335,10 +414,10 @@ class FlowScreen(BaseScreen):
                     participant_names += f" +{participant_count - 3}"
 
                 content = (
-                    f"{unread_marker}{needs_reply}[bold]{subject}[/bold]  "
-                    f"[dim]{time_ago}[/dim]\n"
+                    f"  {unread_marker}{needs_reply}[bold]{subject}[/bold]  "
+                    f"[#94a3b8]{time_ago}[/#94a3b8]\n"
                     f"  {participant_names}  "
-                    f"[dim]{msg_count} messages[/dim]"
+                    f"[#64748b]{msg_count} messages[/#64748b]"
                 )
 
                 listview.append(FlowItem(content, item_data=thread))
@@ -346,13 +425,16 @@ class FlowScreen(BaseScreen):
             logger.debug("Failed to populate threads", exc_info=True)
 
     def _populate_events(self) -> None:
-        """Render upcoming events into the list."""
+        """Render upcoming events."""
         try:
             listview = self.query_one("#flow-events", ListView)
             listview.clear()
 
             if not self._events_data:
-                listview.append(FlowItem("  No upcoming events", item_data={}))
+                listview.append(FlowItem(
+                    "  [#64748b]No upcoming events[/#64748b]",
+                    item_data={},
+                ))
                 return
 
             for event in self._events_data:
@@ -362,11 +444,11 @@ class FlowScreen(BaseScreen):
                 start = event.get("start_time", "")
 
                 time_str = "All day" if is_all_day else relative_date(start)
-                loc_str = f"  @ {location}" if location else ""
+                loc_str = f"  [#64748b]@ {location}[/#64748b]" if location else ""
 
                 content = (
-                    f"  [bold]{time_str}[/bold]  {summary}"
-                    f"[dim]{loc_str}[/dim]"
+                    f"  [#6366f1 bold]{time_str}[/#6366f1 bold]  {summary}"
+                    f"{loc_str}"
                 )
 
                 listview.append(FlowItem(content, item_data=event))
@@ -374,13 +456,16 @@ class FlowScreen(BaseScreen):
             logger.debug("Failed to populate events", exc_info=True)
 
     def _populate_todos(self) -> None:
-        """Render pending todos into the list."""
+        """Render pending todos."""
         try:
             listview = self.query_one("#flow-todos", ListView)
             listview.clear()
 
             if not self._todos_data:
-                listview.append(FlowItem("  No pending todos", item_data={}))
+                listview.append(FlowItem(
+                    "  [#2dd4bf]\u2713[/#2dd4bf] No pending todos",
+                    item_data={},
+                ))
                 return
 
             for todo in self._todos_data:
@@ -388,8 +473,11 @@ class FlowScreen(BaseScreen):
                 status = todo.get("status", "pending")
                 source = todo.get("source", "")
 
-                checkbox = "[ ]" if status == "pending" else "[x]"
-                source_hint = f"  [dim]from: {source}[/dim]" if source else ""
+                if status == "pending":
+                    checkbox = "[#94a3b8]\u2610[/#94a3b8]"
+                else:
+                    checkbox = "[#2dd4bf]\u2611[/#2dd4bf]"
+                source_hint = f"  [#64748b]from: {source}[/#64748b]" if source else ""
 
                 content = f"  {checkbox} {title}{source_hint}"
 
@@ -402,7 +490,7 @@ class FlowScreen(BaseScreen):
         try:
             listview = self.query_one(f"#{list_id}", ListView)
             listview.clear()
-            listview.append(FlowItem(f"  [dim]{message}[/dim]", item_data={}))
+            listview.append(FlowItem(f"  [#64748b]{message}[/#64748b]", item_data={}))
         except Exception:
             pass
 
@@ -416,7 +504,6 @@ class FlowScreen(BaseScreen):
     # ── Section navigation ────────────────────────────────────
 
     def _get_section_list_ids(self) -> list[str]:
-        """Get the ListView IDs for each section."""
         return [
             "flow-needs-reply",
             "flow-awaiting",
@@ -426,7 +513,6 @@ class FlowScreen(BaseScreen):
         ]
 
     def _get_current_listview(self) -> ListView | None:
-        """Get the currently focused section's ListView."""
         list_ids = self._get_section_list_ids()
         if 0 <= self._current_section_idx < len(list_ids):
             try:
@@ -436,14 +522,12 @@ class FlowScreen(BaseScreen):
         return None
 
     def _focus_section(self, idx: int) -> None:
-        """Focus a section by index."""
         list_ids = self._get_section_list_ids()
         if 0 <= idx < len(list_ids):
             self._current_section_idx = idx
             try:
                 listview = self.query_one(f"#{list_ids[idx]}", ListView)
                 listview.focus()
-                # Scroll the section header into view
                 header_ids = [
                     "section-header-needs-reply",
                     "section-header-awaiting",
@@ -457,25 +541,21 @@ class FlowScreen(BaseScreen):
                 pass
 
     def action_next_section(self) -> None:
-        """Move to the next section."""
         new_idx = (self._current_section_idx + 1) % len(SECTIONS)
         self._focus_section(new_idx)
 
     def action_prev_section(self) -> None:
-        """Move to the previous section."""
         new_idx = (self._current_section_idx - 1) % len(SECTIONS)
         self._focus_section(new_idx)
 
     # ── Item navigation ───────────────────────────────────────
 
     def action_cursor_down(self) -> None:
-        """Move cursor down in the current section."""
         lv = self._get_current_listview()
         if lv is not None:
             lv.action_cursor_down()
 
     def action_cursor_up(self) -> None:
-        """Move cursor up in the current section."""
         lv = self._get_current_listview()
         if lv is not None:
             lv.action_cursor_up()
@@ -483,7 +563,6 @@ class FlowScreen(BaseScreen):
     # ── Item actions ──────────────────────────────────────────
 
     def _get_selected_item_data(self) -> dict[str, Any] | None:
-        """Get the data dict for the currently highlighted item."""
         lv = self._get_current_listview()
         if lv is None or lv.index is None:
             return None
@@ -496,7 +575,6 @@ class FlowScreen(BaseScreen):
         return None
 
     def action_open_item(self) -> None:
-        """Open the selected item in detail view."""
         data = self._get_selected_item_data()
         if not data:
             return
@@ -510,23 +588,18 @@ class FlowScreen(BaseScreen):
                 self.app.push_screen(EmailViewScreen(email_id=email_id))
 
         elif section == "threads":
-            # Open the first email in the thread
             thread_id = data.get("thread_id")
             if thread_id:
-                # We don't have a direct thread screen, so we push
-                # to the inbox filtered by thread (or use email view)
                 self.notify(
                     f"Thread: {data.get('subject', '')}",
                     severity="information",
                 )
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
-        """Handle Enter/click on a list item."""
         self.action_open_item()
 
     @work(exclusive=True, group="action")
     async def action_ignore_item(self) -> None:
-        """Ignore a needs-reply item."""
         if self._current_section_idx != 0:
             return
         data = self._get_selected_item_data()
@@ -536,15 +609,13 @@ class FlowScreen(BaseScreen):
             return
         try:
             await self._ai_client.ignore_needs_reply(data["id"])
-            self.notify("Ignored", severity="information")
-            # Refresh needs-reply section
+            self.notify("\u2713 Ignored", severity="information")
             self._load_needs_reply()
         except Exception as e:
             self.notify(f"Ignore failed: {e}", severity="error")
 
     @work(exclusive=True, group="action")
     async def action_snooze_item(self) -> None:
-        """Snooze a needs-reply item for 1 hour."""
         if self._current_section_idx != 0:
             return
         data = self._get_selected_item_data()
@@ -554,22 +625,18 @@ class FlowScreen(BaseScreen):
             return
         try:
             await self._ai_client.snooze_needs_reply(data["id"], duration="1h")
-            self.notify("Snoozed for 1 hour", severity="information")
-            # Refresh needs-reply section
+            self.notify("\u23f0 Snoozed for 1 hour", severity="information")
             self._load_needs_reply()
         except Exception as e:
             self.notify(f"Snooze failed: {e}", severity="error")
 
     def action_skip_item(self) -> None:
-        """Skip to the next item in the current section."""
         self.action_cursor_down()
 
     def action_new_chat(self) -> None:
-        """Placeholder for new chat action."""
         self.notify("Chat - coming soon", severity="information")
 
     def _reply_with_option(self, option_idx: int) -> None:
-        """Select an AI reply option and push compose with pre-filled data."""
         if self._current_section_idx != 0:
             return
         data = self._get_selected_item_data()
@@ -585,7 +652,6 @@ class FlowScreen(BaseScreen):
             return
 
         option = reply_options[option_idx]
-        # reply_options can be either strings or dicts with "text" key
         if isinstance(option, dict):
             reply_text = option.get("text", option.get("body", str(option)))
         else:
@@ -600,23 +666,18 @@ class FlowScreen(BaseScreen):
         )
 
     def action_select_reply_1(self) -> None:
-        """Select AI reply option 1."""
         self._reply_with_option(0)
 
     def action_select_reply_2(self) -> None:
-        """Select AI reply option 2."""
         self._reply_with_option(1)
 
     def action_select_reply_3(self) -> None:
-        """Select AI reply option 3."""
         self._reply_with_option(2)
 
     def action_select_reply_4(self) -> None:
-        """Select AI reply option 4."""
         self._reply_with_option(3)
 
     def action_custom_reply(self) -> None:
-        """Push compose screen for a custom reply to the selected needs-reply item."""
         if self._current_section_idx != 0:
             return
         data = self._get_selected_item_data()
@@ -626,17 +687,16 @@ class FlowScreen(BaseScreen):
         self.app.push_screen(ComposeScreen(reply_data=data))
 
     def action_deselect(self) -> None:
-        """Deselect current item / no-op for back."""
         pass
 
     @work(exclusive=True, group="refresh-section")
     async def _load_needs_reply(self) -> None:
-        """Refresh just the needs-reply section."""
         if self._ai_client is None:
             return
         try:
             result = await self._ai_client.get_needs_reply(page_size=20)
             self._needs_reply_data = result.get("emails", [])
             self._populate_needs_reply()
+            self._update_section_header("needs-reply", "Needs Reply", len(self._needs_reply_data))
         except Exception:
             logger.debug("Failed to refresh needs-reply", exc_info=True)

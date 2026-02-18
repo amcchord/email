@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { api, setUnauthorizedHandler } from './lib/api.js';
   import { user, currentPage, showToast, toastMessage, startSyncPolling, stopSyncPolling, threadOrder } from './lib/stores.js';
-  import { theme } from './lib/theme.js';
+  import { theme, activeTheme } from './lib/theme.js';
   import { startVersionPolling } from './lib/autoReload.js';
   import Login from './pages/Login.svelte';
   import Inbox from './pages/Inbox.svelte';
@@ -15,11 +15,13 @@
   import Calendar from './pages/Calendar.svelte';
   import Flow from './pages/Flow.svelte';
   import EmailViewStandalone from './pages/EmailViewStandalone.svelte';
+  import DeviceAuth from './pages/DeviceAuth.svelte';
   import Layout from './components/layout/Layout.svelte';
   import Toast from './components/common/Toast.svelte';
 
   let loading = $state(true);
   let standaloneEmailId = $state(null);
+  let deviceAuthCode = $state(null);
 
   onMount(async () => {
     setUnauthorizedHandler(() => {
@@ -27,10 +29,14 @@
       stopSyncPolling();
     });
 
-    // Check if this is a pop-out email view
+    // Check if this is a pop-out email view or device auth page
     const params = new URLSearchParams(window.location.search);
     if (params.get('view') === 'email' && params.get('id')) {
       standaloneEmailId = parseInt(params.get('id'));
+    }
+    // Handle /auth/device?code=XXXX-XXXX path
+    if (window.location.pathname === '/auth/device' || params.get('view') === 'device') {
+      deviceAuthCode = params.get('code') || '';
     }
 
     try {
@@ -43,6 +49,12 @@
         const uiPrefs = await api.getUIPreferences();
         if (uiPrefs.thread_order) {
           threadOrder.set(uiPrefs.thread_order);
+        }
+        if (uiPrefs.theme) {
+          activeTheme.set(uiPrefs.theme);
+        }
+        if (uiPrefs.color_scheme) {
+          theme.set(uiPrefs.color_scheme);
         }
       } catch {
         // Use localStorage default
@@ -62,6 +74,13 @@
       showToast('Google account connected successfully', 'success');
       window.history.replaceState({}, '', '/');
     }
+
+    // Listen for Electron menu commands (Cmd+N → compose, Cmd+, → settings)
+    if (window.electronAPI?.isElectron) {
+      window.addEventListener('electron-navigate', (e) => {
+        currentPage.set(e.detail?.page);
+      });
+    }
   });
 </script>
 
@@ -72,6 +91,13 @@
       <span class="text-sm" style="color: var(--text-secondary)">Loading...</span>
     </div>
   </div>
+{:else if deviceAuthCode !== null}
+  <!-- Device-code auth page (TUI authorization) -->
+  {#if $user}
+    <DeviceAuth code={deviceAuthCode} />
+  {:else}
+    <Login />
+  {/if}
 {:else if standaloneEmailId}
   <!-- Pop-out email viewer (no layout chrome) -->
   {#if $user}

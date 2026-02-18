@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
   import { user, showToast } from '../lib/stores.js';
-  import { theme } from '../lib/theme.js';
+  import { theme, getEffectiveMode } from '../lib/theme.js';
 
   let username = $state('');
   let password = $state('');
@@ -62,9 +62,9 @@
       <p class="mt-1 text-sm" style="color: var(--text-secondary)">Sign in to your account</p>
     </div>
 
-    <div class="rounded-xl border p-6 space-y-4" style="background: var(--bg-secondary); border-color: var(--border-color); box-shadow: var(--shadow-md)">
+    <div class="rounded-xl border p-6 space-y-4" style="background: var(--bg-elevated); border-color: var(--border-color); box-shadow: var(--shadow-lg)">
       {#if error}
-        <div class="px-3 py-2 rounded-lg text-sm bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400 border border-red-200 dark:border-red-800">
+        <div class="px-3 py-2 rounded-lg text-sm border" style="background: var(--status-error-bg); color: var(--status-error-text); border-color: var(--status-error-border)">
           {error}
         </div>
       {/if}
@@ -159,7 +159,7 @@
         class="text-xs transition-fast"
         style="color: var(--text-tertiary)"
       >
-        Switch to {$theme === 'dark' ? 'light' : 'dark'} mode
+        Switch to {getEffectiveMode($theme) === 'dark' ? 'light' : 'dark'} mode
       </button>
     </div>
   </div>

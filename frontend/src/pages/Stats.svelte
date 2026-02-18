@@ -21,10 +21,10 @@
   }
 
   const categoryColors = {
-    urgent: '#ef4444',
+    urgent: 'var(--status-error)',
     can_ignore: '#9ca3af',
     fyi: '#10b981',
-    awaiting_reply: '#f59e0b',
+    awaiting_reply: 'var(--status-warning)',
   };
 
   function categoryLabel(cat) {

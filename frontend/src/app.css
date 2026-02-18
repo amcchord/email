@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Use .dark class for dark mode instead of prefers-color-scheme media query */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   /* Custom color palette - warm amber accent, not typical blue */
   --color-accent-50: #fffbeb;
@@ -27,31 +30,97 @@
 }
 
 :root {
+  /* Background hierarchy */
   --bg-primary: var(--color-surface-50);
   --bg-secondary: white;
   --bg-tertiary: var(--color-surface-100);
   --bg-hover: var(--color-surface-100);
+  --bg-elevated: white;
+
+  /* Text hierarchy */
   --text-primary: var(--color-surface-900);
   --text-secondary: var(--color-surface-600);
   --text-tertiary: var(--color-surface-400);
+
+  /* Borders */
   --border-color: var(--color-surface-200);
   --border-subtle: var(--color-surface-100);
+
+  /* Shadows */
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.03);
   --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.08), 0 4px 6px -4px rgb(0 0 0 / 0.04);
+
+  /* Status: Error */
+  --status-error: #dc2626;
+  --status-error-text: #991b1b;
+  --status-error-bg: #fef2f2;
+  --status-error-border: #fecaca;
+
+  /* Status: Warning */
+  --status-warning: #d97706;
+  --status-warning-text: #92400e;
+  --status-warning-bg: #fffbeb;
+  --status-warning-border: #fde68a;
+
+  /* Status: Success */
+  --status-success: #16a34a;
+  --status-success-text: #14532d;
+  --status-success-bg: #f0fdf4;
+  --status-success-border: #bbf7d0;
+
+  /* Status: Info */
+  --status-info: #2563eb;
+  --status-info-text: #1e3a8a;
+  --status-info-bg: #eff6ff;
+  --status-info-border: #bfdbfe;
 }
 
 .dark {
-  --bg-primary: var(--color-surface-950);
-  --bg-secondary: var(--color-surface-900);
-  --bg-tertiary: var(--color-surface-800);
-  --bg-hover: var(--color-surface-800);
+  /* Background hierarchy -- layered elevation */
+  --bg-primary: #1a1816;
+  --bg-secondary: #211f1d;
+  --bg-tertiary: #2a2826;
+  --bg-hover: #302e2b;
+  --bg-elevated: #2f2d2a;
+
+  /* Text hierarchy */
   --text-primary: var(--color-surface-50);
   --text-secondary: var(--color-surface-400);
-  --text-tertiary: var(--color-surface-600);
-  --border-color: var(--color-surface-800);
-  --border-subtle: var(--color-surface-900);
-  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.2);
-  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.2);
+  --text-tertiary: var(--color-surface-500);
+
+  /* Borders */
+  --border-color: #332f2d;
+  --border-subtle: #282523;
+
+  /* Shadows -- subtle warm glow */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.4), 0 2px 4px -2px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.5), 0 4px 6px -4px rgb(0 0 0 / 0.3);
+
+  /* Status: Error */
+  --status-error: #f87171;
+  --status-error-text: #fca5a5;
+  --status-error-bg: rgba(220, 38, 38, 0.12);
+  --status-error-border: rgba(220, 38, 38, 0.25);
+
+  /* Status: Warning */
+  --status-warning: #fbbf24;
+  --status-warning-text: #fde68a;
+  --status-warning-bg: rgba(217, 119, 6, 0.12);
+  --status-warning-border: rgba(217, 119, 6, 0.25);
+
+  /* Status: Success */
+  --status-success: #4ade80;
+  --status-success-text: #bbf7d0;
+  --status-success-bg: rgba(22, 163, 74, 0.12);
+  --status-success-border: rgba(22, 163, 74, 0.25);
+
+  /* Status: Info */
+  --status-info: #60a5fa;
+  --status-info-text: #bfdbfe;
+  --status-info-bg: rgba(37, 99, 235, 0.12);
+  --status-info-border: rgba(37, 99, 235, 0.25);
 }
 
 * {
@@ -72,6 +141,7 @@ body {
   -moz-osx-font-smoothing: grayscale;
   font-size: 14px;
   line-height: 1.5;
+  transition: background-color 200ms ease, color 150ms ease;
 }
 
 ::selection {
@@ -100,11 +170,15 @@ body {
 }
 
 .dark ::-webkit-scrollbar-thumb {
-  background: var(--color-surface-700);
+  background: var(--color-surface-600);
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-surface-400);
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: var(--color-surface-500);
 }
 
 /* Focus styles */
@@ -119,7 +193,18 @@ input, textarea, select {
   font-size: inherit;
 }
 
+/* Fix select dropdown dark mode */
+select option {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
 /* Transition defaults */
 .transition-fast {
   transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Smooth theme-change transitions for major surfaces */
+header, aside, nav, main, [style*="--bg-secondary"], [style*="--bg-primary"] {
+  transition: background-color 200ms ease, border-color 200ms ease;
 }

@@ -1,4 +1,4 @@
-"""Navigation sidebar widget."""
+"""Navigation sidebar widget with Unicode icons and modern styling."""
 
 from __future__ import annotations
 
@@ -18,15 +18,17 @@ class SidebarItem(Static):
         width: 100%;
         height: 1;
         padding: 0 1;
-        color: $text;
+        color: #94a3b8;
     }
     SidebarItem:hover {
-        background: $accent 30%;
+        background: #232440;
+        color: #e2e8f0;
     }
     SidebarItem.active {
-        background: $accent;
-        color: #ffffff;
+        background: #232440;
+        color: #e2e8f0;
         text-style: bold;
+        border-left: tall #6366f1;
     }
     """
 
@@ -38,7 +40,7 @@ class SidebarItem(Static):
             super().__init__()
 
     def __init__(self, label: str, item_id: str, icon: str = "", **kwargs) -> None:
-        display_text = f"{icon} {label}" if icon else label
+        display_text = f" {icon}  {label}" if icon else f"   {label}"
         super().__init__(display_text, **kwargs)
         self.item_id = item_id
         self.label_text = label
@@ -47,19 +49,35 @@ class SidebarItem(Static):
         self.post_message(self.Selected(self.item_id, self.label_text))
 
 
-class SidebarWidget(Widget):
-    """Collapsible navigation sidebar.
+class SidebarDivider(Static):
+    """A thin divider between sidebar sections."""
 
-    Shows navigation items for the main screens. Each item is clickable
-    and highlights when active. Can be collapsed/expanded with toggle.
+    DEFAULT_CSS = """
+    SidebarDivider {
+        width: 100%;
+        height: 1;
+        padding: 0 1;
+        color: #3d3f5c;
+    }
+    """
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__("\u2500" * 18, **kwargs)
+
+
+class SidebarWidget(Widget):
+    """Collapsible navigation sidebar with grouped sections.
+
+    Shows navigation items with Unicode icons. Items are clickable
+    and highlight with a left accent bar when active.
     """
 
     DEFAULT_CSS = """
     SidebarWidget {
         dock: left;
-        width: 22;
-        background: $surface;
-        border-right: solid $primary-background-darken-2;
+        width: 24;
+        background: #1a1b2e;
+        border-right: tall #3d3f5c;
     }
     SidebarWidget.collapsed {
         width: 0;
@@ -70,28 +88,37 @@ class SidebarWidget(Widget):
         height: 1;
         padding: 0 1;
         text-style: bold;
-        color: $accent;
-        background: $surface;
+        color: #6366f1;
+        background: #1a1b2e;
     }
-    SidebarWidget .sidebar-separator {
+    SidebarWidget .sidebar-group-label {
         width: 100%;
         height: 1;
-        color: $text-muted;
+        padding: 0 1;
+        color: #64748b;
+        text-style: bold;
+        margin: 1 0 0 0;
     }
     """
 
     collapsed = reactive(False)
 
-    # Navigation items: (id, label, icon)
-    NAV_ITEMS = [
-        ("flow", "Flow", ">>"),
-        ("inbox", "Inbox", "[]"),
-        ("calendar", "Calendar", "::"),
-        ("todos", "Todos", "**"),
-        ("stats", "Stats", "##"),
-        ("ai_insights", "AI Insights", "~~"),
-        ("chat", "Chat", "<>"),
-        ("settings", "Settings", "@@"),
+    # Navigation items grouped: (id, label, icon)
+    MAIN_NAV = [
+        ("flow", "Flow", "\u25b6"),
+        ("inbox", "Inbox", "\u2709"),
+        ("calendar", "Calendar", "\u25a3"),
+        ("todos", "Todos", "\u2611"),
+    ]
+
+    TOOLS_NAV = [
+        ("stats", "Stats", "\u2261"),
+        ("ai_insights", "AI Insights", "\u2726"),
+        ("chat", "Chat", "\u2604"),
+    ]
+
+    META_NAV = [
+        ("settings", "Settings", "\u2699"),
     ]
 
     def __init__(self, **kwargs) -> None:
@@ -100,15 +127,28 @@ class SidebarWidget(Widget):
 
     def compose(self) -> ComposeResult:
         with Vertical():
-            yield Static(" Navigation", classes="sidebar-header")
-            yield Static("---", classes="sidebar-separator")
-            for item_id, label, icon in self.NAV_ITEMS:
+            yield Static(" \u2501 Mail", classes="sidebar-header")
+
+            yield Static("  [#64748b]NAVIGATE[/#64748b]", classes="sidebar-group-label")
+            for item_id, label, icon in self.MAIN_NAV:
+                yield SidebarItem(label, item_id, icon=icon, id=f"nav-{item_id}")
+
+            yield SidebarDivider()
+
+            yield Static("  [#64748b]TOOLS[/#64748b]", classes="sidebar-group-label")
+            for item_id, label, icon in self.TOOLS_NAV:
+                yield SidebarItem(label, item_id, icon=icon, id=f"nav-{item_id}")
+
+            yield SidebarDivider()
+
+            for item_id, label, icon in self.META_NAV:
                 yield SidebarItem(label, item_id, icon=icon, id=f"nav-{item_id}")
 
     def set_active(self, item_id: str) -> None:
         """Highlight the given navigation item."""
         self._active_item = item_id
-        for nav_id, _, _ in self.NAV_ITEMS:
+        all_items = self.MAIN_NAV + self.TOOLS_NAV + self.META_NAV
+        for nav_id, _, _ in all_items:
             try:
                 widget = self.query_one(f"#nav-{nav_id}", SidebarItem)
                 if nav_id == item_id:

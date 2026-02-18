@@ -1,4 +1,4 @@
-"""Header bar widget for the mail TUI."""
+"""Header bar widget for the mail TUI -- modern design with breadcrumbs and status."""
 
 from __future__ import annotations
 
@@ -9,17 +9,17 @@ from textual.widgets import Static
 
 
 class HeaderWidget(Widget):
-    """Top header bar showing app name, screen title, and user info.
+    """Top header bar with app name, breadcrumb title, and status indicators.
 
-    Displays a single row spanning full width with accent background.
+    Displays a single row with accent background, information-dense layout.
     """
 
     DEFAULT_CSS = """
     HeaderWidget {
         dock: top;
         height: 1;
-        background: $accent;
-        color: $text;
+        background: #6366f1;
+        color: #ffffff;
     }
     HeaderWidget .header-app-name {
         width: auto;
@@ -27,21 +27,30 @@ class HeaderWidget(Widget):
         text-style: bold;
         color: #ffffff;
     }
+    HeaderWidget .header-separator {
+        width: auto;
+        color: #a5b4fc;
+    }
     HeaderWidget .header-title {
         width: 1fr;
         padding: 0 1;
-        color: #e0e0e0;
+        color: #e0e7ff;
+    }
+    HeaderWidget .header-status {
+        width: auto;
+        padding: 0 1;
+        color: #c7d2fe;
     }
     HeaderWidget .header-user {
         width: auto;
         padding: 0 1;
-        color: #e0e0e0;
+        color: #e0e7ff;
     }
     """
 
     def __init__(
         self,
-        app_name: str = "Mail",
+        app_name: str = "\u2501 Mail",
         screen_title: str = "",
         user_name: str = "",
         **kwargs,
@@ -54,8 +63,14 @@ class HeaderWidget(Widget):
     def compose(self) -> ComposeResult:
         with Horizontal():
             yield Static(self._app_name, classes="header-app-name")
+            yield Static(" \u203a ", classes="header-separator")
             yield Static(self._screen_title, classes="header-title", id="header-title")
-            yield Static(self._user_name, classes="header-user", id="header-user")
+            yield Static("", classes="header-status", id="header-status")
+            yield Static(
+                f"\u25cf {self._user_name}" if self._user_name else "",
+                classes="header-user",
+                id="header-user",
+            )
 
     def set_title(self, title: str) -> None:
         """Update the screen title displayed in the header."""
@@ -69,6 +84,14 @@ class HeaderWidget(Widget):
         """Update the user display name in the header."""
         try:
             widget = self.query_one("#header-user", Static)
-            widget.update(name)
+            widget.update(f"\u25cf {name}" if name else "")
+        except Exception:
+            pass
+
+    def set_status(self, text: str) -> None:
+        """Update the status area in the header."""
+        try:
+            widget = self.query_one("#header-status", Static)
+            widget.update(text)
         except Exception:
             pass

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
-from textual.containers import Vertical
 from textual.screen import Screen
 from textual.widgets import Static
 
@@ -48,11 +47,7 @@ class BaseScreen(Screen):
             id="app-header",
         )
         yield SidebarWidget(id="app-sidebar")
-        yield Vertical(
-            *self.compose_content(),
-            id="content-area",
-            classes="content-area",
-        )
+        yield from self.compose_content()
         yield FooterWidget(
             shortcuts=self.DEFAULT_SHORTCUTS,
             id="app-footer",

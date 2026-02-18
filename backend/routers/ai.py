@@ -581,6 +581,7 @@ async def get_needs_reply(
             Email.is_read,
             Email.gmail_thread_id,
             Email.message_id_header,
+            GoogleAccount.email.label("account_email"),
             AIAnalysis.category,
             AIAnalysis.priority,
             AIAnalysis.summary,
@@ -588,6 +589,7 @@ async def get_needs_reply(
             AIAnalysis.reply_options,
         )
         .join(AIAnalysis, AIAnalysis.email_id == Email.id)
+        .join(GoogleAccount, GoogleAccount.id == Email.account_id)
         .where(
             account_filter,
             AIAnalysis.needs_reply == True,
@@ -654,6 +656,7 @@ async def get_needs_reply(
             "snippet": row.snippet,
             "is_read": row.is_read,
             "gmail_thread_id": row.gmail_thread_id,
+            "account_email": row.account_email,
             "category": category,
             "priority": priority,
             "summary": row.summary,
@@ -1013,7 +1016,9 @@ async def get_awaiting_response(
             Email.gmail_thread_id,
             Email.account_id,
             Email.message_id_header,
+            GoogleAccount.email.label("account_email"),
         )
+        .join(GoogleAccount, GoogleAccount.id == Email.account_id)
         .outerjoin(
             ThreadDigest,
             and_(
@@ -1091,6 +1096,7 @@ async def get_awaiting_response(
             "date": row.date.isoformat() if row.date else None,
             "snippet": row.snippet,
             "gmail_thread_id": row.gmail_thread_id,
+            "account_email": row.account_email,
         })
         thread_account_pairs.append((row.gmail_thread_id, row.account_id))
 

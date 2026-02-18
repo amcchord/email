@@ -108,12 +108,10 @@ class ChatScreen(BaseScreen):
             return
         try:
             self._conversations = await self._chat_client.list_conversations()
-            self.call_from_thread(self._populate_conversation_list)
+            self._populate_conversation_list()
         except Exception as e:
             logger.debug("Failed to load conversations", exc_info=True)
-            self.call_from_thread(
-                self._update_status, f"Failed to load conversations: {e}"
-            )
+            self._update_status(f"Failed to load conversations: {e}")
 
     def _populate_conversation_list(self) -> None:
         """Populate the sidebar with conversation items."""
@@ -149,12 +147,10 @@ class ChatScreen(BaseScreen):
         try:
             data = await self._chat_client.get_conversation(conv_id)
             messages = data.get("messages", [])
-            self.call_from_thread(self._display_messages, messages)
+            self._display_messages(messages)
         except Exception as e:
             logger.debug("Failed to load conversation", exc_info=True)
-            self.call_from_thread(
-                self._update_status, f"Failed to load conversation: {e}"
-            )
+            self._update_status(f"Failed to load conversation: {e}")
 
     def _display_messages(self, messages: list[dict[str, Any]]) -> None:
         """Display loaded messages in the message area."""
@@ -228,10 +224,10 @@ class ChatScreen(BaseScreen):
 
         self._streaming = True
         self._accumulated_text = ""
-        self.call_from_thread(self._update_status, "AI is thinking...")
+        self._update_status("AI is thinking...")
 
         # Create the assistant placeholder
-        self.call_from_thread(self._add_assistant_placeholder)
+        self._add_assistant_placeholder()
 
         try:
             async for event_type, data_str in self._chat_client.stream_chat(
@@ -246,9 +242,7 @@ class ChatScreen(BaseScreen):
                     text = data.get("text", "")
                     if text:
                         self._accumulated_text = text
-                        self.call_from_thread(
-                            self._update_streaming_message, text
-                        )
+                        self._update_streaming_message(text)
 
                 elif event_type == "conversation_id":
                     new_id = data.get("conversation_id")
@@ -259,9 +253,7 @@ class ChatScreen(BaseScreen):
                     question = data.get("question", "")
                     if question:
                         self._accumulated_text = question
-                        self.call_from_thread(
-                            self._update_streaming_message, question
-                        )
+                        self._update_streaming_message(question)
 
                 elif event_type == "plan_ready":
                     tasks = data.get("tasks", [])
@@ -274,60 +266,42 @@ class ChatScreen(BaseScreen):
                                 )
                             else:
                                 plan_text += f"  {i}. {task}\n"
-                        self.call_from_thread(
-                            self._update_streaming_message, plan_text
-                        )
+                        self._update_streaming_message(plan_text)
 
                 elif event_type == "task_complete":
                     summary = data.get("summary", "")
                     task_id = data.get("task_id", "")
                     if summary:
-                        self.call_from_thread(
-                            self._update_status,
-                            f"Completed: {summary[:60]}",
-                        )
+                        self._update_status(f"Completed: {summary[:60]}")
 
                 elif event_type == "task_failed":
                     error = data.get("error", "Unknown error")
-                    self.call_from_thread(
-                        self._update_status, f"Task failed: {error[:60]}"
-                    )
+                    self._update_status(f"Task failed: {error[:60]}")
 
                 elif event_type == "phase":
                     phase = data.get("phase", "")
                     if phase:
-                        self.call_from_thread(
-                            self._update_status, f"Phase: {phase}"
-                        )
+                        self._update_status(f"Phase: {phase}")
 
                 elif event_type == "done":
                     # Don't break here -- the backend sends conversation_id
                     # after the done event. The stream will end naturally.
-                    self.call_from_thread(self._update_status, "")
+                    self._update_status("")
 
                 elif event_type == "error":
                     error_msg = data.get("message", data.get("error", "Unknown error"))
-                    self.call_from_thread(
-                        self._update_streaming_message,
-                        f"Error: {error_msg}",
-                    )
-                    self.call_from_thread(
-                        self.notify,
-                        f"Error: {error_msg}",
-                        severity="error",
-                    )
+                    self._update_streaming_message(f"Error: {error_msg}")
+                    self.notify(f"Error: {error_msg}", severity="error")
                     break
 
         except Exception as e:
             logger.error("Chat stream error", exc_info=True)
-            self.call_from_thread(
-                self.notify, f"Stream error: {e}", severity="error"
-            )
+            self.notify(f"Stream error: {e}", severity="error")
         finally:
             self._streaming = False
-            self.call_from_thread(self._update_status, "")
+            self._update_status("")
             # Refresh conversation list to show new/updated conversation
-            self.call_from_thread(self._refresh_conversations_after_stream)
+            self._refresh_conversations_after_stream()
 
     def _refresh_conversations_after_stream(self) -> None:
         """Refresh conversation list after streaming completes."""
@@ -407,13 +381,11 @@ class ChatScreen(BaseScreen):
         try:
             await self._chat_client.delete_conversation(self._conversation_id)
             self._conversation_id = None
-            self.call_from_thread(self.notify, "Conversation deleted")
+            self.notify("Conversation deleted")
             # Clear messages and refresh list
-            self.call_from_thread(self._clear_and_refresh)
+            self._clear_and_refresh()
         except Exception as e:
-            self.call_from_thread(
-                self.notify, f"Delete failed: {e}", severity="error"
-            )
+            self.notify(f"Delete failed: {e}", severity="error")
 
     def _clear_and_refresh(self) -> None:
         """Clear messages and refresh conversation list."""

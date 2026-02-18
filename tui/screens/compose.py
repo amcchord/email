@@ -1,4 +1,4 @@
-"""Compose screen for sending and drafting emails."""
+"""Compose screen for sending and drafting emails with modern styling."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ class ComposeScreen(Screen):
 
     DEFAULT_CSS = """
     ComposeScreen {
-        background: $background;
+        background: #0f0f1a;
     }
     #compose-container {
         width: 100%;
@@ -44,7 +44,7 @@ class ComposeScreen(Screen):
     #compose-title-bar {
         width: 100%;
         height: 1;
-        background: $accent;
+        background: #6366f1;
         color: #ffffff;
         padding: 0 1;
         text-style: bold;
@@ -53,8 +53,8 @@ class ComposeScreen(Screen):
         dock: bottom;
         width: 100%;
         height: 1;
-        background: $surface;
-        color: $text-muted;
+        background: #1a1b2e;
+        color: #94a3b8;
         padding: 0 1;
     }
     """
@@ -74,21 +74,26 @@ class ComposeScreen(Screen):
         self._compose_client: ComposeClient | None = None
 
     def compose(self) -> ComposeResult:
-        title = "Compose"
+        # Title with mode badge
         if self._reply_data:
-            title = "Reply"
+            title = "\u21a9  Reply"
+            badge = "[on #2dd4bf][#0f0f1a] REPLY [/#0f0f1a][/on #2dd4bf] "
         elif self._forward_data:
-            title = "Forward"
+            title = "\u27a4  Forward"
+            badge = "[on #f59e0b][#0f0f1a] FWD [/#0f0f1a][/on #f59e0b] "
+        else:
+            title = "\u270e  Compose"
+            badge = "[on #6366f1][#ffffff] NEW [/#ffffff][/on #6366f1] "
 
         with Vertical(id="compose-container"):
-            yield Static(f" {title}", id="compose-title-bar")
+            yield Static(f" {badge}{title}", id="compose-title-bar")
             yield ComposeEditorWidget(id="compose-editor")
             yield Static(
-                "[bold]Ctrl+Enter[/bold] Send  "
-                "[bold]Ctrl+s[/bold] Draft  "
-                "[bold]Esc[/bold] Back  "
-                "[bold]Ctrl+Shift+c[/bold] Cc  "
-                "[bold]Ctrl+Shift+b[/bold] Bcc",
+                "[reverse] Ctrl+Enter [/reverse] Send  "
+                "[reverse] Ctrl+s [/reverse] Draft  "
+                "[reverse] Esc [/reverse] Back  "
+                "[reverse] Ctrl+Shift+c [/reverse] Cc  "
+                "[reverse] Ctrl+Shift+b [/reverse] Bcc",
                 id="compose-hints",
             )
 
@@ -105,42 +110,40 @@ class ComposeScreen(Screen):
             return
         try:
             accounts = await self._accounts_client.list_accounts()
-            editor = self.query_one("#compose-editor", ComposeEditorWidget)
-            editor.set_accounts(accounts)
-
-            # Apply pre-fill data after accounts are loaded
-            if self._reply_data:
-                editor.set_reply_data(self._reply_data)
-            elif self._forward_data:
-                editor.set_forward_data(self._forward_data)
-
-            # Set initial body text if provided (e.g. from AI reply option)
-            if self._initial_body:
-                editor.set_body_text(self._initial_body)
-
-            # Focus the body for quick typing
-            if self._reply_data or self._forward_data or self._initial_body:
-                editor.focus_body()
+            self._apply_accounts(accounts)
         except Exception as e:
             logger.debug("Failed to load accounts", exc_info=True)
             self.notify(f"Failed to load accounts: {e}", severity="error")
 
+    def _apply_accounts(self, accounts: list) -> None:
+        """Apply account data to the compose editor (main thread only)."""
+        editor = self.query_one("#compose-editor", ComposeEditorWidget)
+        editor.set_accounts(accounts)
+
+        if self._reply_data:
+            editor.set_reply_data(self._reply_data)
+        elif self._forward_data:
+            editor.set_forward_data(self._forward_data)
+
+        if self._initial_body:
+            editor.set_body_text(self._initial_body)
+
+        if self._reply_data or self._forward_data or self._initial_body:
+            editor.focus_body()
+
     def on_key(self, event) -> None:
         """Handle key events that Textual bindings cannot capture directly."""
         key = event.key
-        # Ctrl+Enter to send
         if key == "ctrl+j" or key == "ctrl+enter":
             event.prevent_default()
             event.stop()
             self._do_send()
             return
-        # Ctrl+Shift+c to toggle Cc
         if key == "ctrl+shift+c":
             event.prevent_default()
             event.stop()
             self._toggle_cc()
             return
-        # Ctrl+Shift+b to toggle Bcc
         if key == "ctrl+shift+b":
             event.prevent_default()
             event.stop()
@@ -148,11 +151,9 @@ class ComposeScreen(Screen):
             return
 
     def action_go_back(self) -> None:
-        """Pop this screen and return to the previous view."""
         self.app.pop_screen()
 
     def _toggle_cc(self) -> None:
-        """Toggle the Cc field visibility."""
         try:
             editor = self.query_one("#compose-editor", ComposeEditorWidget)
             editor.toggle_cc()
@@ -160,12 +161,16 @@ class ComposeScreen(Screen):
             pass
 
     def _toggle_bcc(self) -> None:
-        """Toggle the Bcc field visibility."""
         try:
             editor = self.query_one("#compose-editor", ComposeEditorWidget)
             editor.toggle_bcc()
         except Exception:
             pass
+
+    def _read_compose_data(self) -> dict[str, Any]:
+        """Read compose data from the editor widget (main thread only)."""
+        editor = self.query_one("#compose-editor", ComposeEditorWidget)
+        return editor.get_compose_data()
 
     @work(exclusive=True, group="send")
     async def _do_send(self) -> None:
@@ -173,10 +178,8 @@ class ComposeScreen(Screen):
         if self._compose_client is None:
             return
         try:
-            editor = self.query_one("#compose-editor", ComposeEditorWidget)
-            data = editor.get_compose_data()
+            data = self._read_compose_data()
 
-            # Validate required fields
             if not data.get("account_id"):
                 self.notify("Please select an account", severity="warning")
                 return
@@ -200,7 +203,7 @@ class ComposeScreen(Screen):
                 thread_id=data.get("thread_id"),
             )
 
-            self.notify("Email sent!", severity="information")
+            self.notify("\u2713 Email sent!", severity="information")
             self.app.pop_screen()
 
         except Exception as e:
@@ -213,8 +216,7 @@ class ComposeScreen(Screen):
         if self._compose_client is None:
             return
         try:
-            editor = self.query_one("#compose-editor", ComposeEditorWidget)
-            data = editor.get_compose_data()
+            data = self._read_compose_data()
 
             if not data.get("account_id"):
                 self.notify("Please select an account", severity="warning")
@@ -233,7 +235,7 @@ class ComposeScreen(Screen):
                 thread_id=data.get("thread_id"),
             )
 
-            self.notify("Draft saved!", severity="information")
+            self.notify("\u2713 Draft saved!", severity="information")
 
         except Exception as e:
             logger.debug("Failed to save draft", exc_info=True)

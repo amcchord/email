@@ -137,6 +137,7 @@ export const api = {
   getSyncStatus: (accountId) => request('GET', `/accounts/${accountId}/sync-status`),
 
   // Admin
+  getFeatureFlags: () => request('GET', '/admin/feature-flags'),
   getDashboard: () => request('GET', '/admin/dashboard'),
   getStats: () => request('GET', '/admin/stats'),
   getSettings: () => request('GET', '/admin/settings'),
@@ -309,6 +310,12 @@ export const api = {
   // About Me
   getAboutMe: () => request('GET', '/auth/about-me'),
   updateAboutMe: (aboutMe) => request('PUT', '/auth/about-me', { about_me: aboutMe }),
+
+  // TUI Password
+  setTuiPassword: (password) => request('PUT', '/auth/tui-password', { password }),
+
+  // Device-Code Auth (TUI)
+  deviceAuthorize: (userCode) => request('POST', '/auth/device/authorize', { user_code: userCode }),
 
   // Keyboard Shortcuts
   getKeyboardShortcuts: () => request('GET', '/auth/keyboard-shortcuts'),

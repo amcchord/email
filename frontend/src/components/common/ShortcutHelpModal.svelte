@@ -164,9 +164,9 @@
     flex-direction: column;
     border-radius: 12px;
     overflow: hidden;
-    background: var(--bg-primary);
+    background: var(--bg-elevated);
     border: 1px solid var(--border-color);
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    box-shadow: var(--shadow-lg);
     animation: modal-slide-up 0.2s ease;
   }
 

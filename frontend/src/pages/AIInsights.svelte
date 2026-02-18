@@ -37,11 +37,11 @@
   ];
 
   const conversationTypeConfig = {
-    scheduling: { label: 'Scheduling', bg: 'bg-purple-100 dark:bg-purple-900/40', text: 'text-purple-700 dark:text-purple-400', icon: 'calendar' },
-    discussion: { label: 'Discussion', bg: 'bg-blue-100 dark:bg-blue-900/40', text: 'text-blue-700 dark:text-blue-400', icon: 'chat' },
-    notification: { label: 'Notification', bg: 'bg-gray-100 dark:bg-gray-800', text: 'text-gray-600 dark:text-gray-400', icon: 'bell' },
-    transactional: { label: 'Transactional', bg: 'bg-green-100 dark:bg-green-900/40', text: 'text-green-700 dark:text-green-400', icon: 'receipt' },
-    other: { label: 'Other', bg: 'bg-stone-100 dark:bg-stone-800', text: 'text-stone-600 dark:text-stone-400', icon: 'dot' },
+    scheduling: { label: 'Scheduling', bg: 'bg-purple-100 dark:bg-purple-500/20', text: 'text-purple-700 dark:text-purple-300', icon: 'calendar' },
+    discussion: { label: 'Discussion', bg: 'bg-blue-100 dark:bg-blue-500/20', text: 'text-blue-700 dark:text-blue-300', icon: 'chat' },
+    notification: { label: 'Notification', bg: 'bg-gray-100 dark:bg-gray-700/50', text: 'text-gray-600 dark:text-gray-300', icon: 'bell' },
+    transactional: { label: 'Transactional', bg: 'bg-green-100 dark:bg-green-500/20', text: 'text-green-700 dark:text-green-300', icon: 'receipt' },
+    other: { label: 'Other', bg: 'bg-stone-100 dark:bg-stone-700/50', text: 'text-stone-600 dark:text-stone-300', icon: 'dot' },
   };
 
   function getConversationTypeConfig(type) {
@@ -413,11 +413,11 @@
   }
 
   const categoryColors = {
-    urgent: { bg: 'bg-red-100 dark:bg-red-900/40', text: 'text-red-700 dark:text-red-400' },
-    can_ignore: { bg: 'bg-gray-100 dark:bg-gray-800', text: 'text-gray-600 dark:text-gray-400' },
-    fyi: { bg: 'bg-emerald-100 dark:bg-emerald-900/40', text: 'text-emerald-700 dark:text-emerald-400' },
-    awaiting_reply: { bg: 'bg-amber-100 dark:bg-amber-900/40', text: 'text-amber-700 dark:text-amber-400' },
-    expired: { bg: 'bg-stone-100 dark:bg-stone-800/40', text: 'text-stone-500 dark:text-stone-400' },
+    urgent: { bg: 'bg-red-100 dark:bg-red-500/20', text: 'text-red-700 dark:text-red-300' },
+    can_ignore: { bg: 'bg-gray-100 dark:bg-gray-700/50', text: 'text-gray-600 dark:text-gray-300' },
+    fyi: { bg: 'bg-emerald-100 dark:bg-emerald-500/20', text: 'text-emerald-700 dark:text-emerald-300' },
+    awaiting_reply: { bg: 'bg-amber-100 dark:bg-amber-500/20', text: 'text-amber-700 dark:text-amber-300' },
+    expired: { bg: 'bg-stone-100 dark:bg-stone-700/50/40', text: 'text-stone-500 dark:text-stone-300' },
   };
 
   function categoryLabel(cat) {
@@ -517,7 +517,7 @@
                   <button
                     onclick={dropOnly}
                     class="px-3 py-1.5 rounded-md text-xs font-medium transition-fast"
-                    style="background: #ef4444; color: white"
+                    style="background: var(--status-error); color: white"
                   >
                     Drop Only
                   </button>
@@ -609,9 +609,9 @@
       {/if}
 
       {#if processingJustFinished}
-        <div class="rounded-xl border overflow-hidden" style="background: var(--bg-secondary); border-color: #22c55e">
+        <div class="rounded-xl border overflow-hidden" style="background: var(--bg-secondary); border-color: var(--status-success)">
           <div class="px-4 py-3 flex items-center gap-3">
-            <div class="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style="background: #22c55e">
+            <div class="w-5 h-5 rounded-full flex items-center justify-center shrink-0" style="background: var(--status-success)">
               <span class="text-white"><Icon name="check" size={12} /></span>
             </div>
             <span class="text-sm font-medium" style="color: var(--text-primary)">Processing complete -- insights updated</span>
@@ -754,7 +754,7 @@
                           <span class="text-[10px] ml-auto shrink-0" style="color: var(--text-tertiary)">{sender.count} action emails</span>
                         </div>
                         <div class="h-1.5 rounded-full overflow-hidden" style="background: var(--bg-tertiary)">
-                          <div class="h-full rounded-full" style="width: {width}%; background: #ef4444; opacity: {1 - i * 0.08}"></div>
+                          <div class="h-full rounded-full" style="width: {width}%; background: var(--status-error); opacity: {1 - i * 0.08}"></div>
                         </div>
                       </div>
                     </div>
@@ -806,11 +806,11 @@
                             <button
                               onclick={() => goToEmailWithReply(email, option.body)}
                               class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium border transition-fast cursor-pointer
-                                {option.intent === 'accept' ? 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400' :
-                                 option.intent === 'decline' ? 'bg-red-50 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400' :
-                                 option.intent === 'defer' ? 'bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400' :
-                                 option.intent === 'not_relevant' ? 'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400' :
-                                 'bg-blue-50 dark:bg-blue-900/30 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-400'}"
+                                {option.intent === 'accept' ? 'bg-emerald-50 dark:bg-emerald-500/15 border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-300' :
+                                 option.intent === 'decline' ? 'bg-red-50 dark:bg-red-500/15 border-red-200 dark:border-red-500/30 text-red-700 dark:text-red-300' :
+                                 option.intent === 'defer' ? 'bg-amber-50 dark:bg-amber-500/15 border-amber-200 dark:border-amber-500/30 text-amber-700 dark:text-amber-300' :
+                                 option.intent === 'not_relevant' ? 'bg-gray-50 dark:bg-gray-700/50 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300' :
+                                 'bg-blue-50 dark:bg-blue-500/15 border-blue-200 dark:border-blue-500/30 text-blue-700 dark:text-blue-300'}"
                               title={option.body}
                             >
                               {option.label}
@@ -867,14 +867,14 @@
                           <span class="text-sm font-medium truncate" style="color: var(--text-primary)">{sender.from_name}</span>
                           <span class="text-[10px] px-1.5 py-0.5 rounded-full shrink-0" style="background: var(--bg-tertiary); color: var(--text-tertiary)">{sender.count} emails</span>
                           {#if sender.unsubscribed_at}
-                            <span class="text-[10px] px-1.5 py-0.5 rounded-full shrink-0" style="background: #22c55e20; color: #22c55e">Unsubscribed</span>
+                            <span class="text-[10px] px-1.5 py-0.5 rounded-full shrink-0" style="background: color-mix(in srgb, var(--status-success) 12%, transparent); color: var(--status-success)">Unsubscribed</span>
                           {/if}
                         </div>
                         <div class="text-xs mt-0.5" style="color: var(--text-tertiary)">{sender.domain}</div>
                         {#if sender.unsubscribed_at && !sender.honors_unsubscribe}
                           <div class="flex items-center gap-1 mt-1">
-                            <span class="shrink-0" style="color: #f59e0b"><Icon name="alert-triangle" size={12} /></span>
-                            <span class="text-[10px]" style="color: #f59e0b">Still sending emails after unsubscribe ({sender.emails_received_after} received)</span>
+                            <span class="shrink-0" style="color: var(--status-warning)"><Icon name="alert-triangle" size={12} /></span>
+                            <span class="text-[10px]" style="color: var(--status-warning)">Still sending emails after unsubscribe ({sender.emails_received_after} received)</span>
                           </div>
                         {/if}
                       </div>
@@ -883,7 +883,7 @@
                           onclick={() => handleUnsubscribe(sender.sample_email_id)}
                           disabled={unsubscribingId === sender.sample_email_id}
                           class="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium transition-fast shrink-0 disabled:opacity-50"
-                          style="background: {unsubscribePreview && unsubscribePreview.emailId === sender.sample_email_id ? '#dc2626' : '#ef4444'}; color: white"
+                          style="background: var(--status-error); color: white"
                         >
                           {#if unsubscribingId === sender.sample_email_id}
                             <div class="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
@@ -936,7 +936,7 @@
                         <div class="flex items-center gap-2">
                           <span class="text-sm font-medium truncate" style="color: var(--text-primary)">{email.subject || '(no subject)'}</span>
                           {#if email.unsubscribed_at}
-                            <span class="text-[10px] px-1.5 py-0.5 rounded-full shrink-0" style="background: #22c55e20; color: #22c55e">Unsubscribed</span>
+                            <span class="text-[10px] px-1.5 py-0.5 rounded-full shrink-0" style="background: color-mix(in srgb, var(--status-success) 12%, transparent); color: var(--status-success)">Unsubscribed</span>
                           {/if}
                           <span class="text-xs shrink-0 ml-auto" style="color: var(--text-tertiary)">{formatDate(email.date)}</span>
                         </div>
@@ -957,7 +957,7 @@
                           onclick={() => handleUnsubscribe(email.id)}
                           disabled={unsubscribingId === email.id}
                           class="flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium transition-fast shrink-0 disabled:opacity-50"
-                          style="background: {unsubscribePreview && unsubscribePreview.emailId === email.id ? '#dc2626' : '#ef4444'}; color: white"
+                          style="background: var(--status-error); color: white"
                           title="{unsubscribePreview && unsubscribePreview.emailId === email.id ? 'Send unsubscribe email' : 'Unsubscribe'}"
                         >
                           {#if unsubscribingId === email.id}
@@ -1059,7 +1059,7 @@
                             {typeConfig.label}
                           </span>
                           {#if digest.is_resolved}
-                            <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400">Resolved</span>
+                            <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-300">Resolved</span>
                           {/if}
                           <span class="text-xs shrink-0 ml-auto" style="color: var(--text-tertiary)">{formatDate(digest.latest_date)}</span>
                         </div>

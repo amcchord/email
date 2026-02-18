@@ -13,6 +13,17 @@
   let addingTodos = $state(false);
   let showTodoPrompt = $state(false);
 
+  async function handleUnignore() {
+    if (!email) return;
+    try {
+      await api.unignoreNeedsReply(email.id);
+      email.needs_reply_ignored = false;
+      showToast('Restored to needs reply', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
   async function addAllTodos() {
     if (!email) return;
     addingTodos = true;
@@ -253,17 +264,34 @@
 
   // Intent style mapping for the reply option buttons in the AI summary
   const intentButtonStyles = {
-    accept: 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400',
-    decline: 'bg-red-50 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400',
-    defer: 'bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400',
-    not_relevant: 'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400',
-    custom: 'bg-blue-50 dark:bg-blue-900/30 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-400',
+    accept: 'bg-emerald-50 dark:bg-emerald-500/20 border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-300',
+    decline: 'bg-red-50 dark:bg-red-500/15 border-red-200 dark:border-red-500/30 text-red-700 dark:text-red-300',
+    defer: 'bg-amber-50 dark:bg-amber-500/20 border-amber-200 dark:border-amber-500/30 text-amber-700 dark:text-amber-300',
+    not_relevant: 'bg-gray-50 dark:bg-gray-700/40 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300',
+    custom: 'bg-blue-50 dark:bg-blue-500/20 border-blue-200 dark:border-blue-500/30 text-blue-700 dark:text-blue-300',
   };
+
+  function resolveAccountId() {
+    const accountList = get(accounts);
+    if (accountList.length === 1) {
+      return accountList[0].id;
+    }
+    if (accountList.length > 1 && email && email.account_email) {
+      const matched = accountList.find(a => a.email === email.account_email);
+      if (matched) {
+        return matched.id;
+      }
+    }
+    if (accountList.length > 0) {
+      return accountList[0].id;
+    }
+    return null;
+  }
 
   function handleFullCompose() {
     if (!email) return;
     composeData.set({
-      account_id: null,
+      account_id: resolveAccountId(),
       to: [email.reply_to || email.from_address],
       cc: [],
       subject: email.subject?.startsWith('Re:') ? email.subject : `Re: ${email.subject || ''}`,
@@ -278,7 +306,7 @@
   function handleForward() {
     if (!email) return;
     composeData.set({
-      account_id: null,
+      account_id: resolveAccountId(),
       to: [],
       cc: [],
       subject: email.subject?.startsWith('Fwd:') ? email.subject : `Fwd: ${email.subject || ''}`,
@@ -347,7 +375,7 @@
           <h2 class="text-lg font-semibold leading-tight" style="color: var(--text-primary)">{email.subject || '(no subject)'}</h2>
           <div class="flex items-center gap-2 mt-1.5 flex-wrap">
             {#if email.ai_email_type}
-              <span class="inline-block text-xs px-2 py-0.5 rounded-full font-medium {email.ai_email_type === 'work' ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400' : 'bg-teal-100 dark:bg-teal-900/40 text-teal-700 dark:text-teal-400'}">
+              <span class="inline-block text-xs px-2 py-0.5 rounded-full font-medium {email.ai_email_type === 'work' ? 'bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-300' : 'bg-teal-100 dark:bg-teal-500/20 text-teal-700 dark:text-teal-300'}">
                 {emailTypeLabels[email.ai_email_type] || email.ai_email_type}
               </span>
             {/if}
@@ -357,12 +385,25 @@
               </span>
             {/if}
             {#if email.needs_reply}
-              <span class="inline-block text-xs px-2 py-0.5 rounded-full font-medium bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400">
-                Needs Reply
-              </span>
+              {#if email.needs_reply_ignored}
+                <span class="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-gray-100 dark:bg-gray-700/50 text-gray-500 dark:text-gray-300">
+                  Needs Reply: Ignored
+                  <button
+                    onclick={handleUnignore}
+                    class="ml-0.5 hover:text-blue-600 dark:hover:text-blue-400 transition-fast"
+                    title="Restore to needs reply"
+                  >
+                    <Icon name="rotate-ccw" size={12} />
+                  </button>
+                </span>
+              {:else}
+                <span class="inline-block text-xs px-2 py-0.5 rounded-full font-medium bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300">
+                  Needs Reply
+                </span>
+              {/if}
             {/if}
             {#if email.is_subscription}
-              <span class="inline-block text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400">
+              <span class="inline-block text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300">
                 Subscription
               </span>
             {/if}
@@ -713,7 +754,7 @@
           onclick={handleUnsubscribe}
           disabled={unsubscribing}
           class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-fast ml-auto disabled:opacity-50"
-          style="background: #ef4444; color: white"
+          style="background: var(--status-error); color: white"
         >
           {#if unsubscribing}
             <div class="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>

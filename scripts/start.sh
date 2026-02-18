@@ -27,6 +27,10 @@ sudo systemctl start mailapp
 echo "Starting background worker..."
 sudo systemctl start mailworker
 
+echo "Starting TUI servers (SSH + Web)..."
+sudo systemctl start mailtui-ssh || true
+sudo systemctl start mailtui-web || true
+
 echo "Starting Caddy..."
 sudo systemctl start caddy
 
@@ -34,4 +38,5 @@ echo ""
 echo "=== Mail Client is running ==="
 echo "  Web UI:  https://email.mcchord.net"
 echo "  API:     https://email.mcchord.net/api"
+echo "  TUI:     https://email.mcchord.net/tui/"
 echo ""

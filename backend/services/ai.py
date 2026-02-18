@@ -691,6 +691,49 @@ conversation_type guide:
                 logger.error(f"Thread analysis error: {e}")
                 return None
 
+    async def check_thread_merge(
+        self,
+        email_subject: str,
+        email_from: str,
+        email_snippet: str,
+        candidate_subject: str,
+        candidate_participants: list[str],
+        candidate_snippet: str,
+    ) -> dict:
+        """Ask the LLM whether a lone email should be merged into a candidate thread.
+
+        Returns {"should_merge": bool, "confidence": float, "reason": str}.
+        """
+        prompt = (
+            "Given a new email that Gmail placed in its own thread, determine if it "
+            "actually belongs to an existing thread.\n\n"
+            f"New email:\n"
+            f"  Subject: {email_subject!r}\n"
+            f"  From: {email_from}\n"
+            f"  Snippet: {email_snippet!r}\n\n"
+            f"Candidate thread:\n"
+            f"  Subject: {candidate_subject!r}\n"
+            f"  Participants: {', '.join(candidate_participants)}\n"
+            f"  Latest message snippet: {candidate_snippet!r}\n\n"
+            'Should the new email be merged into this thread? Respond with ONLY valid JSON:\n'
+            '{"should_merge": true/false, "confidence": 0.0-1.0, "reason": "..."}'
+        )
+
+        try:
+            response = await self._call_claude(
+                model=self.model,
+                max_tokens=200,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            response_text = response.content[0].text.strip()
+            if response_text.startswith("```"):
+                lines = response_text.split("\n")
+                response_text = "\n".join(lines[1:-1])
+            return json.loads(response_text)
+        except Exception as e:
+            logger.error(f"Thread merge check error: {e}")
+            return {"should_merge": False, "confidence": 0.0, "reason": f"Error: {e}"}
+
     async def generate_thread_digest(
         self,
         thread_id: str,

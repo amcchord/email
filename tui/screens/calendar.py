@@ -126,17 +126,30 @@ class CalendarScreen(BaseScreen):
         except Exception:
             pass
 
+    def _read_date_range(self) -> tuple[str, str] | None:
+        """Read the date range from the grid widget (main thread only)."""
+        grid = self._get_grid()
+        if grid is None:
+            return None
+        return grid.get_date_range()
+
+    def _apply_events(self) -> None:
+        """Apply loaded events to the grid widget (main thread only)."""
+        grid = self._get_grid()
+        if grid is not None:
+            grid.set_events(self._events)
+
     @work(exclusive=True)
     async def _load_events(self) -> None:
         """Fetch events from the API for the current view range."""
         if self._calendar_client is None:
             return
 
-        grid = self._get_grid()
-        if grid is None:
+        date_range = self._read_date_range()
+        if date_range is None:
             return
 
-        start_str, end_str = grid.get_date_range()
+        start_str, end_str = date_range
 
         try:
             self._update_status("Loading events...")
@@ -145,7 +158,7 @@ class CalendarScreen(BaseScreen):
                 end=end_str,
             )
             self._events = result.get("events", [])
-            grid.set_events(self._events)
+            self._apply_events()
             self._update_status()
         except Exception as e:
             logger.debug("Failed to load calendar events", exc_info=True)
@@ -251,7 +264,6 @@ class CalendarScreen(BaseScreen):
             result = await self._calendar_client.sync()
             msg = result.get("message", "Sync triggered")
             self.notify(msg, severity="information")
-            # Reload after a short delay to let sync complete
             self._load_events()
         except Exception as e:
             self.notify(f"Sync failed: {e}", severity="error")

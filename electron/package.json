@@ -1,0 +1,17 @@
+{
+  "name": "mail",
+  "version": "1.0.0",
+  "description": "Mail desktop app",
+  "author": "McChord",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac --win",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "~33.3.1",
+    "electron-builder": "~25.1.8"
+  }
+}

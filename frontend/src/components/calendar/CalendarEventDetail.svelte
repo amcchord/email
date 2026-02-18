@@ -46,9 +46,9 @@
   }
 
   function responseStatusIcon(status) {
-    if (status === 'accepted') return { icon: '\u2713', color: '#22c55e' };
-    if (status === 'declined') return { icon: '\u2717', color: '#ef4444' };
-    if (status === 'tentative') return { icon: '?', color: '#f59e0b' };
+    if (status === 'accepted') return { icon: '\u2713', color: 'var(--status-success)' };
+    if (status === 'declined') return { icon: '\u2717', color: 'var(--status-error)' };
+    if (status === 'tentative') return { icon: '?', color: 'var(--status-warning)' };
     return { icon: '\u2022', color: 'var(--text-tertiary)' };
   }
 

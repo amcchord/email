@@ -2,7 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_, or_
 from backend.models.calendar import CalendarEvent, CalendarSyncStatus
 from backend.models.account import GoogleAccount
 from backend.services.google_calendar import GoogleCalendarService
@@ -116,12 +116,17 @@ class CalendarSyncService:
             )
 
         now = datetime.now(timezone.utc)
-        time_min = (now - timedelta(days=180)).isoformat()
-        time_max = (now + timedelta(days=365)).isoformat()
+        window_start = now - timedelta(days=180)
+        window_end = now + timedelta(days=365)
+        time_min = window_start.isoformat()
+        time_max = window_end.isoformat()
+        window_start_date_str = window_start.strftime("%Y-%m-%d")
+        window_end_date_str = window_end.strftime("%Y-%m-%d")
 
         total_synced = 0
         next_sync_token = None
         page_token = None
+        synced_google_ids = set()
 
         try:
             while True:
@@ -138,6 +143,9 @@ class CalendarSyncService:
                 async with async_session() as db:
                     for event_dict in events:
                         try:
+                            google_id = event_dict.get("id", "")
+                            if google_id:
+                                synced_google_ids.add(google_id)
                             parsed = GoogleCalendarService.parse_event(event_dict, self.account_id)
                             await self._upsert_event(db, parsed)
                             total_synced += 1
@@ -152,6 +160,39 @@ class CalendarSyncService:
                 if not page_token:
                     break
                 await asyncio.sleep(0.3)
+
+            # Prune events in the synced time window that Google no longer
+            # returned -- these have been deleted on the remote side.
+            total_deleted = 0
+            if synced_google_ids:
+                async with async_session() as db:
+                    timed_condition = and_(
+                        CalendarEvent.account_id == self.account_id,
+                        CalendarEvent.is_all_day == False,
+                        CalendarEvent.start_time >= window_start,
+                        CalendarEvent.start_time <= window_end,
+                        CalendarEvent.google_event_id.notin_(synced_google_ids),
+                    )
+                    allday_condition = and_(
+                        CalendarEvent.account_id == self.account_id,
+                        CalendarEvent.is_all_day == True,
+                        CalendarEvent.start_date >= window_start_date_str,
+                        CalendarEvent.start_date <= window_end_date_str,
+                        CalendarEvent.google_event_id.notin_(synced_google_ids),
+                    )
+                    orphan_result = await db.execute(
+                        select(CalendarEvent).where(or_(timed_condition, allday_condition))
+                    )
+                    orphans = orphan_result.scalars().all()
+                    for orphan in orphans:
+                        await db.delete(orphan)
+                        total_deleted += 1
+                    if total_deleted > 0:
+                        await db.commit()
+                        logger.info(
+                            f"Calendar full sync pruned {total_deleted} deleted events "
+                            f"for account {self.account_id}"
+                        )
 
             # NOTE: Do NOT persist refreshed tokens from the calendar service.
             # The Gmail service handles token persistence.  If we persist here,
@@ -168,7 +209,10 @@ class CalendarSyncService:
                     error_message=None,
                 )
 
-            logger.info(f"Calendar full sync complete: {total_synced} events for account {self.account_id}")
+            logger.info(
+                f"Calendar full sync complete: {total_synced} events synced, "
+                f"{total_deleted} deleted for account {self.account_id}"
+            )
 
         except HttpError as e:
             if _is_scope_error(e):

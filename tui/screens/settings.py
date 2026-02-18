@@ -234,11 +234,11 @@ class SettingsScreen(BaseScreen):
         try:
             me = await self.app.api_client.get("/auth/me")
             about = await self.app.api_client.get("/auth/about-me")
-            self.call_from_thread(self._render_profile, me, about)
+            self._render_profile(me, about)
             self._loaded_tabs.add("profile")
         except Exception as e:
             logger.debug("Failed to load profile", exc_info=True)
-            self.call_from_thread(self._update_status, f"Profile error: {e}")
+            self._update_status(f"Profile error: {e}")
 
     def _render_profile(self, me: dict[str, Any], about: dict[str, Any]) -> None:
         """Render profile data into widgets."""
@@ -263,13 +263,11 @@ class SettingsScreen(BaseScreen):
             return
         try:
             accounts = await self._accounts_client.list_accounts()
-            self.call_from_thread(self._render_accounts, accounts)
+            self._render_accounts(accounts)
             self._loaded_tabs.add("accounts")
         except Exception as e:
             logger.debug("Failed to load accounts", exc_info=True)
-            self.call_from_thread(
-                self._set_content, "#accounts-list", f"[red]Error: {e}[/red]"
-            )
+            self._set_content("#accounts-list", f"[red]Error: {e}[/red]")
 
     def _render_accounts(self, accounts: list[dict[str, Any]]) -> None:
         """Render accounts list."""
@@ -327,11 +325,11 @@ class SettingsScreen(BaseScreen):
         """Fetch and display AI model preferences."""
         try:
             prefs = await self.app.api_client.get("/auth/ai-preferences")
-            self.call_from_thread(self._render_ai_preferences, prefs)
+            self._render_ai_preferences(prefs)
             self._loaded_tabs.add("ai")
         except Exception as e:
             logger.debug("Failed to load AI preferences", exc_info=True)
-            self.call_from_thread(self._update_status, f"AI prefs error: {e}")
+            self._update_status(f"AI prefs error: {e}")
 
     def _render_ai_preferences(self, prefs: dict[str, Any]) -> None:
         """Set select widget values from preferences."""
@@ -357,11 +355,11 @@ class SettingsScreen(BaseScreen):
         """Fetch and display UI preferences."""
         try:
             prefs = await self.app.api_client.get("/auth/ui-preferences")
-            self.call_from_thread(self._render_ui_preferences, prefs)
+            self._render_ui_preferences(prefs)
             self._loaded_tabs.add("prefs")
         except Exception as e:
             logger.debug("Failed to load UI preferences", exc_info=True)
-            self.call_from_thread(self._update_status, f"Preferences error: {e}")
+            self._update_status(f"Preferences error: {e}")
 
     def _render_ui_preferences(self, prefs: dict[str, Any]) -> None:
         """Set select widget values from preferences."""
@@ -380,15 +378,11 @@ class SettingsScreen(BaseScreen):
             return
         try:
             settings = await self._admin_client.get_settings()
-            self.call_from_thread(self._render_admin_settings, settings)
+            self._render_admin_settings(settings)
             self._loaded_tabs.add("admin")
         except Exception as e:
             logger.debug("Failed to load admin settings", exc_info=True)
-            self.call_from_thread(
-                self._set_content,
-                "#admin-settings-list",
-                f"[red]Error: {e}[/red]",
-            )
+            self._set_content("#admin-settings-list", f"[red]Error: {e}[/red]")
 
     def _render_admin_settings(self, settings: list[dict[str, Any]]) -> None:
         """Render admin settings list."""
@@ -446,10 +440,10 @@ class SettingsScreen(BaseScreen):
             await self.app.api_client.put(
                 "/auth/about-me", json_data={"about_me": text}
             )
-            self.call_from_thread(self.notify, "About Me saved", severity="information")
-            self.call_from_thread(self._update_status, "About Me saved")
+            self.notify("About Me saved", severity="information")
+            self._update_status("About Me saved")
         except Exception as e:
-            self.call_from_thread(self.notify, f"Save failed: {e}", severity="error")
+            self.notify(f"Save failed: {e}", severity="error")
 
     @work(exclusive=True, group="save-ai")
     async def _save_ai_preferences(self) -> None:
@@ -474,14 +468,10 @@ class SettingsScreen(BaseScreen):
             await self.app.api_client.put(
                 "/auth/ai-preferences", json_data=payload
             )
-            self.call_from_thread(
-                self.notify, "AI preferences saved", severity="information"
-            )
-            self.call_from_thread(self._update_status, "AI preferences saved")
+            self.notify("AI preferences saved", severity="information")
+            self._update_status("AI preferences saved")
         except Exception as e:
-            self.call_from_thread(
-                self.notify, f"Save failed: {e}", severity="error"
-            )
+            self.notify(f"Save failed: {e}", severity="error")
 
     @work(exclusive=True, group="save-prefs")
     async def _save_ui_preferences(self) -> None:
@@ -494,14 +484,10 @@ class SettingsScreen(BaseScreen):
             await self.app.api_client.put(
                 "/auth/ui-preferences", json_data={"thread_order": value}
             )
-            self.call_from_thread(
-                self.notify, "Preferences saved", severity="information"
-            )
-            self.call_from_thread(self._update_status, "Preferences saved")
+            self.notify("Preferences saved", severity="information")
+            self._update_status("Preferences saved")
         except Exception as e:
-            self.call_from_thread(
-                self.notify, f"Save failed: {e}", severity="error"
-            )
+            self.notify(f"Save failed: {e}", severity="error")
 
     @work(exclusive=True, group="save-setting")
     async def _save_admin_setting(self) -> None:
@@ -514,9 +500,7 @@ class SettingsScreen(BaseScreen):
             desc = self.query_one("#admin-setting-desc", Input).value.strip()
 
             if not key:
-                self.call_from_thread(
-                    self.notify, "Key is required", severity="warning"
-                )
+                self.notify("Key is required", severity="warning")
                 return
 
             await self._admin_client.update_setting(
@@ -525,16 +509,12 @@ class SettingsScreen(BaseScreen):
                 is_secret=False,
                 description=desc or None,
             )
-            self.call_from_thread(
-                self.notify, f"Setting '{key}' saved", severity="information"
-            )
+            self.notify(f"Setting '{key}' saved", severity="information")
             # Reload settings list
             self._loaded_tabs.discard("admin")
             self._load_admin_settings()
         except Exception as e:
-            self.call_from_thread(
-                self.notify, f"Save failed: {e}", severity="error"
-            )
+            self.notify(f"Save failed: {e}", severity="error")
 
     @work(exclusive=True, group="delete-setting")
     async def _delete_admin_setting(self) -> None:
@@ -544,24 +524,18 @@ class SettingsScreen(BaseScreen):
         try:
             key = self.query_one("#admin-setting-key", Input).value.strip()
             if not key:
-                self.call_from_thread(
-                    self.notify, "Key is required", severity="warning"
-                )
+                self.notify("Key is required", severity="warning")
                 return
 
             await self._admin_client.delete_setting(key)
-            self.call_from_thread(
-                self.notify, f"Setting '{key}' deleted", severity="information"
-            )
+            self.notify(f"Setting '{key}' deleted", severity="information")
             # Clear inputs
-            self.call_from_thread(self._clear_admin_inputs)
+            self._clear_admin_inputs()
             # Reload settings list
             self._loaded_tabs.discard("admin")
             self._load_admin_settings()
         except Exception as e:
-            self.call_from_thread(
-                self.notify, f"Delete failed: {e}", severity="error"
-            )
+            self.notify(f"Delete failed: {e}", severity="error")
 
     def _clear_admin_inputs(self) -> None:
         """Clear admin setting input fields."""
@@ -580,12 +554,10 @@ class SettingsScreen(BaseScreen):
         try:
             result = await self._accounts_client.trigger_sync(account_id)
             msg = result.get("message", "Sync started")
-            self.call_from_thread(self.notify, msg, severity="information")
-            self.call_from_thread(self._update_status, msg)
+            self.notify(msg, severity="information")
+            self._update_status(msg)
         except Exception as e:
-            self.call_from_thread(
-                self.notify, f"Sync failed: {e}", severity="error"
-            )
+            self.notify(f"Sync failed: {e}", severity="error")
 
     @work(exclusive=True, group="delete-analyses")
     async def _delete_ai_analyses(self) -> None:
@@ -594,11 +566,9 @@ class SettingsScreen(BaseScreen):
             # The backend may not have this endpoint yet; handle gracefully
             result = await self.app.api_client.delete("/admin/ai-analyses")
             msg = result.get("message", "AI analyses deleted") if result else "Done"
-            self.call_from_thread(self.notify, msg, severity="information")
+            self.notify(msg, severity="information")
         except Exception as e:
-            self.call_from_thread(
-                self.notify, f"Failed: {e}", severity="error"
-            )
+            self.notify(f"Failed: {e}", severity="error")
 
     @work(exclusive=True, group="rebuild-index")
     async def _rebuild_search_index(self) -> None:
@@ -607,11 +577,9 @@ class SettingsScreen(BaseScreen):
             # The backend may not have this endpoint yet; handle gracefully
             result = await self.app.api_client.post("/admin/rebuild-index")
             msg = result.get("message", "Search index rebuild started") if result else "Done"
-            self.call_from_thread(self.notify, msg, severity="information")
+            self.notify(msg, severity="information")
         except Exception as e:
-            self.call_from_thread(
-                self.notify, f"Failed: {e}", severity="error"
-            )
+            self.notify(f"Failed: {e}", severity="error")
 
     # ── Helpers ──────────────────────────────────────────────
 

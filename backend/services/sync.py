@@ -3,7 +3,7 @@ import logging
 import re
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text, func
+from sqlalchemy import select, text, func, update, delete
 from backend.models.email import Email, Attachment, EmailLabel
 from backend.models.account import GoogleAccount, SyncStatus
 from backend.services.gmail import GmailService
@@ -591,11 +591,74 @@ class EmailSyncService:
 
         await db.commit()
 
+    async def _resolve_thread_id(self, db: AsyncSession, parsed: dict) -> tuple[str, str | None]:
+        """Check if this email should be merged into an existing thread
+        based on In-Reply-To / References headers.
+
+        Returns (resolved_thread_id, original_thread_id_if_merged).
+        The second value is non-None only when a merge was detected, and
+        holds the original Gmail thread ID that should be retired.
+        """
+        gmail_thread_id = parsed["gmail_thread_id"]
+        in_reply_to = parsed.get("in_reply_to")
+
+        if not in_reply_to:
+            return gmail_thread_id, None
+
+        # Find an existing email whose message_id_header matches our in_reply_to
+        result = await db.execute(
+            select(Email.gmail_thread_id).where(
+                Email.message_id_header == in_reply_to.strip(),
+                Email.account_id == self.account_id,
+            ).limit(1)
+        )
+        parent_thread_id = result.scalar_one_or_none()
+
+        if parent_thread_id and parent_thread_id != gmail_thread_id:
+            logger.info(
+                f"Thread merge: email replies to message in thread {parent_thread_id}, "
+                f"overriding Gmail thread {gmail_thread_id}"
+            )
+            return parent_thread_id, gmail_thread_id
+
+        return gmail_thread_id, None
+
     async def _upsert_email(self, db: AsyncSession, parsed: dict) -> tuple[int, bool]:
         """Insert or update an email record.
 
+        Performs header-based thread merging before insert/update: if the
+        email's In-Reply-To header points to a message stored under a
+        different Gmail thread ID, the email (and any siblings already in
+        the orphan thread) are migrated to the canonical thread.
+
         Returns (email_id, is_new) where is_new is True if this was a new insert.
         """
+        # Resolve thread ID via In-Reply-To / References headers
+        resolved_thread_id, orphan_thread_id = await self._resolve_thread_id(db, parsed)
+        if orphan_thread_id:
+            parsed["gmail_thread_id"] = resolved_thread_id
+
+            # Migrate any other emails already stored with the orphan thread ID
+            await db.execute(
+                update(Email)
+                .where(
+                    Email.gmail_thread_id == orphan_thread_id,
+                    Email.account_id == self.account_id,
+                )
+                .values(gmail_thread_id=resolved_thread_id)
+            )
+
+            # Delete the orphaned ThreadDigest so it gets regenerated
+            # for the merged thread during the next digest pass.
+            from backend.models.ai import ThreadDigest
+            await db.execute(
+                delete(ThreadDigest)
+                .where(
+                    ThreadDigest.gmail_thread_id == orphan_thread_id,
+                    ThreadDigest.account_id == self.account_id,
+                )
+            )
+
         result = await db.execute(
             select(Email).where(
                 Email.gmail_message_id == parsed["gmail_message_id"],

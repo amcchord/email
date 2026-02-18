@@ -223,7 +223,7 @@
                     <div class="text-sm" style="color: var(--text-primary)">{todo.title}</div>
                     <div class="flex items-center gap-2 mt-1 flex-wrap">
                       {#if todo.source === 'ai_action_item'}
-                        <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-400">from AI</span>
+                        <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-300">from AI</span>
                       {/if}
                       {#if todo.email_id}
                         <button
@@ -312,7 +312,7 @@
                           onclick={() => approveAndSend(todo)}
                           disabled={approvingId === todo.id}
                           class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-fast disabled:opacity-50"
-                          style="background: #22c55e; color: white"
+                          style="background: var(--status-success); color: white"
                         >
                           {#if approvingId === todo.id}
                             <div class="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
@@ -345,7 +345,7 @@
                   </div>
                 {/if}
                 {#if todo.ai_draft_status === 'sent'}
-                  <div class="mt-2 text-xs text-emerald-600 dark:text-emerald-400">AI draft was sent</div>
+                  <div class="mt-2 text-xs text-emerald-600 dark:text-emerald-300">AI draft was sent</div>
                 {/if}
               </div>
             {/each}

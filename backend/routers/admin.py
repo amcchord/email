@@ -17,6 +17,33 @@ from backend.utils.security import encrypt_value, decrypt_value
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
+# Default values for feature flags
+FEATURE_FLAG_DEFAULTS = {
+    "tui_enabled": "true",
+    "desktop_app_enabled": "false",
+}
+
+
+@router.get("/feature-flags")
+async def get_feature_flags(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return feature flags. Accessible to any authenticated user."""
+    result = await db.execute(
+        select(Setting).where(
+            Setting.key.in_(list(FEATURE_FLAG_DEFAULTS.keys()))
+        )
+    )
+    settings_map = {s.key: s.value for s in result.scalars().all()}
+
+    flags = {}
+    for key, default in FEATURE_FLAG_DEFAULTS.items():
+        raw = settings_map.get(key, default)
+        flags[key] = raw.lower() in ("true", "1", "yes")
+
+    return flags
+
 
 @router.get("/dashboard", response_model=DashboardStats)
 async def get_dashboard(

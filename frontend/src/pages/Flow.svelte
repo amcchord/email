@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { marked } from 'marked';
   import { api } from '../lib/api.js';
-  import { chatConversations, currentConversationId, showToast, currentPage, currentMailbox, selectedEmailId, pendingReplyDraft, accounts, composeData, threadOrder } from '../lib/stores.js';
+  import { chatConversations, currentConversationId, showToast, currentPage, currentMailbox, selectedEmailId, pendingReplyDraft, accounts, composeData, threadOrder, accountColorMap } from '../lib/stores.js';
   import { get } from 'svelte/store';
   import { registerActions } from '../lib/shortcutStore.js';
   import Icon from '../components/common/Icon.svelte';
@@ -139,7 +139,7 @@
     if (focusedSection === 'needs_reply') {
       openReplyView(item, highlightedIndex, null);
     } else if (focusedSection === 'awaiting') {
-      openThreadInFlow(item.gmail_thread_id, { subject: item.subject, from_name: item.to_name, date: item.date, id: item.id, snippet: item.snippet }, 'awaiting');
+      openThreadInFlow(item.gmail_thread_id, { subject: item.subject, from_name: item.to_name, date: item.date, id: item.id, snippet: item.snippet, account_email: item.account_email }, 'awaiting');
     } else if (focusedSection === 'threads') {
       openThreadInFlow(item.thread_id, { subject: item.subject, summary: item.summary, date: item.latest_date }, 'thread');
     }
@@ -315,6 +315,31 @@
           closeReplyView();
         } else if (highlightedIndex >= 0) {
           highlightedIndex = -1;
+        }
+      },
+      'flow.replyOption1': () => {
+        if (replyViewOpen && selectedReplyEmail?.reply_options?.[0]) {
+          selectReplyOption(selectedReplyEmail.reply_options[0], 0);
+        }
+      },
+      'flow.replyOption2': () => {
+        if (replyViewOpen && selectedReplyEmail?.reply_options?.[1]) {
+          selectReplyOption(selectedReplyEmail.reply_options[1], 1);
+        }
+      },
+      'flow.replyOption3': () => {
+        if (replyViewOpen && selectedReplyEmail?.reply_options?.[2]) {
+          selectReplyOption(selectedReplyEmail.reply_options[2], 2);
+        }
+      },
+      'flow.replyOption4': () => {
+        if (replyViewOpen && selectedReplyEmail?.reply_options?.[3]) {
+          selectReplyOption(selectedReplyEmail.reply_options[3], 3);
+        }
+      },
+      'flow.customReply': () => {
+        if (replyViewOpen && selectedReplyEmail?.reply_options?.length > 0) {
+          customPromptOpen = !customPromptOpen;
         }
       },
     });
@@ -666,10 +691,10 @@
   let hasActiveChat = $derived(conversationMessages.length > 0 || isProcessing);
 
   const categoryColors = {
-    urgent: { bg: 'bg-red-100 dark:bg-red-900/40', text: 'text-red-700 dark:text-red-400' },
-    can_ignore: { bg: 'bg-gray-100 dark:bg-gray-800', text: 'text-gray-600 dark:text-gray-400' },
-    fyi: { bg: 'bg-emerald-100 dark:bg-emerald-900/40', text: 'text-emerald-700 dark:text-emerald-400' },
-    awaiting_reply: { bg: 'bg-amber-100 dark:bg-amber-900/40', text: 'text-amber-700 dark:text-amber-400' },
+    urgent: { bg: 'bg-red-100 dark:bg-red-500/20', text: 'text-red-700 dark:text-red-300' },
+    can_ignore: { bg: 'bg-gray-100 dark:bg-gray-700/50', text: 'text-gray-600 dark:text-gray-300' },
+    fyi: { bg: 'bg-emerald-100 dark:bg-emerald-500/20', text: 'text-emerald-700 dark:text-emerald-300' },
+    awaiting_reply: { bg: 'bg-amber-100 dark:bg-amber-500/20', text: 'text-amber-700 dark:text-amber-300' },
   };
 
   function categoryLabel(cat) {
@@ -678,38 +703,38 @@
   }
 
   const intentColors = {
-    accept: 'bg-emerald-50 dark:bg-emerald-900/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400',
-    decline: 'bg-red-50 dark:bg-red-900/30 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400',
-    defer: 'bg-amber-50 dark:bg-amber-900/30 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-400',
-    not_relevant: 'bg-gray-50 dark:bg-gray-800/50 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400',
-    custom: 'bg-blue-50 dark:bg-blue-900/30 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-400',
+    accept: 'bg-emerald-50 dark:bg-emerald-500/15 border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-300',
+    decline: 'bg-red-50 dark:bg-red-500/15 border-red-200 dark:border-red-500/30 text-red-700 dark:text-red-300',
+    defer: 'bg-amber-50 dark:bg-amber-500/15 border-amber-200 dark:border-amber-500/30 text-amber-700 dark:text-amber-300',
+    not_relevant: 'bg-gray-50 dark:bg-gray-600/20 border-gray-200 dark:border-gray-600/30 text-gray-600 dark:text-gray-300',
+    custom: 'bg-blue-50 dark:bg-blue-500/15 border-blue-200 dark:border-blue-500/30 text-blue-700 dark:text-blue-300',
   };
 
   const intentCardStyles = {
     accept: {
-      bg: 'bg-emerald-50 dark:bg-emerald-900/30',
-      border: 'border-emerald-200 dark:border-emerald-800',
-      text: 'text-emerald-700 dark:text-emerald-400',
+      bg: 'bg-emerald-50 dark:bg-emerald-500/15',
+      border: 'border-emerald-200 dark:border-emerald-500/30',
+      text: 'text-emerald-700 dark:text-emerald-300',
     },
     decline: {
-      bg: 'bg-red-50 dark:bg-red-900/30',
-      border: 'border-red-200 dark:border-red-800',
-      text: 'text-red-700 dark:text-red-400',
+      bg: 'bg-red-50 dark:bg-red-500/15',
+      border: 'border-red-200 dark:border-red-500/30',
+      text: 'text-red-700 dark:text-red-300',
     },
     defer: {
-      bg: 'bg-amber-50 dark:bg-amber-900/30',
-      border: 'border-amber-200 dark:border-amber-800',
-      text: 'text-amber-700 dark:text-amber-400',
+      bg: 'bg-amber-50 dark:bg-amber-500/15',
+      border: 'border-amber-200 dark:border-amber-500/30',
+      text: 'text-amber-700 dark:text-amber-300',
     },
     not_relevant: {
-      bg: 'bg-gray-50 dark:bg-gray-800/50',
-      border: 'border-gray-200 dark:border-gray-700',
-      text: 'text-gray-600 dark:text-gray-400',
+      bg: 'bg-gray-50 dark:bg-gray-600/20',
+      border: 'border-gray-200 dark:border-gray-600/30',
+      text: 'text-gray-600 dark:text-gray-300',
     },
     custom: {
-      bg: 'bg-blue-50 dark:bg-blue-900/30',
-      border: 'border-blue-200 dark:border-blue-800',
-      text: 'text-blue-700 dark:text-blue-400',
+      bg: 'bg-blue-50 dark:bg-blue-500/15',
+      border: 'border-blue-200 dark:border-blue-500/30',
+      text: 'text-blue-700 dark:text-blue-300',
     },
   };
 
@@ -733,10 +758,10 @@
   }
 
   const conversationTypeColors = {
-    scheduling: { bg: 'bg-purple-100 dark:bg-purple-900/40', text: 'text-purple-700 dark:text-purple-400' },
-    discussion: { bg: 'bg-blue-100 dark:bg-blue-900/40', text: 'text-blue-700 dark:text-blue-400' },
-    notification: { bg: 'bg-gray-100 dark:bg-gray-800', text: 'text-gray-600 dark:text-gray-400' },
-    transactional: { bg: 'bg-amber-100 dark:bg-amber-900/40', text: 'text-amber-700 dark:text-amber-400' },
+    scheduling: { bg: 'bg-purple-100 dark:bg-purple-500/20', text: 'text-purple-700 dark:text-purple-300' },
+    discussion: { bg: 'bg-blue-100 dark:bg-blue-500/20', text: 'text-blue-700 dark:text-blue-300' },
+    notification: { bg: 'bg-gray-100 dark:bg-gray-700/50', text: 'text-gray-600 dark:text-gray-300' },
+    transactional: { bg: 'bg-amber-100 dark:bg-amber-500/20', text: 'text-amber-700 dark:text-amber-300' },
   };
 
   // ============ Reply View Logic ============
@@ -818,6 +843,7 @@
       id: metadata.id || null,
       snippet: metadata.snippet || '',
       summary: metadata.summary || '',
+      account_email: metadata.account_email || null,
       reply_options: null,
       suggested_reply: null,
       category: null,
@@ -905,7 +931,22 @@
         editingCustomPrompt = false;
         if (result.is_new_email) {
           const bodyHtml = '<p>' + result.body.replace(/\n/g, '</p><p>') + '</p>';
+          const acctList = get(accounts);
+          let acctId = null;
+          if (acctList.length === 1) {
+            acctId = acctList[0].id;
+          } else if (acctList.length > 1 && selectedReplyEmail.account_email) {
+            const matched = acctList.find(a => a.email === selectedReplyEmail.account_email);
+            if (matched) {
+              acctId = matched.id;
+            } else {
+              acctId = acctList[0].id;
+            }
+          } else if (acctList.length > 0) {
+            acctId = acctList[0].id;
+          }
           composeData.set({
+            account_id: acctId,
             to: result.to || [],
             cc: result.cc || [],
             subject: result.subject || '',
@@ -1071,7 +1112,23 @@
       messageIdHeader = lastMsg.message_id_header;
     }
 
+    const accountList = get(accounts);
+    let accountId = null;
+    if (accountList.length === 1) {
+      accountId = accountList[0].id;
+    } else if (accountList.length > 1 && email.account_email) {
+      const matched = accountList.find(a => a.email === email.account_email);
+      if (matched) {
+        accountId = matched.id;
+      } else {
+        accountId = accountList[0].id;
+      }
+    } else if (accountList.length > 0) {
+      accountId = accountList[0].id;
+    }
+
     composeData.set({
+      account_id: accountId,
       to: [email.from_address],
       subject: subject,
       body_html: replyBodyHtml || '',
@@ -1178,6 +1235,80 @@
       return a.address;
     }).join(', ');
   }
+
+  function getAddressString(addr) {
+    if (!addr) return '';
+    if (typeof addr === 'string') return addr;
+    if (addr.name) return addr.name;
+    return addr.address || '';
+  }
+
+  function getAddressEmail(addr) {
+    if (!addr) return '';
+    if (typeof addr === 'string') return addr;
+    return addr.address || '';
+  }
+
+  // Compute reply context: who we're replying to and from which account
+  let replyContext = $derived.by(() => {
+    if (!selectedReplyEmail) return null;
+
+    // Resolve the sending account
+    const accountList = $accounts;
+    let sendingAccount = null;
+    if (accountList.length === 1) {
+      sendingAccount = accountList[0];
+    } else if (accountList.length > 1 && selectedReplyEmail.account_email) {
+      sendingAccount = accountList.find(a => a.email === selectedReplyEmail.account_email) || accountList[0];
+    } else if (accountList.length > 0) {
+      sendingAccount = accountList[0];
+    }
+
+    // Determine the reply recipients from thread data
+    let toRecipient = selectedReplyEmail.from_name || selectedReplyEmail.from_address || '';
+    let toEmail = selectedReplyEmail.from_address || '';
+    let ccRecipients = [];
+    let isReplyAll = false;
+
+    // If we have thread data, look at the latest inbound message for participant info
+    let otherParticipantCount = 0;
+    if (threadData && threadData.emails && threadData.emails.length > 0) {
+      const latestInbound = threadData.emails.find(m => !m.is_sent);
+      if (latestInbound) {
+        toRecipient = latestInbound.from_name || latestInbound.from_address || toRecipient;
+        toEmail = latestInbound.from_address || toEmail;
+
+        // Count other TO recipients (excluding our own account)
+        if (latestInbound.to_addresses && latestInbound.to_addresses.length > 0) {
+          const otherTos = latestInbound.to_addresses.filter(a => {
+            const addr = getAddressEmail(a);
+            return addr && sendingAccount && addr !== sendingAccount.email;
+          });
+          otherParticipantCount += otherTos.length;
+        }
+
+        // Count CC recipients
+        if (latestInbound.cc_addresses && latestInbound.cc_addresses.length > 0) {
+          ccRecipients = latestInbound.cc_addresses;
+          otherParticipantCount += ccRecipients.length;
+        }
+
+        if (otherParticipantCount > 0) {
+          isReplyAll = true;
+        }
+      }
+    }
+
+    return {
+      sendingAccount,
+      toRecipient,
+      toEmail,
+      ccRecipients,
+      isReplyAll,
+      otherParticipantCount,
+      accountColor: sendingAccount ? $accountColorMap[sendingAccount.email] : null,
+    };
+  });
 </script>
 
 <div class="h-full flex" style="background: var(--bg-primary); {isDraggingSidebar ? 'user-select: none; cursor: col-resize' : ''}{isDraggingBottomCol ? 'user-select: none; cursor: col-resize' : ''}">
@@ -1363,13 +1494,13 @@
                           {:else if status.status === 'in_progress'}
                             <div class="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin" style="border-color: var(--color-accent-500)"></div>
                           {:else if status.status === 'completed'}
-                            <div class="w-3 h-3 rounded-full flex items-center justify-center" style="background: #22c55e">
+                            <div class="w-3 h-3 rounded-full flex items-center justify-center" style="background: var(--status-success)">
                               <svg class="w-2 h-2 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M4.5 12.75l6 6 9-13.5" />
                               </svg>
                             </div>
                           {:else if status.status === 'failed'}
-                            <div class="w-3 h-3 rounded-full flex items-center justify-center" style="background: #ef4444">
+                            <div class="w-3 h-3 rounded-full flex items-center justify-center" style="background: var(--status-error)">
                               <svg class="w-2 h-2 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12" />
                               </svg>
@@ -1435,7 +1566,7 @@
 
               <!-- Error -->
               {#if errorMessage}
-                <div class="rounded-lg border p-3 text-xs" style="border-color: #ef4444/30; background: #ef4444/5; color: #ef4444">
+                <div class="rounded-lg border p-3 text-xs" style="border-color: var(--status-error-border); background: var(--status-error-bg); color: var(--status-error)">
                   {errorMessage}
                 </div>
               {/if}
@@ -1659,6 +1790,37 @@
 
         <!-- BOTTOM PANE: Response Workspace -->
         <div class="flex flex-col overflow-hidden" style="height: {100 - topPanePercent}%">
+          <!-- Reply Context Bar: who we're replying to + sending account -->
+          {#if replyContext}
+            <div class="px-5 py-2 border-b shrink-0 flex items-center justify-between" style="border-color: var(--border-color); background: var(--bg-secondary)">
+              <div class="flex items-center gap-2 min-w-0">
+                <Icon name="corner-up-left" size={13} />
+                <span class="text-xs font-medium truncate" style="color: var(--text-primary)">
+                  To: {replyContext.toRecipient}
+                  {#if replyContext.toRecipient !== replyContext.toEmail}
+                    <span style="color: var(--text-tertiary)">&lt;{replyContext.toEmail}&gt;</span>
+                  {/if}
+                </span>
+                {#if replyContext.isReplyAll}
+                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0" style="background: var(--bg-tertiary); color: var(--text-secondary)">
+                    +{replyContext.otherParticipantCount} other{replyContext.otherParticipantCount !== 1 ? 's' : ''} in thread
+                  </span>
+                {/if}
+              </div>
+              <div class="flex items-center gap-1.5 shrink-0 ml-3">
+                {#if replyContext.accountColor}
+                  <span
+                    class="w-2 h-2 rounded-full shrink-0"
+                    style="background: {replyContext.accountColor.bg}"
+                  ></span>
+                {/if}
+                {#if replyContext.sendingAccount}
+                  <span class="text-[11px]" style="color: var(--text-tertiary)">from {replyContext.sendingAccount.email}</span>
+                {/if}
+              </div>
+            </div>
+          {/if}
+
           <!-- Reply Options as horizontal cards -->
           {#if selectedReplyEmail.reply_options && selectedReplyEmail.reply_options.length > 0}
             <div class="px-5 py-2.5 border-b shrink-0" style="border-color: var(--border-color)">
@@ -1673,6 +1835,7 @@
                   <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
                   <div
                     onclick={() => selectReplyOption(option, optIdx)}
+                    data-shortcut="flow.replyOption{optIdx + 1}"
                     class="rounded-lg border p-3 cursor-pointer transition-fast shrink-0 {intentStyle.bg} {intentStyle.border}"
                     style="width: 260px; {isSelected ? 'box-shadow: 0 0 0 2px var(--color-accent-500)' : ''}"
                   >
@@ -1692,6 +1855,7 @@
                 <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
                 <div
                   onclick={() => { customPromptOpen = !customPromptOpen; }}
+                  data-shortcut="flow.customReply"
                   class="rounded-lg border-2 border-dashed p-3 cursor-pointer transition-fast shrink-0 flex flex-col items-center justify-center gap-1.5"
                   style="width: 140px; border-color: var(--border-color); opacity: {customPromptOpen ? 1 : 0.8}; {customPromptOpen ? 'border-color: var(--color-accent-500); background: color-mix(in srgb, var(--color-accent-500) 5%, transparent)' : ''}"
                 >
@@ -1711,7 +1875,7 @@
                     onkeydown={(e) => { if (e.key === 'Enter' && !customPromptLoading) generateCustomReply(); if (e.key === 'Escape') { customPromptOpen = false; customPromptText = ''; } }}
                   />
                   <button
-                    onclick={generateCustomReply}
+                    onclick={() => generateCustomReply()}
                     disabled={customPromptLoading || !customPromptText.trim()}
                     class="px-3 py-2 rounded-lg text-xs font-medium transition-fast shrink-0 flex items-center gap-1.5"
                     style="background: var(--color-accent-500); color: white; opacity: {customPromptLoading || !customPromptText.trim() ? '0.5' : '1'}"
@@ -2062,7 +2226,7 @@
           <div class="flex-1 min-w-[200px] rounded-xl border p-4" style="background: var(--bg-secondary); border-color: var(--border-color)">
             <div class="flex items-center gap-2 mb-2">
               <div class="w-7 h-7 rounded-lg flex items-center justify-center" style="background: rgba(245, 158, 11, 0.15)">
-                <span style="color: #f59e0b"><Icon name="check-circle" size={16} /></span>
+                <span style="color: var(--status-warning)"><Icon name="check-circle" size={16} /></span>
               </div>
               <div>
                 <div class="text-lg font-bold leading-none" style="color: var(--text-primary)">{pendingTodos.length}</div>
@@ -2084,7 +2248,7 @@
         <div class="flex-1 min-w-[200px] rounded-xl border p-4" style="background: var(--bg-secondary); border-color: var(--border-color)">
           <div class="flex items-center gap-2 mb-2">
             <div class="w-7 h-7 rounded-lg flex items-center justify-center" style="background: rgba(59, 130, 246, 0.15)">
-              <span style="color: #3b82f6"><Icon name="corner-up-left" size={16} /></span>
+              <span style="color: var(--status-info)"><Icon name="corner-up-left" size={16} /></span>
             </div>
             <div>
               <div class="text-lg font-bold leading-none" style="color: var(--text-primary)">{needsReplyTotal}</div>
@@ -2108,7 +2272,7 @@
         <div class="flex-1 min-w-[200px] rounded-xl border p-4" style="background: var(--bg-secondary); border-color: var(--border-color)">
           <div class="flex items-center gap-2 mb-2">
             <div class="w-7 h-7 rounded-lg flex items-center justify-center" style="background: rgba(239, 68, 68, 0.15)">
-              <span style="color: #ef4444"><Icon name="alert-triangle" size={16} /></span>
+              <span style="color: var(--status-error)"><Icon name="alert-triangle" size={16} /></span>
             </div>
             <div>
               <div class="text-lg font-bold leading-none" style="color: var(--text-primary)">{urgentCount}</div>
@@ -2131,7 +2295,7 @@
             <h2 class="text-sm font-semibold" style="color: var(--text-primary)">Needs Reply</h2>
           </div>
           {#if needsReplyTotal > 0}
-            <span class="text-[10px] px-2 py-0.5 rounded-full font-medium" style="background: rgba(239, 68, 68, 0.15); color: #ef4444">{needsReplyTotal} total</span>
+            <span class="text-[10px] px-2 py-0.5 rounded-full font-medium" style="background: var(--status-error-bg); color: var(--status-error)">{needsReplyTotal} total</span>
           {/if}
         </div>
 
@@ -2261,11 +2425,11 @@
         <div class="min-w-0 rounded-xl border p-4" style="background: var(--bg-secondary); border-color: var(--border-color); flex: 0 0 {bottomLeftPercent}%">
           <div class="flex items-center justify-between mb-3">
             <div class="flex items-center gap-2">
-              <span style="color: #f59e0b"><Icon name="clock" size={14} /></span>
+              <span style="color: var(--status-warning)"><Icon name="clock" size={14} /></span>
               <h3 class="text-sm font-semibold" style="color: var(--text-primary)">Waiting On Other Party</h3>
             </div>
             {#if awaitingResponseTotal > 0}
-              <span class="text-[10px] px-2 py-0.5 rounded-full font-medium" style="background: rgba(245, 158, 11, 0.15); color: #f59e0b">{awaitingResponseTotal}</span>
+              <span class="text-[10px] px-2 py-0.5 rounded-full font-medium" style="background: var(--status-warning-bg); color: var(--status-warning)">{awaitingResponseTotal}</span>
             {/if}
           </div>
           {#if awaitingResponse.length > 0}
@@ -2277,7 +2441,7 @@
                   class="p-2.5 rounded-lg cursor-pointer transition-fast hover-bg-subtle"
                   style="background: var(--bg-primary); {focusedSection === 'awaiting' && highlightedIndex === awIdx ? 'outline: 2px solid var(--color-accent-500); outline-offset: -2px; background: var(--bg-tertiary)' : ''}"
                   data-flow-item="awaiting-{awIdx}"
-                  onclick={() => openThreadInFlow(email.gmail_thread_id, { subject: email.subject, from_name: email.to_name, date: email.date, id: email.id, snippet: email.snippet }, 'awaiting')}
+                  onclick={() => openThreadInFlow(email.gmail_thread_id, { subject: email.subject, from_name: email.to_name, date: email.date, id: email.id, snippet: email.snippet, account_email: email.account_email }, 'awaiting')}
                 >
                   <div class="text-xs font-medium truncate" style="color: var(--text-primary)">{email.subject || '(no subject)'}</div>
                   <div class="flex items-center gap-2 mt-0.5">

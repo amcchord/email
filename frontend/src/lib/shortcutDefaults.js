@@ -75,6 +75,11 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'flow.newChat',    key: 'n',          label: 'New chat',                 context: 'flow', category: 'Flow' },
   { id: 'flow.send',       key: 'Ctrl+Enter', label: 'Send reply',               context: 'flow', category: 'Flow' },
   { id: 'flow.back',       key: 'Escape',     label: 'Back to list / deselect',  context: 'flow', category: 'Flow' },
+  { id: 'flow.replyOption1', key: '1',       label: 'Select reply option 1',    context: 'flow', category: 'Flow' },
+  { id: 'flow.replyOption2', key: '2',       label: 'Select reply option 2',    context: 'flow', category: 'Flow' },
+  { id: 'flow.replyOption3', key: '3',       label: 'Select reply option 3',    context: 'flow', category: 'Flow' },
+  { id: 'flow.replyOption4', key: '4',       label: 'Select reply option 4',    context: 'flow', category: 'Flow' },
+  { id: 'flow.customReply',  key: '0',       label: 'Custom reply',             context: 'flow', category: 'Flow' },
 
   // ── Calendar ─────────────────────────────────────────────────────
   { id: 'cal.today', key: 't', label: 'Go to today',     context: 'calendar', category: 'Calendar' },

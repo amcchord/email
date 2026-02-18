@@ -231,6 +231,7 @@ async def list_emails(
         ai_etype = None
         is_sub = None
         needs_rpl = None
+        needs_rpl_ignored = None
         unsub_info = None
         if e.ai_analysis:
             ai_cat = e.ai_analysis.category
@@ -238,6 +239,7 @@ async def list_emails(
             ai_etype = e.ai_analysis.email_type
             is_sub = e.ai_analysis.is_subscription
             needs_rpl = e.ai_analysis.needs_reply
+            needs_rpl_ignored = e.ai_analysis.needs_reply_ignored
             unsub_info = e.ai_analysis.unsubscribe_info
 
         # Override needs_reply if a later reply exists in the thread
@@ -279,6 +281,7 @@ async def list_emails(
             ai_email_type=ai_etype,
             is_subscription=is_sub,
             needs_reply=needs_rpl,
+            needs_reply_ignored=needs_rpl_ignored,
             unsubscribe_info=unsub_info,
             thread_digest_type=td_type,
             thread_digest_summary=td_summary,
@@ -340,6 +343,7 @@ async def get_email(
     ai_etype = None
     is_sub = None
     needs_rpl = None
+    needs_rpl_ignored = None
     unsub_info = None
     ai_model = None
     ai_suggested_reply = None
@@ -352,6 +356,7 @@ async def get_email(
         ai_etype = email.ai_analysis.email_type
         is_sub = email.ai_analysis.is_subscription
         needs_rpl = email.ai_analysis.needs_reply
+        needs_rpl_ignored = email.ai_analysis.needs_reply_ignored
         unsub_info = email.ai_analysis.unsubscribe_info
         ai_model = email.ai_analysis.model_used
         ai_suggested_reply = email.ai_analysis.suggested_reply
@@ -388,6 +393,7 @@ async def get_email(
         ai_email_type=ai_etype,
         is_subscription=is_sub,
         needs_reply=needs_rpl,
+        needs_reply_ignored=needs_rpl_ignored,
         unsubscribe_info=unsub_info,
         ai_model_used=ai_model,
         suggested_reply=ai_suggested_reply,

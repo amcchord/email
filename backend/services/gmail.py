@@ -421,7 +421,24 @@ class GmailService:
             body["threadId"] = thread_id
 
         request = service.users().messages().send(userId="me", body=body)
-        result = await self._execute_with_retry(request, context="send_email")
+        try:
+            result = await self._execute_with_retry(request, context="send_email")
+        except HttpError as e:
+            if e.resp.status == 404 and thread_id:
+                logger.warning(
+                    "send_email got 404 with threadId=%s for %s; "
+                    "retrying without threadId",
+                    thread_id, self.account.email,
+                )
+                body.pop("threadId", None)
+                request = service.users().messages().send(
+                    userId="me", body=body
+                )
+                result = await self._execute_with_retry(
+                    request, context="send_email_no_thread"
+                )
+            else:
+                raise
         return result.get("id", "")
 
     async def create_draft(

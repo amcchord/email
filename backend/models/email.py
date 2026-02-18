@@ -59,6 +59,11 @@ class Email(Base):
         Index("ix_emails_account_date", "account_id", "date"),
         Index("ix_emails_thread", "account_id", "gmail_thread_id"),
         Index("ix_emails_search", "search_vector", postgresql_using="gin"),
+        Index(
+            "ix_emails_message_id_header",
+            "message_id_header",
+            postgresql_where=message_id_header.isnot(None),
+        ),
     )
 
 

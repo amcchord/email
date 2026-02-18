@@ -1,0 +1,29 @@
+appId: net.mcchord.email
+productName: Mail
+
+directories:
+  output: build
+
+mac:
+  icon: icons/icon.png
+  category: public.app-category.productivity
+  target:
+    - target: zip
+      arch: x64
+  darkModeSupport: true
+  hardenedRuntime: true
+  entitlements: entitlements.mac.plist
+  entitlementsInherit: entitlements.mac.inherit.plist
+
+win:
+  icon: icons/icon.png
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: "Mail-${version}-win-setup.${ext}"
+
+nsis:
+  oneClick: true
+  perMachine: false
+  allowToChangeInstallationDirectory: false

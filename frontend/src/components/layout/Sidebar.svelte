@@ -326,11 +326,11 @@
             {#if getAccountSyncState(acct) === 'syncing'}
               <span class="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full animate-pulse" style="background: var(--color-accent-500); box-shadow: 0 0 0 1.5px var(--bg-secondary)"></span>
             {:else if getAccountSyncState(acct) === 'rate_limited'}
-              <span class="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full" style="background: #f59e0b; box-shadow: 0 0 0 1.5px var(--bg-secondary)"></span>
+              <span class="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full" style="background: var(--status-warning); box-shadow: 0 0 0 1.5px var(--bg-secondary)"></span>
             {:else if getAccountSyncState(acct) === 'error'}
-              <span class="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full" style="background: #ef4444; box-shadow: 0 0 0 1.5px var(--bg-secondary)"></span>
+              <span class="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full" style="background: var(--status-error); box-shadow: 0 0 0 1.5px var(--bg-secondary)"></span>
             {:else}
-              <span class="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full" style="background: #22c55e; box-shadow: 0 0 0 1.5px var(--bg-secondary)"></span>
+              <span class="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full" style="background: var(--status-success); box-shadow: 0 0 0 1.5px var(--bg-secondary)"></span>
             {/if}
           </div>
           <div class="flex flex-col min-w-0 text-left">
