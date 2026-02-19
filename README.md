@@ -8,8 +8,18 @@ A self-hosted, AI-augmented email client built on Svelte 5, FastAPI, and Postgre
 - AI-powered email categorization, summarization, and action item extraction via Claude
 - Rich HTML composition with Tiptap editor, inline images, links, and reply/forward threading
 - Multi-account support -- connect multiple Gmail accounts under one user
+- Subscription management -- AI-powered unsubscribe with browser automation, bulk unsubscribe, sender blocking, and post-unsubscribe tracking
+- "Talk to your Emails" AI chat -- conversational assistant that can search emails, read attachments, access calendar, and browse the web; exportable as Markdown or PDF
+- Todo management -- manual and AI-extracted action items with AI-drafted replies you can approve and send directly
+- Flow daily dashboard -- day summary with upcoming events, pending todos, needs-reply queue, awaiting-response tracking, active thread digests, and inline AI reply generation
+- AI Insights -- thread digests, topic-based email bundles, conversation type detection, trending topics, and a "needs attention" queue with snooze/ignore
+- AI reply generation -- suggested replies (accept, decline, defer) and custom-prompt replies
+- Google Calendar integration -- month, week, and day views with multi-account support
+- Statistics dashboard -- email volume charts, top senders, read/unread ratios, AI category breakdowns
+- 6 color themes (Amber, Blue, Rose, Emerald, Purple, Monochrome) with light/dark/system mode
+- Customizable keyboard shortcuts with visual overlay (hold Alt/Option to see shortcuts)
+- Pop-out email viewer for side-by-side work
 - Background sync via Redis + ARQ workers
-- Modern SPA with dark/light themes, column and table views, and a dedicated "Flow" triage queue
 - Self-hosted and private -- all data stored locally, no third-party analytics
 
 ## Screenshots
@@ -19,10 +29,10 @@ The traditional inbox view with sidebar navigation, smart views (Needs Reply, Ur
 
 ![Classic Inbox](screenshots/ClassicInbox.png)
 
-### Flow — AI Triage Queue
-Flow presents emails one at a time with AI-generated summaries and context-aware suggested actions, making it easy to process your inbox quickly.
+### Flow — Daily Dashboard
+Flow is a daily productivity dashboard that surfaces upcoming calendar events, pending todos, emails needing a reply, sent messages awaiting a response, and active thread digests -- all in one view with inline AI reply generation and a collapsible chat sidebar.
 
-![Flow Triage View](screenshots/Flow.png)
+![Flow Dashboard](screenshots/Flow.png)
 
 ### Calendar
 A full weekly calendar view with color-coded events pulled from Google Calendar, supporting multiple calendar categories and day/week/month views.
@@ -41,21 +51,26 @@ Browser (Svelte 5 SPA)
         +-- PostgreSQL (emails, users, accounts, AI analyses, settings)
         +-- Redis + ARQ (background sync jobs, batch AI analysis)
         +-- Gmail API (message sync, send, label management)
-        +-- Claude API (categorization, summarization, trend analysis)
+        +-- Google Calendar API (event sync, multi-account)
+        +-- Claude API (categorization, summarization, trend analysis, reply generation)
+        +-- Playwright (headless browser for AI-powered unsubscribe automation)
+        +-- Brave Search API (optional, web search for AI chat)
 ```
 
-Caddy terminates TLS and serves the built frontend static files. All `/api/*` requests are reverse-proxied to the FastAPI backend running on `localhost:8000`. Background work (email sync, AI batch analysis) is handled by an ARQ worker process connected to Redis.
+Caddy terminates TLS and serves the built frontend static files. All `/api/*` requests are reverse-proxied to the FastAPI backend running on `localhost:8000`. Background work (email sync, AI batch analysis) is handled by an ARQ worker process connected to Redis. The Playwright headless browser is used on-demand for AI-powered URL-based unsubscribe automation.
 
 ## Tech Stack
 
-| Layer          | Technology                                                        |
-| -------------- | ----------------------------------------------------------------- |
-| Frontend       | Svelte 5, Vite, Tailwind CSS 4, Tiptap (rich text), Feather Icons |
-| Backend        | Python 3.13, FastAPI, SQLAlchemy (async + asyncpg), Alembic       |
-| Background     | ARQ workers, Redis                                                |
-| Database       | PostgreSQL 17                                                     |
-| Reverse Proxy  | Caddy 2 (automatic HTTPS)                                        |
-| AI / APIs      | Anthropic Claude, Google Gmail API, Google Calendar API           |
+| Layer          | Technology                                                                    |
+| -------------- | ----------------------------------------------------------------------------- |
+| Frontend       | Svelte 5, Vite, Tailwind CSS 4, Tiptap (rich text), Feather Icons            |
+| Backend        | Python 3.13, FastAPI, SQLAlchemy (async + asyncpg), Alembic                   |
+| Background     | ARQ workers, Redis                                                            |
+| Database       | PostgreSQL 17                                                                 |
+| Reverse Proxy  | Caddy 2 (automatic HTTPS)                                                    |
+| AI / APIs      | Anthropic Claude, Google Gmail API, Google Calendar API                       |
+| Automation     | Playwright (headless Chromium for AI-powered unsubscribe)                     |
+| Search         | Brave Search API (optional, for AI chat web search)                           |
 
 ## Quick Start (One-Liner)
 
@@ -85,7 +100,7 @@ The setup wizard is a 9-step interactive TUI powered by [Rich](https://github.co
 | 4. Domain & SSL | Configures your domain, checks DNS, generates the Caddyfile |
 | 5. Database setup | Creates the PostgreSQL user and database, generates a secure password |
 | 6. Configuration | Generates `.env` with auto-generated secrets, prompts for admin credentials and API keys |
-| 7. Application build | Creates Python venv, installs dependencies, builds the Svelte frontend, runs migrations |
+| 7. Application build | Creates Python venv, installs dependencies, installs Playwright browsers, builds the Svelte frontend, runs migrations |
 | 8. Service installation | Generates and installs systemd unit files, enables and starts all services |
 | 9. Verification | Runs 18 health checks covering infrastructure, services, TLS, DNS, and API connectivity |
 
@@ -189,6 +204,7 @@ sudo -u mailapp bash scripts/setup.sh
 This script will:
 - Start PostgreSQL and Redis if not already running
 - Create a Python virtual environment and install dependencies
+- Install Playwright Chromium browser for AI-powered unsubscribe
 - Run Alembic database migrations
 - Generate an encryption key if one is not set
 - Install frontend npm packages and build the Svelte app
@@ -210,6 +226,8 @@ All configuration is done through the `.env` file in the project root. The backe
 | `GOOGLE_CLIENT_SECRET` | OAuth 2.0 client secret from Google Cloud Console             | (from Google Cloud)                                            |
 | `GOOGLE_REDIRECT_URI`  | OAuth callback URL -- must match Google Console config        | `https://yourdomain.com/api/auth/google/callback`              |
 | `ALLOWED_ORIGINS`      | Comma-separated list of allowed CORS origins                  | `https://yourdomain.com`                                       |
+| `BRAVE_SEARCH_API_KEY` | Brave Search API key (optional, enables web search in AI chat)| (from [Brave Search](https://brave.com/search/api/))           |
+| `SYNC_INTERVAL_SECONDS`| Email sync interval in seconds                                | `60`                                                           |
 
 ## Google OAuth Setup
 
@@ -413,33 +431,36 @@ alembic downgrade -1
 │   ├── config.py            # Pydantic Settings (reads .env)
 │   ├── database.py          # SQLAlchemy async engine and session
 │   ├── models/              # SQLAlchemy ORM models
-│   │   ├── user.py          #   User accounts
-│   │   ├── email.py         #   Email messages
-│   │   ├── account.py       #   Connected Gmail accounts
-│   │   ├── ai.py            #   AI analysis results
-│   │   ├── todo.py          #   Todo items
-│   │   ├── chat.py          #   AI chat history
-│   │   ├── calendar.py      #   Calendar events
-│   │   └── settings.py      #   App settings
+│   │   ├── user.py          #   User accounts and preferences
+│   │   ├── email.py         #   Email messages, attachments, labels
+│   │   ├── account.py       #   Connected Gmail accounts, sync status
+│   │   ├── ai.py            #   AI analyses, thread digests, bundles, unsubscribe tracking
+│   │   ├── todo.py          #   Todo items with AI draft support
+│   │   ├── chat.py          #   AI chat conversations and messages
+│   │   ├── calendar.py      #   Calendar events and sync status
+│   │   └── settings.py      #   App settings (key-value store)
 │   ├── routers/             # API route handlers
-│   │   ├── auth.py          #   Authentication (login, OAuth, JWT)
-│   │   ├── admin.py         #   Admin operations
-│   │   ├── emails.py        #   Email CRUD and search
+│   │   ├── auth.py          #   Authentication (login, OAuth, JWT, device auth)
+│   │   ├── admin.py         #   Admin operations, feature flags, settings
+│   │   ├── emails.py        #   Email CRUD, search, bulk actions
 │   │   ├── compose.py       #   Email composition and sending
-│   │   ├── accounts.py      #   Gmail account management
-│   │   ├── ai.py            #   AI analysis endpoints
-│   │   ├── todos.py         #   Todo CRUD
-│   │   ├── chat.py          #   AI chat endpoints
-│   │   └── calendar.py      #   Calendar endpoints
+│   │   ├── accounts.py      #   Gmail account management, allowed accounts
+│   │   ├── ai.py            #   AI analysis, subscriptions, unsubscribe, reply generation
+│   │   ├── todos.py         #   Todo CRUD, create from email action items
+│   │   ├── chat.py          #   AI chat (streaming, conversations)
+│   │   └── calendar.py      #   Calendar events and sync
 │   ├── schemas/             # Pydantic request/response schemas
 │   ├── services/            # Business logic
 │   │   ├── gmail.py         #   Gmail API integration
 │   │   ├── sync.py          #   Email sync orchestration
-│   │   ├── ai.py            #   Claude AI integration
-│   │   ├── chat.py          #   AI chat service
-│   │   ├── search.py        #   Full-text search
+│   │   ├── ai.py            #   Claude AI (categorization, replies, digests, bundles)
+│   │   ├── chat.py          #   AI chat agent (plan/execute/verify, tool use)
+│   │   ├── search.py        #   Full-text search (PostgreSQL vectors)
 │   │   ├── credentials.py   #   Encrypted credential storage
-│   │   ├── calendar_sync.py #   Calendar sync
+│   │   ├── calendar_sync.py #   Calendar sync orchestration
+│   │   ├── google_calendar.py # Google Calendar API client
+│   │   ├── unsubscribe.py   #   AI-powered unsubscribe (email + Playwright browser)
+│   │   ├── bundler.py       #   Topic-based email clustering
 │   │   └── rate_limiter.py  #   API rate limiting
 │   ├── utils/               # Shared utilities
 │   └── workers/
@@ -450,27 +471,34 @@ alembic downgrade -1
 │   │   ├── App.svelte       # Root component and routing
 │   │   ├── app.css          # Global styles and theme variables
 │   │   ├── pages/           # Top-level page components
-│   │   │   ├── Flow.svelte          # Triage/flow view
-│   │   │   ├── Inbox.svelte         # Traditional inbox
-│   │   │   ├── Compose.svelte       # Email composer
-│   │   │   ├── Admin.svelte         # Settings and admin panel
-│   │   │   ├── Stats.svelte         # Email statistics dashboard
-│   │   │   ├── AIInsights.svelte    # AI analysis overview
-│   │   │   ├── Todos.svelte         # Todo list
-│   │   │   ├── Chat.svelte          # AI chat interface
-│   │   │   ├── Calendar.svelte      # Calendar view
-│   │   │   └── Login.svelte         # Login page
+│   │   │   ├── Flow.svelte              # Daily dashboard (events, todos, replies, threads)
+│   │   │   ├── Inbox.svelte             # Traditional inbox (column + table views)
+│   │   │   ├── Compose.svelte           # Email composer (rich text, multi-account)
+│   │   │   ├── Subscriptions.svelte     # Subscription management and unsubscribe
+│   │   │   ├── Admin.svelte             # Settings, accounts, AI models, preferences
+│   │   │   ├── Stats.svelte             # Email statistics dashboard
+│   │   │   ├── AIInsights.svelte        # AI insights (digests, bundles, topics)
+│   │   │   ├── Todos.svelte             # Todo list with AI draft replies
+│   │   │   ├── Chat.svelte              # "Talk to your Emails" AI chat
+│   │   │   ├── Calendar.svelte          # Calendar (month/week/day views)
+│   │   │   ├── DeviceAuth.svelte        # Device authorization for CLI/TUI
+│   │   │   ├── EmailViewStandalone.svelte # Pop-out email viewer
+│   │   │   └── Login.svelte             # Login page (OAuth + admin password)
 │   │   ├── components/      # Reusable UI components
 │   │   │   ├── layout/      #   App shell, sidebar, header
-│   │   │   ├── email/       #   Email list, viewer, thread
-│   │   │   ├── ai/          #   AI insight cards
-│   │   │   ├── calendar/    #   Calendar widgets
-│   │   │   └── common/      #   Buttons, modals, toast, etc.
+│   │   │   ├── email/       #   Email list, viewer, thread, unsubscribe viewer
+│   │   │   ├── ai/          #   AI insight cards, category badges
+│   │   │   ├── calendar/    #   Calendar month/week/day views, event details
+│   │   │   └── common/      #   Buttons, modals, toast, keyboard shortcuts, etc.
 │   │   └── lib/             # Shared frontend utilities
-│   │       ├── api.js       #   API client (fetch wrapper)
-│   │       ├── stores.js    #   Svelte stores (user, page, sync)
-│   │       ├── theme.js     #   Dark/light theme management
-│   │       └── autoReload.js #  Build version polling
+│   │       ├── api.js              # API client (fetch wrapper)
+│   │       ├── stores.js           # Svelte stores (user, page, sync)
+│   │       ├── theme.js            # Dark/light/system mode management
+│   │       ├── themes.js           # 6 color theme definitions
+│   │       ├── autoReload.js       # Build version polling
+│   │       ├── calendarLayout.js   # Calendar layout utilities
+│   │       ├── shortcutDefaults.js # Default keyboard shortcut bindings
+│   │       └── shortcutStore.js    # Keyboard shortcut state management
 │   ├── vite.config.js       # Vite build configuration
 │   └── package.json         # Frontend dependencies
 ├── alembic/                 # Database migration scripts
@@ -488,9 +516,9 @@ alembic downgrade -1
 │   │       ├── google_cloud.py  # GCP project, APIs, OAuth automation
 │   │       ├── database.py      # PostgreSQL user/database creation
 │   │       ├── config.py        # .env generation, Caddyfile, domain setup
-│   │       ├── application.py   # venv, pip, npm, migrations, build
+│   │       ├── application.py   # venv, pip, npm, Playwright, migrations, build
 │   │       ├── services.py      # systemd unit generation and management
-│   │       └── verify.py        # 18-point health check suite
+│   │       └── verify.py        # Health check suite
 │   ├── setup.sh             # Legacy setup (venv, deps, migrations, build)
 │   ├── start.sh             # Start all services via systemd
 │   └── restart.sh           # Restart services after code changes

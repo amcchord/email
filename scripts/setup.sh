@@ -29,6 +29,12 @@ echo "Installing Python dependencies..."
 . venv/bin/activate
 pip install -q -r requirements.txt
 
+# Install Playwright Chromium browser for AI-powered unsubscribe
+if [ -f "venv/bin/playwright" ]; then
+    echo "Installing Playwright Chromium browser..."
+    venv/bin/playwright install chromium --with-deps || echo "Playwright browser install failed (non-fatal)"
+fi
+
 # Run database migrations
 echo "Running database migrations..."
 alembic upgrade head

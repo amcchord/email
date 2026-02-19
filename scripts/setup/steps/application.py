@@ -83,6 +83,30 @@ def install_python_deps() -> bool:
     return True
 
 
+def install_playwright_browsers() -> bool:
+    """Install Playwright Chromium browser for AI-powered unsubscribe."""
+    playwright_bin = os.path.join(VENV_DIR, "bin", "playwright")
+    if not os.path.exists(playwright_bin):
+        ui.warning("Playwright not found in venv, skipping browser install")
+        return True
+
+    ui.info("Installing Playwright Chromium browser (this may take a minute)...")
+    result = ui.run_cmd(
+        _sudo_cmd([playwright_bin, "install", "chromium", "--with-deps"]),
+        capture=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        ui.warning("Playwright browser install failed (non-fatal, unsubscribe automation will not work)")
+        if result.stderr:
+            for line in result.stderr.strip().split("\n")[-5:]:
+                ui.warning(f"  {line}")
+        return False
+
+    ui.success("Playwright Chromium browser installed")
+    return True
+
+
 def install_frontend_deps() -> bool:
     """Install frontend npm dependencies."""
     if not os.path.exists(os.path.join(FRONTEND_DIR, "package.json")):
@@ -231,7 +255,7 @@ def run(state) -> str | None:
         TextColumn("[progress.description]{task.description}"),
         console=ui.console,
     ) as progress:
-        task = progress.add_task("Building application...", total=7)
+        task = progress.add_task("Building application...", total=8)
 
         # 1. Create venv
         progress.update(task, description="[cyan]Creating Python venv...")
@@ -245,31 +269,37 @@ def run(state) -> str | None:
         results.append(("Python dependencies", "pass" if ok else "fail", ""))
         progress.advance(task)
 
-        # 3. Install frontend deps
+        # 3. Install Playwright browsers
+        progress.update(task, description="[cyan]Installing Playwright browsers...")
+        ok = install_playwright_browsers()
+        results.append(("Playwright browsers", "pass" if ok else "warn", ""))
+        progress.advance(task)
+
+        # 4. Install frontend deps
         progress.update(task, description="[cyan]Installing frontend dependencies...")
         ok = install_frontend_deps()
         results.append(("Frontend dependencies", "pass" if ok else "fail", ""))
         progress.advance(task)
 
-        # 4. Build frontend
+        # 5. Build frontend
         progress.update(task, description="[cyan]Building frontend...")
         ok = build_frontend()
         results.append(("Frontend build", "pass" if ok else "fail", ""))
         progress.advance(task)
 
-        # 5. Database migrations
+        # 6. Database migrations
         progress.update(task, description="[cyan]Running database migrations...")
         ok = run_migrations()
         results.append(("Database migrations", "pass" if ok else "fail", ""))
         progress.advance(task)
 
-        # 6. Data directories
+        # 7. Data directories
         progress.update(task, description="[cyan]Setting up directories...")
         ok = setup_directories()
         results.append(("Data directories", "pass" if ok else "fail", ""))
         progress.advance(task)
 
-        # 7. Fix ownership
+        # 8. Fix ownership
         progress.update(task, description="[cyan]Setting file ownership...")
         ok = fix_ownership()
         results.append(("File ownership", "pass" if ok else "warn", ""))
