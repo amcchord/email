@@ -1,4 +1,7 @@
 import os
+import secrets
+import time
+import threading
 # Google often returns additional scopes (like openid); allow this without error
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
@@ -16,6 +19,7 @@ from backend.schemas.auth import (
     KeyboardShortcutsResponse, KeyboardShortcutsUpdate,
     UIPreferencesResponse, UIPreferencesUpdate,
     DEFAULT_AI_PREFERENCES, DEFAULT_UI_PREFERENCES,
+    ALLOWED_MODELS,
 )
 from backend.utils.security import (
     verify_password, hash_password, create_access_token,
@@ -341,16 +345,26 @@ async def get_me(user: User = Depends(get_current_user)):
 
 # ── AI Preferences ──────────────────────────────────────────────────
 
+def _resolve_pref(prefs: dict, key: str) -> str:
+    """Return the user's preference for *key*, falling back to the default
+    if the stored value is missing or refers to a retired model."""
+    val = prefs.get(key)
+    if val and val in ALLOWED_MODELS:
+        return val
+    return DEFAULT_AI_PREFERENCES[key]
+
+
 @router.get("/ai-preferences", response_model=AIPreferencesResponse)
 async def get_ai_preferences(user: User = Depends(get_current_user)):
     """Return the current user's AI model preferences with defaults filled in."""
     prefs = user.ai_preferences or {}
     return AIPreferencesResponse(
-        chat_plan_model=prefs.get("chat_plan_model", DEFAULT_AI_PREFERENCES["chat_plan_model"]),
-        chat_execute_model=prefs.get("chat_execute_model", DEFAULT_AI_PREFERENCES["chat_execute_model"]),
-        chat_verify_model=prefs.get("chat_verify_model", DEFAULT_AI_PREFERENCES["chat_verify_model"]),
-        agentic_model=prefs.get("agentic_model", DEFAULT_AI_PREFERENCES["agentic_model"]),
-        custom_prompt_model=prefs.get("custom_prompt_model", DEFAULT_AI_PREFERENCES["custom_prompt_model"]),
+        chat_plan_model=_resolve_pref(prefs, "chat_plan_model"),
+        chat_execute_model=_resolve_pref(prefs, "chat_execute_model"),
+        chat_verify_model=_resolve_pref(prefs, "chat_verify_model"),
+        agentic_model=_resolve_pref(prefs, "agentic_model"),
+        custom_prompt_model=_resolve_pref(prefs, "custom_prompt_model"),
+        unsubscribe_model=_resolve_pref(prefs, "unsubscribe_model"),
     )
 
 
@@ -372,6 +386,8 @@ async def update_ai_preferences(
         current["agentic_model"] = body.agentic_model
     if body.custom_prompt_model is not None:
         current["custom_prompt_model"] = body.custom_prompt_model
+    if body.unsubscribe_model is not None:
+        current["unsubscribe_model"] = body.unsubscribe_model
     user.ai_preferences = current
     # Force SQLAlchemy to detect JSONB mutation
     from sqlalchemy.orm.attributes import flag_modified
@@ -381,11 +397,12 @@ async def update_ai_preferences(
 
     prefs = user.ai_preferences or {}
     return AIPreferencesResponse(
-        chat_plan_model=prefs.get("chat_plan_model", DEFAULT_AI_PREFERENCES["chat_plan_model"]),
-        chat_execute_model=prefs.get("chat_execute_model", DEFAULT_AI_PREFERENCES["chat_execute_model"]),
-        chat_verify_model=prefs.get("chat_verify_model", DEFAULT_AI_PREFERENCES["chat_verify_model"]),
-        agentic_model=prefs.get("agentic_model", DEFAULT_AI_PREFERENCES["agentic_model"]),
-        custom_prompt_model=prefs.get("custom_prompt_model", DEFAULT_AI_PREFERENCES["custom_prompt_model"]),
+        chat_plan_model=_resolve_pref(prefs, "chat_plan_model"),
+        chat_execute_model=_resolve_pref(prefs, "chat_execute_model"),
+        chat_verify_model=_resolve_pref(prefs, "chat_verify_model"),
+        agentic_model=_resolve_pref(prefs, "agentic_model"),
+        custom_prompt_model=_resolve_pref(prefs, "custom_prompt_model"),
+        unsubscribe_model=_resolve_pref(prefs, "unsubscribe_model"),
     )
 
 
@@ -479,3 +496,163 @@ async def update_ui_preferences(
         theme=prefs.get("theme", DEFAULT_UI_PREFERENCES["theme"]),
         color_scheme=prefs.get("color_scheme", DEFAULT_UI_PREFERENCES["color_scheme"]),
     )
+
+
+# ── Device Code Auth Flow (for TUI / CLI clients) ───────────────────
+
+_device_codes: dict[str, dict] = {}
+_device_codes_lock = threading.Lock()
+
+DEVICE_CODE_EXPIRY = 600
+DEVICE_CODE_INTERVAL = 5
+
+
+def _generate_user_code() -> str:
+    chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    part1 = "".join(secrets.choice(chars) for _ in range(4))
+    part2 = "".join(secrets.choice(chars) for _ in range(4))
+    return f"{part1}-{part2}"
+
+
+def _clean_expired_codes():
+    now = time.time()
+    with _device_codes_lock:
+        expired = [k for k, v in _device_codes.items() if now > v["expires_at"]]
+        for k in expired:
+            del _device_codes[k]
+
+
+def _get_public_base_url(request: Request) -> str:
+    """Get the public-facing base URL for device auth verification links.
+
+    Derives from allowed_origins config (which has the real public URL like
+    https://email.mcchord.net), falling back to X-Forwarded headers
+    or request.base_url as last resort.
+    """
+    origins = settings.allowed_origins
+    if origins:
+        first_origin = origins.split(",")[0].strip()
+        if first_origin and first_origin.startswith("http"):
+            return first_origin.rstrip("/")
+
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    forwarded_host = request.headers.get("x-forwarded-host")
+    if forwarded_proto and forwarded_host:
+        return f"{forwarded_proto}://{forwarded_host}".rstrip("/")
+
+    return str(request.base_url).rstrip("/")
+
+
+@router.post("/device/start")
+async def device_start(request: Request):
+    """Start the device code authorization flow.
+
+    Returns a device_code (for polling), user_code (for display),
+    and verification_url (where the user should go to authorize).
+    """
+    _clean_expired_codes()
+
+    device_code = secrets.token_urlsafe(32)
+    user_code = _generate_user_code()
+
+    origin = _get_public_base_url(request)
+    verification_url = f"{origin}/auth/device?code={user_code}"
+
+    now = time.time()
+    with _device_codes_lock:
+        _device_codes[device_code] = {
+            "user_code": user_code,
+            "verification_url": verification_url,
+            "status": "pending",
+            "created_at": now,
+            "expires_at": now + DEVICE_CODE_EXPIRY,
+            "access_token": None,
+            "refresh_token": None,
+            "user": None,
+        }
+
+    return {
+        "device_code": device_code,
+        "user_code": user_code,
+        "verification_url": verification_url,
+        "expires_in": DEVICE_CODE_EXPIRY,
+        "interval": DEVICE_CODE_INTERVAL,
+    }
+
+
+@router.get("/device/status/{device_code}")
+async def device_status(device_code: str):
+    """Poll for the status of a device code authorization.
+
+    Returns status: pending, authorized, or expired.
+    When authorized, includes access_token, refresh_token, and user.
+    """
+    _clean_expired_codes()
+
+    with _device_codes_lock:
+        entry = _device_codes.get(device_code)
+
+    if not entry:
+        return {"status": "expired"}
+
+    if time.time() > entry["expires_at"]:
+        with _device_codes_lock:
+            _device_codes.pop(device_code, None)
+        return {"status": "expired"}
+
+    if entry["status"] == "authorized":
+        with _device_codes_lock:
+            _device_codes.pop(device_code, None)
+        return {
+            "status": "authorized",
+            "access_token": entry["access_token"],
+            "refresh_token": entry["refresh_token"],
+            "user": entry["user"],
+        }
+
+    return {"status": "pending"}
+
+
+@router.post("/device/authorize")
+async def device_authorize(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Authorize a device code (called from the web UI by an authenticated user).
+
+    Expects JSON body: {"user_code": "XXXX-XXXX"}
+    """
+    body = await request.json()
+    user_code = body.get("user_code", "").strip().upper()
+    if not user_code:
+        raise HTTPException(status_code=400, detail="user_code is required")
+
+    with _device_codes_lock:
+        target = None
+        for dc, entry in _device_codes.items():
+            if entry["user_code"] == user_code and entry["status"] == "pending":
+                target = dc
+                break
+
+    if not target:
+        raise HTTPException(status_code=404, detail="Invalid or expired code")
+
+    access_token = create_access_token({"sub": str(user.id)})
+    refresh_token = create_refresh_token({"sub": str(user.id)})
+
+    with _device_codes_lock:
+        if target in _device_codes:
+            _device_codes[target]["status"] = "authorized"
+            _device_codes[target]["access_token"] = access_token
+            _device_codes[target]["refresh_token"] = refresh_token
+            _device_codes[target]["user"] = {
+                "id": user.id,
+                "email": user.email,
+                "username": user.username,
+                "display_name": user.display_name,
+                "avatar_url": user.avatar_url,
+                "is_admin": user.is_admin,
+            }
+
+    return {"message": "Device authorized"}

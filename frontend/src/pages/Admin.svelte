@@ -263,7 +263,9 @@
     chat_plan_model: 'claude-opus-4-6',
     chat_execute_model: 'claude-opus-4-6',
     chat_verify_model: 'claude-opus-4-6',
-    agentic_model: 'claude-sonnet-4-5-20250929',
+    agentic_model: 'claude-sonnet-4-6',
+    custom_prompt_model: 'claude-sonnet-4-6',
+    unsubscribe_model: 'claude-sonnet-4-6',
   });
   let aiPrefsAllowedModels = $state([]);
   let aiPrefsLoaded = $state(false);
@@ -333,7 +335,7 @@
   const modelLabels = {
     'claude-opus-4-6': 'Claude Opus 4.6 — Most capable',
     'claude-opus-4-6-fast': 'Claude Opus 4.6 (Fast) — 2.5x speed, 6x cost',
-    'claude-sonnet-4-5-20250929': 'Claude Sonnet 4.5 — Balanced',
+    'claude-sonnet-4-6': 'Claude Sonnet 4.6 — Balanced',
     'claude-haiku-4-5-20251001': 'Claude Haiku 4.5 — Fastest',
   };
 
@@ -346,6 +348,7 @@
         chat_verify_model: data.chat_verify_model,
         agentic_model: data.agentic_model,
         custom_prompt_model: data.custom_prompt_model,
+        unsubscribe_model: data.unsubscribe_model,
       };
       aiPrefsAllowedModels = data.allowed_models || [];
       aiPrefsLoaded = true;
@@ -364,6 +367,7 @@
         chat_verify_model: data.chat_verify_model,
         agentic_model: data.agentic_model,
         custom_prompt_model: data.custom_prompt_model,
+        unsubscribe_model: data.unsubscribe_model,
       };
       showToast('AI model preferences saved', 'success');
     } catch (err) {
@@ -1219,6 +1223,40 @@
           </div>
         </div>
 
+        <!-- Unsubscribe Model -->
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Unsubscribe Model</h3>
+          <p class="text-xs mb-5" style="color: var(--text-tertiary)">
+            Used for AI-powered browser automation when unsubscribing from mailing lists.
+            Sonnet 4.6 is recommended for its computer use capabilities.
+          </p>
+
+          <div>
+            <label for="ai-unsubscribe-model" class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color: var(--text-tertiary)">
+              Model
+            </label>
+            <select
+              id="ai-unsubscribe-model"
+              bind:value={aiPrefs.unsubscribe_model}
+              class="w-full h-9 px-3 rounded-lg text-sm outline-none border appearance-none cursor-pointer"
+              style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+            >
+              {#each aiPrefsAllowedModels as model}
+                <option value={model}>{modelLabels[model] || model}</option>
+              {/each}
+            </select>
+          </div>
+
+          <div class="mt-5 flex items-center gap-3">
+            <Button variant="primary" size="sm" onclick={saveAIPreferences} disabled={aiPrefsSaving}>
+              {aiPrefsSaving ? 'Saving...' : 'Save'}
+            </Button>
+            <span class="text-[10px]" style="color: var(--text-tertiary)">
+              Changes apply to the next unsubscribe action.
+            </span>
+          </div>
+        </div>
+
         <!-- Model comparison info -->
         <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
           <h3 class="text-sm font-semibold mb-3" style="color: var(--text-primary)">Model Comparison</h3>
@@ -1239,7 +1277,7 @@
                 <td class="py-2" style="color: var(--text-secondary)">$$$</td>
               </tr>
               <tr class="border-b" style="border-color: var(--border-color)">
-                <td class="py-2 font-medium" style="color: var(--text-primary)">Sonnet 4.5</td>
+                <td class="py-2 font-medium" style="color: var(--text-primary)">Sonnet 4.6</td>
                 <td class="py-2" style="color: var(--color-accent-600)">High</td>
                 <td class="py-2" style="color: var(--color-accent-600)">Balanced</td>
                 <td class="py-2" style="color: var(--text-secondary)">$$</td>

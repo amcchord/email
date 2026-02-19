@@ -54,6 +54,28 @@ Environment=OAUTHLIB_RELAX_TOKEN_SCOPE=1
 WantedBy=multi-user.target
 """
 
+MAILTUI_SERVICE = """\
+[Unit]
+Description=Mail Client TUI (SSH + Web Terminal)
+After=network.target mailapp.service
+Wants=mailapp.service
+
+[Service]
+Type=simple
+User=mailapp
+Group=mailapp
+WorkingDirectory={project_root}
+ExecStart={project_root}/bin/mailtui --serve
+Restart=always
+RestartSec=3
+Environment=TUI_API_URL=http://localhost:8000
+Environment=TUI_SSH_PORT=2222
+Environment=TUI_WEB_PORT=8022
+
+[Install]
+WantedBy=multi-user.target
+"""
+
 SYSTEMD_DIR = "/etc/systemd/system"
 
 
@@ -183,8 +205,16 @@ def run(state) -> str | None:
             ui.Panel(mailworker_content, title="[bold]mailworker.service[/bold]", border_style="blue")
         )
 
+    mailtui_content = MAILTUI_SERVICE.format(project_root=project_root)
+
     install_service_file("mailapp", mailapp_content)
     install_service_file("mailworker", mailworker_content)
+
+    # Install TUI service if the binary exists
+    if os.path.exists(os.path.join(project_root, "bin", "mailtui")):
+        install_service_file("mailtui", mailtui_content)
+    else:
+        ui.info("  TUI binary not found, skipping mailtui.service (build with: cd tui && make install)")
 
     # --- Configure Caddy ---
     ui.console.print()
@@ -205,6 +235,8 @@ def run(state) -> str | None:
     ui.info("[bold]Enabling services...[/bold]")
 
     services_to_enable = ["mailapp", "mailworker", "caddy"]
+    if os.path.exists(os.path.join(project_root, "bin", "mailtui")):
+        services_to_enable.append("mailtui")
 
     # Also ensure PostgreSQL and Redis are enabled
     pg_service = "postgresql"
@@ -234,6 +266,8 @@ def run(state) -> str | None:
 
         # Start in dependency order
         start_order = [pg_service, redis_service, "mailapp", "mailworker", "caddy"]
+        if "mailtui" in services_to_enable:
+            start_order.append("mailtui")
 
         for svc in start_order:
             ui.info(f"  Starting {svc}...")

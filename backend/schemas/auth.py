@@ -5,7 +5,7 @@ from typing import Optional
 ALLOWED_MODELS = [
     "claude-opus-4-6",
     "claude-opus-4-6-fast",
-    "claude-sonnet-4-5-20250929",
+    "claude-sonnet-4-6",
     "claude-haiku-4-5-20251001",
 ]
 
@@ -13,8 +13,9 @@ DEFAULT_AI_PREFERENCES = {
     "chat_plan_model": "claude-opus-4-6",
     "chat_execute_model": "claude-opus-4-6",
     "chat_verify_model": "claude-opus-4-6",
-    "agentic_model": "claude-sonnet-4-5-20250929",
-    "custom_prompt_model": "claude-sonnet-4-5-20250929",
+    "agentic_model": "claude-sonnet-4-6",
+    "custom_prompt_model": "claude-sonnet-4-6",
+    "unsubscribe_model": "claude-sonnet-4-6",
 }
 
 
@@ -51,6 +52,7 @@ class AIPreferencesResponse(BaseModel):
     chat_verify_model: str
     agentic_model: str
     custom_prompt_model: str
+    unsubscribe_model: str
     allowed_models: list[str] = ALLOWED_MODELS
 
 
@@ -60,8 +62,9 @@ class AIPreferencesUpdate(BaseModel):
     chat_verify_model: Optional[str] = None
     agentic_model: Optional[str] = None
     custom_prompt_model: Optional[str] = None
+    unsubscribe_model: Optional[str] = None
 
-    @field_validator("chat_plan_model", "chat_execute_model", "chat_verify_model", "agentic_model", "custom_prompt_model")
+    @field_validator("chat_plan_model", "chat_execute_model", "chat_verify_model", "agentic_model", "custom_prompt_model", "unsubscribe_model")
     @classmethod
     def validate_model_name(cls, v):
         if v is not None and v not in ALLOWED_MODELS:

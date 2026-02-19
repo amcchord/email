@@ -14,12 +14,15 @@
   import Chat from './pages/Chat.svelte';
   import Calendar from './pages/Calendar.svelte';
   import Flow from './pages/Flow.svelte';
+  import Subscriptions from './pages/Subscriptions.svelte';
+  import DeviceAuth from './pages/DeviceAuth.svelte';
   import EmailViewStandalone from './pages/EmailViewStandalone.svelte';
   import Layout from './components/layout/Layout.svelte';
   import Toast from './components/common/Toast.svelte';
 
   let loading = $state(true);
   let standaloneEmailId = $state(null);
+  let deviceAuthCode = $state(null);
 
   onMount(async () => {
     setUnauthorizedHandler(() => {
@@ -27,8 +30,11 @@
       stopSyncPolling();
     });
 
-    // Check if this is a pop-out email view
+    // Check if this is a device auth page or pop-out email view
     const params = new URLSearchParams(window.location.search);
+    if (window.location.pathname === '/auth/device') {
+      deviceAuthCode = params.get('code') || '';
+    }
     if (params.get('view') === 'email' && params.get('id')) {
       standaloneEmailId = parseInt(params.get('id'));
     }
@@ -85,6 +91,8 @@
       <span class="text-sm" style="color: var(--text-secondary)">Loading...</span>
     </div>
   </div>
+{:else if deviceAuthCode !== null}
+  <DeviceAuth />
 {:else if standaloneEmailId}
   <!-- Pop-out email viewer (no layout chrome) -->
   {#if $user}
@@ -112,6 +120,8 @@
       <Calendar />
     {:else if $currentPage === 'chat'}
       <Chat />
+    {:else if $currentPage === 'subscriptions'}
+      <Subscriptions />
     {:else if $currentPage === 'inbox'}
       <Inbox />
     {:else}

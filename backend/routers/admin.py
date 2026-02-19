@@ -20,6 +20,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 # Default values for feature flags
 FEATURE_FLAG_DEFAULTS = {
     "desktop_app_enabled": "false",
+    "tui_enabled": "true",
 }
 
 

@@ -23,6 +23,7 @@ cd /opt/mail
 DO_FRONTEND=false
 DO_BACKEND=false
 DO_WORKER=false
+DO_TUI=false
 GOT_FLAGS=false
 
 for arg in "$@"; do
@@ -39,15 +40,20 @@ for arg in "$@"; do
             DO_WORKER=true
             GOT_FLAGS=true
             ;;
+        --tui)
+            DO_TUI=true
+            GOT_FLAGS=true
+            ;;
         --all)
             DO_FRONTEND=true
             DO_BACKEND=true
             DO_WORKER=true
+            DO_TUI=true
             GOT_FLAGS=true
             ;;
         *)
             echo "Unknown flag: $arg"
-            echo "Usage: bash scripts/restart.sh [--frontend] [--backend] [--worker] [--all]"
+            echo "Usage: bash scripts/restart.sh [--frontend] [--backend] [--worker] [--tui] [--all]"
             exit 1
             ;;
     esac
@@ -58,6 +64,7 @@ if [ "$GOT_FLAGS" = false ]; then
     DO_FRONTEND=true
     DO_BACKEND=true
     DO_WORKER=true
+    DO_TUI=true
 fi
 
 echo "=== Restarting Services ==="
@@ -88,6 +95,18 @@ if [ "$DO_WORKER" = true ]; then
     sudo systemctl restart mailworker
     echo "[worker] Done."
     RESTARTED="${RESTARTED} worker"
+fi
+
+# --- TUI (mailtui) ---
+if [ "$DO_TUI" = true ]; then
+    if systemctl is-enabled mailtui >/dev/null 2>&1; then
+        echo "[tui] Restarting TUI server..."
+        sudo systemctl restart mailtui
+        echo "[tui] Done."
+        RESTARTED="${RESTARTED} tui"
+    else
+        echo "[tui] TUI service not installed, skipping."
+    fi
 fi
 
 # --- Write build version so open browser tabs auto-refresh ---

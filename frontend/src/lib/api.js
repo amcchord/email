@@ -210,10 +210,31 @@ export const api = {
     }
     return request('GET', `/ai/subscriptions?${searchParams.toString()}`);
   },
-  unsubscribe: (emailId, preview = false) => {
-    const qs = preview ? '?preview=true' : '';
-    return request('POST', `/ai/unsubscribe/${emailId}${qs}`);
+  unsubscribe: (emailId, { preview = false, markSpam = true } = {}) => {
+    const params = new URLSearchParams();
+    if (preview) params.set('preview', 'true');
+    if (!markSpam) params.set('mark_spam', 'false');
+    const qs = params.toString();
+    return request('POST', `/ai/unsubscribe/${emailId}${qs ? '?' + qs : ''}`);
   },
+  unsubscribeStream: (emailId, { markSpam = true } = {}) => {
+    const params = new URLSearchParams();
+    if (!markSpam) params.set('mark_spam', 'false');
+    const qs = params.toString();
+    return fetch(`${BASE}/ai/unsubscribe/${emailId}/stream${qs ? '?' + qs : ''}`, {
+      method: 'GET',
+      credentials: 'include',
+    });
+  },
+  bulkUnsubscribe: (emailIds, { markSpam = true } = {}) => {
+    const params = new URLSearchParams();
+    for (const id of emailIds) {
+      params.append('email_ids', id);
+    }
+    if (!markSpam) params.set('mark_spam', 'false');
+    return request('POST', `/ai/unsubscribe/bulk?${params.toString()}`);
+  },
+  blockSender: (emailId) => request('POST', `/ai/subscriptions/${emailId}/block`),
   getThreadSummaries: (params = {}) => {
     const searchParams = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
@@ -322,6 +343,9 @@ export const api = {
   // Account description
   updateAccountDescription: (accountId, description) =>
     request('PUT', `/accounts/${accountId}/description`, { description }),
+
+  // Device code auth (for TUI)
+  deviceAuthorize: (userCode) => request('POST', '/auth/device/authorize', { user_code: userCode }),
 
   // Health
   health: () => request('GET', '/health'),

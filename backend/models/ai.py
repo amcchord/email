@@ -126,11 +126,17 @@ class UnsubscribeTracking(Base):
     sender_address: Mapped[str] = mapped_column(String(255))
     unsubscribe_to: Mapped[str] = mapped_column(String(255), nullable=True)
     method: Mapped[str] = mapped_column(String(20))  # "email" or "url"
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    # Status: pending, in_progress, success, failed
     unsubscribed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
     emails_received_after: Mapped[int] = mapped_column(Integer, default=0)
     last_email_after_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    screenshots = mapped_column(JSONB, nullable=True)
+    llm_log = mapped_column(JSONB, nullable=True)
+    error_message: Mapped[str] = mapped_column(Text, nullable=True)
+    marked_spam: Mapped[bool] = mapped_column(Boolean, default=False)
 
     user = relationship("User")
     email = relationship("Email")

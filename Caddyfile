@@ -12,10 +12,24 @@ email.mcchord.net {
 
     # API proxy to FastAPI
     handle /api/* {
-        reverse_proxy localhost:8000
+        reverse_proxy localhost:8000 {
+            flush_interval -1
+        }
+    }
+
+    # Web TUI - browser-based terminal interface
+    handle_path /tui/* {
+        reverse_proxy localhost:8022
+    }
+    handle /tui {
+        redir /tui/ permanent
     }
 
     # Serve desktop app downloads
+    handle_path /downloads/tui/* {
+        root * /opt/mail/downloads/tui
+        file_server browse
+    }
     handle_path /downloads/* {
         root * /opt/mail/electron/build
         file_server browse

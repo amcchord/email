@@ -34,6 +34,13 @@ data/
 .cursor-server/
 .claude/
 
+# Build artifacts / binaries
+bin/
+downloads/
+go/
+tui/
+.pki/
+
 # System / user files
 .bash_history
 .bashrc

@@ -366,6 +366,16 @@
   <!-- Bottom actions -->
   <div class="p-2 border-t shrink-0 space-y-0.5" style="border-color: var(--border-color)">
     <button
+      onclick={() => currentPage.set('subscriptions')}
+      class="w-full flex items-center gap-3 px-3 h-8 rounded-md text-sm transition-fast"
+      style="color: {$currentPage === 'subscriptions' ? 'var(--text-primary)' : 'var(--text-secondary)'}; background: {$currentPage === 'subscriptions' ? 'var(--bg-hover)' : 'transparent'}"
+    >
+      <Icon name="bell-off" size={18} class="shrink-0" />
+      {#if !$sidebarCollapsed}
+        <span>Subscriptions</span>
+      {/if}
+    </button>
+    <button
       onclick={() => currentPage.set('todos')}
       class="w-full flex items-center gap-3 px-3 h-8 rounded-md text-sm transition-fast"
       style="color: {$currentPage === 'todos' ? 'var(--text-primary)' : 'var(--text-secondary)'}; background: {$currentPage === 'todos' ? 'var(--bg-hover)' : 'transparent'}"

@@ -13,7 +13,7 @@ from backend.models.ai import AIAnalysis
 from backend.models.user import User
 from backend.config import get_settings
 from backend.database import async_session
-from backend.schemas.auth import DEFAULT_AI_PREFERENCES
+from backend.schemas.auth import DEFAULT_AI_PREFERENCES, ALLOWED_MODELS
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -72,17 +72,33 @@ def _parse_list_unsubscribe(raw_headers: dict) -> Optional[dict]:
     return result
 
 
+def _valid_model(model: str | None) -> bool:
+    """Return True if *model* is a currently supported model ID."""
+    return model is not None and model in ALLOWED_MODELS
+
+
 async def get_model_for_user(user_id: int) -> str:
     """Read the agentic_model preference for a user, falling back to the default."""
     async with async_session() as db:
         result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
         if user and user.ai_preferences:
-            return user.ai_preferences.get(
-                "agentic_model",
-                DEFAULT_AI_PREFERENCES["agentic_model"],
-            )
+            model = user.ai_preferences.get("agentic_model")
+            if _valid_model(model):
+                return model
     return DEFAULT_AI_PREFERENCES["agentic_model"]
+
+
+async def get_unsubscribe_model_for_user(user_id: int) -> str:
+    """Read the unsubscribe_model preference for a user, falling back to the default."""
+    async with async_session() as db:
+        result = await db.execute(select(User).where(User.id == user_id))
+        user = result.scalar_one_or_none()
+        if user and user.ai_preferences:
+            model = user.ai_preferences.get("unsubscribe_model")
+            if _valid_model(model):
+                return model
+    return DEFAULT_AI_PREFERENCES["unsubscribe_model"]
 
 
 async def get_custom_prompt_model_for_user(user_id: int) -> str:
@@ -95,12 +111,11 @@ async def get_custom_prompt_model_for_user(user_id: int) -> str:
         user = result.scalar_one_or_none()
         if user and user.ai_preferences:
             custom = user.ai_preferences.get("custom_prompt_model")
-            if custom:
+            if _valid_model(custom):
                 return custom
-            return user.ai_preferences.get(
-                "agentic_model",
-                DEFAULT_AI_PREFERENCES["agentic_model"],
-            )
+            agentic = user.ai_preferences.get("agentic_model")
+            if _valid_model(agentic):
+                return agentic
     return DEFAULT_AI_PREFERENCES["custom_prompt_model"]
 
 
@@ -338,6 +353,12 @@ class AIService:
                         "or if the conversation has moved on. If the user already replied after "
                         "this email, set needs_reply to false."
                     )
+                else:
+                    thread_context = (
+                        "\n\nNote: This is the FIRST email from this sender — there is no prior "
+                        "conversation history. Be extra skeptical of meeting requests or pitches "
+                        "from first-time senders with no established relationship."
+                    )
 
             # Inject calendar context for scheduling-related emails
             calendar_context = ""
@@ -410,7 +431,7 @@ Respond with ONLY valid JSON in this exact format:
     }},
     "suggested_reply": "<brief best-fit suggested reply if response needed, or null>",
     "reply_options": <array of reply option objects or null. Each object has: "label" (short button text like "Accept", "Decline", "Not now", "Reply"), "intent" (one of: accept, decline, defer, custom, not_relevant), "body" (the full reply text). Provide 2-4 options when a reply is needed, or null if no reply is needed.>,
-    "is_subscription": <true if this is a newsletter, marketing, automated notification, mailing list, or bulk email; false if personal/direct>,
+    "is_subscription": <true if this is a newsletter, marketing, automated notification, mailing list, bulk email, cold sales outreach, unsolicited pitch, or vendor solicitation; false if personal/direct from someone the user has a relationship with>,
     "needs_reply": <true if the recipient should write back to this email; false if no reply needed>
 }}
 
@@ -420,7 +441,14 @@ conversation_type guide:
 - "notification": automated alerts, system notifications, status updates, delivery updates
 - "transactional": receipts, order confirmations, password resets, account verification
 - "other": anything that does not fit the above categories
-{reply_options_guide}"""
+{reply_options_guide}
+
+cold outreach / spam detection guide:
+Cold sales emails are crafted to avoid spam filters -- they use subtle, polite language instead of obvious keywords. Watch for these signals:
+- SOFT OPT-OUT LANGUAGE (strongest signal): Any variant of "you can tell me to go away" from a first-time sender is cold outreach. Examples: "just let me know if this isn't relevant", "feel free to ignore this", "no worries if the timing isn't right", "happy to stop reaching out", "if you're not the right person just say so", "just say no thank you", "not a fit? no problem", "if you want me to stop messaging". A legitimate contact would NEVER preemptively offer the recipient a way to make them go away.
+- MEETING/CALL REQUESTS FROM UNKNOWN SENDERS: If there is no prior conversation and someone asks for a call, meeting, demo, or "15 minutes of your time", treat it as cold outreach.
+- SUBTLE SALES PATTERNS: "I came across your company", "I noticed you're using X", "companies like yours", "we help teams with", "quick question for you", "checking in" (with no prior thread), "following up on my last email" (when there is no prior conversation), "would love to connect", "curious if you've thought about", "I'd love to show you".
+When cold outreach is detected: set is_subscription=true, needs_reply=false, category="can_ignore", priority=0. Do NOT suggest the user reply to cold outreach."""
 
             response = await self._call_claude(
                 model=self.model,
