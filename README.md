@@ -531,9 +531,10 @@ alembic downgrade -1
 ├── alembic.ini              # Alembic configuration
 ├── requirements.txt         # Python dependencies
 ├── goals.md                 # Project goals and vision
+├── LICENSE                  # MIT License
 └── .env                     # Environment variables (not committed)
 ```
 
 ## License
 
-This project does not currently specify a license. All rights reserved.
+This project is licensed under the [MIT License](LICENSE).
