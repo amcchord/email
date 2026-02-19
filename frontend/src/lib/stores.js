@@ -235,7 +235,8 @@ export const chatConversations = writable([]);
 export const currentConversationId = writable(null);
 
 // Calendar
-export const calendarView = writable('month');
+export const calendarView = writable(localStorage.getItem('calendarView') || 'week');
+calendarView.subscribe(v => localStorage.setItem('calendarView', v));
 export const calendarDate = writable(new Date());
 export const calendarEvents = writable([]);
 export const calendarLoading = writable(false);
