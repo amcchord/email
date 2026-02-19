@@ -39,6 +39,11 @@ A full weekly calendar view with color-coded events pulled from Google Calendar,
 
 ![Calendar View](screenshots/Calendar.png)
 
+### Subscription Management & AI Unsubscribe
+The Subscriptions page lists every mailing list and marketing sender detected by AI, grouped by domain with email counts and last-received dates. One-click unsubscribe triggers a fully automated Playwright browser session guided by Claude's vision model -- the AI loads the unsubscribe page, analyzes the layout, fills in forms or clicks buttons, and verifies the result. A live progress modal streams each step in real time: browser launch, page analysis, LLM reasoning, screenshots of the actual unsubscribe page, and a final success/failure confirmation. Bulk unsubscribe lets you select multiple senders and process them sequentially, and senders are optionally marked as spam in Gmail after unsubscribing.
+
+![Subscription Management & AI Unsubscribe](screenshots/Unsubscribe.png)
+
 ## Architecture
 
 ```
