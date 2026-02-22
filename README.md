@@ -19,6 +19,8 @@ A self-hosted, AI-augmented email client built on Svelte 5, FastAPI, and Postgre
 - 6 color themes (Amber, Blue, Rose, Emerald, Purple, Monochrome) with light/dark/system mode
 - Customizable keyboard shortcuts with visual overlay (hold Alt/Option to see shortcuts)
 - Pop-out email viewer for side-by-side work
+- Real-time updates via Server-Sent Events (SSE) -- new emails and AI analysis results push to the browser instantly via Redis Pub/Sub, no polling required
+- Cross-thread reply detection -- replies that Gmail places in a different thread (e.g. after a subject change) are still recognized via In-Reply-To / References headers
 - Background sync via Redis + ARQ workers
 - Self-hosted and private -- all data stored locally, no third-party analytics
 
@@ -48,13 +50,15 @@ The Subscriptions page lists every mailing list and marketing sender detected by
 
 ```
 Browser (Svelte 5 SPA)
+  |  EventSource (SSE)
   |
   +-- Caddy (automatic TLS, static files, /api reverse proxy)
   |
-  +-- FastAPI (REST API, JWT auth, email CRUD)
+  +-- FastAPI (REST API, JWT auth, email CRUD, SSE event stream)
         |
         +-- PostgreSQL (emails, users, accounts, AI analyses, settings)
         +-- Redis + ARQ (background sync jobs, batch AI analysis)
+        +-- Redis Pub/Sub (real-time event delivery to SSE clients)
         +-- Gmail API (message sync, send, label management)
         +-- Google Calendar API (event sync, multi-account)
         +-- Claude API (categorization, summarization, trend analysis, reply generation)
@@ -62,7 +66,7 @@ Browser (Svelte 5 SPA)
         +-- Brave Search API (optional, web search for AI chat)
 ```
 
-Caddy terminates TLS and serves the built frontend static files. All `/api/*` requests are reverse-proxied to the FastAPI backend running on `localhost:8000`. Background work (email sync, AI batch analysis) is handled by an ARQ worker process connected to Redis. The Playwright headless browser is used on-demand for AI-powered URL-based unsubscribe automation.
+Caddy terminates TLS and serves the built frontend static files. All `/api/*` requests are reverse-proxied to the FastAPI backend running on `localhost:8000`. Background work (email sync, AI batch analysis) is handled by an ARQ worker process connected to Redis. Real-time notifications (new emails, AI analysis completion) flow from workers through Redis Pub/Sub to a per-user SSE endpoint, which pushes events to all connected browser tabs. The Playwright headless browser is used on-demand for AI-powered URL-based unsubscribe automation.
 
 ## Tech Stack
 
@@ -453,7 +457,8 @@ alembic downgrade -1
 │   │   ├── ai.py            #   AI analysis, subscriptions, unsubscribe, reply generation
 │   │   ├── todos.py         #   Todo CRUD, create from email action items
 │   │   ├── chat.py          #   AI chat (streaming, conversations)
-│   │   └── calendar.py      #   Calendar events and sync
+│   │   ├── calendar.py      #   Calendar events and sync
+│   │   └── events.py        #   SSE event stream (real-time push to browser)
 │   ├── schemas/             # Pydantic request/response schemas
 │   ├── services/            # Business logic
 │   │   ├── gmail.py         #   Gmail API integration
@@ -466,6 +471,7 @@ alembic downgrade -1
 │   │   ├── google_calendar.py # Google Calendar API client
 │   │   ├── unsubscribe.py   #   AI-powered unsubscribe (email + Playwright browser)
 │   │   ├── bundler.py       #   Topic-based email clustering
+│   │   ├── notifications.py #   Redis Pub/Sub event publishing
 │   │   └── rate_limiter.py  #   API rate limiting
 │   ├── utils/               # Shared utilities
 │   └── workers/
@@ -500,6 +506,7 @@ alembic downgrade -1
 │   │       ├── stores.js           # Svelte stores (user, page, sync)
 │   │       ├── theme.js            # Dark/light/system mode management
 │   │       ├── themes.js           # 6 color theme definitions
+│   │       ├── realtime.js         # SSE client for real-time event updates
 │   │       ├── autoReload.js       # Build version polling
 │   │       ├── calendarLayout.js   # Calendar layout utilities
 │   │       ├── shortcutDefaults.js # Default keyboard shortcut bindings

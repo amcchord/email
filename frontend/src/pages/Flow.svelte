@@ -5,6 +5,8 @@
   import { chatConversations, currentConversationId, showToast, currentPage, currentMailbox, selectedEmailId, pendingReplyDraft, accounts, composeData, threadOrder, accountColorMap } from '../lib/stores.js';
   import { get } from 'svelte/store';
   import { registerActions } from '../lib/shortcutStore.js';
+  import { lastEvent } from '../lib/realtime.js';
+  import { theme } from '../lib/theme.js';
   import Icon from '../components/common/Icon.svelte';
   import RichEditor from '../components/email/RichEditor.svelte';
 
@@ -14,6 +16,7 @@
   let pendingTodos = $state([]);
   let needsReplyEmails = $state([]);
   let needsReplyTotal = $state(0);
+  let hideFyi = $state(localStorage.getItem('flowHideFyi') !== 'false');
   let urgentCount = $state(0);
   let trendsSummary = $state('');
 
@@ -349,6 +352,16 @@
     };
   });
 
+  $effect(() => {
+    const evt = $lastEvent;
+    if (!evt) return;
+    if (evt.type === 'new_emails' || evt.type === 'emails_updated') {
+      loadDaySummary();
+      loadAwaitingResponse();
+      loadActiveThreads();
+    }
+  });
+
   // ============ Day Summary ============
 
   async function loadDaySummary() {
@@ -356,7 +369,7 @@
     const results = await Promise.allSettled([
       api.getUpcomingEvents(1),
       api.getTodos({ status: 'pending' }),
-      api.getNeedsReply({ limit: 20 }),
+      api.getNeedsReply({ limit: 20, ...(hideFyi ? { exclude_category: 'fyi' } : {}) }),
       api.getAITrends(),
     ]);
 
@@ -1227,6 +1240,55 @@
     return tmp.textContent || tmp.innerText || '';
   }
 
+  function renderHtmlEmail(iframeEl, html) {
+    function write() {
+      const isDark = get(theme) === 'dark';
+      const doc = iframeEl.contentDocument;
+      if (!doc) return;
+      doc.open();
+      doc.write(`<!DOCTYPE html><html><head><style>
+        body {
+          margin: 0; padding: 8px;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          font-size: 14px; line-height: 1.6;
+          color: ${isDark ? '#e4e4e7' : '#1a1a1a'};
+          background: ${isDark ? '#18181b' : '#ffffff'};
+          word-break: break-word;
+        }
+        img { max-width: 100%; height: auto; }
+        a { color: ${isDark ? '#f59e0b' : '#b45309'}; }
+        blockquote { border-left: 3px solid ${isDark ? '#3f3f46' : '#d4d4d8'}; padding-left: 12px; margin-left: 0; opacity: 0.8; }
+        table { max-width: 100%; }
+        pre { overflow-x: auto; }
+      </style></head><body>${html}</body></html>`);
+      doc.close();
+
+      function resize() {
+        if (iframeEl && doc.body) {
+          iframeEl.style.height = doc.body.scrollHeight + 'px';
+        }
+      }
+
+      const imgs = doc.querySelectorAll('img');
+      if (imgs.length > 0) {
+        let loaded = 0;
+        imgs.forEach(img => {
+          if (img.complete) {
+            loaded++;
+          } else {
+            img.addEventListener('load', () => { loaded++; if (loaded >= imgs.length) resize(); });
+            img.addEventListener('error', () => { loaded++; if (loaded >= imgs.length) resize(); });
+          }
+        });
+        if (loaded >= imgs.length) resize();
+      }
+      setTimeout(resize, 50);
+      setTimeout(resize, 300);
+    }
+
+    write();
+  }
+
   function formatAddresses(addresses) {
     if (!addresses || addresses.length === 0) return '';
     return addresses.map(a => {
@@ -1755,11 +1817,17 @@
                   </div>
 
                   {#if !isCollapsed}
-                    <div class="px-4 py-3 text-sm thread-message-body" style="color: var(--text-primary); background: var(--bg-secondary)">
-                      {#if msg.body_text}
+                    <div class="px-4 py-3 text-sm" style="background: var(--bg-secondary)">
+                      {#if msg.body_html}
+                        <iframe
+                          use:renderHtmlEmail={msg.body_html}
+                          title="Message content"
+                          sandbox="allow-same-origin allow-popups"
+                          class="w-full border-0"
+                          style="min-height: 60px"
+                        ></iframe>
+                      {:else if msg.body_text}
                         <pre class="whitespace-pre-wrap font-sans text-sm" style="color: var(--text-primary)">{msg.body_text}</pre>
-                      {:else if msg.body_html}
-                        <div class="text-sm" style="color: var(--text-primary)">{stripHtml(msg.body_html)}</div>
                       {:else}
                         <p class="text-xs italic" style="color: var(--text-tertiary)">No content</p>
                       {/if}
@@ -2294,9 +2362,19 @@
             <span style="color: var(--color-accent-500)"><Icon name="inbox" size={16} /></span>
             <h2 class="text-sm font-semibold" style="color: var(--text-primary)">Needs Reply</h2>
           </div>
-          {#if needsReplyTotal > 0}
-            <span class="text-[10px] px-2 py-0.5 rounded-full font-medium" style="background: var(--status-error-bg); color: var(--status-error)">{needsReplyTotal} total</span>
-          {/if}
+          <div class="flex items-center gap-2">
+            <button
+              onclick={() => { hideFyi = !hideFyi; localStorage.setItem('flowHideFyi', String(hideFyi)); loadDaySummary(); }}
+              class="text-[10px] px-2 py-0.5 rounded-full font-medium border transition-fast cursor-pointer"
+              style="border-color: {hideFyi ? 'var(--border-color)' : 'var(--color-emerald-200, #a7f3d0)'}; background: {hideFyi ? 'transparent' : 'var(--color-emerald-50, #ecfdf5)'}; color: {hideFyi ? 'var(--text-tertiary)' : 'var(--color-emerald-700, #047857)'}"
+              title={hideFyi ? 'FYI emails hidden — click to show' : 'Showing FYI emails — click to hide'}
+            >
+              {hideFyi ? 'FYI hidden' : 'FYI shown'}
+            </button>
+            {#if needsReplyTotal > 0}
+              <span class="text-[10px] px-2 py-0.5 rounded-full font-medium" style="background: var(--status-error-bg); color: var(--status-error)">{needsReplyTotal} total</span>
+            {/if}
+          </div>
         </div>
 
         {#if needsReplyEmails.length > 0}
@@ -2668,9 +2746,6 @@
     background: var(--text-tertiary) !important;
   }
 
-  .thread-message-body pre {
-    font-family: inherit;
-  }
 
   .last-child-no-border:last-child {
     border-bottom: none;

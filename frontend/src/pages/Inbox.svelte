@@ -9,6 +9,7 @@
     hideIgnored, sidebarCollapsed,
   } from '../lib/stores.js';
   import { registerActions } from '../lib/shortcutStore.js';
+  import { lastEvent } from '../lib/realtime.js';
   import EmailList from '../components/email/EmailList.svelte';
   import EmailTable from '../components/email/EmailTable.svelte';
   import EmailView from '../components/email/EmailView.svelte';
@@ -113,6 +114,14 @@
       untrack(() => { loadEmail(eid); });
     } else {
       selectedEmail = null;
+    }
+  });
+
+  $effect(() => {
+    const evt = $lastEvent;
+    if (!evt || !mounted) return;
+    if (evt.type === 'new_emails' || evt.type === 'emails_updated') {
+      untrack(() => { loadEmails(false); });
     }
   });
 

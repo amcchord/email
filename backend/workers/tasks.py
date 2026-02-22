@@ -10,7 +10,7 @@ from backend.services.ai import AIService
 from backend.database import async_session
 from backend.models.email import Email
 from backend.models.account import GoogleAccount
-from sqlalchemy import select, update
+from sqlalchemy import literal, select, update
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -111,6 +111,13 @@ async def _clear_needs_reply_for_replied_threads(new_email_ids: list[int]):
 
     This handles the case where a user sends a reply and the original
     received email's stale needs_reply=true flag should be cleared.
+
+    Two passes:
+      1. Thread-ID based: clear needs_reply on older emails in the same
+         gmail_thread_id as a newly synced sent email.
+      2. In-Reply-To based: clear needs_reply on any email whose
+         message_id_header matches a newly synced sent email's
+         in_reply_to -- even if they are in different threads.
     """
     if not new_email_ids:
         return
@@ -120,7 +127,7 @@ async def _clear_needs_reply_for_replied_threads(new_email_ids: list[int]):
     async with async_session() as db:
         # Find sent emails among the newly synced batch
         result = await db.execute(
-            select(Email.gmail_thread_id, Email.account_id, Email.date)
+            select(Email.gmail_thread_id, Email.account_id, Email.date, Email.in_reply_to)
             .where(
                 Email.id.in_(new_email_ids),
                 Email.is_sent == True,
@@ -133,9 +140,9 @@ async def _clear_needs_reply_for_replied_threads(new_email_ids: list[int]):
             return
 
         cleared_total = 0
-        # For each sent email, clear needs_reply on earlier thread emails
-        for thread_id, account_id, sent_date in sent_emails:
-            # Find email IDs in the same thread that are older
+
+        # --- Pass 1: thread-ID based clearing ---
+        for thread_id, account_id, sent_date, _irt in sent_emails:
             thread_result = await db.execute(
                 select(Email.id).where(
                     Email.gmail_thread_id == thread_id,
@@ -156,9 +163,109 @@ async def _clear_needs_reply_for_replied_threads(new_email_ids: list[int]):
                 )
                 cleared_total += result.rowcount
 
+        # --- Pass 2: cross-thread In-Reply-To clearing ---
+        # For sent emails with an In-Reply-To header, find the parent
+        # email by message_id_header regardless of thread.  This catches
+        # replies that Gmail placed in a different thread.
+        account_ids_set = {acc_id for _, acc_id, _, _ in sent_emails}
+        for _tid, account_id, _sd, in_reply_to in sent_emails:
+            if not in_reply_to or not in_reply_to.strip():
+                continue
+            parent_result = await db.execute(
+                select(Email.id).where(
+                    Email.message_id_header == in_reply_to.strip(),
+                    Email.account_id == account_id,
+                )
+            )
+            parent_ids = [r[0] for r in parent_result.all()]
+            if parent_ids:
+                result = await db.execute(
+                    update(AIAnalysis)
+                    .where(
+                        AIAnalysis.email_id.in_(parent_ids),
+                        AIAnalysis.needs_reply == True,
+                    )
+                    .values(needs_reply=False)
+                )
+                cleared_total += result.rowcount
+
         await db.commit()
         if cleared_total:
             logger.info(f"Cleared needs_reply on {cleared_total} emails due to sent replies")
+
+
+async def _clear_needs_reply_after_analysis(email_ids: list[int]):
+    """After (re-)analysis, clear needs_reply on emails that already have
+    a sent reply -- either in the same thread or linked by In-Reply-To.
+
+    This handles the case where reprocess/backfill re-creates AIAnalysis
+    rows and the LLM re-flags needs_reply=True despite an existing reply.
+    """
+    if not email_ids:
+        return
+
+    from backend.models.ai import AIAnalysis
+    from sqlalchemy.orm import aliased
+
+    async with async_session() as db:
+        # Find emails that were just analyzed AND flagged needs_reply
+        result = await db.execute(
+            select(Email.id, Email.gmail_thread_id, Email.account_id,
+                   Email.date, Email.message_id_header)
+            .join(AIAnalysis, AIAnalysis.email_id == Email.id)
+            .where(
+                Email.id.in_(email_ids),
+                AIAnalysis.needs_reply == True,
+            )
+        )
+        flagged = result.all()
+        if not flagged:
+            return
+
+        cleared_ids = set()
+        for eid, thread_id, account_id, email_date, msg_id in flagged:
+            # Check 1: sent email in same thread with later date
+            if thread_id and email_date:
+                sent_result = await db.execute(
+                    select(literal(1)).where(
+                        Email.gmail_thread_id == thread_id,
+                        Email.account_id == account_id,
+                        Email.is_sent == True,
+                        Email.is_trash == False,
+                        Email.date > email_date,
+                    ).limit(1)
+                )
+                if sent_result.scalar_one_or_none() is not None:
+                    cleared_ids.add(eid)
+                    continue
+
+            # Check 2: sent email whose In-Reply-To matches our Message-ID
+            if msg_id and msg_id.strip():
+                irt_result = await db.execute(
+                    select(literal(1)).where(
+                        Email.in_reply_to == msg_id.strip(),
+                        Email.account_id == account_id,
+                        Email.is_sent == True,
+                        Email.is_trash == False,
+                    ).limit(1)
+                )
+                if irt_result.scalar_one_or_none() is not None:
+                    cleared_ids.add(eid)
+
+        if cleared_ids:
+            await db.execute(
+                update(AIAnalysis)
+                .where(
+                    AIAnalysis.email_id.in_(list(cleared_ids)),
+                    AIAnalysis.needs_reply == True,
+                )
+                .values(needs_reply=False)
+            )
+            await db.commit()
+            logger.info(
+                f"Cleared needs_reply on {len(cleared_ids)} emails "
+                f"after analysis (existing sent replies found)"
+            )
 
 
 async def _refresh_digests_for_replied_threads(new_email_ids: list[int]):
@@ -417,6 +524,10 @@ async def sync_account_incremental(ctx, account_id: int):
     new_email_ids = await sync_service.incremental_sync()
     logger.info(f"Incremental sync completed for account {account_id}")
 
+    # Notify frontend about new emails
+    if new_email_ids:
+        await _notify_new_emails(account_id, len(new_email_ids))
+
     # Auto-analyze any new emails that arrived
     try:
         await _queue_ai_for_new_emails(account_id, new_email_ids)
@@ -620,6 +731,10 @@ async def sync_all_accounts(ctx):
                         sync.rate_limit_count = 0
                         await db.commit()
 
+                # Notify frontend about new emails
+                if new_email_ids:
+                    await _notify_new_emails(account.id, len(new_email_ids))
+
                 # Auto-analyze any new emails that arrived
                 try:
                     await _queue_ai_for_new_emails(account.id, new_email_ids)
@@ -676,6 +791,20 @@ async def sync_all_accounts(ctx):
 
             # Breathing room between accounts to spread API load
             await asyncio.sleep(INTER_ACCOUNT_DELAY)
+
+
+async def _notify_new_emails(account_id: int, count: int):
+    """Publish a real-time event so connected browsers refresh."""
+    try:
+        from backend.services.notifications import publish_event
+        user_id = await _resolve_user_id_for_account(account_id)
+        if user_id:
+            await publish_event(user_id, "new_emails", {
+                "account_id": account_id,
+                "count": count,
+            })
+    except Exception:
+        logger.warning("Failed to publish new_emails event for account %s", account_id, exc_info=True)
 
 
 async def _resolve_user_id_for_account(account_id: int) -> int | None:
@@ -804,6 +933,25 @@ async def analyze_emails_batch(ctx, email_ids: list[int]):
         account_descriptions=acct_descs,
         account_emails=acct_emails,
     )
+
+    # Notify frontend that AI analysis updated email metadata
+    if user_id:
+        try:
+            from backend.services.notifications import publish_event
+            await publish_event(user_id, "emails_updated", {
+                "reason": "ai_analysis",
+                "count": len(email_ids),
+            })
+        except Exception:
+            logger.warning("Failed to publish ai_analysis event", exc_info=True)
+
+    # After analysis, clear stale needs_reply flags for emails that
+    # already have sent replies (handles re-analysis setting needs_reply
+    # back to true on emails the user already responded to).
+    try:
+        await _clear_needs_reply_after_analysis(email_ids)
+    except Exception as e:
+        logger.warning(f"Failed to clear needs_reply after batch analysis: {e}")
 
     # After analysis, generate thread digests for multi-message threads
     try:

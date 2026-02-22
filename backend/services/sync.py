@@ -601,25 +601,47 @@ class EmailSyncService:
         """
         gmail_thread_id = parsed["gmail_thread_id"]
         in_reply_to = parsed.get("in_reply_to")
+        references = parsed.get("references_header")
 
-        if not in_reply_to:
-            return gmail_thread_id, None
-
-        # Find an existing email whose message_id_header matches our in_reply_to
-        result = await db.execute(
-            select(Email.gmail_thread_id).where(
-                Email.message_id_header == in_reply_to.strip(),
-                Email.account_id == self.account_id,
-            ).limit(1)
-        )
-        parent_thread_id = result.scalar_one_or_none()
-
-        if parent_thread_id and parent_thread_id != gmail_thread_id:
-            logger.info(
-                f"Thread merge: email replies to message in thread {parent_thread_id}, "
-                f"overriding Gmail thread {gmail_thread_id}"
+        # --- Check In-Reply-To first (most direct link) ---
+        if in_reply_to and in_reply_to.strip():
+            result = await db.execute(
+                select(Email.gmail_thread_id).where(
+                    Email.message_id_header == in_reply_to.strip(),
+                    Email.account_id == self.account_id,
+                ).limit(1)
             )
-            return parent_thread_id, gmail_thread_id
+            parent_thread_id = result.scalar_one_or_none()
+
+            if parent_thread_id and parent_thread_id != gmail_thread_id:
+                logger.info(
+                    f"Thread merge: email replies to message in thread {parent_thread_id}, "
+                    f"overriding Gmail thread {gmail_thread_id}"
+                )
+                return parent_thread_id, gmail_thread_id
+
+        # --- Fallback: walk the References chain (most recent first) ---
+        if references and references.strip():
+            ref_ids = references.strip().split()
+            for ref_id in reversed(ref_ids):
+                ref_id = ref_id.strip()
+                if not ref_id:
+                    continue
+                if in_reply_to and ref_id == in_reply_to.strip():
+                    continue
+                result = await db.execute(
+                    select(Email.gmail_thread_id).where(
+                        Email.message_id_header == ref_id,
+                        Email.account_id == self.account_id,
+                    ).limit(1)
+                )
+                parent_thread_id = result.scalar_one_or_none()
+                if parent_thread_id and parent_thread_id != gmail_thread_id:
+                    logger.info(
+                        f"Thread merge (via References): email references message in "
+                        f"thread {parent_thread_id}, overriding Gmail thread {gmail_thread_id}"
+                    )
+                    return parent_thread_id, gmail_thread_id
 
         return gmail_thread_id, None
 

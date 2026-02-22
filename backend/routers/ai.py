@@ -536,6 +536,7 @@ async def get_processing_status(
 async def get_needs_reply(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
+    exclude_category: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -562,6 +563,25 @@ async def get_needs_reply(
             SentEmail.is_sent == True,
             SentEmail.is_trash == False,
             SentEmail.date > Email.date,
+        )
+        .correlate(Email)
+        .exists()
+    )
+
+    # Cross-thread reply detection: check whether a sent email's
+    # In-Reply-To header matches this email's Message-ID.  This catches
+    # replies that Gmail placed in a different thread (e.g. after a
+    # threadId 404 retry or subject change).  Deterministic -- if B's
+    # In-Reply-To equals A's Message-ID, B IS a reply to A.
+    SentEmail2 = aliased(Email, flat=True)
+    has_direct_reply_to = (
+        select(literal(1))
+        .where(
+            SentEmail2.in_reply_to == Email.message_id_header,
+            SentEmail2.account_id.in_(account_ids),
+            SentEmail2.is_sent == True,
+            SentEmail2.is_trash == False,
+            Email.message_id_header.isnot(None),
         )
         .correlate(Email)
         .exists()
@@ -600,6 +620,8 @@ async def get_needs_reply(
             Email.is_spam == False,
             AIAnalysis.is_subscription == False,
             ~has_later_reply,
+            ~has_direct_reply_to,
+            *([AIAnalysis.category != exclude_category] if exclude_category else []),
         )
         .distinct(Email.gmail_thread_id)
         .order_by(Email.gmail_thread_id, desc(Email.date))

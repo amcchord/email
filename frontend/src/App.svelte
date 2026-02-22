@@ -4,6 +4,7 @@
   import { user, currentPage, showToast, toastMessage, startSyncPolling, stopSyncPolling, threadOrder } from './lib/stores.js';
   import { theme, activeTheme } from './lib/theme.js';
   import { startVersionPolling } from './lib/autoReload.js';
+  import { startRealtime, stopRealtime } from './lib/realtime.js';
   import Login from './pages/Login.svelte';
   import Inbox from './pages/Inbox.svelte';
   import Admin from './pages/Admin.svelte';
@@ -28,6 +29,7 @@
     setUnauthorizedHandler(() => {
       user.set(null);
       stopSyncPolling();
+      stopRealtime();
     });
 
     // Check if this is a device auth page or pop-out email view
@@ -44,6 +46,7 @@
       user.set(me);
       // Start polling sync status once authenticated
       startSyncPolling(() => api.listAccounts());
+      startRealtime();
       // Load UI preferences from server (sync across devices)
       try {
         const uiPrefs = await api.getUIPreferences();
