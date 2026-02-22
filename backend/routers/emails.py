@@ -172,6 +172,9 @@ async def list_emails(
     total = await db.scalar(count_query)
 
     # Sort
+    _ALLOWED_SORT_FIELDS = {"date", "subject", "sender", "is_read", "has_attachments"}
+    if sort_by not in _ALLOWED_SORT_FIELDS:
+        sort_by = "date"
     sort_column = getattr(Email, sort_by, Email.date)
     if sort_order == "asc":
         query = query.order_by(asc(sort_column))

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { marked } from 'marked';
   import { api } from '../lib/api.js';
+  import { sanitizeHtml, sanitizeMarkdown } from '../lib/sanitize.js';
   import { chatConversations, currentConversationId, showToast, currentPage, currentMailbox, selectedEmailId, pendingReplyDraft, accounts, composeData, threadOrder, accountColorMap } from '../lib/stores.js';
   import { get } from 'svelte/store';
   import { registerActions } from '../lib/shortcutStore.js';
@@ -453,7 +454,7 @@
         }
         if (lastAssistant.content) {
           finalContent = lastAssistant.content;
-          renderedContent = marked.parse(lastAssistant.content);
+          renderedContent = sanitizeMarkdown(marked.parse(lastAssistant.content));
         }
         currentPhase = 'done';
       }
@@ -597,7 +598,7 @@
       currentPhase = 'clarification';
     } else if (eventType === 'content') {
       finalContent = data.text || '';
-      renderedContent = marked.parse(finalContent);
+      renderedContent = sanitizeMarkdown(marked.parse(finalContent));
     } else if (eventType === 'done') {
       if (currentPhase !== 'clarification') {
         currentPhase = 'done';
@@ -1260,7 +1261,7 @@
         blockquote { border-left: 3px solid ${isDark ? '#3f3f46' : '#d4d4d8'}; padding-left: 12px; margin-left: 0; opacity: 0.8; }
         table { max-width: 100%; }
         pre { overflow-x: auto; }
-      </style></head><body>${html}</body></html>`);
+      </style></head><body>${sanitizeHtml(html)}</body></html>`);
       doc.close();
 
       function resize() {

@@ -6,6 +6,9 @@ from cryptography.fernet import Fernet
 from backend.config import get_settings
 import base64
 import hashlib
+import hmac
+import json
+import time
 
 settings = get_settings()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -65,3 +68,39 @@ def decode_token(token: str) -> Optional[dict]:
         return payload
     except JWTError:
         return None
+
+
+def sign_oauth_state(data: dict, ttl_seconds: int = 600) -> str:
+    """Create an HMAC-signed, base64-encoded OAuth state token with expiry."""
+    data = data.copy()
+    data["exp"] = time.time() + ttl_seconds
+    payload = base64.urlsafe_b64encode(json.dumps(data).encode()).decode()
+    sig = hmac.new(
+        settings.secret_key.encode(), payload.encode(), hashlib.sha256
+    ).digest()
+    sig_b64 = base64.urlsafe_b64encode(sig).decode()
+    return f"{payload}.{sig_b64}"
+
+
+def verify_oauth_state(token: str) -> Optional[dict]:
+    """Verify an HMAC-signed OAuth state token. Returns payload or None."""
+    parts = token.split(".", 1)
+    if len(parts) != 2:
+        return None
+    payload_b64, sig_b64 = parts
+    expected_sig = hmac.new(
+        settings.secret_key.encode(), payload_b64.encode(), hashlib.sha256
+    ).digest()
+    try:
+        actual_sig = base64.urlsafe_b64decode(sig_b64)
+    except Exception:
+        return None
+    if not hmac.compare_digest(expected_sig, actual_sig):
+        return None
+    try:
+        data = json.loads(base64.urlsafe_b64decode(payload_b64).decode())
+    except Exception:
+        return None
+    if data.get("exp", 0) < time.time():
+        return None
+    return data

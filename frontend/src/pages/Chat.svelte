@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { marked } from 'marked';
   import { api } from '../lib/api.js';
+  import { sanitizeMarkdown } from '../lib/sanitize.js';
   import { chatConversations, currentConversationId, showToast } from '../lib/stores.js';
   import { registerActions } from '../lib/shortcutStore.js';
   import Icon from '../components/common/Icon.svelte';
@@ -101,7 +102,7 @@
         }
         if (lastAssistant.content) {
           finalContent = lastAssistant.content;
-          renderedContent = marked.parse(lastAssistant.content);
+          renderedContent = sanitizeMarkdown(marked.parse(lastAssistant.content));
         }
         currentPhase = 'done';
       }
@@ -266,7 +267,7 @@
       currentPhase = 'clarification';
     } else if (eventType === 'content') {
       finalContent = data.text || '';
-      renderedContent = marked.parse(finalContent);
+      renderedContent = sanitizeMarkdown(marked.parse(finalContent));
     } else if (eventType === 'done') {
       if (currentPhase !== 'clarification') {
         currentPhase = 'done';

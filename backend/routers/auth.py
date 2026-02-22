@@ -6,7 +6,7 @@ import threading
 os.environ["OAUTHLIB_RELAX_TOKEN_SCOPE"] = "1"
 
 from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from backend.database import get_db
@@ -26,9 +26,12 @@ from backend.utils.security import (
     create_refresh_token, decode_token,
 )
 from backend.config import get_settings
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 settings = get_settings()
+limiter = Limiter(key_func=get_remote_address)
 
 LOGIN_SCOPES = [
     "openid",
@@ -140,9 +143,10 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
 # ── Admin password login (fallback) ─────────────────────────────────
 
 @router.post("/login", response_model=TokenResponse)
-async def login(request: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def login(request: Request, body: LoginRequest, response: Response, db: AsyncSession = Depends(get_db)):
     # Check admin override
-    if request.username == settings.admin_username:
+    if body.username == settings.admin_username:
         result = await db.execute(
             select(User).where(User.username == settings.admin_username)
         )
@@ -160,7 +164,7 @@ async def login(request: LoginRequest, response: Response, db: AsyncSession = De
             await db.commit()
             await db.refresh(user)
 
-        if not verify_password(request.password, user.hashed_password):
+        if not verify_password(body.password, user.hashed_password):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid credentials",
@@ -168,7 +172,7 @@ async def login(request: LoginRequest, response: Response, db: AsyncSession = De
     else:
         result = await db.execute(
             select(User).where(
-                (User.username == request.username) | (User.email == request.username)
+                (User.username == body.username) | (User.email == body.username)
             )
         )
         user = result.scalar_one_or_none()
@@ -177,7 +181,7 @@ async def login(request: LoginRequest, response: Response, db: AsyncSession = De
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid credentials",
             )
-        if not verify_password(request.password, user.hashed_password):
+        if not verify_password(body.password, user.hashed_password):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid credentials",
@@ -197,7 +201,7 @@ async def login(request: LoginRequest, response: Response, db: AsyncSession = De
 # ── Google OAuth login ──────────────────────────────────────────────
 
 @router.get("/google/login")
-async def google_login_start(db: AsyncSession = Depends(get_db)):
+async def google_login_start(response: Response, db: AsyncSession = Depends(get_db)):
     """Start Google OAuth login flow."""
     from backend.services.credentials import get_google_credentials
     client_id, client_secret = await get_google_credentials(db)
@@ -208,21 +212,39 @@ async def google_login_start(db: AsyncSession = Depends(get_db)):
     redirect_uri = settings.google_redirect_uri
     flow = _build_google_flow(client_id, client_secret, redirect_uri, LOGIN_SCOPES)
 
+    csrf_state = secrets.token_urlsafe(32)
     auth_url, _ = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="select_account",
+        state=csrf_state,
     )
-    return {"auth_url": auth_url}
+
+    is_https = "https" in settings.allowed_origins
+    response = JSONResponse(content={"auth_url": auth_url})
+    response.set_cookie(
+        key="oauth_state",
+        value=csrf_state,
+        httponly=True,
+        samesite="lax",
+        secure=is_https,
+        max_age=600,
+    )
+    return response
 
 
 @router.get("/google/callback")
 async def google_login_callback(
     code: str,
-    response: Response,
+    state: str = "",
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Handle Google OAuth login callback. Creates or finds user, issues JWT."""
+    cookie_state = request.cookies.get("oauth_state", "") if request else ""
+    if not state or not cookie_state or not secrets.compare_digest(state, cookie_state):
+        return RedirectResponse(url="/?login_error=invalid_state")
+
     from backend.services.credentials import get_google_credentials
     client_id, client_secret = await get_google_credentials(db)
 
@@ -285,6 +307,7 @@ async def google_login_callback(
     # Set cookies and redirect to app
     redirect = RedirectResponse(url="/", status_code=302)
     _set_auth_cookies(redirect, access_token, refresh_token)
+    redirect.delete_cookie("oauth_state")
     return redirect
 
 

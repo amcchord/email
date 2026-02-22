@@ -9,10 +9,9 @@ from backend.models.settings import Setting
 from backend.schemas.admin import GoogleAccountResponse, SyncStatusResponse, GoogleOAuthStart
 from backend.schemas.auth import AccountDescriptionUpdate
 from backend.routers.auth import get_current_user
-from backend.utils.security import encrypt_value, decrypt_value
+from backend.utils.security import encrypt_value, decrypt_value, sign_oauth_state, verify_oauth_state
 from backend.config import get_settings
 import json
-import base64
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 settings = get_settings()
@@ -157,9 +156,7 @@ async def start_oauth(
         redirect_uri=redirect_uri,
     )
 
-    # Encode the user ID in the state so the callback knows who is connecting
-    state_data = json.dumps({"user_id": user.id})
-    state = base64.urlsafe_b64encode(state_data.encode()).decode()
+    state = sign_oauth_state({"user_id": user.id})
 
     auth_url, _ = flow.authorization_url(
         access_type="offline",
@@ -214,8 +211,7 @@ async def reauthorize_account(
         redirect_uri=redirect_uri,
     )
 
-    state_data = json.dumps({"user_id": user.id})
-    state = base64.urlsafe_b64encode(state_data.encode()).decode()
+    state = sign_oauth_state({"user_id": user.id})
 
     auth_url, _ = flow.authorization_url(
         access_type="offline",
@@ -232,6 +228,7 @@ async def oauth_callback(
     code: str,
     state: str = "",
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """Handle OAuth callback for connecting a Gmail account."""
     from backend.services.credentials import get_google_credentials
@@ -240,23 +237,13 @@ async def oauth_callback(
     if not client_id or not client_secret:
         raise HTTPException(status_code=400, detail="Google OAuth not configured")
 
-    # Decode the user ID from state
-    user_id = None
-    if state:
-        try:
-            state_data = json.loads(base64.urlsafe_b64decode(state).decode())
-            user_id = state_data.get("user_id")
-        except Exception:
-            pass
-
-    if not user_id:
+    state_data = verify_oauth_state(state)
+    if not state_data:
         return RedirectResponse(url="/?page=admin&tab=accounts&error=invalid_state")
 
-    # Verify the user exists
-    result = await db.execute(select(User).where(User.id == user_id))
-    owner = result.scalar_one_or_none()
-    if not owner:
-        return RedirectResponse(url="/?page=admin&tab=accounts&error=invalid_user")
+    user_id = state_data.get("user_id")
+    if not user_id or user_id != user.id:
+        return RedirectResponse(url="/?page=admin&tab=accounts&error=invalid_state")
 
     from google_auth_oauthlib.flow import Flow
     from googleapiclient.discovery import build

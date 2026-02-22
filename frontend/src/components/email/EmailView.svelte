@@ -2,6 +2,7 @@
   import { currentPage, composeData, showToast, pendingReplyDraft, accounts, todos, accountColorMap } from '../../lib/stores.js';
   import { theme } from '../../lib/theme.js';
   import { api } from '../../lib/api.js';
+  import { sanitizeHtml } from '../../lib/sanitize.js';
   import { get } from 'svelte/store';
   import Button from '../common/Button.svelte';
   import Icon from '../common/Icon.svelte';
@@ -181,7 +182,7 @@
           blockquote { border-left: 3px solid ${isDark ? '#3f3f46' : '#d4d4d8'}; padding-left: 12px; margin-left: 0; opacity: 0.8; }
           table { max-width: 100%; }
           pre { overflow-x: auto; }
-        </style></head><body>${email.body_html}</body></html>`);
+        </style></head><body>${sanitizeHtml(email.body_html)}</body></html>`);
         doc.close();
 
         // Auto-resize iframe to content height

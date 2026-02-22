@@ -24,6 +24,14 @@ A self-hosted, AI-augmented email client built on Svelte 5, FastAPI, and Postgre
 - Background sync via Redis + ARQ workers
 - Self-hosted and private -- all data stored locally, no third-party analytics
 
+### Security
+
+- HMAC-signed OAuth state tokens with expiry to prevent forgery and replay attacks
+- CSRF protection on Google login OAuth flow via random state cookie verification
+- Rate limiting on login endpoint (5 attempts/minute) to block brute-force attacks
+- HTML sanitization with DOMPurify on email body rendering and AI markdown output
+- Allowlisted sort parameters to prevent model attribute probing
+
 ## Screenshots
 
 ### Classic Inbox
@@ -72,8 +80,8 @@ Caddy terminates TLS and serves the built frontend static files. All `/api/*` re
 
 | Layer          | Technology                                                                    |
 | -------------- | ----------------------------------------------------------------------------- |
-| Frontend       | Svelte 5, Vite, Tailwind CSS 4, Tiptap (rich text), Feather Icons            |
-| Backend        | Python 3.13, FastAPI, SQLAlchemy (async + asyncpg), Alembic                   |
+| Frontend       | Svelte 5, Vite, Tailwind CSS 4, Tiptap (rich text), DOMPurify, Feather Icons |
+| Backend        | Python 3.13, FastAPI, SQLAlchemy (async + asyncpg), Alembic, slowapi          |
 | Background     | ARQ workers, Redis                                                            |
 | Database       | PostgreSQL 17                                                                 |
 | Reverse Proxy  | Caddy 2 (automatic HTTPS)                                                    |
@@ -509,6 +517,7 @@ alembic downgrade -1
 │   │       ├── realtime.js         # SSE client for real-time event updates
 │   │       ├── autoReload.js       # Build version polling
 │   │       ├── calendarLayout.js   # Calendar layout utilities
+│   │       ├── sanitize.js         # DOMPurify wrappers for HTML/markdown sanitization
 │   │       ├── shortcutDefaults.js # Default keyboard shortcut bindings
 │   │       └── shortcutStore.js    # Keyboard shortcut state management
 │   ├── vite.config.js       # Vite build configuration
