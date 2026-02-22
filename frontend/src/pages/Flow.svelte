@@ -1736,10 +1736,13 @@
 
       <!-- Top/Bottom Resizable Layout -->
       <div class="flex-1 flex flex-col min-h-0" bind:this={replyContainerEl} style="{isDraggingDivider ? 'user-select: none; cursor: row-resize' : ''}">
+        {#if isDraggingDivider}
+          <div class="fixed inset-0 z-50" style="cursor: row-resize"></div>
+        {/if}
         <!-- TOP PANE: Thread Context -->
-        <div class="flex flex-col overflow-hidden" style="height: {topPanePercent}%">
+        <div class="overflow-y-auto" style="height: {topPanePercent}%">
           <!-- Email Header -->
-          <div class="px-5 py-2.5 border-b shrink-0" style="border-color: var(--border-color)">
+          <div class="px-5 py-2.5 border-b" style="border-color: var(--border-color)">
             <div class="flex items-center gap-2 mb-0.5">
               {#if selectedReplyEmail.category}
                 <span class="text-xs px-1.5 py-0.5 rounded-full font-medium shrink-0 {categoryColors[selectedReplyEmail.category]?.bg || ''} {categoryColors[selectedReplyEmail.category]?.text || ''}">
@@ -1756,7 +1759,7 @@
 
           <!-- AI Summary -->
           {#if selectedReplyEmail.summary}
-            <div class="px-5 py-2.5 border-b shrink-0" style="border-color: var(--border-color); background: var(--bg-secondary)">
+            <div class="px-5 py-2.5 border-b" style="border-color: var(--border-color); background: var(--bg-secondary)">
               <div class="flex items-center gap-1.5 mb-1">
                 <span style="color: var(--color-accent-500)"><Icon name="zap" size={12} /></span>
                 <span class="text-[11px] font-semibold uppercase tracking-wider" style="color: var(--color-accent-600)">AI Summary</span>
@@ -1776,7 +1779,7 @@
           {/if}
 
           <!-- Thread Messages -->
-          <div class="flex-1 overflow-y-auto px-5 py-3 space-y-2">
+          <div class="px-5 py-3 space-y-2">
             {#if threadLoading}
               <div class="flex items-center justify-center py-10">
                 <div class="w-5 h-5 border-2 rounded-full animate-spin" style="border-color: var(--border-color); border-top-color: var(--color-accent-500)"></div>
@@ -1890,9 +1893,12 @@
             </div>
           {/if}
 
+          <!-- Scrollable area: reply options + suggestion banner + editor -->
+          <div class="flex-1 min-h-0 overflow-y-auto">
+
           <!-- Reply Options as horizontal cards -->
           {#if selectedReplyEmail.reply_options && selectedReplyEmail.reply_options.length > 0}
-            <div class="px-5 py-2.5 border-b shrink-0" style="border-color: var(--border-color)">
+            <div class="px-5 py-2.5 border-b" style="border-color: var(--border-color)">
               <div class="flex items-center gap-1.5 mb-2">
                 <span style="color: var(--color-accent-500)"><Icon name="zap" size={12} /></span>
                 <span class="text-[11px] font-semibold uppercase tracking-wider" style="color: var(--color-accent-600)">AI Reply Options</span>
@@ -1961,7 +1967,7 @@
               {/if}
             </div>
           {:else if selectedReplyEmail.suggested_reply}
-            <div class="px-5 py-2.5 border-b shrink-0" style="border-color: var(--border-color); background: var(--bg-secondary)">
+            <div class="px-5 py-2.5 border-b" style="border-color: var(--border-color); background: var(--bg-secondary)">
               <div class="flex items-center gap-1.5 mb-1">
                 <span style="color: var(--color-accent-500)"><Icon name="zap" size={12} /></span>
                 <span class="text-[10px] font-semibold uppercase tracking-wider" style="color: var(--color-accent-600)">Suggested Reply</span>
@@ -1979,7 +1985,7 @@
 
           <!-- AI Suggestion Banner -->
           {#if replyIntent}
-            <div class="px-5 py-1.5 border-b shrink-0" style="border-color: var(--border-color); background: color-mix(in srgb, var(--color-accent-500) 8%, transparent)">
+            <div class="px-5 py-1.5 border-b" style="border-color: var(--border-color); background: color-mix(in srgb, var(--color-accent-500) 8%, transparent)">
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-1.5">
                   <svg class="w-3.5 h-3.5 shrink-0" style="color: var(--color-accent-500)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2059,15 +2065,18 @@
           {/if}
 
           <!-- Rich Text Editor -->
-          <div class="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <div class="flex flex-col">
             {#key editorKey}
               <RichEditor
                 content={initialReplyContent}
                 onUpdate={handleEditorUpdate}
                 placeholder="Write your reply..."
+                externalScroll={true}
               />
             {/key}
           </div>
+
+          </div><!-- end scrollable area -->
 
           <!-- Action Bar -->
           <div class="px-4 py-2.5 border-t shrink-0 flex items-center justify-between" style="border-color: var(--border-color); background: var(--bg-secondary)">

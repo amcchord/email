@@ -7,7 +7,7 @@
   import Placeholder from '@tiptap/extension-placeholder';
   import Underline from '@tiptap/extension-underline';
 
-  let { content = '', onUpdate = null, placeholder = 'Write your message...' } = $props();
+  let { content = '', onUpdate = null, placeholder = 'Write your message...', externalScroll = false } = $props();
 
   let editorElement = $state(null);
   let editor = $state(null);
@@ -228,7 +228,7 @@
   {/if}
 
   <!-- Editor -->
-  <div class="flex-1 overflow-y-auto" bind:this={editorElement} style="color: var(--text-primary)"></div>
+  <div class="{externalScroll ? '' : 'flex-1 overflow-y-auto'}" bind:this={editorElement} style="color: var(--text-primary)"></div>
 </div>
 
 <style>
