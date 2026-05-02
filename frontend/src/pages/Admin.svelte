@@ -17,6 +17,7 @@
   } from '../lib/shortcutStore.js';
   import { getCategories } from '../lib/shortcutDefaults.js';
   import Button from '../components/common/Button.svelte';
+  import AIModelsPanel from '../lib/admin/AIModelsPanel.svelte';
   import Input from '../components/common/Input.svelte';
   import Icon from '../components/common/Icon.svelte';
 
@@ -258,16 +259,17 @@
   let allowedAccounts = $state('');
   let allowedLoaded = $state(false);
 
-  // AI model preferences
+  // AI model preferences (defaults overwritten by /ai-preferences response)
   let aiPrefs = $state({
-    chat_plan_model: 'claude-opus-4-6',
-    chat_execute_model: 'claude-opus-4-6',
-    chat_verify_model: 'claude-opus-4-6',
-    agentic_model: 'claude-sonnet-4-6',
-    custom_prompt_model: 'claude-sonnet-4-6',
-    unsubscribe_model: 'claude-sonnet-4-6',
+    chat_plan_model: '',
+    chat_execute_model: '',
+    chat_verify_model: '',
+    agentic_model: '',
+    custom_prompt_model: '',
+    unsubscribe_model: '',
   });
   let aiPrefsAllowedModels = $state([]);
+  let aiPrefsLabels = $state({});
   let aiPrefsLoaded = $state(false);
   let aiPrefsSaving = $state(false);
   let reprocessing = $state(false);
@@ -332,12 +334,9 @@
     }
   });
 
-  const modelLabels = {
-    'claude-opus-4-6': 'Claude Opus 4.6 — Most capable',
-    'claude-opus-4-6-fast': 'Claude Opus 4.6 (Fast) — 2.5x speed, 6x cost',
-    'claude-sonnet-4-6': 'Claude Sonnet 4.6 — Balanced',
-    'claude-haiku-4-5-20251001': 'Claude Haiku 4.5 — Fastest',
-  };
+  function modelLabel(modelId) {
+    return aiPrefsLabels[modelId] || modelId;
+  }
 
   async function loadAIPreferences() {
     try {
@@ -351,6 +350,7 @@
         unsubscribe_model: data.unsubscribe_model,
       };
       aiPrefsAllowedModels = data.allowed_models || [];
+      aiPrefsLabels = data.labels || {};
       aiPrefsLoaded = true;
     } catch (err) {
       showToast('Failed to load AI preferences', 'error');
@@ -369,6 +369,7 @@
         custom_prompt_model: data.custom_prompt_model,
         unsubscribe_model: data.unsubscribe_model,
       };
+      aiPrefsLabels = data.labels || aiPrefsLabels;
       showToast('AI model preferences saved', 'success');
     } catch (err) {
       showToast(err.message, 'error');
@@ -1061,238 +1062,16 @@
       </div>
 
     {:else if activeTab === 'ai-models'}
-      <!-- AI Model Preferences -->
-      <div class="space-y-6">
-        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
-          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Chat AI Models</h3>
-          <p class="text-xs mb-5" style="color: var(--text-tertiary)">
-            Choose which Claude model to use for each phase of the "Talk to your Emails" chat feature.
-            Opus gives the best quality, Haiku is fastest and cheapest.
-          </p>
-
-          <div class="space-y-5">
-            <!-- Plan model -->
-            <div>
-              <label for="ai-plan-model" class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color: var(--text-tertiary)">
-                Plan
-              </label>
-              <p class="text-[11px] mb-2" style="color: var(--text-tertiary)">
-                Analyzes your question and builds a research task list.
-              </p>
-              <select
-                id="ai-plan-model"
-                bind:value={aiPrefs.chat_plan_model}
-                class="w-full h-9 px-3 rounded-lg text-sm outline-none border appearance-none cursor-pointer"
-                style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
-              >
-                {#each aiPrefsAllowedModels as model}
-                  <option value={model}>{modelLabels[model] || model}</option>
-                {/each}
-              </select>
-            </div>
-
-            <!-- Execute model -->
-            <div>
-              <label for="ai-execute-model" class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color: var(--text-tertiary)">
-                Research
-              </label>
-              <p class="text-[11px] mb-2" style="color: var(--text-tertiary)">
-                Searches and reads your emails to complete each task in the plan.
-              </p>
-              <select
-                id="ai-execute-model"
-                bind:value={aiPrefs.chat_execute_model}
-                class="w-full h-9 px-3 rounded-lg text-sm outline-none border appearance-none cursor-pointer"
-                style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
-              >
-                {#each aiPrefsAllowedModels as model}
-                  <option value={model}>{modelLabels[model] || model}</option>
-                {/each}
-              </select>
-            </div>
-
-            <!-- Verify model -->
-            <div>
-              <label for="ai-verify-model" class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color: var(--text-tertiary)">
-                Answer
-              </label>
-              <p class="text-[11px] mb-2" style="color: var(--text-tertiary)">
-                Verifies completeness and writes the final formatted answer.
-              </p>
-              <select
-                id="ai-verify-model"
-                bind:value={aiPrefs.chat_verify_model}
-                class="w-full h-9 px-3 rounded-lg text-sm outline-none border appearance-none cursor-pointer"
-                style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
-              >
-                {#each aiPrefsAllowedModels as model}
-                  <option value={model}>{modelLabels[model] || model}</option>
-                {/each}
-              </select>
-            </div>
-          </div>
-
-          <div class="mt-5 flex items-center gap-3">
-            <Button variant="primary" size="sm" onclick={saveAIPreferences} disabled={aiPrefsSaving}>
-              {aiPrefsSaving ? 'Saving...' : 'Save Preferences'}
-            </Button>
-            <span class="text-[10px]" style="color: var(--text-tertiary)">
-              Changes take effect on the next chat conversation.
-            </span>
-          </div>
-        </div>
-
-        <!-- Custom Prompt Model -->
-        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
-          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Custom Prompt Model</h3>
-          <p class="text-xs mb-5" style="color: var(--text-tertiary)">
-            Used when generating replies from custom prompts in the Flow view.
-            Opus gives the best quality, Haiku is fastest and cheapest.
-          </p>
-
-          <div>
-            <label for="ai-custom-prompt-model" class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color: var(--text-tertiary)">
-              Model
-            </label>
-            <select
-              id="ai-custom-prompt-model"
-              bind:value={aiPrefs.custom_prompt_model}
-              class="w-full h-9 px-3 rounded-lg text-sm outline-none border appearance-none cursor-pointer"
-              style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
-            >
-              {#each aiPrefsAllowedModels as model}
-                <option value={model}>{modelLabels[model] || model}</option>
-              {/each}
-            </select>
-          </div>
-
-          <div class="mt-5 flex items-center gap-3">
-            <Button variant="primary" size="sm" onclick={saveAIPreferences} disabled={aiPrefsSaving}>
-              {aiPrefsSaving ? 'Saving...' : 'Save'}
-            </Button>
-            <span class="text-[10px]" style="color: var(--text-tertiary)">
-              Changes take effect on the next custom prompt generation.
-            </span>
-          </div>
-        </div>
-
-        <!-- Email Processing Model -->
-        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
-          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Email Processing Model</h3>
-          <p class="text-xs mb-5" style="color: var(--text-tertiary)">
-            Used for email categorization, summarization, action items, and suggested replies.
-            Changing this model affects new analyses. Use "Reprocess" to re-analyze emails with the new model.
-          </p>
-
-          <div>
-            <label for="ai-agentic-model" class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color: var(--text-tertiary)">
-              Model
-            </label>
-            <select
-              id="ai-agentic-model"
-              bind:value={aiPrefs.agentic_model}
-              class="w-full h-9 px-3 rounded-lg text-sm outline-none border appearance-none cursor-pointer"
-              style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
-            >
-              {#each aiPrefsAllowedModels as model}
-                <option value={model}>{modelLabels[model] || model}</option>
-              {/each}
-            </select>
-          </div>
-
-          <div class="mt-5 flex items-center gap-3">
-            <Button variant="primary" size="sm" onclick={saveAIPreferences} disabled={aiPrefsSaving}>
-              {aiPrefsSaving ? 'Saving...' : 'Save'}
-            </Button>
-            <button
-              onclick={reprocessWithModel}
-              disabled={reprocessing}
-              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-fast disabled:opacity-50"
-              style="background: var(--bg-primary); color: var(--text-primary); border: 1px solid var(--border-color)"
-            >
-              {#if reprocessing}
-                <div class="w-3.5 h-3.5 border-2 rounded-full animate-spin" style="border-color: var(--border-color); border-top-color: var(--color-accent-500)"></div>
-                Reprocessing...
-              {:else}
-                Reprocess with this model
-              {/if}
-            </button>
-            <span class="text-[10px]" style="color: var(--text-tertiary)">
-              Re-analyzes emails previously processed with a different model.
-            </span>
-          </div>
-        </div>
-
-        <!-- Unsubscribe Model -->
-        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
-          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Unsubscribe Model</h3>
-          <p class="text-xs mb-5" style="color: var(--text-tertiary)">
-            Used for AI-powered browser automation when unsubscribing from mailing lists.
-            Sonnet 4.6 is recommended for its computer use capabilities.
-          </p>
-
-          <div>
-            <label for="ai-unsubscribe-model" class="block text-xs font-semibold mb-1.5 uppercase tracking-wider" style="color: var(--text-tertiary)">
-              Model
-            </label>
-            <select
-              id="ai-unsubscribe-model"
-              bind:value={aiPrefs.unsubscribe_model}
-              class="w-full h-9 px-3 rounded-lg text-sm outline-none border appearance-none cursor-pointer"
-              style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
-            >
-              {#each aiPrefsAllowedModels as model}
-                <option value={model}>{modelLabels[model] || model}</option>
-              {/each}
-            </select>
-          </div>
-
-          <div class="mt-5 flex items-center gap-3">
-            <Button variant="primary" size="sm" onclick={saveAIPreferences} disabled={aiPrefsSaving}>
-              {aiPrefsSaving ? 'Saving...' : 'Save'}
-            </Button>
-            <span class="text-[10px]" style="color: var(--text-tertiary)">
-              Changes apply to the next unsubscribe action.
-            </span>
-          </div>
-        </div>
-
-        <!-- Model comparison info -->
-        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
-          <h3 class="text-sm font-semibold mb-3" style="color: var(--text-primary)">Model Comparison</h3>
-          <table class="w-full text-sm">
-            <thead>
-              <tr class="border-b" style="border-color: var(--border-color)">
-                <th class="text-left py-2 text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Model</th>
-                <th class="text-left py-2 text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Quality</th>
-                <th class="text-left py-2 text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Speed</th>
-                <th class="text-left py-2 text-xs font-semibold uppercase tracking-wider" style="color: var(--text-secondary)">Cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr class="border-b" style="border-color: var(--border-color)">
-                <td class="py-2 font-medium" style="color: var(--text-primary)">Opus 4.6</td>
-                <td class="py-2" style="color: var(--status-success)">Highest</td>
-                <td class="py-2" style="color: var(--text-secondary)">Slower</td>
-                <td class="py-2" style="color: var(--text-secondary)">$$$</td>
-              </tr>
-              <tr class="border-b" style="border-color: var(--border-color)">
-                <td class="py-2 font-medium" style="color: var(--text-primary)">Sonnet 4.6</td>
-                <td class="py-2" style="color: var(--color-accent-600)">High</td>
-                <td class="py-2" style="color: var(--color-accent-600)">Balanced</td>
-                <td class="py-2" style="color: var(--text-secondary)">$$</td>
-              </tr>
-              <tr>
-                <td class="py-2 font-medium" style="color: var(--text-primary)">Haiku 4.5</td>
-                <td class="py-2" style="color: var(--text-secondary)">Good</td>
-                <td class="py-2" style="color: var(--status-success)">Fastest</td>
-                <td class="py-2" style="color: var(--status-success)">$</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
+      <AIModelsPanel
+        bind:aiPrefs
+        allowedModels={aiPrefsAllowedModels}
+        labels={aiPrefsLabels}
+        saving={aiPrefsSaving}
+        {reprocessing}
+        onSave={saveAIPreferences}
+        onReprocess={reprocessWithModel}
+        {Button}
+      />
     {:else if activeTab === 'preferences'}
       <!-- Preferences & Keyboard Shortcuts -->
       <div class="space-y-6">

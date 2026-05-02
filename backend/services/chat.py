@@ -240,6 +240,102 @@ READ_CALENDAR_EVENT_TOOL = {
 }
 
 # ---------------------------------------------------------------------------
+# Extended thinking helpers
+# ---------------------------------------------------------------------------
+
+# Models that support extended thinking and the budget (in tokens) we ask for
+# during the Plan and Verify phases. Haiku does not benefit meaningfully and
+# the `-fast` beta is incompatible with thinking, so both are disabled.
+_THINKING_BUDGET_PLAN = 3000
+_THINKING_BUDGET_VERIFY = 6000
+
+
+def _thinking_kwargs(model: str, budget_tokens: int) -> dict:
+    """Return `{"thinking": {...}}` kwargs if the model supports extended
+    thinking, otherwise an empty dict. Caller can `**`-unpack into
+    `client.messages.create(...)`.
+    """
+    if not model or model.endswith("-fast"):
+        return {}
+    if "haiku" in model:
+        return {}
+    return {
+        "thinking": {"type": "enabled", "budget_tokens": budget_tokens},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Prompt caching helpers
+# ---------------------------------------------------------------------------
+
+def _cached_system(static: str, dynamic: str = "") -> list[dict]:
+    """Build a `system` list that marks the static portion as cacheable.
+
+    The Anthropic prompt-caching feature stores everything up to and
+    including a block tagged with `cache_control: ephemeral`. By putting
+    the long static instructions first and tagging them, every subsequent
+    call with the same static text gets a ~90% discount on those tokens
+    (and a much faster TTFT).
+    """
+    blocks: list[dict] = [
+        {"type": "text", "text": static, "cache_control": {"type": "ephemeral"}},
+    ]
+    if dynamic:
+        blocks.append({"type": "text", "text": dynamic})
+    return blocks
+
+
+def _cached_tools(tools: list[dict]) -> list[dict]:
+    """Mark the tools list as cacheable by tagging the last tool.
+
+    This caches every tool definition before it (i.e. the entire tools
+    array) on Anthropic's side.
+    """
+    if not tools:
+        return tools
+    cached = list(tools)
+    last = dict(cached[-1])
+    last["cache_control"] = {"type": "ephemeral"}
+    cached[-1] = last
+    return cached
+
+
+# ---------------------------------------------------------------------------
+# Structured-output tool for the planner phase
+# ---------------------------------------------------------------------------
+
+SUBMIT_PLAN_TOOL = {
+    "name": "submit_plan",
+    "description": (
+        "Submit either a clarifying question for the user OR a research plan. "
+        "Use exactly one of `clarification` or `tasks`."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "clarification": {
+                "type": ["string", "null"],
+                "description": "A question to ask the user when the request is too vague.",
+            },
+            "tasks": {
+                "type": ["array", "null"],
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "integer"},
+                        "description": {"type": "string"},
+                        "search_strategy": {"type": "string"},
+                        "depends_on": {"type": "array", "items": {"type": "integer"}},
+                    },
+                    "required": ["id", "description"],
+                },
+            },
+        },
+    },
+}
+
+
+# ---------------------------------------------------------------------------
 # System prompts
 # ---------------------------------------------------------------------------
 
@@ -253,20 +349,9 @@ IMPORTANT: If the question is unclear, too broad, or you're unsure what the user
 
 However, do NOT ask if the question is reasonably clear -- even if imperfect. A question like "What furniture did I order in 2020?" is clear enough to plan for.
 
-RESPONSE FORMAT -- respond with ONLY a JSON object, one of two forms:
-
-Form 1 -- Clarification needed:
-{
-  "clarification": "Your question to the user here. Be specific about what you need to know."
-}
-
-Form 2 -- Research plan:
-{
-  "tasks": [
-    {"id": 1, "description": "...", "search_strategy": "...", "depends_on": []},
-    ...
-  ]
-}
+ALWAYS call the `submit_plan` tool with EXACTLY ONE of:
+- `clarification`: a question to ask the user (when the request is too vague), OR
+- `tasks`: a list of research tasks (when the request is clear enough to plan).
 
 Each task in the plan must have:
 - "id": sequential integer starting at 1
@@ -1208,7 +1293,7 @@ async def _run_single_task(
                 response = await client.messages.create(
                     model=execute_model,
                     max_tokens=8192,
-                    system=EXECUTE_SYSTEM_PROMPT,
+                    system=_cached_system(EXECUTE_SYSTEM_PROMPT),
                     tools=tools,
                     messages=task_messages,
                 )
@@ -1280,7 +1365,7 @@ async def _run_single_task(
                 wrap_response = await client.messages.create(
                     model=execute_model,
                     max_tokens=4096,
-                    system=EXECUTE_SYSTEM_PROMPT,
+                    system=_cached_system(EXECUTE_SYSTEM_PROMPT),
                     messages=task_messages,
                 )
                 tokens_used += wrap_response.usage.input_tokens + wrap_response.usage.output_tokens
@@ -1369,8 +1454,12 @@ class ChatService:
                         parts.append(f"  - {ac['email']}")
             user_context_block = "\n".join(parts)
 
-        plan_system = PLAN_SYSTEM_PROMPT + user_context_block
-        verify_system = VERIFY_SYSTEM_PROMPT + user_context_block
+        # The static prompt portion is cached; the per-user context block is
+        # the dynamic suffix, which still benefits from caching at the user
+        # level once it has been seen once in the cache window.
+        plan_system = _cached_system(PLAN_SYSTEM_PROMPT, user_context_block)
+        verify_system = _cached_system(VERIFY_SYSTEM_PROMPT, user_context_block)
+        cached_tools = _cached_tools(tools)
 
         # ─── PHASE 1: PLAN ────────────────────────────────────────────
         yield _sse_event("phase", {"phase": "plan"})
@@ -1384,31 +1473,44 @@ class ChatService:
         plan_messages.append({"role": "user", "content": user_query})
 
         try:
+            plan_thinking = _thinking_kwargs(plan_model, _THINKING_BUDGET_PLAN)
+            # Extended thinking is incompatible with forced `tool_choice`, so
+            # when thinking is enabled we let the planner choose any tool. It
+            # only has one tool available, so this is effectively the same.
+            plan_tool_choice = (
+                {"type": "any"} if plan_thinking
+                else {"type": "tool", "name": SUBMIT_PLAN_TOOL["name"]}
+            )
+            plan_max_tokens = 4096 + (
+                plan_thinking["thinking"]["budget_tokens"] if plan_thinking else 0
+            )
             plan_response = await client.messages.create(
                 model=plan_model,
-                max_tokens=4096,
+                max_tokens=plan_max_tokens,
                 system=plan_system,
                 messages=plan_messages,
+                tools=[SUBMIT_PLAN_TOOL],
+                tool_choice=plan_tool_choice,
+                **plan_thinking,
             )
             total_tokens += plan_response.usage.input_tokens + plan_response.usage.output_tokens
 
-            plan_text = plan_response.content[0].text.strip()
-            if plan_text.startswith("```"):
-                lines = plan_text.split("\n")
-                plan_text = "\n".join(lines[1:-1])
+            plan_data = None
+            for block in plan_response.content:
+                if getattr(block, "type", None) == "tool_use" and block.name == SUBMIT_PLAN_TOOL["name"]:
+                    plan_data = block.input
+                    break
+            if plan_data is None:
+                plan_data = {}
 
-            plan_data = json.loads(plan_text)
-
-            # Check if the model is asking for clarification
-            if "clarification" in plan_data and not plan_data.get("tasks"):
-                question = plan_data["clarification"]
-                yield _sse_event("clarification", {"question": question})
+            if plan_data.get("clarification") and not plan_data.get("tasks"):
+                yield _sse_event("clarification", {"question": plan_data["clarification"]})
                 yield _sse_event("done", {"tokens_used": total_tokens, "needs_reply": True})
                 return
 
-            tasks = plan_data.get("tasks", [])[:MAX_TASKS]
+            tasks = (plan_data.get("tasks") or [])[:MAX_TASKS]
 
-        except (json.JSONDecodeError, Exception) as e:
+        except Exception as e:
             logger.error(f"Plan phase failed: {e}")
             tasks = [{
                 "id": 1,
@@ -1447,7 +1549,7 @@ class ChatService:
                 # Run the task
                 coro = _run_single_task(
                     task, user_query, tasks, all_results,
-                    account_ids, execute_model, tools, event_queue,
+                    account_ids, execute_model, cached_tools, event_queue,
                 )
                 result = await coro
                 # Yield all queued events
@@ -1466,7 +1568,7 @@ class ChatService:
                 coros = [
                     _run_single_task(
                         t, user_query, tasks, all_results,
-                        account_ids, execute_model, tools, event_queue,
+                        account_ids, execute_model, cached_tools, event_queue,
                     )
                     for t in wave
                 ]
@@ -1515,11 +1617,16 @@ class ChatService:
         )
 
         try:
+            verify_thinking = _thinking_kwargs(verify_model, _THINKING_BUDGET_VERIFY)
+            verify_max_tokens = 16000 + (
+                verify_thinking["thinking"]["budget_tokens"] if verify_thinking else 0
+            )
             verify_response = await client.messages.create(
                 model=verify_model,
-                max_tokens=16000,
+                max_tokens=verify_max_tokens,
                 system=verify_system,
                 messages=[{"role": "user", "content": verify_prompt}],
+                **verify_thinking,
             )
             total_tokens += verify_response.usage.input_tokens + verify_response.usage.output_tokens
 

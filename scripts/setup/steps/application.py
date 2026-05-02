@@ -54,20 +54,28 @@ def create_venv() -> bool:
 
 
 def install_python_deps() -> bool:
-    """Install Python dependencies from requirements.txt."""
+    """Install Python dependencies.
+
+    Prefers `requirements.lock` for reproducible deploys (generated via
+    `pip-compile requirements.txt`), and falls back to `requirements.txt`
+    if no lockfile is present.
+    """
     pip = os.path.join(VENV_DIR, "bin", "pip")
+    lock = os.path.join(PROJECT_ROOT, "requirements.lock")
     requirements = os.path.join(PROJECT_ROOT, "requirements.txt")
 
-    if not os.path.exists(requirements):
-        ui.error(f"requirements.txt not found at {requirements}")
+    install_from = lock if os.path.exists(lock) else requirements
+
+    if not os.path.exists(install_from):
+        ui.error(f"No requirements file found at {install_from}")
         return False
 
     ui.info("Upgrading pip...")
     ui.run_cmd([pip, "install", "--quiet", "--upgrade", "pip"], capture=True, check=False)
 
-    ui.info("Installing Python dependencies (this may take a minute)...")
+    ui.info(f"Installing Python dependencies from {os.path.basename(install_from)} (this may take a minute)...")
     result = ui.run_cmd(
-        [pip, "install", "--quiet", "-r", requirements],
+        [pip, "install", "--quiet", "-r", install_from],
         capture=True,
         check=False,
     )

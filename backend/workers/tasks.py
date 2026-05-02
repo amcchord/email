@@ -20,16 +20,15 @@ _sync_lock = asyncio.Lock()
 
 
 def parse_redis_url(url: str) -> RedisSettings:
-    """Parse redis URL into RedisSettings."""
-    # redis://localhost:6379/0
-    url = url.replace("redis://", "")
-    parts = url.split("/")
-    host_port = parts[0]
-    database = int(parts[1]) if len(parts) > 1 else 0
-    host_parts = host_port.split(":")
-    host = host_parts[0]
-    port = int(host_parts[1]) if len(host_parts) > 1 else 6379
-    return RedisSettings(host=host, port=port, database=database)
+    """Convert a Redis URL into arq's `RedisSettings`.
+
+    Delegates to `RedisSettings.from_dsn`, which understands the full URL
+    grammar — usernames, passwords, non-default ports, db numbers, `rediss://`
+    TLS, and query params — so `redis://:password@host:6380/2?ssl=true`
+    works correctly. The previous hand-rolled splitter dropped passwords
+    and silently broke on TLS schemes.
+    """
+    return RedisSettings.from_dsn(url)
 
 
 async def _queue_ai_for_new_emails(account_id: int, new_email_ids: list[int]):
@@ -926,13 +925,29 @@ async def analyze_emails_batch(ctx, email_ids: list[int]):
     acct_descs = await _resolve_account_descriptions(list(acct_ids)) if acct_ids else {}
     acct_emails = await _resolve_account_emails(list(acct_ids)) if acct_ids else {}
 
-    await ai_service.batch_categorize(
-        email_ids,
-        on_progress=on_progress,
-        user_context=user_context,
-        account_descriptions=acct_descs,
-        account_emails=acct_emails,
-    )
+    # Large jobs: route through Anthropic Message Batches API for the 50%
+    # discount and to dodge per-call rate limits during initial-sync floods.
+    # Smaller jobs still use the realtime fan-out so the UI gets progress.
+    if len(email_ids) >= AIService.BATCH_API_MIN_SIZE:
+        logger.info(
+            f"analyze_emails_batch: routing {len(email_ids)} emails through "
+            f"Message Batches API (>= {AIService.BATCH_API_MIN_SIZE})"
+        )
+        await ai_service.batch_categorize_via_messages_batch(
+            email_ids,
+            on_progress=on_progress,
+            user_context=user_context,
+            account_descriptions=acct_descs,
+            account_emails=acct_emails,
+        )
+    else:
+        await ai_service.batch_categorize(
+            email_ids,
+            on_progress=on_progress,
+            user_context=user_context,
+            account_descriptions=acct_descs,
+            account_emails=acct_emails,
+        )
 
     # Notify frontend that AI analysis updated email metadata
     if user_id:
@@ -1010,12 +1025,20 @@ async def analyze_recent_unanalyzed(ctx, account_id: int, limit: int = 50):
         acct_descs = await _resolve_account_descriptions([account_id])
         acct_emails = await _resolve_account_emails([account_id])
 
-        await ai_service.batch_categorize(
-            email_ids,
-            user_context=user_context,
-            account_descriptions=acct_descs,
-            account_emails=acct_emails,
-        )
+        if len(email_ids) >= AIService.BATCH_API_MIN_SIZE:
+            await ai_service.batch_categorize_via_messages_batch(
+                email_ids,
+                user_context=user_context,
+                account_descriptions=acct_descs,
+                account_emails=acct_emails,
+            )
+        else:
+            await ai_service.batch_categorize(
+                email_ids,
+                user_context=user_context,
+                account_descriptions=acct_descs,
+                account_emails=acct_emails,
+            )
         logger.info(f"Analyzed {len(email_ids)} emails for account {account_id}")
 
 

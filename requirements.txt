@@ -18,7 +18,8 @@ google-api-python-client>=2.154.0
 google-auth>=2.36.0
 google-auth-oauthlib>=1.2.1
 google-auth-httplib2>=0.2.0
-anthropic>=0.40.0
+# anthropic SDK 0.79+ ships the strict tool_use API + Message Batches client.
+anthropic>=0.79.0
 email-validator>=2.2.0
 aiofiles>=24.1.0
 jinja2>=3.1.4

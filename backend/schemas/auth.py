@@ -1,22 +1,34 @@
 from pydantic import BaseModel, field_validator
 from typing import Optional
 
+from backend.services.ai_models import (
+    ALLOWED_MODELS,
+    DEFAULT_AI_PREFERENCES,
+    MODEL_LABELS,
+)
 
-ALLOWED_MODELS = [
-    "claude-opus-4-6",
-    "claude-opus-4-6-fast",
-    "claude-sonnet-4-6",
-    "claude-haiku-4-5-20251001",
+# Re-exported here for backwards compatibility with existing imports.
+__all__ = [
+    "ALLOWED_MODELS",
+    "DEFAULT_AI_PREFERENCES",
+    "MODEL_LABELS",
+    "LoginRequest",
+    "TokenResponse",
+    "RefreshRequest",
+    "UserResponse",
+    "AIPreferencesResponse",
+    "AIPreferencesUpdate",
+    "AboutMeResponse",
+    "AboutMeUpdate",
+    "AccountDescriptionUpdate",
+    "KeyboardShortcutsResponse",
+    "KeyboardShortcutsUpdate",
+    "ALLOWED_THEMES",
+    "ALLOWED_COLOR_SCHEMES",
+    "DEFAULT_UI_PREFERENCES",
+    "UIPreferencesResponse",
+    "UIPreferencesUpdate",
 ]
-
-DEFAULT_AI_PREFERENCES = {
-    "chat_plan_model": "claude-opus-4-6",
-    "chat_execute_model": "claude-opus-4-6",
-    "chat_verify_model": "claude-opus-4-6",
-    "agentic_model": "claude-sonnet-4-6",
-    "custom_prompt_model": "claude-sonnet-4-6",
-    "unsubscribe_model": "claude-sonnet-4-6",
-}
 
 
 class LoginRequest(BaseModel):
@@ -54,6 +66,8 @@ class AIPreferencesResponse(BaseModel):
     custom_prompt_model: str
     unsubscribe_model: str
     allowed_models: list[str] = ALLOWED_MODELS
+    # `model_` prefix is reserved by Pydantic v2; use `labels` instead.
+    labels: dict[str, str] = MODEL_LABELS
 
 
 class AIPreferencesUpdate(BaseModel):

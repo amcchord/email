@@ -5,6 +5,12 @@ import logging
 from typing import AsyncGenerator
 
 from backend.config import get_settings
+from backend.services.ai_models import (
+    CU_CONFIG,
+    DEFAULT_CU_MODEL,
+    base_model_id,
+    is_fast_variant,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -14,15 +20,37 @@ VIEWPORT_WIDTH = 1280
 VIEWPORT_HEIGHT = 900
 NAV_TIMEOUT_MS = 20000
 
-# Model -> (beta_header, tool_type) mapping for computer use
-CU_CONFIG = {
-    "claude-sonnet-4-6": ("computer-use-2025-11-24", "computer_20251124"),
-    "claude-opus-4-6": ("computer-use-2025-11-24", "computer_20251124"),
-    "claude-opus-4-6-fast": ("computer-use-2025-11-24", "computer_20251124"),
-    "claude-sonnet-4-5-20250514": ("computer-use-2025-01-24", "computer_20250124"),
-    "claude-haiku-4-5-20251001": ("computer-use-2025-01-24", "computer_20250124"),
+# Structured tool the model calls to report the unsubscribe outcome instead
+# of relying on English-keyword detection in its final text. This works for
+# non-English unsubscribe pages too and lets us short-circuit the loop the
+# moment the model is confident.
+UNSUBSCRIBE_STATUS_TOOL = {
+    "name": "report_unsubscribe_status",
+    "description": (
+        "Report the final outcome of the unsubscribe attempt. Call this as "
+        "your VERY LAST action when the unsubscribe is complete or you have "
+        "decided to stop. Do not call any other tools after this."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": ["success", "failure", "needs_human"],
+                "description": (
+                    "success = the page confirmed the user is unsubscribed; "
+                    "needs_human = blocked by CAPTCHA / login wall / similar; "
+                    "failure = could not complete the unsubscribe."
+                ),
+            },
+            "reason": {
+                "type": "string",
+                "description": "Short human-readable explanation of the outcome.",
+            },
+        },
+        "required": ["status", "reason"],
+    },
 }
-DEFAULT_CU_MODEL = "claude-sonnet-4-6"
 
 
 def _encode_screenshot(png_bytes: bytes) -> str:
@@ -77,10 +105,15 @@ class UnsubscribeEvent:
 class UnsubscribeService:
     def __init__(self, model: str = None):
         self._anthropic_client = None
-        self.model = model or DEFAULT_CU_MODEL
-        cu_entry = CU_CONFIG.get(self.model)
+        requested = model or DEFAULT_CU_MODEL
+        # Computer Use is incompatible with fast-mode; strip the suffix and
+        # fall back to the model's normal CU config.
+        self.model = base_model_id(requested)
+        self._used_fast_request = is_fast_variant(requested)
+        cu_entry = CU_CONFIG.get(self.model) or CU_CONFIG.get(requested)
         if not cu_entry:
             cu_entry = CU_CONFIG[DEFAULT_CU_MODEL]
+            self.model = DEFAULT_CU_MODEL
         self.cu_beta, self.cu_tool_type = cu_entry
 
     def _get_anthropic(self):
@@ -243,7 +276,8 @@ class UnsubscribeService:
                         "display_width_px": VIEWPORT_WIDTH,
                         "display_height_px": VIEWPORT_HEIGHT,
                         "display_number": 1,
-                    }
+                    },
+                    UNSUBSCRIBE_STATUS_TOOL,
                 ]
 
                 system_prompt = (
@@ -257,13 +291,18 @@ class UnsubscribeService:
                     "- Clicking 'Submit' or 'Update Preferences' buttons\n\n"
                     "IMPORTANT RULES:\n"
                     "- Take a screenshot first to see the current page state\n"
-                    "- If you see a confirmation that you've been unsubscribed, you're done\n"
+                    "- If you see a confirmation that you've been unsubscribed, call the "
+                    "`report_unsubscribe_status` tool with status=\"success\" — that ends the run.\n"
                     "- If there are checkboxes to unsubscribe from lists, uncheck ALL of them "
                     "(or check the 'unsubscribe from all' option), then submit\n"
                     "- If asked for an email, type the user's email address\n"
-                    "- If you see a CAPTCHA or login wall, stop -- you cannot proceed\n"
+                    "- If you see a CAPTCHA or login wall, call `report_unsubscribe_status` with "
+                    "status=\"needs_human\" — you cannot proceed.\n"
+                    "- If the page errors out or the unsubscribe cannot be completed for any other "
+                    "reason, call `report_unsubscribe_status` with status=\"failure\".\n"
                     "- Be precise with your clicks. Click directly on buttons and checkboxes.\n"
-                    "- After taking an action, take a screenshot to verify the result"
+                    "- After taking an action, take a screenshot to verify the result.\n"
+                    "- ALWAYS finish by calling `report_unsubscribe_status` exactly once."
                 )
 
                 messages = [
@@ -325,8 +364,45 @@ class UnsubscribeService:
                             reasoning_parts.append(block.text.strip())
                     reasoning = " ".join(reasoning_parts) if reasoning_parts else ""
 
+                    # Did the model report a final status via the structured tool?
+                    # If so, that is authoritative — short-circuit the loop and use
+                    # its language-independent answer instead of keyword matching.
+                    status_block = next(
+                        (
+                            b for b in assistant_content
+                            if getattr(b, "type", None) == "tool_use"
+                            and b.name == UNSUBSCRIBE_STATUS_TOOL["name"]
+                        ),
+                        None,
+                    )
+                    if status_block is not None:
+                        status_input = status_block.input or {}
+                        reported = status_input.get("status", "failure")
+                        reason = status_input.get("reason", "") or reasoning
+                        success = reported == "success"
+                        _, _, final_thumb = await self._take_screenshot(page)
+                        yield UnsubscribeEvent(
+                            step="completed",
+                            message=(
+                                "Successfully unsubscribed!" if success
+                                else f"Stopped ({reported}): {reason[:200]}"
+                            ),
+                            screenshot_b64=final_thumb,
+                            llm_reasoning=reasoning or reason,
+                            status="success" if success else "failed",
+                            error=None if success else reason[:200],
+                        )
+                        return
+
                     if not has_tool_use:
-                        # Claude decided it's done -- check if success or failure
+                        # Model returned plain text without calling the status tool.
+                        # Fall back to the legacy English-keyword heuristic so we
+                        # do not lose the run, but log a warning — the structured
+                        # tool is the preferred path.
+                        logger.warning(
+                            "Unsubscribe model ended turn without report_unsubscribe_status; "
+                            "falling back to keyword detection"
+                        )
                         reasoning_lower = reasoning.lower()
                         success = any(
                             kw in reasoning_lower
@@ -352,6 +428,9 @@ class UnsubscribeService:
                     tool_results = []
                     for block in assistant_content:
                         if getattr(block, "type", None) != "tool_use":
+                            continue
+                        # The status tool was already handled above.
+                        if block.name == UNSUBSCRIBE_STATUS_TOOL["name"]:
                             continue
 
                         tool_input = block.input

@@ -24,10 +24,16 @@ if [ ! -d "venv" ]; then
     python3 -m venv venv
 fi
 
-# Install/upgrade Python dependencies
+# Install/upgrade Python dependencies. Prefer the lockfile for reproducible
+# deploys; fall back to requirements.txt if the lockfile is missing (e.g. on
+# a brand new checkout that hasn't been resolved yet).
 echo "Installing Python dependencies..."
 . venv/bin/activate
-pip install -q -r requirements.txt
+if [ -f requirements.lock ]; then
+    pip install -q -r requirements.lock
+else
+    pip install -q -r requirements.txt
+fi
 
 # Install Playwright Chromium browser for AI-powered unsubscribe
 if [ -f "venv/bin/playwright" ]; then
