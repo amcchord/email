@@ -103,6 +103,11 @@ export const api = {
   me: () => request('GET', '/auth/me'),
   refresh: () => request('POST', '/auth/refresh', {}),
 
+  // API Tokens (for the read-only public /api/v1 surface)
+  listApiTokens: () => request('GET', '/auth/api-tokens'),
+  createApiToken: (name) => request('POST', '/auth/api-tokens', { name }),
+  revokeApiToken: (id) => request('DELETE', `/auth/api-tokens/${id}`),
+
   // Emails
   listEmails: (params = {}) => {
     const searchParams = new URLSearchParams();

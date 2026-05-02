@@ -521,6 +521,88 @@ async def update_ui_preferences(
     )
 
 
+# ── API Tokens (read-only public API, /api/v1/...) ──────────────────
+
+@router.get("/api-tokens")
+async def list_api_tokens(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """List the current user's API tokens (no secrets returned)."""
+    from backend.models.api_token import ApiToken
+    from backend.schemas.api_token import ApiTokenSummary
+
+    result = await db.execute(
+        select(ApiToken)
+        .where(ApiToken.user_id == user.id)
+        .order_by(ApiToken.created_at.desc())
+    )
+    tokens = result.scalars().all()
+    return [ApiTokenSummary.model_validate(t) for t in tokens]
+
+
+@router.post("/api-tokens")
+async def create_api_token(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Mint a new API token. Returns the raw token EXACTLY ONCE."""
+    from backend.models.api_token import ApiToken
+    from backend.schemas.api_token import ApiTokenCreateRequest, ApiTokenCreatedResponse
+    from backend.utils.api_auth import generate_api_token
+
+    body = await request.json()
+    payload = ApiTokenCreateRequest.model_validate(body)
+
+    raw, token_hash, prefix = generate_api_token()
+
+    token = ApiToken(
+        user_id=user.id,
+        name=payload.name.strip(),
+        token_hash=token_hash,
+        prefix=prefix,
+    )
+    db.add(token)
+    await db.commit()
+    await db.refresh(token)
+
+    return ApiTokenCreatedResponse(
+        id=token.id,
+        name=token.name,
+        prefix=token.prefix,
+        token=raw,
+        created_at=token.created_at,
+    )
+
+
+@router.delete("/api-tokens/{token_id}")
+async def revoke_api_token(
+    token_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Soft-revoke an API token by setting `revoked_at`."""
+    from backend.models.api_token import ApiToken
+    from datetime import datetime, timezone
+
+    result = await db.execute(
+        select(ApiToken).where(
+            ApiToken.id == token_id,
+            ApiToken.user_id == user.id,
+        )
+    )
+    token = result.scalar_one_or_none()
+    if not token:
+        raise HTTPException(status_code=404, detail="Token not found")
+
+    if token.revoked_at is None:
+        token.revoked_at = datetime.now(timezone.utc)
+        await db.commit()
+
+    return {"message": "Token revoked"}
+
+
 # ── Device Code Auth Flow (for TUI / CLI clients) ───────────────────
 
 _device_codes: dict[str, dict] = {}

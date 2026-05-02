@@ -6,6 +6,7 @@ from backend.models.settings import Setting
 from backend.models.todo import TodoItem
 from backend.models.chat import ChatConversation, ChatMessage
 from backend.models.calendar import CalendarEvent, CalendarSyncStatus
+from backend.models.api_token import ApiToken
 
 __all__ = [
     "User",
@@ -21,4 +22,5 @@ __all__ = [
     "ChatMessage",
     "CalendarEvent",
     "CalendarSyncStatus",
+    "ApiToken",
 ]

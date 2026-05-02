@@ -149,8 +149,8 @@
       allowedAccounts = allowed.allowed_accounts || '';
       allowedLoaded = true;
 
-      // Always load AI preferences, About Me, UI preferences, and feature flags (available to all users)
-      await Promise.all([loadAIPreferences(), loadAboutMe(), loadUIPreferences(), loadFeatureFlags()]);
+      // Always load AI preferences, About Me, UI preferences, feature flags, and API tokens (available to all users)
+      await Promise.all([loadAIPreferences(), loadAboutMe(), loadUIPreferences(), loadFeatureFlags(), loadApiTokens()]);
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -248,6 +248,62 @@
     } catch (err) {
       showToast(err.message, 'error');
     }
+  }
+
+  // ── Read-only API tokens ────────────────────────────────────────
+  let apiTokens = $state([]);
+  let apiTokensLoaded = $state(false);
+  let newTokenName = $state('');
+  let newTokenCreating = $state(false);
+  // The plaintext value of a freshly-created token, shown exactly once.
+  let freshToken = $state(null);
+
+  async function loadApiTokens() {
+    try {
+      apiTokens = await api.listApiTokens();
+      apiTokensLoaded = true;
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  async function createApiToken() {
+    const name = newTokenName.trim();
+    if (!name) return;
+    newTokenCreating = true;
+    try {
+      const created = await api.createApiToken(name);
+      freshToken = created;
+      newTokenName = '';
+      await loadApiTokens();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    newTokenCreating = false;
+  }
+
+  async function revokeApiToken(id) {
+    if (!confirm('Revoke this token? Any clients using it will stop working immediately.')) return;
+    try {
+      await api.revokeApiToken(id);
+      showToast('Token revoked', 'success');
+      await loadApiTokens();
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  async function copyTokenToClipboard(token) {
+    try {
+      await navigator.clipboard.writeText(token);
+      showToast('Token copied to clipboard', 'success');
+    } catch (err) {
+      showToast('Copy failed -- select and copy manually', 'error');
+    }
+  }
+
+  function dismissFreshToken() {
+    freshToken = null;
   }
 
   // API key form values
@@ -951,6 +1007,113 @@
                 {/if}
               </div>
             {/each}
+          {/if}
+        </div>
+
+        <!-- API Tokens for read-only public API -->
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">API Tokens</h3>
+          <p class="text-xs mb-4" style="color: var(--text-tertiary)">
+            Create a shared-secret token to access your emails and calendar from external apps
+            (e.g. an e-ink display) over the read-only <code style="color: var(--text-secondary)">/api/v1</code> JSON API.
+            Use it as <code style="color: var(--text-secondary)">Authorization: Bearer &lt;token&gt;</code>.
+            See <code style="color: var(--text-secondary)">docs/api.md</code> for endpoint reference.
+          </p>
+
+          {#if freshToken}
+            <div class="mb-4 rounded-lg p-3" style="background: var(--status-warning-bg); border: 1px solid var(--status-warning-border); color: var(--status-warning-text)">
+              <div class="flex items-start gap-2 mb-2">
+                <span class="shrink-0 mt-0.5" style="color: var(--status-warning)">
+                  <Icon name="alert-triangle" size={16} />
+                </span>
+                <div class="flex-1">
+                  <div class="text-xs font-semibold mb-1">Copy your token now -- you won't be able to see it again.</div>
+                  <div class="text-[11px]" style="color: var(--status-warning-text)">Token "{freshToken.name}"</div>
+                </div>
+              </div>
+              <div class="flex gap-2 items-center">
+                <input
+                  type="text"
+                  readonly
+                  value={freshToken.token}
+                  onclick={(e) => e.target.select()}
+                  class="flex-1 h-8 px-3 rounded-md text-xs outline-none border font-mono"
+                  style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+                />
+                <Button size="sm" variant="primary" onclick={() => copyTokenToClipboard(freshToken.token)}>
+                  Copy
+                </Button>
+                <Button size="sm" onclick={dismissFreshToken}>
+                  Done
+                </Button>
+              </div>
+            </div>
+          {/if}
+
+          <!-- Create token form -->
+          <div class="flex gap-2 mb-4">
+            <input
+              type="text"
+              bind:value={newTokenName}
+              placeholder="Token name (e.g. e-ink display)"
+              class="flex-1 h-9 px-3 rounded-lg text-sm outline-none border"
+              style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+              onkeydown={(e) => { if (e.key === 'Enter') createApiToken(); }}
+            />
+            <Button variant="primary" size="sm" onclick={createApiToken} disabled={newTokenCreating || !newTokenName.trim()}>
+              {newTokenCreating ? 'Creating...' : 'Create token'}
+            </Button>
+          </div>
+
+          {#if !apiTokensLoaded}
+            <div class="text-xs" style="color: var(--text-tertiary)">Loading...</div>
+          {:else if apiTokens.length === 0}
+            <div class="text-xs" style="color: var(--text-tertiary)">No tokens yet.</div>
+          {:else}
+            <div class="rounded-lg border overflow-hidden" style="border-color: var(--border-color)">
+              <table class="w-full text-xs">
+                <thead>
+                  <tr style="background: var(--bg-primary); color: var(--text-tertiary)">
+                    <th class="text-left font-medium px-3 py-2">Name</th>
+                    <th class="text-left font-medium px-3 py-2">Prefix</th>
+                    <th class="text-left font-medium px-3 py-2">Created</th>
+                    <th class="text-left font-medium px-3 py-2">Last used</th>
+                    <th class="text-left font-medium px-3 py-2">Status</th>
+                    <th class="text-right font-medium px-3 py-2">&nbsp;</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each apiTokens as t (t.id)}
+                    <tr style="border-top: 1px solid var(--border-color); color: var(--text-primary)">
+                      <td class="px-3 py-2">{t.name || '(unnamed)'}</td>
+                      <td class="px-3 py-2 font-mono" style="color: var(--text-secondary)">{t.prefix}…</td>
+                      <td class="px-3 py-2" style="color: var(--text-secondary)">{new Date(t.created_at).toLocaleString()}</td>
+                      <td class="px-3 py-2" style="color: var(--text-secondary)">
+                        {#if t.last_used_at}
+                          {new Date(t.last_used_at).toLocaleString()}
+                        {:else}
+                          Never
+                        {/if}
+                      </td>
+                      <td class="px-3 py-2">
+                        {#if t.revoked_at}
+                          <span style="color: var(--status-error)">Revoked</span>
+                        {:else}
+                          <span style="color: var(--status-success, #10b981)">Active</span>
+                        {/if}
+                      </td>
+                      <td class="px-3 py-2 text-right">
+                        {#if !t.revoked_at}
+                          <Button size="sm" variant="danger" onclick={() => revokeApiToken(t.id)}>
+                            Revoke
+                          </Button>
+                        {/if}
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
           {/if}
         </div>
       </div>
