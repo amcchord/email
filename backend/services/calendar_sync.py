@@ -52,6 +52,32 @@ class CalendarSyncService:
             scopes = []
         return "https://www.googleapis.com/auth/calendar.readonly" in scopes
 
+    async def _mark_calendar_scope_lost(self):
+        """Remove calendar.readonly from the account's local scopes record.
+
+        Called after Google returns a 403 insufficient-scope error so that
+        the next 5-minute cron tick short-circuits via `_check_calendar_scope`
+        instead of repeatedly hitting Google with a token that no longer
+        carries the calendar grant.  The OAuth reauthorize callback will
+        restore the full scope list once the user re-grants permission.
+        """
+        import json
+        async with async_session() as db:
+            account = await self._get_account(db)
+            try:
+                scopes = json.loads(account.scopes or "[]")
+            except (json.JSONDecodeError, TypeError):
+                scopes = []
+            cal_scope = "https://www.googleapis.com/auth/calendar.readonly"
+            if cal_scope in scopes:
+                scopes = [s for s in scopes if s != cal_scope]
+                account.scopes = json.dumps(scopes)
+                await db.commit()
+                logger.info(
+                    f"Removed calendar scope from local record for account "
+                    f"{self.account_id} -- reauth required to resume calendar sync"
+                )
+
     async def _update_sync_status(self, db: AsyncSession, **kwargs):
         result = await db.execute(
             select(CalendarSyncStatus).where(CalendarSyncStatus.account_id == self.account_id)
@@ -230,6 +256,10 @@ class CalendarSyncService:
                         )
                 except Exception:
                     pass
+                try:
+                    await self._mark_calendar_scope_lost()
+                except Exception as exc:
+                    logger.warning(f"Failed to clear local calendar scope for account {self.account_id}: {exc}")
                 # Don't re-raise scope errors -- they're expected for old accounts
                 return
             logger.error(f"Calendar full sync error for account {self.account_id}: {e}")
@@ -305,7 +335,24 @@ class CalendarSyncService:
                             await self._update_sync_status(db, sync_token=None)
                         return await self.full_sync()
                     if _is_scope_error(e):
-                        logger.debug(f"Calendar sync skipped for account {self.account_id}: insufficient scopes")
+                        logger.info(
+                            f"Calendar incremental sync for account {self.account_id}: insufficient scopes; "
+                            f"clearing local calendar scope so future ticks short-circuit."
+                        )
+                        try:
+                            async with async_session() as db:
+                                await self._update_sync_status(
+                                    db,
+                                    status="error",
+                                    error_message="Calendar scope not authorized. Reauthorize this account to enable calendar sync.",
+                                    completed_at=datetime.now(timezone.utc),
+                                )
+                        except Exception:
+                            pass
+                        try:
+                            await self._mark_calendar_scope_lost()
+                        except Exception as exc:
+                            logger.warning(f"Failed to clear local calendar scope for account {self.account_id}: {exc}")
                         return
                     raise
 
@@ -370,7 +417,24 @@ class CalendarSyncService:
 
         except HttpError as e:
             if _is_scope_error(e):
-                logger.debug(f"Calendar sync skipped for account {self.account_id}: insufficient scopes")
+                logger.info(
+                    f"Calendar incremental sync for account {self.account_id}: insufficient scopes; "
+                    f"clearing local calendar scope so future ticks short-circuit."
+                )
+                try:
+                    async with async_session() as db:
+                        await self._update_sync_status(
+                            db,
+                            status="error",
+                            error_message="Calendar scope not authorized. Reauthorize this account to enable calendar sync.",
+                            completed_at=datetime.now(timezone.utc),
+                        )
+                except Exception:
+                    pass
+                try:
+                    await self._mark_calendar_scope_lost()
+                except Exception as exc:
+                    logger.warning(f"Failed to clear local calendar scope for account {self.account_id}: {exc}")
                 return
             logger.error(f"Calendar incremental sync error for account {self.account_id}: {e}")
             try:

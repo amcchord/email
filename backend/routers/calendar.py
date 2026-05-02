@@ -42,6 +42,15 @@ async def list_calendar_events(
     start: str = Query(..., description="Start date YYYY-MM-DD"),
     end: str = Query(..., description="End date YYYY-MM-DD"),
     account_id: int = Query(None, description="Filter by account ID"),
+    tz: str = Query(
+        "UTC",
+        description=(
+            "IANA timezone name used to interpret the start/end day boundaries. "
+            "Defaults to UTC for backwards compatibility. Pass the user's local "
+            "timezone (e.g. 'America/New_York') so timed events near midnight are "
+            "not dropped by UTC day-rounding."
+        ),
+    ),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -56,10 +65,18 @@ async def list_calendar_events(
     target_ids = [account_id] if account_id else account_ids
 
     try:
-        start_dt = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        end_dt = datetime.strptime(end, "%Y-%m-%d").replace(
-            hour=23, minute=59, second=59, tzinfo=timezone.utc
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        try:
+            local_tz = ZoneInfo(tz) if tz else timezone.utc
+        except ZoneInfoNotFoundError:
+            raise HTTPException(status_code=400, detail=f"Unknown timezone: {tz}")
+        start_local = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=local_tz)
+        end_local = datetime.strptime(end, "%Y-%m-%d").replace(
+            hour=23, minute=59, second=59, tzinfo=local_tz
         )
+        # Convert to UTC for comparison against stored start_time/end_time
+        start_dt = start_local.astimezone(timezone.utc)
+        end_dt = end_local.astimezone(timezone.utc)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
 
@@ -137,7 +154,7 @@ async def trigger_calendar_sync(
     user: User = Depends(get_current_user),
 ):
     """Trigger calendar sync for all accounts or a specific one."""
-    from backend.workers.tasks import parse_redis_url
+    from backend.workers.tasks import parse_redis_url, CRON_QUEUE_NAME
     from arq import create_pool
     from backend.config import get_settings
 
@@ -156,7 +173,9 @@ async def trigger_calendar_sync(
     redis = await create_pool(parse_redis_url(settings.redis_url))
     try:
         for aid in target_ids:
-            await redis.enqueue_job("sync_calendar_incremental", aid)
+            await redis.enqueue_job(
+                "sync_calendar_incremental", aid, _queue_name=CRON_QUEUE_NAME
+            )
     finally:
         await redis.close()
 

@@ -974,12 +974,19 @@ async def analyze_emails_batch(ctx, email_ids: list[int]):
     except Exception as e:
         logger.warning(f"Failed to generate thread digests after batch analysis: {e}")
 
-    # After analysis, queue bundle generation for the user
+    # After analysis, queue bundle generation for the user.  Use a stable
+    # job_id so concurrent analysis batches collapse to a single bundle run
+    # instead of stacking up hundreds of redundant jobs in the queue.
     if user_id:
         try:
             redis = await create_pool(parse_redis_url(settings.redis_url))
             try:
-                await redis.enqueue_job("generate_bundles_for_user", user_id, model)
+                await redis.enqueue_job(
+                    "generate_bundles_for_user",
+                    user_id,
+                    model,
+                    _job_id=f"bundles:{user_id}:{model}",
+                )
             finally:
                 await redis.close()
         except Exception as e:
@@ -1083,14 +1090,24 @@ async def auto_categorize_account(ctx, account_id: int, days: int = None):
     )
     logger.info(f"Auto-categorization complete for account {account_id}: {analyzed} emails analyzed")
 
-    # After categorization, queue digest and bundle generation
+    # After categorization, queue digest and bundle generation with stable
+    # job IDs so repeat ticks collapse to a single pending run.
     if analyzed > 0:
         try:
             redis = await create_pool(parse_redis_url(settings.redis_url))
             try:
-                await redis.enqueue_job("generate_digests_for_account", account_id)
+                await redis.enqueue_job(
+                    "generate_digests_for_account",
+                    account_id,
+                    _job_id=f"digests:account:{account_id}",
+                )
                 if user_id:
-                    await redis.enqueue_job("generate_bundles_for_user", user_id, model)
+                    await redis.enqueue_job(
+                        "generate_bundles_for_user",
+                        user_id,
+                        model,
+                        _job_id=f"bundles:{user_id}:{model}",
+                    )
             finally:
                 await redis.close()
         except Exception as e:
@@ -1341,8 +1358,21 @@ async def shutdown(ctx):
     logger.info("ARQ worker shutting down")
 
 
+# Dedicated Redis queue for short, latency-sensitive jobs (cron ticks and
+# manually-triggered account/calendar syncs).  Keeping these off the default
+# queue prevents them from being starved by the long-running
+# `analyze_emails_batch` jobs that occupy the main worker's slots.
+CRON_QUEUE_NAME = "arq:cron"
+
+
 class WorkerSettings:
-    """ARQ worker settings."""
+    """ARQ worker settings for the main queue (long-running AI batches).
+
+    This worker no longer owns `cron_jobs` -- those live on
+    `CronWorkerSettings` so they cannot be blocked by saturated AI batches.
+    Functions are kept here so the main worker can still process explicitly
+    enqueued jobs (e.g. backfills) on the default queue if needed.
+    """
     redis_settings = parse_redis_url(settings.redis_url)
     functions = [
         sync_account_full,
@@ -1359,6 +1389,30 @@ class WorkerSettings:
         sync_calendar_incremental,
         sync_all_calendars,
     ]
+    on_startup = startup
+    on_shutdown = shutdown
+    max_jobs = 5
+    job_timeout = 7200  # 2 hours for full sync
+
+
+class CronWorkerSettings:
+    """ARQ worker settings for the cron / short-job queue.
+
+    Reads from `CRON_QUEUE_NAME` so it is fully isolated from the main
+    queue's AI batch backlog.  Owns the cron schedule (email sync every
+    minute, calendar sync every 5 minutes) and accepts manually-triggered
+    sync jobs routed via `_queue_name=CRON_QUEUE_NAME`.
+    """
+    redis_settings = parse_redis_url(settings.redis_url)
+    queue_name = CRON_QUEUE_NAME
+    functions = [
+        sync_account_full,
+        sync_account_incremental,
+        sync_all_accounts,
+        sync_calendar_full,
+        sync_calendar_incremental,
+        sync_all_calendars,
+    ]
     # Schedule periodic incremental sync for all accounts every minute.
     # Deliberately NOT using run_at_startup to avoid a burst of API calls
     # when the worker boots.  The first tick will fire within 60 seconds.
@@ -1369,22 +1423,25 @@ class WorkerSettings:
     ]
     on_startup = startup
     on_shutdown = shutdown
-    max_jobs = 5
+    # Small pool: cron ticks themselves are serialized by in-memory locks,
+    # and manual triggers are infrequent.  Keeping this low avoids competing
+    # with the main worker for CPU when a backlog is being burned down.
+    max_jobs = 3
     job_timeout = 7200  # 2 hours for full sync
 
 
 async def queue_sync(account_id: int, full: bool = False):
-    """Queue a sync job."""
+    """Queue an account sync job on the cron queue (kept off the AI backlog)."""
     redis = await create_pool(parse_redis_url(settings.redis_url))
     if full:
-        await redis.enqueue_job("sync_account_full", account_id)
+        await redis.enqueue_job("sync_account_full", account_id, _queue_name=CRON_QUEUE_NAME)
     else:
-        await redis.enqueue_job("sync_account_incremental", account_id)
+        await redis.enqueue_job("sync_account_incremental", account_id, _queue_name=CRON_QUEUE_NAME)
     await redis.close()
 
 
 async def queue_analysis(email_ids: list[int]):
-    """Queue an analysis job."""
+    """Queue an analysis job on the main queue."""
     redis = await create_pool(parse_redis_url(settings.redis_url))
     await redis.enqueue_job("analyze_emails_batch", email_ids)
     await redis.close()

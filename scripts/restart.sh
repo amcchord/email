@@ -93,6 +93,10 @@ fi
 if [ "$DO_WORKER" = true ]; then
     echo "[worker] Restarting background worker..."
     sudo systemctl restart mailworker
+    if systemctl list-unit-files mailworker-cron.service >/dev/null 2>&1; then
+        echo "[worker] Restarting cron worker..."
+        sudo systemctl restart mailworker-cron
+    fi
     echo "[worker] Done."
     RESTARTED="${RESTARTED} worker"
 fi

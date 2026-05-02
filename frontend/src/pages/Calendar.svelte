@@ -12,6 +12,29 @@
   let selectedEvent = $state(null);
   let hasLoaded = $state(false);
   let syncing = $state(false);
+  let syncStatuses = $state([]);
+
+  let erroredStatuses = $derived(
+    syncStatuses.filter(s => s && s.status === 'error')
+  );
+
+  async function loadSyncStatus() {
+    try {
+      const result = await api.getCalendarSyncStatus();
+      syncStatuses = Array.isArray(result) ? result : [];
+    } catch (err) {
+      console.error('Failed to load calendar sync status:', err);
+    }
+  }
+
+  async function reauthorize(accountId) {
+    try {
+      const result = await api.reauthorizeAccount(accountId);
+      window.location.href = result.auth_url;
+    } catch (err) {
+      showToast(err.message || 'Failed to start reauthorization', 'error');
+    }
+  }
 
   onMount(() => {
     const cleanupShortcuts = registerActions({
@@ -22,7 +45,12 @@
       'cal.week': () => calendarView.set('week'),
       'cal.day': () => calendarView.set('day'),
     });
-    return cleanupShortcuts;
+    loadSyncStatus();
+    const statusInterval = setInterval(loadSyncStatus, 60000);
+    return () => {
+      cleanupShortcuts();
+      clearInterval(statusInterval);
+    };
   });
 
   let selectedAccount = $derived(
@@ -61,6 +89,11 @@
       const params = { start, end };
       if ($selectedAccountId) {
         params.account_id = $selectedAccountId;
+      }
+      try {
+        params.tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      } catch {
+        // Fall through; backend defaults to UTC
       }
       const result = await api.getCalendarEvents(params);
       calendarEvents.set(result.events || []);
@@ -131,10 +164,11 @@
     try {
       await api.triggerCalendarSync($selectedAccountId || undefined);
       showToast('Calendar sync triggered', 'success');
-      // Poll for new events a few times after sync
-      setTimeout(loadEvents, 3000);
-      setTimeout(loadEvents, 8000);
-      setTimeout(loadEvents, 15000);
+      // Poll for new events and sync status a few times after triggering
+      const refresh = () => { loadEvents(); loadSyncStatus(); };
+      setTimeout(refresh, 3000);
+      setTimeout(refresh, 8000);
+      setTimeout(refresh, 15000);
     } catch (err) {
       showToast(err.message || 'Sync failed', 'error');
     } finally {
@@ -246,6 +280,31 @@
       </div>
     </div>
   </div>
+
+  {#if erroredStatuses.length > 0}
+    <div class="px-4 py-2 border-b shrink-0" style="background: var(--color-warning-bg, #fef3c7); border-color: var(--border-color)">
+      {#each erroredStatuses as s (s.account_id)}
+        <div class="flex items-center justify-between gap-3 py-1 text-sm">
+          <div class="flex items-center gap-2 min-w-0">
+            <Icon name="alert-triangle" size={16} />
+            <span class="font-medium truncate" style="color: var(--text-primary)">
+              {s.account_email || `Account ${s.account_id}`}
+            </span>
+            <span class="truncate" style="color: var(--text-secondary)">
+              {s.error_message || 'Calendar sync failed'}
+            </span>
+          </div>
+          <button
+            onclick={() => reauthorize(s.account_id)}
+            class="px-3 py-1 rounded-md text-xs font-medium border shrink-0 transition-fast hover:bg-black/5"
+            style="color: var(--text-primary); border-color: var(--border-color); background: var(--bg-primary)"
+          >
+            Reauthorize
+          </button>
+        </div>
+      {/each}
+    </div>
+  {/if}
 
   <!-- Calendar content -->
   <div class="flex-1 overflow-hidden">
