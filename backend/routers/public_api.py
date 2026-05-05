@@ -963,21 +963,59 @@ def _briefing_to_prompt_payload(briefing: PublicBriefing) -> dict:
     }
 
 
-_BRIEFING_PROMPT_SYSTEM = """You write short, concrete daily briefings for a busy person -- think morning newspaper editor, not corporate report.
+_BRIEFING_PROMPT_SYSTEM_TMPL = """You write short, concrete daily briefings for a busy person -- think morning newspaper editor, not corporate report.
+
+Length target:
+- Aim for roughly {char_target} characters of plain text. {length_guidance}
+- This is a soft target: a little over or under is fine. Never leave a sentence half-finished to hit the number.
 
 Style:
-- 2-3 short paragraphs, plain text (no markdown bullet lists, no headings).
+- Plain text (no markdown bullet lists, no headings).
 - Lead with what matters most about today.
 - Mention specific calendar items by title and time when they are important; skip routine blocks.
-- Mention 1-3 specific emails or threads that the user should engage with, by sender.
-- End with a brief week-ahead note if anything notable is coming up.
+- Mention specific emails or threads the user should engage with, by sender, when space allows.
+- If the target length permits, end with a brief week-ahead note about anything notable coming up.
 - Don't restate raw counts mechanically; weave them into prose ("today is unusually quiet", "your inbox is up about 30% this week").
-- If there is little going on, say so plainly. Don't pad."""
+- If there is little going on, say so plainly. Don't pad to hit the length."""
+
+
+def _length_guidance(char_target: int) -> str:
+    """Style hint that scales with the requested length."""
+    if char_target <= 200:
+        return "One tight sentence. Single most important thing only."
+    if char_target <= 400:
+        return "1-2 sentences. Today's headline and at most one other beat."
+    if char_target <= 800:
+        return "2-3 short paragraphs. Today, then one note about emails or the week ahead."
+    if char_target <= 1500:
+        return "3-4 paragraphs. Cover today, the week's anchor events, and 2-3 specific emails or threads."
+    return "Up to a full column. Cover today thoroughly, name multiple specific events and threads, and end with a real week-ahead outlook."
+
+
+def _trim_to_chars(text: str, char_target: int) -> str:
+    """Soft trim if Claude overshot the requested length.
+
+    Uses 1.4x the target as a forgiving ceiling so well-balanced prose isn't chopped.
+    Trims at the last sentence boundary inside the budget when possible.
+    """
+    if not text:
+        return text
+    ceiling = max(int(char_target * 1.4), char_target + 80)
+    if len(text) <= ceiling:
+        return text
+    cut = text[:ceiling]
+    for sep in (". ", "! ", "? ", "\n\n"):
+        idx = cut.rfind(sep)
+        if idx >= int(char_target * 0.6):
+            return cut[: idx + len(sep)].rstrip()
+    return cut.rstrip() + "\u2026"
 
 
 async def _generate_briefing_summary(
     user: User,
     briefing: PublicBriefing,
+    *,
+    char_target: int,
 ) -> tuple[str, str, int]:
     """Call Claude once to write the briefing prose. Returns (summary, model, tokens)."""
     from backend.config import get_settings as _gs
@@ -996,14 +1034,23 @@ async def _generate_briefing_summary(
         f"```json\n{json.dumps(payload, default=str)[:60000]}\n```"
     )
 
+    system_prompt = _BRIEFING_PROMPT_SYSTEM_TMPL.format(
+        char_target=char_target,
+        length_guidance=_length_guidance(char_target),
+    )
+
+    # ~4 chars per token, plus generous headroom so Claude can finish a sentence
+    # past the soft target without getting cut off; clamp to a sane ceiling.
+    max_tokens = max(120, min(int(char_target / 4 * 1.6) + 80, 2400))
+
     try:
         import anthropic
 
         client = anthropic.AsyncAnthropic(api_key=settings_local.claude_api_key)
         resp = await client.messages.create(
             model=model,
-            max_tokens=900,
-            system=_BRIEFING_PROMPT_SYSTEM,
+            max_tokens=max_tokens,
+            system=system_prompt,
             messages=[{"role": "user", "content": user_prompt}],
         )
     except HTTPException:
@@ -1016,6 +1063,7 @@ async def _generate_briefing_summary(
         b.text for b in resp.content if getattr(b, "type", None) == "text"
     ]
     text = "\n".join(text_parts).strip()
+    text = _trim_to_chars(text, char_target)
     tokens = (resp.usage.input_tokens or 0) + (resp.usage.output_tokens or 0)
     return text, model, tokens
 
@@ -1027,15 +1075,18 @@ async def _build_briefing(
     days: int,
     zone: ZoneInfo,
     include_summary: bool,
+    important_limit: int = 20,
+    digests_limit: int = 10,
+    summary_chars: int = 600,
 ) -> PublicBriefing:
     accounts = await _get_account_map(db, user)
 
     week_task = _build_week(db, user, accounts, days=days, zone=zone)
     important_task = _fetch_important_emails(
-        db, accounts, limit=20, unread_only=True, days=14, mailbox="INBOX"
+        db, accounts, limit=important_limit, unread_only=True, days=14, mailbox="INBOX"
     )
     digests_task = _fetch_recent_digests(
-        db, accounts, limit=10, unresolved_only=False
+        db, accounts, limit=digests_limit, unresolved_only=False
     )
     volume_task = _fetch_email_volume(db, accounts, days=7, zone=zone)
     unread_task = _compute_unread(db, accounts)
@@ -1071,10 +1122,13 @@ async def _build_briefing(
     )
 
     if include_summary:
-        summary, model, tokens = await _generate_briefing_summary(user, briefing)
+        summary, model, tokens = await _generate_briefing_summary(
+            user, briefing, char_target=summary_chars
+        )
         briefing.summary = summary
         briefing.meta.summary_model = model
         briefing.meta.summary_tokens_used = tokens
+        briefing.meta.summary_char_target = summary_chars
 
     return briefing
 
@@ -1115,6 +1169,24 @@ async def briefing(
     tz: Optional[str] = Query(None, description="IANA timezone for day bucketing."),
     days: int = Query(7, ge=1, le=14, description="How many days to include in week_ahead."),
     summary: bool = Query(False, description="If true, also generates a Claude-written prose briefing."),
+    summary_chars: int = Query(
+        600,
+        ge=100,
+        le=4000,
+        description="Soft target length for the AI prose summary, in characters. Ignored when summary=false.",
+    ),
+    important_limit: int = Query(
+        20,
+        ge=1,
+        le=100,
+        description="Maximum number of important_emails to return.",
+    ),
+    digests_limit: int = Query(
+        10,
+        ge=1,
+        le=50,
+        description="Maximum number of recent_digests to return.",
+    ),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_api_user),
 ):
@@ -1125,7 +1197,16 @@ async def briefing(
     this endpoint with ?summary=true frequently, prefer that split instead.
     """
     zone = _resolve_tz(tz)
-    return await _build_briefing(db, user, days=days, zone=zone, include_summary=summary)
+    return await _build_briefing(
+        db,
+        user,
+        days=days,
+        zone=zone,
+        include_summary=summary,
+        important_limit=important_limit,
+        digests_limit=digests_limit,
+        summary_chars=summary_chars,
+    )
 
 
 @router.get("/briefing/summary", response_model=PublicBriefingSummaryResponse)
@@ -1134,16 +1215,44 @@ async def briefing_summary(
     request: Request,
     tz: Optional[str] = Query(None, description="IANA timezone for day bucketing."),
     days: int = Query(7, ge=1, le=14),
+    chars: int = Query(
+        600,
+        ge=100,
+        le=4000,
+        description="Soft target length for the AI prose summary, in characters.",
+    ),
+    important_limit: int = Query(
+        20,
+        ge=1,
+        le=100,
+        description="Number of important emails to feed Claude when composing the prose.",
+    ),
+    digests_limit: int = Query(
+        10,
+        ge=1,
+        le=50,
+        description="Number of recent thread digests to feed Claude when composing the prose.",
+    ),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_api_user),
 ):
     """Just the Claude-written prose briefing. Useful when you poll /briefing separately."""
     zone = _resolve_tz(tz)
-    briefing = await _build_briefing(db, user, days=days, zone=zone, include_summary=True)
+    briefing = await _build_briefing(
+        db,
+        user,
+        days=days,
+        zone=zone,
+        include_summary=True,
+        important_limit=important_limit,
+        digests_limit=digests_limit,
+        summary_chars=chars,
+    )
     return PublicBriefingSummaryResponse(
         summary=briefing.summary or "",
         model=briefing.meta.summary_model or "",
         tokens_used=briefing.meta.summary_tokens_used or 0,
+        char_target=briefing.meta.summary_char_target or chars,
         generated_at=briefing.meta.generated_at,
         timezone=briefing.meta.timezone,
     )

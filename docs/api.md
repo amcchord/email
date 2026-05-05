@@ -351,15 +351,22 @@ The "newspaper front page". One call returns today, tomorrow, the week
 ahead, important emails, recent thread digests, recent volume, and unread
 counts. Ideal for an e-ink display or a morning dashboard.
 
-| param     | type   | default | notes                                  |
-|-----------|--------|---------|----------------------------------------|
-| `tz`      | string | `UTC`   | IANA timezone for day bucketing        |
-| `days`    | int    | 7       | 1–14; how many days in `week_ahead`    |
-| `summary` | bool   | false   | If true, also generates a Claude-written prose briefing (counts against the 10/min AI tier) |
+| param             | type   | default | notes                                                                      |
+|-------------------|--------|---------|----------------------------------------------------------------------------|
+| `tz`              | string | `UTC`   | IANA timezone for day bucketing                                            |
+| `days`            | int    | 7       | 1–14; how many days in `week_ahead`                                        |
+| `summary`         | bool   | false   | If true, also generates a Claude-written prose briefing (counts against the 10/min AI tier) |
+| `summary_chars`   | int    | 600     | 100–4000. Soft target for the AI prose length, in characters. Ignored when `summary=false`. The model is told to aim for this length and the response is soft-trimmed at sentence boundaries if it overshoots by more than ~40%. |
+| `important_limit` | int    | 20      | 1–100. Number of `important_emails` to include.                            |
+| `digests_limit`   | int    | 10      | 1–50. Number of `recent_digests` to include.                               |
 
 Without `summary=true` the endpoint runs purely against the database and
 parallelises its sub-queries; expect ~50–150 ms typical latency. With
-`summary=true` it then makes one Claude call (a few seconds, ~1k tokens).
+`summary=true` it then makes one Claude call (a few seconds; token budget
+scales with `summary_chars`).
+
+The `important_limit` value also bounds how many emails feed into the AI
+prose, so trimming it makes the prose call faster and cheaper as well.
 
 ```json
 {
@@ -387,16 +394,30 @@ parallelises its sub-queries; expect ~50–150 ms typical latency. With
 Just the Claude-written prose. Useful when you poll `/briefing` (the data
 part) on a fast cadence and refresh the prose less frequently.
 
-| param  | type   | default | notes                                  |
-|--------|--------|---------|----------------------------------------|
-| `tz`   | string | `UTC`   | IANA timezone for day bucketing        |
-| `days` | int    | 7       | 1–14                                   |
+| param             | type   | default | notes                                                       |
+|-------------------|--------|---------|-------------------------------------------------------------|
+| `tz`              | string | `UTC`   | IANA timezone for day bucketing                             |
+| `days`            | int    | 7       | 1–14                                                        |
+| `chars`           | int    | 600     | 100–4000. Soft target for prose length in characters.       |
+| `important_limit` | int    | 20      | 1–100. How many important emails to feed Claude as context. |
+| `digests_limit`   | int    | 10      | 1–50. How many recent digests to feed Claude as context.    |
+
+Length guidance the model gets, by `chars` value:
+
+| `chars` | Style                                                                  |
+|---------|------------------------------------------------------------------------|
+| ≤ 200   | One tight sentence; single most important thing only                   |
+| ≤ 400   | 1–2 sentences; today's headline plus at most one other beat            |
+| ≤ 800   | 2–3 short paragraphs                                                   |
+| ≤ 1500  | 3–4 paragraphs covering today, anchor events, and 2–3 specific threads |
+| > 1500  | A full column with multiple specific events/threads and a real outlook |
 
 ```json
 {
   "summary": "Your morning is light...",
   "model": "claude-sonnet-4-6",
   "tokens_used": 920,
+  "char_target": 600,
   "generated_at": "2026-05-02T13:46:00+00:00",
   "timezone": "America/New_York"
 }
@@ -518,16 +539,17 @@ HOST="https://email.example.com"
 TZ="America/New_York"
 
 # Every 5 minutes -- cheap composite payload (no Claude call)
+# Trim what you don't need with important_limit / digests_limit
 curl -s -H "Authorization: Bearer $TOKEN" \
-  "$HOST/api/v1/briefing?tz=$TZ&days=7"
+  "$HOST/api/v1/briefing?tz=$TZ&days=7&important_limit=10&digests_limit=5"
 
-# Every 30 minutes -- refresh the AI-written prose
+# Every 30 minutes -- refresh the AI-written prose, sized to a small e-ink screen
 curl -s -H "Authorization: Bearer $TOKEN" \
-  "$HOST/api/v1/briefing/summary?tz=$TZ&days=7"
+  "$HOST/api/v1/briefing/summary?tz=$TZ&days=7&chars=400"
 
 # A single one-shot call that includes everything (counts against the 10/min AI tier)
 curl -s -H "Authorization: Bearer $TOKEN" \
-  "$HOST/api/v1/briefing?tz=$TZ&days=7&summary=true"
+  "$HOST/api/v1/briefing?tz=$TZ&days=7&summary=true&summary_chars=800&important_limit=15"
 ```
 
 For a richer "feel for the week ahead" view, combine `/calendar/week`

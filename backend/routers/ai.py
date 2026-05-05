@@ -1225,7 +1225,7 @@ async def get_thread_digests(
     result = await db.execute(
         select(ThreadDigest)
         .where(*where_clauses)
-        .order_by(desc(ThreadDigest.latest_date))
+        .order_by(desc(ThreadDigest.latest_date).nullslast())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )
@@ -1284,7 +1284,7 @@ async def get_email_bundles(
     result = await db.execute(
         select(EmailBundle)
         .where(*where_clauses)
-        .order_by(desc(EmailBundle.latest_date))
+        .order_by(desc(EmailBundle.latest_date).nullslast())
         .offset((page - 1) * page_size)
         .limit(page_size)
     )

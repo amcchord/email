@@ -108,6 +108,26 @@ export const api = {
   createApiToken: (name) => request('POST', '/auth/api-tokens', { name }),
   revokeApiToken: (id) => request('DELETE', `/auth/api-tokens/${id}`),
 
+  // E-Ink Terminals (per-user short-code dashboards + Home Assistant link)
+  getTerminalSettings: () => request('GET', '/terminal/settings'),
+  regenerateTerminalCode: () => request('POST', '/terminal/settings/regenerate', {}),
+  setHomeAssistant: (payload) => request('PUT', '/terminal/settings/home-assistant', payload),
+  setTerminalTimezone: (timezone) => request('PUT', '/terminal/settings/timezone', { timezone }),
+  listTerminals: () => request('GET', '/terminal/devices'),
+  updateTerminal: (id, payload) => request('PATCH', `/terminal/devices/${id}`, payload),
+  deleteTerminal: (id) => request('DELETE', `/terminal/devices/${id}`),
+  testHomeAssistant: () => request('POST', '/terminal/ha/test', {}),
+  // URL builder for the post-quantize preview <img>; uses cookie auth.
+  terminalPreviewPngUrl: (id, palette = null, cacheBuster = null) => {
+    const params = new URLSearchParams();
+    if (palette) params.set('palette', palette);
+    if (cacheBuster) params.set('t', String(cacheBuster));
+    const qs = params.toString();
+    let q = '';
+    if (qs) q = `?${qs}`;
+    return `/api/terminal/devices/${id}/preview.png${q}`;
+  },
+
   // Emails
   listEmails: (params = {}) => {
     const searchParams = new URLSearchParams();

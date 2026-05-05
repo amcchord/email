@@ -75,6 +75,7 @@
     { id: 'profile', label: 'Profile & Accounts', adminOnly: false },
     { id: 'ai-models', label: 'AI Models', adminOnly: false },
     { id: 'preferences', label: 'Preferences', adminOnly: false },
+    { id: 'terminals', label: 'E-Ink Terminals', adminOnly: false },
     { id: 'data', label: 'Data Management', adminOnly: false },
     { id: 'dashboard', label: 'Dashboard', adminOnly: true },
     { id: 'apikeys', label: 'API Keys', adminOnly: true },
@@ -149,8 +150,16 @@
       allowedAccounts = allowed.allowed_accounts || '';
       allowedLoaded = true;
 
-      // Always load AI preferences, About Me, UI preferences, feature flags, and API tokens (available to all users)
-      await Promise.all([loadAIPreferences(), loadAboutMe(), loadUIPreferences(), loadFeatureFlags(), loadApiTokens()]);
+      // Always load AI preferences, About Me, UI preferences, feature flags, API tokens, and terminal settings (available to all users)
+      await Promise.all([
+        loadAIPreferences(),
+        loadAboutMe(),
+        loadUIPreferences(),
+        loadFeatureFlags(),
+        loadApiTokens(),
+        loadTerminalSettings(),
+        loadTerminals(),
+      ]);
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -746,6 +755,305 @@
     }
     accountDescSaving = { ...accountDescSaving, [accountId]: false };
   }
+
+  // ── E-Ink Terminals ─────────────────────────────────────────────
+  let terminalSettings = $state(null);
+  let terminalSettingsLoaded = $state(false);
+  let terminals = $state([]);
+  let terminalsLoaded = $state(false);
+  let terminalsRefreshing = $state(false);
+  let terminalRowSaving = $state({});
+  let haUrlInput = $state('');
+  let haTokenInput = $state('');
+  let haSaving = $state(false);
+  let regenLoading = $state(false);
+  let copyHint = $state('');
+  let tzInput = $state('');
+  let tzSaving = $state(false);
+
+  // Common IANA zones surfaced as quick picks. Users can type any other valid
+  // zone (server validates against the system zoneinfo db) into the input.
+  const TIMEZONE_PRESETS = [
+    'America/New_York',
+    'America/Chicago',
+    'America/Denver',
+    'America/Los_Angeles',
+    'America/Anchorage',
+    'America/Phoenix',
+    'America/Toronto',
+    'Europe/London',
+    'Europe/Paris',
+    'Europe/Berlin',
+    'Europe/Madrid',
+    'Asia/Tokyo',
+    'Asia/Shanghai',
+    'Asia/Kolkata',
+    'Australia/Sydney',
+    'UTC',
+  ];
+
+  function terminalBaseUrl() {
+    if (!terminalSettings?.code) return '';
+    return `${window.location.origin}/terminal/${terminalSettings.code}`;
+  }
+
+  function terminalScheduleUrl(variantQuery) {
+    const base = terminalBaseUrl();
+    if (!base) return '';
+    if (!variantQuery) return `${base}/schedule.json`;
+    return `${base}/schedule.json?variant=${encodeURIComponent(variantQuery)}`;
+  }
+
+  async function loadTerminalSettings() {
+    try {
+      const s = await api.getTerminalSettings();
+      terminalSettings = s;
+      haUrlInput = s.home_assistant_url || '';
+      tzInput = s.timezone || '';
+      terminalSettingsLoaded = true;
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  async function loadTerminals() {
+    try {
+      terminals = await api.listTerminals();
+      terminalsLoaded = true;
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  async function refreshTerminals() {
+    terminalsRefreshing = true;
+    await loadTerminals();
+    terminalsRefreshing = false;
+  }
+
+  async function regenerateTerminalCode() {
+    if (!confirm('Regenerate the terminal short code? All existing devices will need their firmware URL updated to the new code before they can check in again.')) return;
+    regenLoading = true;
+    try {
+      const s = await api.regenerateTerminalCode();
+      terminalSettings = s;
+      showToast('Terminal code regenerated', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    regenLoading = false;
+  }
+
+  async function copyToClipboard(text, hint = 'Copied') {
+    try {
+      await navigator.clipboard.writeText(text);
+      copyHint = hint;
+      setTimeout(() => { if (copyHint === hint) copyHint = ''; }, 1200);
+    } catch {
+      showToast('Copy failed -- select and copy manually', 'error');
+    }
+  }
+
+  async function saveTerminalTimezone() {
+    const tz = (tzInput || '').trim();
+    if (!tz) {
+      showToast('Enter an IANA timezone (e.g. America/New_York)', 'error');
+      return;
+    }
+    if (terminalSettings && tz === (terminalSettings.timezone || '')) return;
+    tzSaving = true;
+    try {
+      const s = await api.setTerminalTimezone(tz);
+      terminalSettings = s;
+      tzInput = s.timezone || '';
+      showToast('Timezone saved', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    tzSaving = false;
+  }
+
+  async function saveHomeAssistant() {
+    haSaving = true;
+    try {
+      const payload = {
+        home_assistant_url: haUrlInput.trim(),
+        home_assistant_token: haTokenInput.trim() || null,
+      };
+      const s = await api.setHomeAssistant(payload);
+      terminalSettings = s;
+      haTokenInput = '';
+      showToast('Home Assistant settings saved', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    haSaving = false;
+  }
+
+  async function clearHomeAssistant() {
+    if (!confirm('Clear Home Assistant URL and access token?')) return;
+    haSaving = true;
+    try {
+      const s = await api.setHomeAssistant({ clear: true });
+      terminalSettings = s;
+      haUrlInput = '';
+      haTokenInput = '';
+      showToast('Home Assistant settings cleared', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    haSaving = false;
+  }
+
+  async function renameTerminal(device, newName) {
+    const name = (newName || '').trim();
+    if (name === (device.name || '').trim()) return;
+    terminalRowSaving = { ...terminalRowSaving, [device.id]: true };
+    try {
+      const updated = await api.updateTerminal(device.id, { name });
+      terminals = terminals.map(d => d.id === updated.id ? updated : d);
+      showToast('Terminal renamed', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    terminalRowSaving = { ...terminalRowSaving, [device.id]: false };
+  }
+
+  async function setTerminalContentType(device, contentType) {
+    if (contentType === device.content_type) return;
+    terminalRowSaving = { ...terminalRowSaving, [device.id]: true };
+    try {
+      const updated = await api.updateTerminal(device.id, { content_type: contentType });
+      terminals = terminals.map(d => d.id === updated.id ? updated : d);
+      showToast('Content updated', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    terminalRowSaving = { ...terminalRowSaving, [device.id]: false };
+  }
+
+  async function setTerminalRefreshInterval(device, value) {
+    // value is the literal <option> value: a string of digits, or '' for "default"
+    const parsed = value === '' || value === null || value === undefined ? null : parseInt(value, 10);
+    if (parsed === device.refresh_interval_sec) return;
+    terminalRowSaving = { ...terminalRowSaving, [device.id]: true };
+    try {
+      let payload;
+      if (parsed === null) {
+        payload = { refresh_interval_clear: true };
+      } else {
+        payload = { refresh_interval_sec: parsed };
+      }
+      const updated = await api.updateTerminal(device.id, payload);
+      terminals = terminals.map(d => d.id === updated.id ? updated : d);
+      showToast('Refresh rate updated', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    terminalRowSaving = { ...terminalRowSaving, [device.id]: false };
+  }
+
+  function formatIntervalSec(sec) {
+    if (!sec || sec <= 0) return '—';
+    if (sec < 60) return `${sec}s`;
+    if (sec < 3600) return `${Math.round(sec / 60)}m`;
+    if (sec < 86400) return `${Math.round(sec / 360) / 10}h`.replace('.0h', 'h');
+    return `${Math.round(sec / 8640) / 10}d`;
+  }
+
+  async function deleteTerminal(device) {
+    if (!confirm(`Forget terminal "${device.name || device.mac}"? It will reappear on its next check-in.`)) return;
+    try {
+      await api.deleteTerminal(device.id);
+      terminals = terminals.filter(d => d.id !== device.id);
+      showToast('Terminal forgotten', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+  }
+
+  async function setTerminalDesign(device, design) {
+    const cur = (device.content_config && device.content_config.design) || 'editorial';
+    if (design === cur) return;
+    terminalRowSaving = { ...terminalRowSaving, [device.id]: true };
+    try {
+      const updated = await api.updateTerminal(device.id, {
+        content_config: { ...(device.content_config || {}), design },
+      });
+      terminals = terminals.map(d => d.id === updated.id ? updated : d);
+      showToast('Design updated', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    terminalRowSaving = { ...terminalRowSaving, [device.id]: false };
+  }
+
+  // ── Home Assistant connection test ─────────────────────────────
+  let haTesting = $state(false);
+  let haTestResult = $state(null); // { ok: bool, entity_count: int, error?: string }
+  async function testHomeAssistantConnection() {
+    haTesting = true;
+    haTestResult = null;
+    try {
+      haTestResult = await api.testHomeAssistant();
+    } catch (err) {
+      haTestResult = { ok: false, error: err.message || 'Unknown error' };
+    }
+    haTesting = false;
+  }
+
+  // ── E-Ink preview modal ────────────────────────────────────────
+  let previewDevice = $state(null);
+  let previewPaletteOverride = $state(null); // null|'six'|'bw' (null = device default)
+  let previewPngBuster = $state(0);
+  let previewAutoRefreshTimer = null;
+
+  function openPreview(device) {
+    previewDevice = device;
+    previewPaletteOverride = null;
+    previewPngBuster = Date.now();
+    if (previewAutoRefreshTimer) clearInterval(previewAutoRefreshTimer);
+    previewAutoRefreshTimer = setInterval(() => {
+      previewPngBuster = Date.now();
+    }, 30000);
+  }
+  function closePreview() {
+    previewDevice = null;
+    if (previewAutoRefreshTimer) {
+      clearInterval(previewAutoRefreshTimer);
+      previewAutoRefreshTimer = null;
+    }
+  }
+  function refreshPreviewPng() {
+    previewPngBuster = Date.now();
+  }
+
+  function previewPngUrl() {
+    if (!previewDevice) return '';
+    return api.terminalPreviewPngUrl(previewDevice.id, previewPaletteOverride, previewPngBuster);
+  }
+
+  function einkFieldsGridCols(isEink) {
+    if (isEink) return 'sm:grid-cols-3';
+    return 'sm:grid-cols-2';
+  }
+  function paletteTabBg(active) {
+    if (active) return 'var(--color-accent-500)';
+    return 'var(--bg-secondary)';
+  }
+  function paletteTabFg(active) {
+    if (active) return 'white';
+    return 'var(--text-secondary)';
+  }
+
+  function formatRelative(ts) {
+    if (!ts) return 'never';
+    const diff = (Date.now() - new Date(ts).getTime()) / 1000;
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+  }
 </script>
 
 <div class="h-full overflow-y-auto" style="background: var(--bg-primary)">
@@ -1116,7 +1424,356 @@
             </div>
           {/if}
         </div>
+
       </div>
+
+    {:else if activeTab === 'terminals'}
+      <!-- E-Ink Terminals (per-user short URL + Home Assistant settings + device cards) -->
+      <div class="space-y-6">
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">E-Ink Terminals</h3>
+          <p class="text-xs" style="color: var(--text-tertiary)">
+            Point a SeeedStudio reTerminal (E1001 / E1002 / E1004) at your personal short URL below.
+            All of your devices share one URL; the server identifies each panel by its MAC address.
+            See <code style="color: var(--text-secondary)">docs/terminal/</code> for the firmware-side protocol.
+          </p>
+        </div>
+
+        {#if !terminalSettingsLoaded}
+          <div class="rounded-xl border p-5 text-xs" style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-tertiary)">Loading...</div>
+        {:else if terminalSettings}
+          <!-- Schedule URLs (one card per panel variant) -->
+          <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+            <div class="flex items-center justify-between mb-3">
+              <div>
+                <h4 class="text-sm font-semibold" style="color: var(--text-primary)">Firmware schedule URLs</h4>
+                <p class="text-[11px] mt-0.5" style="color: var(--text-tertiary)">Paste one of these into your reTerminal's <code>data/config.json</code> as <code>schedule_url</code>.</p>
+              </div>
+              <Button size="sm" onclick={regenerateTerminalCode} disabled={regenLoading}>
+                {regenLoading ? 'Regenerating…' : 'Regenerate code'}
+              </Button>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              {#each terminalSettings.variants as v (v.key)}
+                {@const url = terminalScheduleUrl(v.query)}
+                <div class="rounded-lg border p-3" style="background: var(--bg-primary); border-color: var(--border-color)">
+                  <div class="flex items-baseline justify-between gap-3 mb-1">
+                    <div class="text-xs font-semibold" style="color: var(--text-primary)">{v.image_format}</div>
+                    <div class="text-[11px] whitespace-nowrap" style="color: var(--text-tertiary)">{v.width}×{v.height} · wake {v.next_checkin_sec}s</div>
+                  </div>
+                  <div class="flex gap-2 items-stretch">
+                    <code class="flex-1 px-2 py-1.5 rounded-md text-[11px] break-all border" style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary)">{url}</code>
+                    <Button size="sm" onclick={() => copyToClipboard(url, `Copied ${v.key}`)}>
+                      {copyHint === `Copied ${v.key}` ? 'Copied' : 'Copy'}
+                    </Button>
+                  </div>
+                </div>
+              {/each}
+            </div>
+          </div>
+
+          <!-- Timezone -->
+          <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+            <h4 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Clock timezone</h4>
+            <p class="text-xs mb-3" style="color: var(--text-tertiary)">
+              IANA timezone used to render the clock on every panel. Pick a preset or type any zone the server's tzdata knows
+              (e.g. <code style="color: var(--text-secondary)">America/New_York</code>, <code style="color: var(--text-secondary)">Europe/Berlin</code>).
+            </p>
+            <div class="flex flex-wrap items-stretch gap-2">
+              <input
+                type="text"
+                bind:value={tzInput}
+                list="terminal-timezone-presets"
+                placeholder="America/New_York"
+                spellcheck="false"
+                autocomplete="off"
+                class="h-9 px-3 rounded-lg text-sm outline-none border min-w-[16rem] flex-1"
+                style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+              />
+              <datalist id="terminal-timezone-presets">
+                {#each TIMEZONE_PRESETS as tz}
+                  <option value={tz}></option>
+                {/each}
+              </datalist>
+              <Button variant="primary" size="sm" onclick={saveTerminalTimezone} disabled={tzSaving}>
+                {tzSaving ? 'Saving…' : 'Save'}
+              </Button>
+            </div>
+            {#if terminalSettings.timezone}
+              <p class="text-[11px] mt-2" style="color: var(--text-tertiary)">
+                Currently rendering as <code style="color: var(--text-secondary)">{terminalSettings.timezone}</code>.
+              </p>
+            {/if}
+          </div>
+
+          <!-- Home Assistant -->
+          <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+            <h4 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Home Assistant</h4>
+            <p class="text-xs mb-4" style="color: var(--text-tertiary)">
+              Optional. Future content types (calendar, sensors, dashboards) will pull from this Home Assistant instance.
+              The token is stored encrypted and never returned through the API.
+            </p>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+              <div>
+                <label class="block text-[11px] mb-1" style="color: var(--text-tertiary)">Base URL</label>
+                <input
+                  type="url"
+                  bind:value={haUrlInput}
+                  placeholder="https://homeassistant.local:8123"
+                  class="w-full h-9 px-3 rounded-lg text-sm outline-none border"
+                  style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+                />
+              </div>
+              <div>
+                <label class="block text-[11px] mb-1" style="color: var(--text-tertiary)">
+                  Long-lived access token
+                  {#if terminalSettings.home_assistant_token_set}
+                    <span style="color: var(--status-success, #10b981)">· saved</span>
+                  {/if}
+                </label>
+                <input
+                  type="password"
+                  bind:value={haTokenInput}
+                  placeholder={terminalSettings.home_assistant_token_set ? '(token saved · enter new to replace)' : 'eyJ…'}
+                  class="w-full h-9 px-3 rounded-lg text-sm outline-none border"
+                  style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+                />
+              </div>
+            </div>
+            <div class="flex gap-2 items-center flex-wrap">
+              <Button variant="primary" size="sm" onclick={saveHomeAssistant} disabled={haSaving}>
+                {haSaving ? 'Saving…' : 'Save'}
+              </Button>
+              <Button size="sm" onclick={testHomeAssistantConnection} disabled={haTesting || !terminalSettings.home_assistant_url || !terminalSettings.home_assistant_token_set}>
+                {haTesting ? 'Testing…' : 'Test connection'}
+              </Button>
+              {#if terminalSettings.home_assistant_url || terminalSettings.home_assistant_token_set}
+                <Button size="sm" variant="danger" onclick={clearHomeAssistant} disabled={haSaving}>Clear</Button>
+              {/if}
+              {#if haTestResult}
+                {#if haTestResult.ok}
+                  <span class="text-[11px]" style="color: var(--status-success, #10b981)">
+                    Connected · {haTestResult.entity_count} entities
+                  </span>
+                {:else}
+                  <span class="text-[11px]" style="color: var(--status-error, #ef4444)">
+                    Failed: {haTestResult.error}
+                  </span>
+                {/if}
+              {/if}
+            </div>
+          </div>
+        {/if}
+
+        <!-- Devices (one card per device) -->
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <h4 class="text-sm font-semibold" style="color: var(--text-primary)">Checked-in devices</h4>
+              <p class="text-[11px] mt-0.5" style="color: var(--text-tertiary)">Devices auto-register on their first wake. "Forget" deletes the row; the device will reappear with default settings on its next check-in.</p>
+            </div>
+            <Button size="sm" onclick={refreshTerminals} disabled={terminalsRefreshing}>
+              {terminalsRefreshing ? 'Refreshing…' : 'Refresh'}
+            </Button>
+          </div>
+
+          {#if !terminalsLoaded}
+            <div class="text-xs" style="color: var(--text-tertiary)">Loading...</div>
+          {:else if terminals.length === 0}
+            <div class="rounded-lg border p-4 text-xs" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-tertiary)">
+              No devices have checked in yet. Configure your reTerminal firmware to point at one of the URLs above; it will register automatically on its first wake.
+            </div>
+          {:else}
+            <div class="space-y-3">
+              {#each terminals as d (d.id)}
+                {@const saving = !!terminalRowSaving[d.id]}
+                {@const isEink = d.content_type === 'eink_dashboard'}
+                {@const designKey = (d.content_config && d.content_config.design) || 'editorial'}
+                {@const fieldsGridCols = einkFieldsGridCols(isEink)}
+                <div class="rounded-lg border p-4" style="background: var(--bg-primary); border-color: var(--border-color)">
+                  <!-- Header: name + variant + Forget -->
+                  <div class="flex items-start justify-between gap-3 mb-3">
+                    <div class="flex-1 min-w-0">
+                      <input
+                        type="text"
+                        value={d.name}
+                        onblur={(e) => renameTerminal(d, e.target.value)}
+                        onkeydown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                        disabled={saving}
+                        placeholder="Terminal name"
+                        class="w-full h-9 px-3 rounded-lg text-sm font-semibold outline-none border"
+                        style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary)"
+                      />
+                      <div class="flex flex-wrap gap-x-3 gap-y-1 mt-1.5 text-[11px]" style="color: var(--text-tertiary)">
+                        <span class="font-mono">{d.mac}</span>
+                        <span>{d.variant || 'unknown variant'}</span>
+                        <span>last seen {formatRelative(d.last_seen_at)}</span>
+                        {#if d.last_wake_reason}<span>wake: {d.last_wake_reason}</span>{/if}
+                      </div>
+                    </div>
+                    <div class="flex flex-col gap-2 shrink-0">
+                      <Button size="sm" onclick={() => openPreview(d)}>
+                        Preview
+                      </Button>
+                      <Button size="sm" variant="danger" onclick={() => deleteTerminal(d)}>
+                        Forget
+                      </Button>
+                    </div>
+                  </div>
+
+                  <!-- Editable fields -->
+                  <div class="grid grid-cols-1 {fieldsGridCols} gap-3">
+                    <div>
+                      <label class="block text-[11px] mb-1" style="color: var(--text-tertiary)">Content</label>
+                      <select
+                        value={d.content_type}
+                        onchange={(e) => setTerminalContentType(d, e.target.value)}
+                        disabled={saving || !terminalSettings}
+                        class="w-full h-9 px-2 rounded-lg text-sm outline-none border"
+                        style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary)"
+                      >
+                        {#each (terminalSettings?.content_types || []) as ct (ct.key)}
+                          <option value={ct.key} disabled={!ct.available && ct.key !== d.content_type}>
+                            {ct.label}
+                          </option>
+                        {/each}
+                      </select>
+                    </div>
+                    {#if isEink}
+                      <div>
+                        <label class="block text-[11px] mb-1" style="color: var(--text-tertiary)">Design</label>
+                        <select
+                          value={designKey}
+                          onchange={(e) => setTerminalDesign(d, e.target.value)}
+                          disabled={saving || !terminalSettings}
+                          class="w-full h-9 px-2 rounded-lg text-sm outline-none border"
+                          style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary)"
+                        >
+                          {#each (terminalSettings?.designs || [{key:'editorial',label:'Editorial'},{key:'swiss',label:'Swiss'}]) as opt (opt.key)}
+                            <option value={opt.key}>{opt.label}</option>
+                          {/each}
+                        </select>
+                      </div>
+                    {/if}
+                    <div>
+                      <label class="block text-[11px] mb-1" style="color: var(--text-tertiary)">
+                        Refresh rate
+                        <span style="color: var(--text-tertiary)">· now {formatIntervalSec(d.effective_refresh_interval_sec)}</span>
+                      </label>
+                      <select
+                        value={d.refresh_interval_sec == null ? '' : String(d.refresh_interval_sec)}
+                        onchange={(e) => setTerminalRefreshInterval(d, e.target.value)}
+                        disabled={saving || !terminalSettings}
+                        class="w-full h-9 px-2 rounded-lg text-sm outline-none border"
+                        style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary)"
+                      >
+                        {#each (terminalSettings?.refresh_interval_presets || []) as p}
+                          <option value={p.value == null ? '' : String(p.value)}>{p.label}</option>
+                        {/each}
+                      </select>
+                    </div>
+                  </div>
+
+                  <!-- Telemetry footer -->
+                  <div class="flex flex-wrap gap-x-4 gap-y-1 mt-3 pt-3 text-[11px] border-t" style="border-color: var(--border-color); color: var(--text-tertiary)">
+                    <span>
+                      Battery:
+                      <span style="color: var(--text-secondary)">
+                        {d.last_battery_pct != null ? `${d.last_battery_pct}% (${d.last_battery_mv} mV)` : '—'}
+                      </span>
+                    </span>
+                    <span>
+                      RSSI:
+                      <span style="color: var(--text-secondary)">{d.last_rssi_dbm != null ? `${d.last_rssi_dbm} dBm` : '—'}</span>
+                    </span>
+                    <span>
+                      Boots:
+                      <span style="color: var(--text-secondary)">{d.last_boot_count ?? '—'}</span>
+                    </span>
+                    {#if d.last_fw_version}
+                      <span>
+                        FW:
+                        <span style="color: var(--text-secondary)">{d.last_fw_version}</span>
+                      </span>
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      </div>
+
+      <!-- E-Ink Preview modal -->
+      {#if previewDevice}
+        <div
+          class="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style="background: rgba(0,0,0,0.55)"
+          onclick={(e) => { if (e.target === e.currentTarget) closePreview(); }}
+          onkeydown={(e) => { if (e.key === 'Escape') closePreview(); }}
+          role="dialog"
+          tabindex="-1"
+        >
+          <div
+            class="rounded-xl border p-5 w-full max-w-[1100px] max-h-[92vh] overflow-y-auto"
+            style="background: var(--bg-primary); border-color: var(--border-color)"
+          >
+            <div class="flex items-start justify-between gap-3 mb-4">
+              <div>
+                <h3 class="text-sm font-semibold" style="color: var(--text-primary)">
+                  Preview · {previewDevice.name || previewDevice.mac}
+                </h3>
+                <p class="text-[11px] mt-0.5" style="color: var(--text-tertiary)">
+                  Live HTML refreshes every 30s. The "Device view" PNG is the post-quantization image
+                  the panel actually renders -- click Refresh to re-render with current HA state.
+                </p>
+              </div>
+              <div class="flex items-center gap-2">
+                <div class="flex rounded-lg border overflow-hidden text-[11px]" style="border-color: var(--border-color)">
+                  {#each [
+                    { id: null,  label: 'Device default' },
+                    { id: 'six', label: '6-color' },
+                    { id: 'bw',  label: 'B&W' },
+                  ] as opt}
+                    {@const active = previewPaletteOverride === opt.id}
+                    <button
+                      onclick={() => { previewPaletteOverride = opt.id; refreshPreviewPng(); }}
+                      class="px-2.5 py-1.5"
+                      style="background: {paletteTabBg(active)}; color: {paletteTabFg(active)}"
+                    >
+                      {opt.label}
+                    </button>
+                  {/each}
+                </div>
+                <Button size="sm" onclick={closePreview}>Close</Button>
+              </div>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <h4 class="text-xs font-semibold tracking-wider uppercase" style="color: var(--text-secondary)">Device view (post-quantize)</h4>
+                <button
+                  onclick={refreshPreviewPng}
+                  class="text-[11px] underline"
+                  style="color: var(--text-tertiary)"
+                >Re-render</button>
+              </div>
+              <div
+                class="rounded-lg border overflow-hidden mx-auto flex items-center justify-center"
+                style="border-color: var(--border-color); width: 800px; height: 480px; background: white; max-width: 100%;"
+              >
+                <img
+                  src={previewPngUrl()}
+                  alt="Quantized panel preview"
+                  style="width: 800px; height: 480px; image-rendering: pixelated; max-width: 100%;"
+                />
+              </div>
+              <p class="text-[10px] mt-1.5 text-center" style="color: var(--text-tertiary)">Native 800 × 480 BMP — exactly what the panel will show</p>
+            </div>
+          </div>
+        </div>
+      {/if}
 
     {:else if activeTab === 'dashboard'}
       <!-- Dashboard -->

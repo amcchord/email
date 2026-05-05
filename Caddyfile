@@ -17,6 +17,13 @@ email.mcchord.net {
         }
     }
 
+    # E-ink terminal device endpoints (schedule.json + image.bmp)
+    handle /terminal/* {
+        reverse_proxy localhost:8000 {
+            flush_interval -1
+        }
+    }
+
     # Web TUI - browser-based terminal interface
     handle_path /tui/* {
         reverse_proxy localhost:8022

@@ -561,15 +561,32 @@ class GmailService:
             from email.utils import parsedate_to_datetime
             try:
                 email_date = parsedate_to_datetime(date_str)
-                if email_date.tzinfo is None:
+                if email_date and email_date.tzinfo is None:
                     email_date = email_date.replace(tzinfo=timezone.utc)
             except Exception:
-                try:
-                    internal_date = msg.get("internalDate")
-                    if internal_date:
-                        email_date = datetime.fromtimestamp(int(internal_date) / 1000, tz=timezone.utc)
-                except Exception:
-                    pass
+                email_date = None
+
+        # Fall back to Gmail's internalDate when the Date header is missing or
+        # unparseable. This is the common case for Hangouts/Chat archive
+        # messages, which carry no Date header at all.
+        if email_date is None:
+            try:
+                internal_date = msg.get("internalDate")
+                if internal_date:
+                    email_date = datetime.fromtimestamp(int(internal_date) / 1000, tz=timezone.utc)
+            except Exception:
+                pass
+
+        # Y2038 sanity: a few spam senders set Date headers that parse to the
+        # signed-int32 boundary (2038-01-19 03:14:07Z). Prefer internalDate in
+        # that case so they don't outsort every real recent thread.
+        if email_date and email_date.year >= 2038:
+            try:
+                internal_date = msg.get("internalDate")
+                if internal_date:
+                    email_date = datetime.fromtimestamp(int(internal_date) / 1000, tz=timezone.utc)
+            except Exception:
+                pass
 
         labels = msg.get("labelIds", [])
         is_read = "UNREAD" not in labels

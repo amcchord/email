@@ -89,6 +89,7 @@ class CalendarSyncStatus(Base):
     events_synced: Mapped[int] = mapped_column(Integer, default=0)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
+    needs_reauth: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Relationships
     account = relationship("GoogleAccount", back_populates="calendar_sync_status")

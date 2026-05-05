@@ -9,8 +9,19 @@ from backend.services.google_calendar import GoogleCalendarService
 from backend.services.credentials import get_google_credentials
 from backend.database import async_session
 from googleapiclient.errors import HttpError
+from google.auth.exceptions import RefreshError
 
 logger = logging.getLogger(__name__)
+
+# How recently must we have synced for a transient failure to be considered
+# "blip-y" enough to suppress the UI error?  The cron tick runs every 5 minutes,
+# so 30 minutes covers ~6 ticks worth of intermittent failures.
+RECENT_SUCCESS_WINDOW = timedelta(minutes=30)
+
+REAUTH_MESSAGE = (
+    "Calendar scope not authorized. Reauthorize this account to enable calendar sync."
+)
+TRANSIENT_MESSAGE = "Calendar sync temporarily failing -- will retry."
 
 
 def _is_scope_error(error) -> bool:
@@ -23,6 +34,47 @@ def _is_scope_error(error) -> bool:
         if 'insufficient' in msg or 'scope' in msg or 'permission' in msg:
             return True
     return False
+
+
+def _is_auth_error(error) -> bool:
+    """Return True for errors that genuinely require the user to reauthorize.
+
+    Includes:
+      * scope errors (handled separately for messaging, but classified here too)
+      * google.auth RefreshError (refresh token revoked / expired / invalid_grant)
+      * HttpError 401 (unauthenticated)
+    """
+    if _is_scope_error(error):
+        return True
+    if isinstance(error, RefreshError):
+        return True
+    if isinstance(error, HttpError):
+        status = getattr(error.resp, 'status', 0) if hasattr(error, 'resp') else 0
+        if status == 401:
+            return True
+    return False
+
+
+def _recently_succeeded(sync_status: CalendarSyncStatus,
+                        threshold: timedelta = RECENT_SUCCESS_WINDOW) -> bool:
+    """True if the account has had a successful sync within `threshold`.
+
+    Used to suppress UI-visible errors for short-lived transient failures
+    when we know calendar updates are still flowing.
+    """
+    if sync_status is None:
+        return False
+    candidates = []
+    if sync_status.last_incremental_sync is not None:
+        candidates.append(sync_status.last_incremental_sync)
+    if sync_status.last_full_sync is not None:
+        candidates.append(sync_status.last_full_sync)
+    if not candidates:
+        return False
+    most_recent = max(candidates)
+    if most_recent.tzinfo is None:
+        most_recent = most_recent.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - most_recent) <= threshold
 
 
 class CalendarSyncService:
@@ -108,6 +160,78 @@ class CalendarSyncService:
             event = CalendarEvent(**parsed)
             db.add(event)
 
+    async def _handle_sync_exception(self, error: Exception, sync_kind: str) -> None:
+        """Persist sync error state, distinguishing auth vs transient failures.
+
+        Auth errors (scope loss / RefreshError / 401) flip ``needs_reauth=True``
+        so the UI shows the Reauthorize banner.  Other errors are treated as
+        transient: if the account synced successfully within
+        :data:`RECENT_SUCCESS_WINDOW`, we log only and leave the existing
+        (likely "completed") status untouched so the UI stays clean.  If the
+        last successful sync is older than the window, we surface a generic
+        "temporarily failing" message without claiming reauth is needed.
+        """
+        if _is_auth_error(error):
+            logger.warning(
+                f"Calendar {sync_kind} sync auth error for account "
+                f"{self.account_id}: {error}. Reauthorization required."
+            )
+            try:
+                async with async_session() as db:
+                    await self._update_sync_status(
+                        db,
+                        status="error",
+                        error_message=REAUTH_MESSAGE,
+                        needs_reauth=True,
+                        completed_at=datetime.now(timezone.utc),
+                    )
+            except Exception:
+                pass
+            if _is_scope_error(error):
+                try:
+                    await self._mark_calendar_scope_lost()
+                except Exception as exc:
+                    logger.warning(
+                        f"Failed to clear local calendar scope for account "
+                        f"{self.account_id}: {exc}"
+                    )
+            return
+
+        try:
+            async with async_session() as db:
+                result = await db.execute(
+                    select(CalendarSyncStatus).where(
+                        CalendarSyncStatus.account_id == self.account_id
+                    )
+                )
+                sync_status = result.scalar_one_or_none()
+        except Exception:
+            sync_status = None
+
+        if _recently_succeeded(sync_status):
+            logger.warning(
+                f"Calendar {sync_kind} sync transient error for account "
+                f"{self.account_id} (recent success within "
+                f"{int(RECENT_SUCCESS_WINDOW.total_seconds() / 60)}m, "
+                f"suppressing UI error): {error}"
+            )
+            return
+
+        logger.error(
+            f"Calendar {sync_kind} sync error for account {self.account_id}: {error}"
+        )
+        try:
+            async with async_session() as db:
+                await self._update_sync_status(
+                    db,
+                    status="error",
+                    error_message=TRANSIENT_MESSAGE,
+                    needs_reauth=False,
+                    completed_at=datetime.now(timezone.utc),
+                )
+        except Exception:
+            pass
+
     async def full_sync(self):
         """Full sync: fetch events from 6 months ago to 12 months ahead.
 
@@ -127,7 +251,8 @@ class CalendarSyncService:
                 await self._update_sync_status(
                     db,
                     status="error",
-                    error_message="Calendar scope not authorized. Reauthorize this account to enable calendar sync.",
+                    error_message=REAUTH_MESSAGE,
+                    needs_reauth=True,
                     completed_at=datetime.now(timezone.utc),
                 )
                 return
@@ -233,6 +358,7 @@ class CalendarSyncService:
                     events_synced=total_synced,
                     completed_at=datetime.now(timezone.utc),
                     error_message=None,
+                    needs_reauth=False,
                 )
 
             logger.info(
@@ -240,53 +366,11 @@ class CalendarSyncService:
                 f"{total_deleted} deleted for account {self.account_id}"
             )
 
-        except HttpError as e:
-            if _is_scope_error(e):
-                logger.warning(
-                    f"Calendar sync for account {self.account_id}: insufficient scopes. "
-                    f"Account needs reauthorization for calendar access."
-                )
-                try:
-                    async with async_session() as db:
-                        await self._update_sync_status(
-                            db,
-                            status="error",
-                            error_message="Calendar scope not authorized. Reauthorize this account to enable calendar sync.",
-                            completed_at=datetime.now(timezone.utc),
-                        )
-                except Exception:
-                    pass
-                try:
-                    await self._mark_calendar_scope_lost()
-                except Exception as exc:
-                    logger.warning(f"Failed to clear local calendar scope for account {self.account_id}: {exc}")
-                # Don't re-raise scope errors -- they're expected for old accounts
-                return
-            logger.error(f"Calendar full sync error for account {self.account_id}: {e}")
-            try:
-                async with async_session() as db:
-                    await self._update_sync_status(
-                        db,
-                        status="error",
-                        error_message=str(e)[:500],
-                        completed_at=datetime.now(timezone.utc),
-                    )
-            except Exception:
-                pass
-            raise
-
         except Exception as e:
-            logger.error(f"Calendar full sync error for account {self.account_id}: {e}")
-            try:
-                async with async_session() as db:
-                    await self._update_sync_status(
-                        db,
-                        status="error",
-                        error_message=str(e)[:500],
-                        completed_at=datetime.now(timezone.utc),
-                    )
-            except Exception:
-                pass
+            await self._handle_sync_exception(e, "full")
+            if _is_auth_error(e):
+                # Auth errors are expected for old accounts -- don't propagate.
+                return
             raise
 
     async def incremental_sync(self):
@@ -334,26 +418,6 @@ class CalendarSyncService:
                         async with async_session() as db:
                             await self._update_sync_status(db, sync_token=None)
                         return await self.full_sync()
-                    if _is_scope_error(e):
-                        logger.info(
-                            f"Calendar incremental sync for account {self.account_id}: insufficient scopes; "
-                            f"clearing local calendar scope so future ticks short-circuit."
-                        )
-                        try:
-                            async with async_session() as db:
-                                await self._update_sync_status(
-                                    db,
-                                    status="error",
-                                    error_message="Calendar scope not authorized. Reauthorize this account to enable calendar sync.",
-                                    completed_at=datetime.now(timezone.utc),
-                                )
-                        except Exception:
-                            pass
-                        try:
-                            await self._mark_calendar_scope_lost()
-                        except Exception as exc:
-                            logger.warning(f"Failed to clear local calendar scope for account {self.account_id}: {exc}")
-                        return
                     raise
 
                 events = result.get("items", [])
@@ -395,6 +459,7 @@ class CalendarSyncService:
                     "last_incremental_sync": datetime.now(timezone.utc),
                     "status": "completed",
                     "error_message": None,
+                    "needs_reauth": False,
                 }
                 if next_sync_token:
                     update_kwargs["sync_token"] = next_sync_token
@@ -415,50 +480,8 @@ class CalendarSyncService:
                     f"{total_deleted} deleted for account {self.account_id}"
                 )
 
-        except HttpError as e:
-            if _is_scope_error(e):
-                logger.info(
-                    f"Calendar incremental sync for account {self.account_id}: insufficient scopes; "
-                    f"clearing local calendar scope so future ticks short-circuit."
-                )
-                try:
-                    async with async_session() as db:
-                        await self._update_sync_status(
-                            db,
-                            status="error",
-                            error_message="Calendar scope not authorized. Reauthorize this account to enable calendar sync.",
-                            completed_at=datetime.now(timezone.utc),
-                        )
-                except Exception:
-                    pass
-                try:
-                    await self._mark_calendar_scope_lost()
-                except Exception as exc:
-                    logger.warning(f"Failed to clear local calendar scope for account {self.account_id}: {exc}")
-                return
-            logger.error(f"Calendar incremental sync error for account {self.account_id}: {e}")
-            try:
-                async with async_session() as db:
-                    await self._update_sync_status(
-                        db,
-                        status="error",
-                        error_message=str(e)[:500],
-                        completed_at=datetime.now(timezone.utc),
-                    )
-            except Exception:
-                pass
-            raise
-
         except Exception as e:
-            logger.error(f"Calendar incremental sync error for account {self.account_id}: {e}")
-            try:
-                async with async_session() as db:
-                    await self._update_sync_status(
-                        db,
-                        status="error",
-                        error_message=str(e)[:500],
-                        completed_at=datetime.now(timezone.utc),
-                    )
-            except Exception:
-                pass
+            await self._handle_sync_exception(e, "incremental")
+            if _is_auth_error(e):
+                return
             raise

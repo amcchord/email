@@ -165,6 +165,7 @@ class PublicBriefingMeta(BaseModel):
     summary_included: bool
     summary_model: Optional[str] = None
     summary_tokens_used: Optional[int] = None
+    summary_char_target: Optional[int] = None
 
 
 class PublicBriefing(BaseModel):
@@ -183,6 +184,7 @@ class PublicBriefingSummaryResponse(BaseModel):
     summary: str
     model: str
     tokens_used: int
+    char_target: int
     generated_at: datetime
     timezone: str
 

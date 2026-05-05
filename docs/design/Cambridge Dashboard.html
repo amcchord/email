@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cambridge · E-Ink Home Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;0,8..60,700;1,8..60,400;1,8..60,700&family=UnifrakturCook:wght@700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="fonts.css">
+<style>
+  html, body { margin: 0; padding: 0; background: #ddd6cb; }
+  body { font-family: "Source Serif 4", Georgia, serif; }
+  /* Outer artboard chrome */
+  .device {
+    width: 800px; height: 480px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.10), 0 0 0 1px rgba(0,0,0,0.05);
+    background: white;
+    overflow: hidden;
+  }
+  /* B&W simulation: a slight gray band so the "white" looks like e-ink paper */
+  .bw-shell { background: #e9e7e2; }
+  /* Make the rendered text crisp for e-ink simulation */
+  .device * { -webkit-font-smoothing: antialiased; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<script src="ha-data.js"></script>
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="editorial.jsx"></script>
+<script type="text/babel" src="swiss.jsx"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useEffect, useState } = React;
+
+function App() {
+  const [ha, setHa] = useState(null);
+  useEffect(() => { window.HA_READY.then(setHa); }, []);
+  if (!ha) return <div style={{padding:40, fontFamily:'sans-serif'}}>Loading state…</div>;
+
+  const DC        = window.DesignCanvas;
+  const DCSection = window.DCSection;
+  const DCArtboard= window.DCArtboard;
+  const Editorial = window.EditorialDashboard;
+  const Swiss     = window.SwissDashboard;
+  const E_PAL     = window.E_PALETTE;
+  const SW_PAL    = window.SW_PALETTE;
+
+  return (
+    <DC title="Cambridge · E-Ink Home Dashboard" subtitle="Two design directions, each rendered for the SeedStudio E1002 (6-color) and E1001 (B&W) — 800×480">
+      <DCSection id="editorial" title="A · Editorial — newspaper, serif, rules">
+        <DCArtboard id="ed-6" label="6-color · E1002" width={800} height={480}>
+          <div className="device">
+            <Editorial ha={ha} palette={E_PAL.six} />
+          </div>
+        </DCArtboard>
+        <DCArtboard id="ed-bw" label="Black & white · E1001" width={800} height={480}>
+          <div className="device bw-shell">
+            <Editorial ha={ha} palette={E_PAL.bw} />
+          </div>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="swiss" title="B · Swiss / Modular — grid, mono, ISO readouts">
+        <DCArtboard id="sw-6" label="6-color · E1002" width={800} height={480}>
+          <div className="device">
+            <Swiss ha={ha} palette={SW_PAL.six} />
+          </div>
+        </DCArtboard>
+        <DCArtboard id="sw-bw" label="Black & white · E1001" width={800} height={480}>
+          <div className="device bw-shell">
+            <Swiss ha={ha} palette={SW_PAL.bw} />
+          </div>
+        </DCArtboard>
+      </DCSection>
+    </DC>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

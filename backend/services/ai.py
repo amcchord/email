@@ -1018,7 +1018,11 @@ Body (quoted text removed):
             # Gather metadata from the emails
             subject = emails[0].subject or "(no subject)"
             message_count = len(emails)
-            latest_date = emails[-1].date
+            # Use the maximum non-null date so digests are never NULL when
+            # at least one constituent email has a usable date. Avoids the
+            # previous bug where a NULL-dated row would sort last in ASC and
+            # silently become the digest's "latest_date".
+            latest_date = max((e.date for e in emails if e.date), default=None)
             participants = []
             seen_addrs = set()
             for e in emails:

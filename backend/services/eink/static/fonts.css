@@ -1,0 +1,55 @@
+/* Pixel + display font stack for the Cambridge dashboard */
+
+@font-face {
+  font-family: "Cherry";
+  src: url("fonts/cherry/cherry-13-r.ttf") format("truetype");
+  font-weight: 400; font-style: normal; font-display: block;
+}
+@font-face {
+  font-family: "Cherry";
+  src: url("fonts/cherry/cherry-13-b.ttf") format("truetype");
+  font-weight: 700; font-style: normal; font-display: block;
+}
+@font-face {
+  font-family: "Cherry Small";
+  src: url("fonts/cherry/cherry-10-r.ttf") format("truetype");
+  font-weight: 400; font-style: normal; font-display: block;
+}
+@font-face {
+  font-family: "Cherry Small";
+  src: url("fonts/cherry/cherry-11-b.ttf") format("truetype");
+  font-weight: 700; font-style: normal; font-display: block;
+}
+@font-face {
+  font-family: "Tamzen";
+  src: url("fonts/tamzen/Tamzen8x16r.ttf") format("truetype");
+  font-weight: 400; font-style: normal; font-display: block;
+}
+@font-face {
+  font-family: "Tamzen";
+  src: url("fonts/tamzen/Tamzen8x16b.ttf") format("truetype");
+  font-weight: 700; font-style: normal; font-display: block;
+}
+@font-face {
+  font-family: "Tamzen Big";
+  src: url("fonts/tamzen/Tamzen10x20b.ttf") format("truetype");
+  font-weight: 700; font-style: normal; font-display: block;
+}
+@font-face {
+  font-family: "Spleen";
+  src: url("fonts/spleen/spleen-12x24.ttf") format("truetype");
+  font-weight: 700; font-style: normal; font-display: block;
+}
+@font-face {
+  font-family: "Spleen Big";
+  src: url("fonts/spleen/spleen-16x32.ttf") format("truetype");
+  font-weight: 700; font-style: normal; font-display: block;
+}
+
+.pix-cherry, .pix-cherry-sm, .pix-tamzen, .pix-tamzen-big, .pix-spleen, .pix-spleen-big {
+  font-smooth: never;
+  -webkit-font-smoothing: none;
+  -moz-osx-font-smoothing: unset;
+  image-rendering: pixelated;
+  text-rendering: geometricPrecision;
+}

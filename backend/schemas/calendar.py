@@ -60,5 +60,6 @@ class CalendarSyncStatusResponse(BaseModel):
     events_synced: int = 0
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    needs_reauth: bool = False
 
     model_config = {"from_attributes": True}

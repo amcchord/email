@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,7 +9,7 @@ from backend.config import get_settings
 from backend.database import engine, Base
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from backend.routers import auth, admin, emails, compose, accounts, ai, todos, chat, calendar, events, public_api
+from backend.routers import auth, admin, emails, compose, accounts, ai, todos, chat, calendar, events, public_api, terminal, terminal_admin
 
 # Import all models so they register with Base
 import backend.models  # noqa: F401
@@ -28,7 +29,6 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables created/verified")
     yield
-    # Shutdown
     await engine.dispose()
 
 
@@ -64,6 +64,8 @@ app.include_router(chat.router)
 app.include_router(calendar.router)
 app.include_router(events.router)
 app.include_router(public_api.router)
+app.include_router(terminal_admin.router)
+app.include_router(terminal.router)
 
 
 @app.get("/api/health")
@@ -85,8 +87,6 @@ async def build_version():
 
 
 # Serve frontend
-import os
-
 FRONTEND_DIR = "/opt/mail/frontend/dist"
 
 if os.path.isdir(FRONTEND_DIR):

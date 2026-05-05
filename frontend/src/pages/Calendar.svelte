@@ -14,8 +14,12 @@
   let syncing = $state(false);
   let syncStatuses = $state([]);
 
-  let erroredStatuses = $derived(
-    syncStatuses.filter(s => s && s.status === 'error')
+  let reauthStatuses = $derived(
+    syncStatuses.filter(s => s && s.needs_reauth)
+  );
+
+  let transientErrorStatuses = $derived(
+    syncStatuses.filter(s => s && s.status === 'error' && !s.needs_reauth)
   );
 
   async function loadSyncStatus() {
@@ -281,9 +285,9 @@
     </div>
   </div>
 
-  {#if erroredStatuses.length > 0}
+  {#if reauthStatuses.length > 0}
     <div class="px-4 py-2 border-b shrink-0" style="background: var(--color-warning-bg, #fef3c7); border-color: var(--border-color)">
-      {#each erroredStatuses as s (s.account_id)}
+      {#each reauthStatuses as s (s.account_id)}
         <div class="flex items-center justify-between gap-3 py-1 text-sm">
           <div class="flex items-center gap-2 min-w-0">
             <Icon name="alert-triangle" size={16} />
@@ -301,6 +305,19 @@
           >
             Reauthorize
           </button>
+        </div>
+      {/each}
+    </div>
+  {/if}
+
+  {#if transientErrorStatuses.length > 0}
+    <div class="px-4 py-1.5 border-b shrink-0 text-xs" style="background: var(--bg-tertiary); border-color: var(--border-color); color: var(--text-tertiary)">
+      {#each transientErrorStatuses as s (s.account_id)}
+        <div class="flex items-center gap-2 py-0.5">
+          <Icon name="refresh-cw" size={12} />
+          <span class="truncate">
+            {s.account_email || `Account ${s.account_id}`}: sync issue, retrying...
+          </span>
         </div>
       {/each}
     </div>
