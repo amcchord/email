@@ -86,6 +86,11 @@ def _sauna_state(base: dict) -> dict:
         "lastNotification": None, "powerOn": True,
         "cycles": 54, "energyMonth": 12000,
     }
+    out["dryer"] = {
+        "status": "running", "operation": "cycle",
+        "remaining": "2026-05-05T23:15:00+00:00",
+        "lastNotification": None, "powerOn": True,
+    }
     return out
 
 
@@ -126,6 +131,11 @@ def _stress_state(base: dict) -> dict:
         "remaining": "2026-05-05T23:59:00+00:00",
         "lastNotification": None, "powerOn": True,
         "cycles": 999, "energyMonth": 999000,
+    }
+    out["dryer"] = {
+        "status": "wrinkle_care", "operation": "cycle",
+        "remaining": "2026-05-05T23:59:00+00:00",
+        "lastNotification": None, "powerOn": True,
     }
     return out
 

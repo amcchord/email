@@ -946,6 +946,55 @@ def _draw_washer_done_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, 
         badge="UNLOAD", headline_runs=runs, deck=deck, body=body)
 
 
+_EDITORIAL_DRYER_PHASE_HEADS = {
+    "cooling":      "Cooling down.",
+    "wrinkle_care": "Wrinkle care.",
+    "pause":        "Paused.",
+}
+
+
+def _draw_dryer_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) -> int:
+    P = ctx.palette
+    view = item.view
+    accent = ctx.accent(view.accent_kind)
+    phase = view.extras.get("phase") or "running"
+    if phase in _EDITORIAL_DRYER_PHASE_HEADS:
+        runs = [Run(_EDITORIAL_DRYER_PHASE_HEADS[phase],
+                    _hero_italic_bold_font(), P.ink)]
+    else:
+        runs = [Run(view.status_label, _hero_font(), P.ink),
+                Run(", then fold.", _hero_italic_bold_font(), P.ink)]
+    deck = f"Finishing around {view.finish_label}."
+    if view.remaining_label and view.remaining_label != "\u2014":
+        deck += f" {view.remaining_label} remaining."
+    cur_y = _draw_story_shell(draw, P, x0, y, w,
+        kicker=view.eyebrow_kicker, accent=accent,
+        headline_runs=runs, deck=deck)
+    cur_y = _draw_fact_strip(draw, P, x0, cur_y + 6, w, [
+        {"k": "Remaining", "v": view.remaining_label, "accent": accent},
+        {"k": "Done by", "v": view.finish_label},
+        {"k": "Phase", "v": title_case(phase.replace("_", " "))},
+    ])
+    return cur_y
+
+
+def _draw_dryer_done_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) -> int:
+    P = ctx.palette
+    view = item.view
+    accent = ctx.accent(view.accent_kind)
+    runs = [
+        Run("Drying complete \u2014 ", _hero_font(), P.ink),
+        Run("please unload", _hero_italic_bold_font(), P.ink),
+        Run("\n", _hero_font(), P.ink),
+        Run("the dryer.", _hero_italic_bold_font(), P.ink),
+    ]
+    deck = f"Finished {view.finish_label} \u00b7 {view.relative_label}."
+    body = "Drum's done its work. Time to fold."
+    return _draw_story_shell(draw, P, x0, y, w,
+        kicker=view.eyebrow_kicker, accent=accent,
+        badge="UNLOAD", headline_runs=runs, deck=deck, body=body)
+
+
 def _draw_dishwasher_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) -> int:
     P = ctx.palette
     view = item.view
@@ -1026,6 +1075,8 @@ EDITORIAL_LEAD_DRAWERS = {
     "sauna":        _draw_sauna_lead,
     "washer":       _draw_washer_lead,
     "washer-done":  _draw_washer_done_lead,
+    "dryer":        _draw_dryer_lead,
+    "dryer-done":   _draw_dryer_done_lead,
     "dishwasher":   _draw_dishwasher_lead,
     "pool":         _draw_pool_lead,
 }
@@ -1088,6 +1139,24 @@ def _brief_washer_done(view: ApplianceView) -> tuple[str, str, str]:
     )
 
 
+def _brief_dryer(view: ApplianceView) -> tuple[str, str, str]:
+    phase = view.extras.get("phase") or "running"
+    title = f"Dryer \u00b7 {title_case(phase.replace('_', ' '))}"
+    sub = f"Finishes {view.finish_label}"
+    value = (f"{view.remaining_label} left"
+             if view.remaining_label and view.remaining_label != "\u2014"
+             else "\u2014")
+    return title, sub, value
+
+
+def _brief_dryer_done(view: ApplianceView) -> tuple[str, str, str]:
+    return (
+        "Dryer done",
+        f"Finished {view.finish_label}",
+        view.relative_label or "\u2014",
+    )
+
+
 def _brief_dishwasher(view: ApplianceView) -> tuple[str, str, str]:
     prog = view.progress_pct
     return (
@@ -1113,6 +1182,8 @@ EDITORIAL_BRIEFS = {
     "sauna":        _brief_sauna,
     "washer":       _brief_washer,
     "washer-done":  _brief_washer_done,
+    "dryer":        _brief_dryer,
+    "dryer-done":   _brief_dryer_done,
     "dishwasher":   _brief_dishwasher,
     "pool":         _brief_pool,
 }

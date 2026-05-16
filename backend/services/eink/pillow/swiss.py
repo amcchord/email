@@ -521,6 +521,42 @@ def _describe_washer_done_swiss(view: ApplianceView, ctx: RenderContext) -> dict
     }
 
 
+_DRYER_PHASE_HEADLINES = {
+    "cooling":      "Cooling down.",
+    "wrinkle_care": "Wrinkle care.",
+    "pause":        "Paused.",
+}
+
+
+def _describe_dryer_swiss(view: ApplianceView, ctx: RenderContext) -> dict:
+    P = ctx.palette
+    head_font = fonts.sans(layout.SwissType.HERO_ACTIVE_HEAD_PX, weight="bold")
+    accent = ctx.accent(view.accent_kind)
+    phase = view.extras.get("phase") or "running"
+    head_text = _DRYER_PHASE_HEADLINES.get(phase, f"{view.status_label}.")
+    runs = [Run(head_text, head_font, P.ink)]
+    return {
+        "eyebrow": view.eyebrow_label, "accent": accent, "head_runs": runs,
+        "sub": f"Finishes {view.finish_label}",
+        "big": view.relative_label,
+        "big_label": "REMAINING", "big_sub": "CYCLE ACTIVE", "bar": None,
+    }
+
+
+def _describe_dryer_done_swiss(view: ApplianceView, ctx: RenderContext) -> dict:
+    P = ctx.palette
+    head_font = fonts.sans(layout.SwissType.HERO_ACTIVE_HEAD_PX, weight="bold")
+    accent = ctx.accent(view.accent_kind)
+    return {
+        "eyebrow": view.eyebrow_label, "accent": accent,
+        "head_runs": [Run("Unload the dryer.", head_font, P.ink)],
+        "sub": f"Finished {view.finish_label}",
+        "big": "\u2713", "big_label": "COMPLETE",
+        "big_sub": (view.relative_label or "\u2014").upper(),
+        "bar": None,
+    }
+
+
 def _describe_dishwasher_swiss(view: ApplianceView, ctx: RenderContext) -> dict:
     P = ctx.palette
     head_font = fonts.sans(layout.SwissType.HERO_ACTIVE_HEAD_PX, weight="bold")
@@ -580,6 +616,8 @@ _SWISS_HERO_DESCRIBERS = {
     "sauna":        _describe_sauna_swiss,
     "washer":       _describe_washer_swiss,
     "washer-done":  _describe_washer_done_swiss,
+    "dryer":        _describe_dryer_swiss,
+    "dryer-done":   _describe_dryer_done_swiss,
     "dishwasher":   _describe_dishwasher_swiss,
     "pool":         _describe_pool_swiss,
 }

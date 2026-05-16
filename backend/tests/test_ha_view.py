@@ -237,6 +237,69 @@ def test_washer_done_uses_localized_completion_time():
     assert v.relative_label and v.relative_label != ""
 
 
+def test_dryer_running_view_phase():
+    ctx = _ctx("America/New_York")
+    ha = {"dryer": {"status": "running",
+                    "remaining": "2026-05-05T19:00:00+00:00",
+                    "powerOn": True}}
+    v = build_appliance_view(ha, "dryer", ctx=ctx)
+    assert v.eyebrow_label == "DRYER RUNNING"
+    assert v.accent_kind == "info"
+    assert v.extras["phase"] == "running"
+    assert v.status_label  # title-cased non-empty
+    # 19:00 UTC -> 15:00 EDT
+    assert v.finish_label == "3:00 PM"
+
+
+def test_dryer_view_wrinkle_care_phase():
+    ctx = _ctx("America/New_York")
+    ha = {"dryer": {"status": "wrinkle_care",
+                    "remaining": "2026-05-05T19:30:00+00:00",
+                    "powerOn": True}}
+    v = build_appliance_view(ha, "dryer", ctx=ctx)
+    assert v.extras["phase"] == "wrinkle_care"
+
+
+def test_dryer_done_active_only_when_powered_off():
+    """LG dryers stay powered ON through cooling/wrinkle_care, so the
+    done-card waits for the user to press power-off before it appears.
+    That doubles as the "I unloaded it" dismissal signal."""
+    from datetime import datetime, timezone
+    from backend.services.eink.pillow.appliances import _dryer_done_active
+    now = datetime(2026, 5, 5, 18, 0, tzinfo=timezone.utc)
+    notif = {"type": "drying_is_complete",
+             "at": "2026-05-05T17:30:00+00:00"}
+    ha_powered = {"dryer": {"status": "end", "powerOn": True,
+                            "lastNotification": notif}}
+    ha_off = {"dryer": {"status": "power_off", "powerOn": False,
+                        "lastNotification": notif}}
+    assert _dryer_done_active(ha_powered, now) is True
+    assert _dryer_done_active(ha_off, now) is False
+
+
+def test_washer_done_dismissed_when_dryer_running():
+    """The strongest 'I moved the laundry' signal: the dryer is running.
+    The washer-done card must drop the moment we see that, even if the
+    washer notification is still well within its 6h cap."""
+    from datetime import datetime, timezone
+    from backend.services.eink.pillow.appliances import _washer_done_active
+    now = datetime(2026, 5, 5, 18, 0, tzinfo=timezone.utc)
+    notif = {"type": "washing_is_complete",
+             "at": "2026-05-05T17:00:00+00:00"}
+    base_washer = {"status": "power_off", "powerOn": False,
+                   "lastNotification": notif}
+    # Without a running dryer: card is active.
+    assert _washer_done_active(
+        {"washer": base_washer, "dryer": {"status": "power_off"}},
+        now,
+    ) is True
+    # With a running dryer: card is dismissed.
+    assert _washer_done_active(
+        {"washer": base_washer, "dryer": {"status": "running"}},
+        now,
+    ) is False
+
+
 def test_appliance_view_handles_missing_time():
     ctx = _ctx("America/New_York")
     v = build_appliance_view({"washer": {"status": "wash"}}, "washer", ctx=ctx)

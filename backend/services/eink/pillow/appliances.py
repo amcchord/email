@@ -89,11 +89,49 @@ def _washer_active(ha: dict, now: datetime) -> bool:
 def _washer_done_active(ha: dict, now: datetime) -> bool:
     """The washer is "done" until 6h after the completion notification.
     The active-washer predicate above takes precedence; this only
-    surfaces when the washer itself isn't running."""
+    surfaces when the washer itself isn't running.
+
+    Also dismissed the moment the dryer starts running -- that's the
+    strongest "I moved the laundry" signal we have, and the dryer card
+    will take over the hero anyway.
+    """
     if _washer_active(ha, now):
+        return False
+    if _dryer_active(ha, now):
         return False
     notif = ((ha.get("washer") or {}).get("lastNotification")) or {}
     if notif.get("type") != "washing_is_complete":
+        return False
+    at = parse_iso(notif.get("at"))
+    if at is None:
+        return False
+    age_hrs = (now - at).total_seconds() / 3600
+    return 0 <= age_hrs < 6
+
+
+def _dryer_active(ha: dict, now: datetime) -> bool:
+    """Same status-enum vocabulary as the washer; `cooling` and
+    `wrinkle_care` count as ACTIVE so the running card stays up through
+    the post-cycle anti-wrinkle phase (the door's still locked then)."""
+    d = ha.get("dryer") or {}
+    return (d.get("status") not in _RUNNING_WASHER_STATES_EXCLUDED)
+
+
+def _dryer_done_active(ha: dict, now: datetime) -> bool:
+    """The dryer is "done" until the user powers it off (or 6h cap).
+
+    LG dryers stay powered on through `cooling` / `wrinkle_care`, so
+    `switch.dryer_power=off` only flips when the user hits the button
+    -- a clean "I unloaded it" proxy. The active-dryer predicate above
+    takes precedence; this only surfaces when the dryer isn't running.
+    """
+    if _dryer_active(ha, now):
+        return False
+    d = ha.get("dryer") or {}
+    if not d.get("powerOn"):
+        return False
+    notif = d.get("lastNotification") or {}
+    if notif.get("type") != "drying_is_complete":
         return False
     at = parse_iso(notif.get("at"))
     if at is None:
@@ -149,6 +187,8 @@ APPLIANCES: List[ApplianceSpec] = [
     ApplianceSpec("sauna",       1, "alert", _sauna_active),
     ApplianceSpec("washer",      2, "info",  _washer_active),
     ApplianceSpec("washer-done", 1, "alert", _washer_done_active),
+    ApplianceSpec("dryer",       2, "info",  _dryer_active),
+    ApplianceSpec("dryer-done",  1, "alert", _dryer_done_active),
     ApplianceSpec("dishwasher",  3, "info",  _dishwasher_active,
                   severity_for=_dishwasher_severity),
     ApplianceSpec("pool",        3, "alert", _pool_active),

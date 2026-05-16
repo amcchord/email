@@ -371,6 +371,60 @@ def _build_washer_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
     )
 
 
+_DRYER_PHASE_MAP = {
+    "running":      "running",
+    "cooling":      "cooling",
+    "wrinkle_care": "wrinkle_care",
+    "pause":        "pause",
+}
+
+
+def _build_dryer_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
+    """extras: phase:str ("running" / "cooling" / "wrinkle_care" /
+    "pause" / "other"). Time fields refer to the projected finish.
+    LG dryers stay powered on through `cooling` and `wrinkle_care` after
+    the cycle proper, so those still count as 'active' here -- you
+    shouldn't open the door yet."""
+    d = ha.get("dryer") or {}
+    finish_iso = d.get("remaining")
+    finish_at = _localize(finish_iso, ctx)
+    raw_status = (d.get("status") or "").lower()
+    phase = _DRYER_PHASE_MAP.get(raw_status, "other")
+    return ApplianceView(
+        kind="dryer",
+        eyebrow_kicker="Laundry \u00b7 Drying",
+        eyebrow_label="DRYER RUNNING",
+        accent_kind="info",
+        finish_at_local=finish_at,
+        finish_label=_clock(finish_iso, ctx),
+        remaining_label=_duration(finish_iso, ctx),
+        relative_label=_relative(finish_iso, ctx),
+        status_label=title_case(d.get("status")),
+        extras={
+            "phase": phase,
+        },
+    )
+
+
+def _build_dryer_done_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
+    """Time fields refer to when the cycle completed."""
+    d = ha.get("dryer") or {}
+    notif = d.get("lastNotification") or {}
+    at_iso = notif.get("at")
+    at_local = _localize(at_iso, ctx)
+    return ApplianceView(
+        kind="dryer-done",
+        eyebrow_kicker="Laundry \u00b7 Attention",
+        eyebrow_label="DRYER DONE",
+        accent_kind="alert",
+        finish_at_local=at_local,
+        finish_label=_clock(at_iso, ctx),
+        remaining_label=_DASH,
+        relative_label=_relative(at_iso, ctx),
+        status_label="Unload",
+    )
+
+
 def _build_washer_done_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
     """Time fields refer to when the cycle completed."""
     wsh = ha.get("washer") or {}
@@ -446,6 +500,8 @@ _APPLIANCE_BUILDERS: dict[str, Any] = {
     "sauna":        _build_sauna_view,
     "washer":       _build_washer_view,
     "washer-done":  _build_washer_done_view,
+    "dryer":        _build_dryer_view,
+    "dryer-done":   _build_dryer_done_view,
     "dishwasher":   _build_dishwasher_view,
     "pool":         _build_pool_view,
 }

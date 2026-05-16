@@ -98,6 +98,16 @@ _WASHER_POWER = "switch.washer_power"
 _WASHER_CYCLES = "sensor.washer_cycles"
 _WASHER_ENERGY = "sensor.washer_energy_this_month"
 
+# LG ThinQ dryer mirrors the washer entity layout, minus cycles/energy
+# (those sensors aren't exposed for the dryer model). Status enum adds
+# `cooling` and `wrinkle_care` for the post-cycle anti-wrinkle phase --
+# those still count as "running" so the active card stays up.
+_DRYER_STATUS = "sensor.dryer_current_status"
+_DRYER_OP = "select.dryer_operation"
+_DRYER_REMAINING = "sensor.dryer_remaining_time"
+_DRYER_NOTIF = "event.dryer_notification"
+_DRYER_POWER = "switch.dryer_power"
+
 _DW_STATE = "sensor.dishwasher_operation_state"
 _DW_PROG = "select.dishwasher_selected_program"
 _DW_PROGRESS = "sensor.dishwasher_program_progress"
@@ -292,6 +302,23 @@ def shape_ha_state(
         "energyMonth": state_num(_WASHER_ENERGY),
     }
 
+    # ── Dryer ──────────────────────────────────────────────────────
+    dryer_notif_event = get(_DRYER_NOTIF)
+    dryer_last_notif: Optional[dict] = None
+    if dryer_notif_event:
+        a = dryer_notif_event.get("attributes") or {}
+        dryer_last_notif = {
+            "type": a.get("event_type"),
+            "at": dryer_notif_event.get("state"),
+        }
+    dryer = {
+        "status": state_str(_DRYER_STATUS),
+        "operation": state_str(_DRYER_OP),
+        "remaining": state_str(_DRYER_REMAINING),
+        "lastNotification": dryer_last_notif,
+        "powerOn": state_str(_DRYER_POWER) == "on",
+    }
+
     # ── Dishwasher ─────────────────────────────────────────────────
     dishwasher = {
         "state": state_str(_DW_STATE),
@@ -396,6 +423,7 @@ def shape_ha_state(
         "pool": pool,
         "sauna": sauna,
         "washer": washer,
+        "dryer": dryer,
         "dishwasher": dishwasher,
         "allClimates": all_climates,
         "floorActivity": floor_activity,
@@ -431,6 +459,13 @@ def empty_ha_shape(*, fetched_at: Optional[datetime] = None) -> dict[str, Any]:
             "powerOn": False,
             "cycles": 0,
             "energyMonth": 0,
+        },
+        "dryer": {
+            "status": "power_off",
+            "operation": None,
+            "remaining": None,
+            "lastNotification": None,
+            "powerOn": False,
         },
         "dishwasher": {
             "state": None,
