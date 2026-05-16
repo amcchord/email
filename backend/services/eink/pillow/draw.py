@@ -973,6 +973,254 @@ def square_marker(
         draw.rectangle(box, outline=color, width=1)
 
 
+# Arrow / refresh / star primitives.
+#
+# Cherry pixel font (and several of the small sans bitmaps) ship without
+# glyphs for U+2192 -> / U+2191 up / U+2193 down / U+21BB refresh / U+2605
+# star. FreeType renders the missing-glyph .notdef rectangle, which the
+# Editorial design exhibits as the visible "tofu boxes" next to target
+# temps, the colophon refresh icon, and the calm-state eyebrow.
+#
+# Each primitive below paints the requested glyph at a baseline-aligned
+# anchor and returns the drawn width so callers can compose them inline
+# with tracked text rows.
+
+
+def draw_arrow_right(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y_baseline: int,
+    *,
+    size: int = 7,
+    fill: RGB,
+) -> int:
+    """Inline right-arrow glyph anchored at `(x, y_baseline)` with the
+    shaft sitting at half-cap-height. Returns the advance width in px.
+
+    Drawn as a 1-px shaft + filled triangle head. Visually balances
+    Cherry-9 / Source-Serif-9..14 caps when `size` is 7-9.
+    """
+    sz = max(5, int(size))
+    head_w = sz - 2
+    head_h = sz - 2
+    cy = y_baseline - sz // 2 - 1
+    shaft_x0 = x
+    shaft_x1 = x + sz - head_w
+    if shaft_x1 > shaft_x0:
+        draw.rectangle([(shaft_x0, cy), (shaft_x1, cy)], fill=fill)
+    tip_x = x + sz - 1
+    tip_y_top = cy - head_h // 2
+    tip_y_bot = cy + head_h // 2
+    head_left = tip_x - head_w
+    draw.polygon(
+        [(head_left, tip_y_top), (tip_x, cy), (head_left, tip_y_bot)],
+        fill=fill,
+    )
+    return sz
+
+
+def draw_arrow_up(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y_baseline: int,
+    *,
+    size: int = 7,
+    fill: RGB,
+) -> int:
+    """Inline up-arrow glyph. Returns advance width."""
+    sz = max(5, int(size))
+    head_w = sz - 2
+    head_h = sz - 2
+    cx = x + sz // 2
+    top_y = y_baseline - sz + 1
+    bot_y = y_baseline - 1
+    if bot_y > top_y + head_h:
+        draw.rectangle([(cx, top_y + head_h), (cx, bot_y)], fill=fill)
+    draw.polygon(
+        [(cx - head_w // 2, top_y + head_h),
+         (cx, top_y),
+         (cx + head_w // 2, top_y + head_h)],
+        fill=fill,
+    )
+    return sz
+
+
+def draw_arrow_down(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y_baseline: int,
+    *,
+    size: int = 7,
+    fill: RGB,
+) -> int:
+    """Inline down-arrow glyph. Returns advance width."""
+    sz = max(5, int(size))
+    head_w = sz - 2
+    head_h = sz - 2
+    cx = x + sz // 2
+    top_y = y_baseline - sz + 1
+    bot_y = y_baseline - 1
+    if bot_y - head_h > top_y:
+        draw.rectangle([(cx, top_y), (cx, bot_y - head_h)], fill=fill)
+    draw.polygon(
+        [(cx - head_w // 2, bot_y - head_h),
+         (cx, bot_y),
+         (cx + head_w // 2, bot_y - head_h)],
+        fill=fill,
+    )
+    return sz
+
+
+def draw_refresh_glyph(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y_baseline: int,
+    *,
+    size: int = 9,
+    fill: RGB,
+) -> int:
+    """Inline refresh icon: three-quarter ring + arrowhead.
+
+    Replaces the missing U+21BB glyph in the Editorial colophon. The ring
+    is approximated with an unfilled ellipse and a small bg-tinted notch;
+    the arrowhead caps the open end so it reads as a circular arrow at
+    any size from 7 to 12 px.
+    """
+    sz = max(7, int(size))
+    cx = x + sz // 2
+    cy = y_baseline - sz // 2
+    r = sz // 2
+    # Pillow's `arc` is the cleanest way to get an open ring without
+    # painting and then re-painting a notch.
+    draw.arc(
+        [(cx - r, cy - r), (cx + r, cy + r)],
+        start=40,
+        end=320,
+        fill=fill,
+        width=1,
+    )
+    # Arrowhead at the open end (~40° on the unit circle).
+    a = math.radians(40)
+    tip_x = cx + int(r * math.cos(a))
+    tip_y = cy + int(r * math.sin(a))
+    draw.polygon(
+        [(tip_x, tip_y),
+         (tip_x - 2, tip_y - 2),
+         (tip_x + 1, tip_y - 3)],
+        fill=fill,
+    )
+    return sz
+
+
+def draw_star_marker(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y_baseline: int,
+    *,
+    size: int = 9,
+    fill: RGB,
+) -> int:
+    """Inline 5-point star, baseline-aligned. Returns advance width.
+
+    Replaces the missing U+2605 glyph used by the calm-state eyebrow
+    (`★  THE CALM EDITION  ★`).
+    """
+    sz = max(7, int(size))
+    cx = x + sz // 2
+    cy = y_baseline - sz // 2 - 1
+    r_outer = sz // 2
+    r_inner = max(2, r_outer // 2)
+    pts: List[Tuple[int, int]] = []
+    for i in range(10):
+        ang = -math.pi / 2 + i * math.pi / 5
+        rr = r_outer if i % 2 == 0 else r_inner
+        pts.append((cx + int(rr * math.cos(ang)),
+                    cy + int(rr * math.sin(ang))))
+    draw.polygon(pts, fill=fill)
+    return sz
+
+
+# ── Text overflow (fit-then-ellipsize) ─────────────────────────────────
+
+
+def draw_text_clipped_bl(
+    draw: ImageDraw.ImageDraw,
+    xy_baseline: Tuple[int, int],
+    text: str,
+    font: ImageFont.ImageFont,
+    fill: RGB,
+    *,
+    max_w: int,
+    ellipsis: str = "\u2026",
+) -> int:
+    """Baseline-anchored text that ellipsizes when it doesn't fit `max_w`.
+
+    Pillow has no `text-overflow: ellipsis`. This helper measures the
+    full string; if it overflows, it pops characters off the end and
+    re-measures `text + ellipsis` until it fits. Returns the advance
+    width actually drawn.
+
+    Use this whenever the rendered string comes from outside data
+    (person names, status labels, program names) where a worst-case
+    expansion could otherwise spill the column.
+    """
+    if not text:
+        return 0
+    s = text
+    full_w = text_width(font, s)
+    if full_w <= max_w:
+        draw.text(xy_baseline, s, font=font, fill=fill, anchor="ls")
+        return full_w
+    # Doesn't fit -- chop and append the ellipsis until it does.
+    ell_w = text_width(font, ellipsis)
+    if ell_w >= max_w:
+        # Column is too narrow for even the ellipsis -- skip drawing
+        # rather than paint a half-glyph over the rule.
+        return 0
+    while s and text_width(font, s + ellipsis) > max_w:
+        s = s[:-1]
+    if not s:
+        return 0
+    out = s + ellipsis
+    draw.text(xy_baseline, out, font=font, fill=fill, anchor="ls")
+    return text_width(font, out)
+
+
+def draw_text_clipped_bl_right(
+    draw: ImageDraw.ImageDraw,
+    xy_baseline_right: Tuple[int, int],
+    text: str,
+    font: ImageFont.ImageFont,
+    fill: RGB,
+    *,
+    max_w: int,
+    ellipsis: str = "\u2026",
+) -> int:
+    """Right-aligned variant of draw_text_clipped_bl."""
+    if not text:
+        return 0
+    s = text
+    full_w = text_width(font, s)
+    if full_w <= max_w:
+        x = xy_baseline_right[0] - full_w
+        draw.text((x, xy_baseline_right[1]), s,
+                  font=font, fill=fill, anchor="ls")
+        return full_w
+    ell_w = text_width(font, ellipsis)
+    if ell_w >= max_w:
+        return 0
+    while s and text_width(font, s + ellipsis) > max_w:
+        s = s[:-1]
+    if not s:
+        return 0
+    out = s + ellipsis
+    w = text_width(font, out)
+    x = xy_baseline_right[0] - w
+    draw.text((x, xy_baseline_right[1]), out,
+              font=font, fill=fill, anchor="ls")
+    return w
+
+
 # ── Multi-run headline layout (inline italic, etc.) ─────────────────────
 
 

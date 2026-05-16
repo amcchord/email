@@ -35,14 +35,21 @@ from .draw import (
     diamond,
     dotted_hr,
     double_hr,
+    draw_arrow_down,
+    draw_arrow_right,
+    draw_arrow_up,
     draw_dashed_arc,
     draw_drop_cap_paragraph,
     draw_fit_text_bl,
     draw_headline,
     draw_paragraph,
+    draw_refresh_glyph,
+    draw_star_marker,
     draw_text_bl,
     draw_text_bl_center,
     draw_text_bl_right,
+    draw_text_clipped_bl,
+    draw_text_clipped_bl_right,
     draw_text_in_box,
     draw_tracked_text,
     draw_tracked_text_bl,
@@ -161,7 +168,9 @@ def _draw_masthead(draw: ImageDraw.ImageDraw, P: Palette, now: datetime, weather
         time_s, time_col.w - ampm_w, TY.TIME_CANDIDATES,
     )
     fm_time = font_metrics(fit_font)
-    display_baseline = content_y0 + fm_time.ascent + 2
+    # Display baseline sits high enough that label row has the
+    # MASTHEAD_LABEL_GAP_PX of breathing space below the descender.
+    display_baseline = label_baseline - fm_label.ascent - TY.MASTHEAD_LABEL_GAP_PX - fm_time.descent
     draw.text((time_col.x0, display_baseline), time_s,
               font=fit_font, fill=P.ink, anchor="ls")
     tw = text_width(fit_font, time_s)
@@ -176,16 +185,14 @@ def _draw_masthead(draw: ImageDraw.ImageDraw, P: Palette, now: datetime, weather
         lambda s: fonts.serif(s, weight="bold"),
         "CAMBRIDGE", wm_col.w, TY.WORDMARK_CANDIDATES,
     )
-    tw = tracked_width(wm_fit_font, "CAMBRIDGE", wm_tracking)
-    draw_tracked_text(
-        draw, (wm_col.cx - tw // 2, display_baseline),
+    draw_tracked_text_bl_center(
+        draw, (wm_col.cx, display_baseline),
         "CAMBRIDGE", wm_fit_font, P.ink, wm_tracking,
     )
     date_s = fmt_date(now)
     d_tracking = em_to_px(TY.LABEL_PX, TY.DATE_TRACKING_EM)
-    dw = tracked_width(label_font, date_s.upper(), d_tracking)
-    draw_tracked_text(
-        draw, (wm_col.cx - dw // 2, label_baseline),
+    draw_tracked_text_bl_center(
+        draw, (wm_col.cx, label_baseline),
         date_s.upper(), label_font, P.muted, d_tracking,
     )
 
@@ -391,6 +398,10 @@ def _draw_diamond_kicker(
 
 
 def _draw_left_rail(draw, ctx: RenderContext, ha, box: Box) -> None:
+    """Three stacked stories: Outside / Sun / At Home, each separated by
+    a hairline. The kicker-to-stat gap is 6px and section-to-section is
+    `8 + hairline + 6`, which gives the rail a clear newspaper rhythm.
+    """
     P = ctx.palette
     zone = ctx.zone
     weather = ha.get("weather") or {}
@@ -402,7 +413,7 @@ def _draw_left_rail(draw, ctx: RenderContext, ha, box: Box) -> None:
         fm = font_metrics(kfont)
         _draw_kicker(draw, Box(box.x0, cur_y, box.x1, cur_y + fm.line_height),
                      text=text, P=P, decor=True)
-        cur_y += fm.line_height + 4
+        cur_y += fm.line_height + 6
 
     _section("Outside")
     cur_y = _draw_rail_stat(draw, P, box.x0, cur_y, box.w,
@@ -417,48 +428,72 @@ def _draw_left_rail(draw, ctx: RenderContext, ha, box: Box) -> None:
     cur_y = _draw_rail_stat(draw, P, box.x0, cur_y, box.w,
         k="Visibility", v=f"{safe_round(weather.get('visibility'))}", u="mi")
 
-    cur_y += 6
-    hairline_hr(draw, box.x0, box.x1, cur_y, fill=P.rule); cur_y += 4
+    cur_y += 8
+    hairline_hr(draw, box.x0, box.x1, cur_y, fill=P.rule); cur_y += 6
     sun = ha.get("sun") or {}
     sun_label = "Sun \u00b7 " + ("Risen" if sun.get("state") == "above_horizon" else "Set")
     _section(sun_label)
     cur_y = _draw_sun_arc(draw, P, box.x0, cur_y, box.w, ha, zone)
 
-    cur_y += 6
-    hairline_hr(draw, box.x0, box.x1, cur_y, fill=P.rule); cur_y += 4
+    cur_y += 8
+    hairline_hr(draw, box.x0, box.x1, cur_y, fill=P.rule); cur_y += 6
     _section("At Home")
     for p in (ha.get("people") or [])[:5]:
         cur_y = _draw_person_row_editorial(draw, P, box.x0, cur_y, box.w, p)
 
 
 def _draw_rail_stat(draw, P, x0, y, w, *, k, v, u) -> int:
+    """One Outside stat row: ``label .... value unit``.
+
+    The label always fits (italicized noun); the value uses
+    ``pick_fitting_size`` so a 3-digit number or a long pressure string
+    can shrink instead of spilling into the unit column.
+    """
     label_font = fonts.serif(layout.EditorialType.RAIL_LABEL_PX, italic=True)
-    value_font = fonts.serif(layout.EditorialType.RAIL_VALUE_PX, weight="bold")
+    value_factory = lambda s: fonts.serif(s, weight="bold")
     unit_font = fonts.pix_cherry_small(9, bold=True)
     unit_tracking = em_to_px(9, 0.10)
-    fm_v = font_metrics(value_font)
     fm_l = font_metrics(label_font)
+    label_w = text_width(label_font, k)
+    unit_w = tracked_width(unit_font, u, unit_tracking)
+    # Value column is bounded by [label + 6px gap, unit - 3px gap].
+    avail = max(20, w - label_w - 6 - unit_w - 3)
+    value_font, _val_size = pick_fitting_size(
+        value_factory, v, avail,
+        (layout.EditorialType.RAIL_VALUE_PX, 14, 13, 12),
+    )
+    fm_v = font_metrics(value_font)
     baseline = y + max(fm_v.ascent, fm_l.ascent)
     draw_text_bl(draw, (x0, baseline), k, label_font, P.ink)
-    unit_w = tracked_width(unit_font, u, unit_tracking)
     val_w = text_width(value_font, v)
     right = x0 + w
     unit_x = right - unit_w
     val_x = unit_x - 3 - val_w
-    draw_text_bl(draw, (val_x, baseline), v, value_font, P.ink)
-    draw_tracked_text_bl(draw, (unit_x, baseline), u, unit_font, P.muted, unit_tracking)
+    # If the value would touch the label, just truncate the value.
+    if val_x < x0 + label_w + 6:
+        from .draw import draw_text_clipped_bl_right
+        # Truncate value to fit the available column.
+        draw_tracked_text_bl(draw, (unit_x, baseline), u,
+                             unit_font, P.muted, unit_tracking)
+        draw_text_clipped_bl_right(draw, (unit_x - 3, baseline), v,
+                                   value_font, P.ink, max_w=avail)
+    else:
+        draw_text_bl(draw, (val_x, baseline), v, value_font, P.ink)
+        draw_tracked_text_bl(draw, (unit_x, baseline), u,
+                             unit_font, P.muted, unit_tracking)
     under_y = baseline + max(fm_v.descent, fm_l.descent) + 2
     dotted_hr(draw, x0, x0 + w, under_y, dash=1, gap=3, fill=P.rule)
     return under_y + 2
 
 
 def _draw_person_row_editorial(draw, P, x0, y, w, p) -> int:
-    name_font = fonts.serif(14, weight="semibold")
+    """One At Home row. The state label is fixed-width (it's always
+    short: ``home`` / ``not_home`` / ``away``); the name auto-fits to
+    the remaining width so a long first name like ``Maximillian`` can't
+    overlap the bullet + state column to its right.
+    """
     state_font = fonts.pix_cherry_small(10, bold=True)
     tracking = em_to_px(10, 0.14)
-    fm_n = font_metrics(name_font)
-    fm_s = font_metrics(state_font)
-    baseline = y + max(fm_n.ascent, fm_s.ascent)
     home = (p or {}).get("state") == "home"
     color = P.green if home else P.muted
     label = "home" if home else ((p or {}).get("state") or "away")
@@ -467,12 +502,24 @@ def _draw_person_row_editorial(draw, P, x0, y, w, p) -> int:
     gap = 6
     label_x = x0 + w - label_w
     bullet_cx = label_x - gap - bullet_dia // 2
+    name = ((p or {}).get("name") or "").split(" ")[0]
+    # Name fits into [x0, bullet left edge - 4px gap].
+    name_max_w = max(20, bullet_cx - bullet_dia // 2 - 4 - x0)
+    name_factory = lambda s: fonts.serif(s, weight="semibold")
+    name_font, _ = pick_fitting_size(
+        name_factory, name, name_max_w, (14, 13, 12, 11),
+    )
+    fm_n = font_metrics(name_font)
+    fm_s = font_metrics(state_font)
+    baseline = y + max(fm_n.ascent, fm_s.ascent)
     bullet(draw, bullet_cx, baseline - fm_s.ascent // 2 + 1, 3,
            filled=home, color=color)
     draw_tracked_text_bl(draw, (label_x, baseline), label,
                          state_font, color, tracking)
-    name = ((p or {}).get("name") or "").split(" ")[0]
-    draw_text_bl(draw, (x0, baseline), name, name_font, P.ink)
+    # Even with auto-fit, fall back to ellipsis if the smallest size
+    # still wouldn't fit (e.g. an absurdly long first name).
+    draw_text_clipped_bl(draw, (x0, baseline), name,
+                         name_font, P.ink, max_w=name_max_w)
     return baseline + max(fm_n.descent, fm_s.descent) + 4
 
 
@@ -496,7 +543,7 @@ def _draw_sun_arc(draw, P, x0, y, w, ha, zone) -> int:
     except Exception:
         frac = 0.5
     frac = clamp(frac, 0.0, 1.0)
-    W, H = min(138, w), 36
+    W, H = min(144, w), 40
     cx = x0 + W // 2
     cy_flat = y + H
     rX = W // 2 - 8
@@ -516,8 +563,13 @@ def _draw_sun_arc(draw, P, x0, y, w, ha, zone) -> int:
     lf = fonts.serif(11, italic=True)
     fm = font_metrics(lf)
     baseline = y + H + 4 + fm.ascent
-    draw_text_bl(draw, (x0, baseline), f"\u2191 {rise}", lf, P.muted)
-    draw_text_bl_right(draw, (x0 + w, baseline), f"\u2193 {set_s}", lf, P.muted)
+    arrow_sz = 8
+    draw_arrow_up(draw, x0, baseline, size=arrow_sz, fill=P.muted)
+    draw_text_bl(draw, (x0 + arrow_sz + 3, baseline), rise, lf, P.muted)
+    set_tw = text_width(lf, set_s)
+    draw_arrow_down(draw, x0 + w - arrow_sz - 3 - set_tw, baseline,
+                    size=arrow_sz, fill=P.muted)
+    draw_text_bl_right(draw, (x0 + w, baseline), set_s, lf, P.muted)
     return baseline + fm.descent + 4
 
 
@@ -525,6 +577,9 @@ def _draw_sun_arc(draw, P, x0, y, w, ha, zone) -> int:
 
 
 def _draw_right_rail(draw, ctx: RenderContext, ha, box: Box) -> None:
+    """House / Hearth / Pool stack. Same `8 + hairline + 6` rhythm as
+    the left rail so the two rails read as siblings.
+    """
     P = ctx.palette
     pool = ha.get("pool")
     cur_y = box.y0
@@ -535,13 +590,13 @@ def _draw_right_rail(draw, ctx: RenderContext, ha, box: Box) -> None:
         fm = font_metrics(kfont)
         _draw_kicker(draw, Box(box.x0, cur_y, box.x1, cur_y + fm.line_height),
                      text=text, P=P, decor=True)
-        cur_y += fm.line_height + 4
+        cur_y += fm.line_height + 6
 
     _section("The House")
     cur_y = _draw_floor_list(draw, ctx, ha, box.x0, cur_y, box.w)
 
-    cur_y += 6
-    hairline_hr(draw, box.x0, box.x1, cur_y, fill=P.rule); cur_y += 4
+    cur_y += 8
+    hairline_hr(draw, box.x0, box.x1, cur_y, fill=P.rule); cur_y += 6
     _section("Hearth \u00b7 Radiant")
     climates = ha.get("climates") or {}
     cur_y = _draw_radiant_row(draw, ctx, box.x0, cur_y, box.w, "Main",
@@ -549,17 +604,21 @@ def _draw_right_rail(draw, ctx: RenderContext, ha, box: Box) -> None:
     cur_y = _draw_radiant_row(draw, ctx, box.x0, cur_y, box.w, "Apt",
                               build_zone_view(climates.get("radiantApt"), name="Apt"))
 
-    cur_y += 6
-    hairline_hr(draw, box.x0, box.x1, cur_y, fill=P.rule); cur_y += 4
+    cur_y += 8
+    hairline_hr(draw, box.x0, box.x1, cur_y, fill=P.rule); cur_y += 6
     if pool and pool.get("heating"):
         _section("Pool")
         _draw_pool_mini(draw, P, box.x0, cur_y, box.w, pool)
 
 
 def _draw_floor_list(draw, ctx: RenderContext, ha, x0, y, w) -> int:
-    """One row per floor. Heating in red, cooling in blue, idle in muted.
-    The state comes from ``FloorView`` so a stale HA action can't get the
-    direction wrong."""
+    """One row per floor: name + sub-state on the left, big temp on the
+    right. Heating renders in red, cooling in blue, idle in ink.
+
+    The temp digits use a shared auto-fit pass so every row's number
+    sits on the same baseline at the same size, no matter which one is
+    widest (a 3-digit temp can't shift just one row).
+    """
     P = ctx.palette
     floor_views = build_floor_views(ha, [
         ("third", "Third"),
@@ -570,11 +629,21 @@ def _draw_floor_list(draw, ctx: RenderContext, ha, x0, y, w) -> int:
     name_font = fonts.serif(13, weight="semibold")
     sub_font = fonts.pix_cherry_small(9, bold=True)
     sub_tracking = em_to_px(9, 0.16)
-    temp_font = fonts.serif(22, weight="bold")
     fm_n = font_metrics(name_font)
     fm_s = font_metrics(sub_font)
+    # Pick a single temp size against the widest expected string so all
+    # four rows share one baseline. Reserve ~half the rail width for the
+    # name+sub cluster.
+    widest_temp = max((fmt_temp(v.temp) for v in floor_views),
+                      key=lambda s: text_width(fonts.serif(22, weight='bold'), s),
+                      default="00\u00b0")
+    temp_factory = lambda s: fonts.serif(s, weight="bold")
+    temp_font, _ = pick_fitting_size(
+        temp_factory, widest_temp, max(36, w // 2),
+        (22, 20, 18, 16),
+    )
     fm_t = font_metrics(temp_font)
-    row_h = fm_t.ascent + fm_s.line_height + 4
+    row_h = fm_t.ascent + fm_s.line_height + 6
     cur_y = y
     for idx, view in enumerate(floor_views):
         active = view.state in ("heating", "cooling")
@@ -584,7 +653,6 @@ def _draw_floor_list(draw, ctx: RenderContext, ha, x0, y, w) -> int:
         sub_baseline = name_baseline + fm_n.descent + 2 + fm_s.ascent
         bullet(draw, x0 + 3, sub_baseline - fm_s.ascent // 2 + 1, 3,
                filled=active, color=accent)
-        # Sub label: "{n} heat" / "{n} cool" / "idle".
         if view.state == "heating":
             sub_label = f"{view.heat_count} heat"
         elif view.state == "cooling":
@@ -606,7 +674,9 @@ def _draw_floor_list(draw, ctx: RenderContext, ha, x0, y, w) -> int:
 
 def _draw_radiant_row(draw, ctx: RenderContext, x0, y, w, label, view: ZoneView) -> int:
     """Radiant zone row. Reads ``ZoneView.state`` so heating shows red,
-    cooling shows blue, idle/off stays in ink."""
+    cooling shows blue, idle/off stays in ink. The `→ target` glyph is
+    drawn as primitives because Cherry pixel font lacks U+2192.
+    """
     P = ctx.palette
     if view is None or view.state == "unknown":
         return y
@@ -614,28 +684,41 @@ def _draw_radiant_row(draw, ctx: RenderContext, x0, y, w, label, view: ZoneView)
     color = ctx.accent(view.accent_kind) if active else P.ink
     left_font = fonts.pix_cherry_small(10, bold=True)
     l_tracking = em_to_px(10, 0.14)
-    cur_font = fonts.serif(15, weight="bold")
+    cur_factory = lambda s: fonts.serif(s, weight="bold")
     tgt_font = fonts.pix_cherry_small(9, bold=True)
     tgt_tracking = em_to_px(9, 0.10)
-    fm_c = font_metrics(cur_font)
     fm_l = font_metrics(left_font)
     fm_t = font_metrics(tgt_font)
+    cur_s = fmt_temp(view.current)
+    tgt_temp_s = fmt_temp(view.target) if view.target is not None else ""
+    label_w = tracked_width(left_font, label.upper(), l_tracking)
+    bullet_w = 10
+    arrow_sz = 7
+    arrow_block_w = (arrow_sz + 3 + tracked_width(tgt_font, tgt_temp_s, tgt_tracking)) if tgt_temp_s else 0
+    available = w - bullet_w - label_w - 6 - arrow_block_w - 5
+    cur_font, _cur_size = pick_fitting_size(
+        cur_factory, cur_s, max(20, available), (15, 14, 13, 12),
+    )
+    fm_c = font_metrics(cur_font)
     baseline = y + max(fm_c.ascent, fm_l.ascent, fm_t.ascent)
     bullet(draw, x0 + 3, baseline - fm_l.ascent // 2, 3,
            filled=active, color=color)
     draw_tracked_text_bl(draw, (x0 + 10, baseline),
                          label.upper(), left_font, color, l_tracking)
-    cur_s = fmt_temp(view.current)
-    tgt_s = f"\u2192{fmt_temp(view.target)}" if view.target is not None else ""
-    tgt_w = tracked_width(tgt_font, tgt_s, tgt_tracking) if tgt_s else 0
     cur_w = text_width(cur_font, cur_s)
     right = x0 + w
-    tgt_x = right - tgt_w
-    cur_x = tgt_x - 5 - cur_w
-    draw_text_bl(draw, (cur_x, baseline), cur_s, cur_font, color)
-    if tgt_s:
+    tgt_temp_w = tracked_width(tgt_font, tgt_temp_s, tgt_tracking) if tgt_temp_s else 0
+    if tgt_temp_s:
+        tgt_x = right - tgt_temp_w
+        arrow_x = tgt_x - arrow_sz - 3
+        cur_x = arrow_x - 5 - cur_w
+        draw_text_bl(draw, (cur_x, baseline), cur_s, cur_font, color)
+        draw_arrow_right(draw, arrow_x, baseline, size=arrow_sz, fill=P.muted)
         draw_tracked_text_bl(draw, (tgt_x, baseline),
-                             tgt_s, tgt_font, P.muted, tgt_tracking)
+                             tgt_temp_s, tgt_font, P.muted, tgt_tracking)
+    else:
+        cur_x = right - cur_w
+        draw_text_bl(draw, (cur_x, baseline), cur_s, cur_font, color)
     return baseline + max(fm_c.descent, fm_l.descent, fm_t.descent) + 2
 
 
@@ -649,18 +732,24 @@ def _draw_pool_mini(draw, P, x0, y, w, pool) -> None:
         from_v=50, to_v=95,
         now=pool.get("current"), target=pool.get("target"), accent=accent)
     text_x = x0 + therm_w + 10
-    cur_font = fonts.serif(28, weight="bold")
+    text_max_w = max(20, x0 + w - text_x)
+    cur_factory = lambda s: fonts.serif(s, weight="bold")
+    cur_s = fmt_temp(pool.get("current"))
+    cur_font, _cur_size = pick_fitting_size(
+        cur_factory, cur_s, text_max_w, (28, 24, 22, 20, 18),
+    )
     stat_font = fonts.pix_cherry_small(9, bold=True)
     s_tracking = em_to_px(9, 0.14)
     fm_c = font_metrics(cur_font)
     fm_s = font_metrics(stat_font)
     color = P.red if heating else P.ink
     baseline = y + fm_c.ascent
-    draw_text_bl(draw, (text_x, baseline),
-                 fmt_temp(pool.get("current")), cur_font, color)
-    sub_baseline = baseline + fm_c.descent + 4 + fm_s.ascent
-    draw_tracked_text_bl(draw, (text_x, sub_baseline),
-                         f"\u2192 {fmt_temp(pool.get('target'))}",
+    draw_text_bl(draw, (text_x, baseline), cur_s, cur_font, color)
+    sub_baseline = baseline + fm_c.descent + 6 + fm_s.ascent
+    arrow_sz = 7
+    draw_arrow_right(draw, text_x, sub_baseline, size=arrow_sz, fill=P.muted)
+    draw_tracked_text_bl(draw, (text_x + arrow_sz + 3, sub_baseline),
+                         fmt_temp(pool.get("target")),
                          stat_font, P.muted, s_tracking)
     air = pool.get("air")
     if air is not None:
@@ -720,9 +809,18 @@ def _draw_calm_lead(draw, P, ha, x0, y, w) -> int:
     kicker_font = fonts.pix_cherry_small(11, bold=True)
     k_tracking = em_to_px(11, 0.30)
     fm_k = font_metrics(kicker_font)
-    kicker = "\u2605  THE CALM EDITION  \u2605"
-    draw_tracked_text_bl(draw, (x0, y + fm_k.ascent),
-                         kicker, kicker_font, P.muted, k_tracking)
+    star_sz = 9
+    kicker_label = "THE CALM EDITION"
+    label_w = tracked_width(kicker_font, kicker_label, k_tracking)
+    block_w = star_sz + 8 + label_w + 8 + star_sz
+    block_x = x0 + max(0, (w - block_w) // 2)
+    kicker_baseline = y + fm_k.ascent
+    draw_star_marker(draw, block_x, kicker_baseline,
+                     size=star_sz, fill=P.muted)
+    draw_tracked_text_bl(draw, (block_x + star_sz + 8, kicker_baseline),
+                         kicker_label, kicker_font, P.muted, k_tracking)
+    draw_star_marker(draw, block_x + star_sz + 8 + label_w + 8,
+                     kicker_baseline, size=star_sz, fill=P.muted)
     head_font = fonts.serif(38, weight="bold")
     italic_font = fonts.serif(38, italic=True, weight="bold")
     fm_h = font_metrics(head_font)
@@ -768,21 +866,31 @@ def _draw_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) ->
 
 def _draw_story_shell(draw, P, x0, y, w, *, kicker, accent, headline_runs,
                       deck=None, body=None, badge=None) -> int:
+    """Magazine lead: kicker -> 8px -> headline -> 12px -> deck -> 10px -> body.
+
+    Every text block has a hard `max_lines` cap so a long status label or
+    long program string can never push the fact strip off the body box.
+    The headline auto-shrinks to 2 lines max; the deck wraps to 2 max;
+    the body wraps to 4 max.
+    """
     kfont = fonts.pix_cherry_small(layout.EditorialType.KICKER_PX, bold=True)
     fm_k = font_metrics(kfont)
     _draw_diamond_kicker(draw, Box(x0, y, x0 + w, y + 18),
                          text=kicker, P=P, accent=accent, badge=badge)
     cur_y = y + fm_k.line_height + 8
     cur_y = draw_headline(draw, (x0, cur_y, w, 100), headline_runs,
-                          line_height_px=32, align="left")
+                          line_height_px=32, align="left",
+                          max_lines=2)
     if deck:
         deck_font = fonts.serif(14, italic=True)
-        cur_y = draw_paragraph(draw, (x0, cur_y + 2, w, 60),
-            deck, font=deck_font, fill=P.muted, line_height_px=18)
+        cur_y = draw_paragraph(draw, (x0, cur_y + 6, w, 36),
+            deck, font=deck_font, fill=P.muted, line_height_px=18,
+            max_lines=2)
     if body:
         body_font = fonts.serif(13)
-        cur_y = draw_paragraph(draw, (x0, cur_y + 4, w, 80),
-            body, font=body_font, fill=P.ink, line_height_px=18)
+        cur_y = draw_paragraph(draw, (x0, cur_y + 6, w, 80),
+            body, font=body_font, fill=P.ink, line_height_px=18,
+            max_lines=4)
     return cur_y
 
 
@@ -823,37 +931,65 @@ def _draw_thermometer(draw, P, x0, y, w, *, from_v, to_v, now, target,
 
 
 def _draw_fact_strip(draw, P, x0, y, w, cells) -> int:
+    """Newspaper-style fact strip with `len(cells)` columns.
+
+    Each cell's value runs through `pick_fitting_size` against the cell
+    width so an outlier (`"2h45m"`, `"#199"`) shrinks just its own cell,
+    not the whole row. The label and the optional sub-line use clipped
+    drawing so a long label degrades to an ellipsis rather than crossing
+    the cell rule.
+    """
     cell_w = w // max(1, len(cells))
-    cell_h = 44
+    cell_h = 48
     draw.rectangle([(x0, y), (x0 + w - 1, y + 1)], fill=P.rule)
     bottom = y + 2 + cell_h
     hairline_hr(draw, x0, x0 + w, bottom, fill=P.rule)
     label_font = fonts.pix_cherry_small(9, bold=True)
     tracking = em_to_px(9, 0.18)
-    val_font = fonts.serif(19, weight="bold")
+    val_factory = lambda s: fonts.serif(s, weight="bold")
+    val_candidates = (22, 20, 18, 16, 14)
     sub_font = fonts.pix_cherry_small(9, bold=True)
     sub_tracking = em_to_px(9, 0.10)
     fm_l = font_metrics(label_font)
-    fm_v = font_metrics(val_font)
     fm_s = font_metrics(sub_font)
+    inner_pad = 6  # px reserved at each side of a cell for the value fit.
     for i, c in enumerate(cells):
         cx0 = x0 + i * cell_w
+        cx1 = cx0 + cell_w
         if i > 0:
             draw.rectangle([(cx0, y + 2), (cx0, bottom - 1)], fill=P.rule)
         cell_cx = cx0 + cell_w // 2
         label = (c.get("k") or "").upper()
-        label_baseline = y + 2 + fm_l.ascent + 1
-        draw_tracked_text_bl_center(draw, (cell_cx, label_baseline),
-            label, label_font, P.muted, tracking)
+        label_baseline = y + 4 + fm_l.ascent
+        # Clip the label to the cell (minus inner pad). Anything over goes
+        # to ellipsis rather than crossing the cell rule.
+        from .draw import draw_text_clipped_bl_right  # local alias is fine.
+        # Centered tracked label, but we still cap by the cell width
+        # (the tracking helper has no clipping, so pre-truncate).
+        max_label_w = cell_w - inner_pad * 2
+        s_label = label
+        while s_label and tracked_width(label_font, s_label, tracking) > max_label_w:
+            s_label = s_label[:-1]
+        if s_label:
+            draw_tracked_text_bl_center(draw, (cell_cx, label_baseline),
+                s_label, label_font, P.muted, tracking)
         val = c.get("v") or "\u2014"
         color = c.get("accent") or P.ink
-        val_baseline = label_baseline + fm_l.descent + 3 + fm_v.ascent
+        val_font, _val_size = pick_fitting_size(
+            val_factory, val, max(20, cell_w - inner_pad * 2), val_candidates,
+        )
+        fm_v = font_metrics(val_font)
+        val_baseline = label_baseline + fm_l.descent + 4 + fm_v.ascent
         draw_text_bl_center(draw, (cell_cx, val_baseline), val, val_font, color)
         sub = c.get("sub")
         if sub:
             sub_baseline = val_baseline + fm_v.descent + 2 + fm_s.ascent
-            draw_tracked_text_bl_center(draw, (cell_cx, sub_baseline),
-                sub, sub_font, P.muted, sub_tracking)
+            s_sub = sub.upper()
+            while s_sub and tracked_width(sub_font, s_sub, sub_tracking) > max_label_w:
+                s_sub = s_sub[:-1]
+            if s_sub:
+                draw_tracked_text_bl_center(draw, (cell_cx, sub_baseline),
+                    s_sub, sub_font, P.muted, sub_tracking)
     return bottom + 2
 
 
@@ -1193,8 +1329,14 @@ EDITORIAL_BRIEFS = {
 
 
 def _draw_colophon(draw, ctx: RenderContext, ha) -> None:
-    """Bottom strip. Reads ``HvacSummary`` so the zones label correctly
-    branches on heating/cooling/idle (the original only knew about heat)."""
+    """Bottom strip: three columns -- people on the left, italic quote
+    in the center, status chips on the right.
+
+    The right cluster reserves its width first; the quote is then
+    truncated to whatever middle space remains so the two can never
+    collide. If even after dropping the refresh chip the right cluster
+    still doesn't fit, the quote falls back to a shorter form.
+    """
     L = layout.EDITORIAL
     P = ctx.palette
     now = ctx.now_local
@@ -1205,30 +1347,39 @@ def _draw_colophon(draw, ctx: RenderContext, ha) -> None:
     fm = font_metrics(label_font)
     baseline = box.y0 + 5 + fm.ascent
 
+    # ── Left column: people ────────────────────────────────────────
     people = ha.get("people") or []
     home_names = [p.get("name", "").split(" ")[0] for p in people if p.get("state") == "home"]
     if home_names:
         bullet(draw, box.x0 + 3, baseline - fm.ascent // 2, 3,
                filled=True, color=ctx.accent("ok"))
-        label = " & ".join(home_names).upper() + " HOME"
-        draw_tracked_text_bl(draw, (box.x0 + 10, baseline), label,
-                             label_font, P.ink, tracking)
+        left_text = " & ".join(home_names).upper() + " HOME"
+        left_color = P.ink
     else:
         bullet(draw, box.x0 + 3, baseline - fm.ascent // 2, 3,
                filled=False, color=ctx.accent("idle"))
-        draw_tracked_text_bl(draw, (box.x0 + 10, baseline), "NOBODY HOME",
-                             label_font, P.muted, tracking)
+        left_text = "NOBODY HOME"
+        left_color = P.muted
+    left_max_w = (box.cx - box.x0) - 20  # reserve 20-px gap before quote.
+    # Truncate the left text to its column.
+    s_left = left_text
+    while s_left and tracked_width(label_font, s_left, tracking) > left_max_w:
+        s_left = s_left[:-1]
+    if s_left and s_left != left_text:
+        # Drop one more char and ellipsize.
+        while s_left and tracked_width(label_font, s_left + "\u2026", tracking) > left_max_w:
+            s_left = s_left[:-1]
+        s_left = s_left + "\u2026"
+    if s_left:
+        draw_tracked_text_bl(draw, (box.x0 + 10, baseline), s_left,
+                             label_font, left_color, tracking)
+    left_end_x = box.x0 + 10 + tracked_width(label_font, s_left, tracking)
 
-    quote_font = fonts.serif(11, italic=True)
-    fm_q = font_metrics(quote_font)
-    quote = "\u201cAll the news that fits the house.\u201d"
-    draw_text_bl_center(draw, (box.cx, box.y0 + 6 + fm_q.ascent),
-                        quote, quote_font, P.muted)
-
+    # ── Right column: chips ────────────────────────────────────────
     summary: HvacSummary = build_hvac_summary(ha)
     win_count = len(ha.get("openWindows") or [])
     sep = "  \u00b7  "
-    refresh = f"\u21bb {fmt_time(now).upper()}"
+    refresh_label = fmt_time(now).upper()
     zones_color = ctx.accent(summary.dominant) if summary.is_active else ctx.accent("idle")
     zones_text = summary.label
     wins_color = (ctx.accent("warn") if (win_count and P.yellow != P.ink)
@@ -1236,13 +1387,21 @@ def _draw_colophon(draw, ctx: RenderContext, ha) -> None:
 
     bullet_dia = 7
     gap = 4
+    refresh_sz = 8
     zones_w = tracked_width(label_font, zones_text, tracking)
     sep_w = tracked_width(label_font, sep, tracking)
     wins_text = f"{win_count} WIN"
     wins_w = tracked_width(label_font, wins_text, tracking)
-    refresh_w = tracked_width(label_font, refresh, tracking)
-    total = (bullet_dia + gap + zones_w + sep_w
-             + bullet_dia + gap + wins_w + sep_w + refresh_w)
+    refresh_w = refresh_sz + 4 + tracked_width(label_font, refresh_label, tracking)
+    total_with_refresh = (bullet_dia + gap + zones_w + sep_w
+                          + bullet_dia + gap + wins_w + sep_w + refresh_w)
+    total_no_refresh = (bullet_dia + gap + zones_w + sep_w
+                        + bullet_dia + gap + wins_w)
+    # Right cluster gets at most half of the box minus a 20-px gap
+    # reservation for the quote.
+    right_budget = (box.x1 - box.cx) - 20
+    show_refresh = total_with_refresh <= right_budget
+    total = total_with_refresh if show_refresh else total_no_refresh
     rx = box.x1 - total
     bullet(draw, rx + 3, baseline - fm.ascent // 2, 3,
            filled=summary.is_active, color=zones_color)
@@ -1258,7 +1417,26 @@ def _draw_colophon(draw, ctx: RenderContext, ha) -> None:
     draw_tracked_text_bl(draw, (cur_x, baseline), wins_text,
                          label_font, wins_color, tracking)
     cur_x += wins_w
-    draw_tracked_text_bl(draw, (cur_x, baseline), sep, label_font, P.muted, tracking)
-    cur_x += sep_w
-    draw_tracked_text_bl(draw, (cur_x, baseline), refresh,
-                         label_font, P.muted, tracking)
+    if show_refresh:
+        draw_tracked_text_bl(draw, (cur_x, baseline), sep,
+                             label_font, P.muted, tracking)
+        cur_x += sep_w
+        draw_refresh_glyph(draw, cur_x, baseline,
+                           size=refresh_sz, fill=P.muted)
+        cur_x += refresh_sz + 4
+        draw_tracked_text_bl(draw, (cur_x, baseline), refresh_label,
+                             label_font, P.muted, tracking)
+
+    # ── Center column: italic quote (last so it can use the real gap) ──
+    quote_font = fonts.serif(11, italic=True)
+    fm_q = font_metrics(quote_font)
+    quote_full = "\u201cAll the news that fits the house.\u201d"
+    quote_short = "\u201cAll the news.\u201d"
+    quote_baseline = box.y0 + 6 + fm_q.ascent
+    quote_max_w = max(0, rx - 20 - (left_end_x + 12))
+    quote = quote_full if text_width(quote_font, quote_full) <= quote_max_w else quote_short
+    if text_width(quote_font, quote) <= quote_max_w and quote_max_w > 20:
+        quote_w = text_width(quote_font, quote)
+        center_x = (left_end_x + 12 + rx - 20) // 2
+        draw_text_bl_center(draw, (center_x, quote_baseline),
+                            quote, quote_font, P.muted)

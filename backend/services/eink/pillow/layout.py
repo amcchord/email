@@ -74,15 +74,19 @@ class EditorialType:
     TEMP_PX = 40
     AMPM_PX = 14
 
-    # Wordmark sits on the same display baseline; 30 px reads right
-    # against the 40-px display digits next to it.
-    WORDMARK_PX = 30
-    WORDMARK_TRACKING_EM = 0.04
+    # Wordmark sits on the same display baseline; 34 px lands as the
+    # dominant masthead element opposite the 40-px display digits next
+    # to it, matching the JSX editorial.jsx intent (fontSize: 32 with
+    # +letterSpacing rather than a pixel-tight match).
+    WORDMARK_PX = 34
+    WORDMARK_TRACKING_EM = 0.06
 
     # Cherry-Small labels (date, weather label) -- 9 px native bitmap.
+    # Wider date tracking gives the label row air under the wordmark
+    # so it reads as the edition stamp rather than a sub-title.
     LABEL_PX = 9
-    DATE_TRACKING_EM = 0.22
-    WEATHER_LABEL_TRACKING_EM = 0.16
+    DATE_TRACKING_EM = 0.26
+    WEATHER_LABEL_TRACKING_EM = 0.18
 
     # Weather glyph size in the masthead.
     WEATHER_GLYPH_PX = 34
@@ -103,7 +107,7 @@ class EditorialType:
     # fit so the renderer never silently overflows.
     TIME_CANDIDATES = (40, 36, 32, 28)
     TEMP_CANDIDATES = (40, 36, 32, 28)
-    WORDMARK_CANDIDATES = (30, 28, 26, 24)
+    WORDMARK_CANDIDATES = (34, 32, 30, 28, 26)
 
 
 def _build_editorial() -> EditorialLayout:
