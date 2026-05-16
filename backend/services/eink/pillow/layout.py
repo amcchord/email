@@ -114,9 +114,11 @@ def _build_editorial() -> EditorialLayout:
     canvas = Box(0, 0, CANVAS_W, CANVAS_H)
     gutter = 22
 
-    # Vertical bands: pin(1) + content(52) + thick(3) + gap(2) + hair(1) = 59.
-    # Plus 11 px free under the pin rule to seat the content band comfortably.
-    masthead = Box(gutter, 12, CANVAS_W - gutter, 82)        # 70 px tall
+    # Vertical bands: content(52) + thick(3) + gap(2) + hair(1) = 58.
+    # The pin rule that used to sit at the top of the masthead is no
+    # longer drawn (see _draw_masthead in editorial.py); the masthead
+    # itself is nudged 4px down so the content has clear air above it.
+    masthead = Box(gutter, 16, CANVAS_W - gutter, 86)        # 70 px tall
     body = Box(gutter, 92, CANVAS_W - gutter, 452)           # 360 px tall
     colophon = Box(gutter, 456, CANVAS_W - gutter, 480)      # 24 px tall
 

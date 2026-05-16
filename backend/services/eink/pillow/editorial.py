@@ -142,7 +142,9 @@ def _draw_masthead(draw: ImageDraw.ImageDraw, P: Palette, now: datetime, weather
     L = layout.EDITORIAL
     TY = layout.EditorialType
 
-    fill_box(draw, L.masthead_pin_rule, P.rule)
+    # Top pin rule intentionally not drawn -- the masthead reads cleaner
+    # without a hairline against the panel edge. The thick + hairline
+    # below the content band still bracket the flag.
     fill_box(draw, L.masthead_thick_rule, P.rule)
     fill_box(draw, L.masthead_hair_rule, P.rule)
 
