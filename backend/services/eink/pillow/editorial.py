@@ -972,7 +972,6 @@ def _draw_compact_fact_strip(draw, P, x0, y, w, cells) -> int:
     cell_h = 34
     draw.rectangle([(x0, y), (x0 + w - 1, y + 1)], fill=P.rule)
     bottom = y + 2 + cell_h
-    hairline_hr(draw, x0, x0 + w, bottom, fill=P.rule)
     label_font = fonts.pix_cherry_small(9, bold=True)
     tracking = em_to_px(9, 0.18)
     val_factory = lambda s: fonts.serif(s, weight="bold")
@@ -1306,7 +1305,6 @@ def _draw_fact_strip(draw, P, x0, y, w, cells) -> int:
     cell_h = 48
     draw.rectangle([(x0, y), (x0 + w - 1, y + 1)], fill=P.rule)
     bottom = y + 2 + cell_h
-    hairline_hr(draw, x0, x0 + w, bottom, fill=P.rule)
     label_font = fonts.pix_cherry_small(9, bold=True)
     tracking = em_to_px(9, 0.18)
     val_factory = lambda s: fonts.serif(s, weight="bold")
