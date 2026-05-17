@@ -120,7 +120,7 @@ def render_dashboard(
 
     _draw_left_rail(draw, ctx, ha, L.body_left_rail.inset(right=14))
     _draw_lead_column(
-        draw, ctx, ha, lead, rest,
+        img, draw, ctx, ha, active,
         L.body_lead.inset(left=18, right=18),
     )
     _draw_right_rail(draw, ctx, ha, L.body_right_rail.inset(left=16))
@@ -788,23 +788,384 @@ def _draw_vertical_thermometer(
 # ── Lead column ────────────────────────────────────────────────────────
 
 
-def _draw_lead_column(draw, ctx: RenderContext, ha, lead, rest, box: Box) -> None:
+def _draw_lead_column(img: Image.Image, draw, ctx: RenderContext, ha,
+                      active: list, box: Box) -> None:
+    """Composer for the center column.
+
+    Branches on how many appliances are currently active:
+
+    * 0 active: render the calm-edition hero. Slack is distributed so
+      the headline sits ~1/3 from the top -- a magazine looks anchored,
+      not floating.
+    * 1 active: render the full per-kind hero, then place it at the
+      same 1/3 gravity offset so the fact strip floats nearer the
+      column center instead of hugging the top.
+    * 2 active: render two equal-weight co-lead stories stacked with a
+      double-rule divider. This is the "Dryer + Washer" case where
+      both deserve top-billing.
+    * 3+ active: render the highest-severity item as the full hero,
+      then the rest as briefs underneath -- still left-anchored
+      because the content is approaching the column height anyway.
+
+    Implementation note: cases 0 / 1 / 3+ paint to a scratch image so
+    we can measure the rendered height, then composite at the chosen
+    vertical offset. Pillow can't measure imperative drawing ahead of
+    time, so the two-pass render is the price for clean centering.
+    """
     P = ctx.palette
+    lead = active[0] if active else None
+    rest = active[1:]
+
+    # Case: exactly two active items -- render as paired co-leads.
+    # This branch paints directly so the divider lands at the midline.
+    if lead is not None and len(rest) == 1:
+        _draw_two_co_leads(draw, ctx, ha, [lead, rest[0]], box)
+        return
+
+    # All other branches use the scratch-image / measure / center
+    # approach so the lead doesn't hug the top when the column has
+    # significant vertical slack. The scratch is sized to 2x the box
+    # height so an overflowing brief gets fully painted on the scratch
+    # (where we can crop it cleanly) instead of being silently clipped
+    # by Pillow at the scratch edge.
+    bg = P.bg
+    scratch = Image.new("RGB", (box.w, box.h * 2), bg)
+    sdraw = ImageDraw.Draw(scratch)
+
     if lead is None:
-        y_end = _draw_calm_lead(draw, P, ha, box.x0, box.y0, box.w)
+        y_end = _draw_calm_lead(sdraw, P, ha, 0, 0, box.w)
     else:
-        y_end = _draw_lead(draw, ctx, ha, lead, box.x0, box.y0, box.w)
-    if rest:
-        double_hr(draw, box.x0, box.x1, y_end + 10, fill=P.rule, gap=2)
-        y_end += 10 + 5
-        kfont = fonts.pix_cherry_small(layout.EditorialType.KICKER_PX, bold=True)
-        fm = font_metrics(kfont)
-        _draw_kicker(draw, Box(box.x0, y_end + 6, box.x1, y_end + 6 + fm.line_height),
-                     text="Also Active", P=P)
-        y_end += fm.line_height + 8
-        for idx, item in enumerate(rest):
-            y_end = _draw_brief(draw, ctx, ha, box.x0, y_end, box.w,
-                                item, last=(idx == len(rest) - 1))
+        y_end = _draw_lead(sdraw, ctx, ha, lead, 0, 0, box.w)
+        if rest:
+            # Briefs are added one at a time; we stop as soon as the
+            # next brief wouldn't fit. If any were dropped, the kicker
+            # is augmented with a "+ N more" tail so the user knows
+            # there are background tasks not on screen.
+            kfont = fonts.pix_cherry_small(
+                layout.EditorialType.KICKER_PX, bold=True,
+            )
+            fm_k = font_metrics(kfont)
+            brief_row_h = 40
+            divider_h = 10 + 5
+            kicker_h = fm_k.line_height + 8
+            limit_y = box.h
+            # How many briefs fit?
+            available = limit_y - (y_end + divider_h + kicker_h)
+            max_fits = max(0, available // brief_row_h)
+            shown = list(rest[:max_fits])
+            hidden = len(rest) - len(shown)
+            if shown:
+                double_hr(sdraw, 0, box.w, y_end + 10, fill=P.rule, gap=2)
+                y_end += divider_h
+                kicker_text = "Also Active"
+                if hidden > 0:
+                    kicker_text += f"  \u00b7  +{hidden} more"
+                _draw_kicker(
+                    sdraw,
+                    Box(0, y_end + 6, box.w, y_end + 6 + fm_k.line_height),
+                    text=kicker_text, P=P,
+                )
+                y_end += kicker_h
+                for idx, item in enumerate(shown):
+                    y_end = _draw_brief(
+                        sdraw, ctx, ha, 0, y_end, box.w, item,
+                        last=(idx == len(shown) - 1),
+                    )
+
+    # Vertical distribution: leave 1/3 of slack at the top, 2/3 below.
+    # This pulls the headline down toward the optical center without
+    # making the column feel empty-bottomed. When content overflows
+    # the column there's no slack to distribute -- top_pad falls to 0.
+    rendered_h = min(box.h, y_end)
+    slack = max(0, box.h - rendered_h)
+    top_pad = slack // 3
+    crop = scratch.crop((0, 0, box.w, rendered_h))
+    img.paste(crop, (box.x0, box.y0 + top_pad))
+
+
+def _draw_two_co_leads(draw, ctx: RenderContext, ha,
+                       items: list, box: Box) -> None:
+    """Render two equal-weight stories stacked vertically.
+
+    Used when exactly two appliances are running so they read as
+    co-leads rather than "one big + one tiny". The midline is a thin
+    triple-rule horizontal divider (heavy + hairline + heavy).
+    """
+    P = ctx.palette
+    # Reserve 14px in the middle for the divider stack.
+    div_h = 14
+    top_h = (box.h - div_h) // 2
+    bot_h = box.h - div_h - top_h
+    top_box = Box(box.x0, box.y0, box.x1, box.y0 + top_h)
+    div_y = top_box.y1 + div_h // 2 - 2
+    bot_box = Box(box.x0, top_box.y1 + div_h, box.x1, box.y1)
+
+    _draw_co_lead_story(draw, ctx, items[0], top_box)
+    # Divider: heavy (2px) + 2px gap + hairline.
+    draw.rectangle([(box.x0, div_y), (box.x1 - 1, div_y + 1)], fill=P.rule)
+    draw.rectangle([(box.x0, div_y + 4), (box.x1 - 1, div_y + 4)], fill=P.rule)
+    _draw_co_lead_story(draw, ctx, items[1], bot_box)
+
+
+# ── Co-lead story (data-driven, half-height) ──────────────────────────
+
+
+def _draw_co_lead_story(draw, ctx: RenderContext,
+                        item: ActiveAppliance, box: Box) -> None:
+    """Compact magazine-style story used in the two-co-lead layout.
+
+    Pure presentation -- reads ``item.view`` and dispatches text
+    through ``_co_lead_descriptor`` so each kind contributes its own
+    headline / deck / fact cells without rebuilding a full hero.
+    """
+    P = ctx.palette
+    view = item.view
+    accent = ctx.accent(view.accent_kind)
+
+    descriptor = _co_lead_descriptor(view, ctx)
+
+    # Kicker row with diamond + optional badge.
+    kfont = fonts.pix_cherry_small(layout.EditorialType.KICKER_PX, bold=True)
+    fm_k = font_metrics(kfont)
+    _draw_diamond_kicker(
+        draw, Box(box.x0, box.y0, box.x1, box.y0 + 18),
+        text=view.eyebrow_kicker, P=P, accent=accent,
+        badge=descriptor.get("badge"),
+    )
+    cur_y = box.y0 + fm_k.line_height + 6
+
+    # Headline (22 px serif bold, max 2 lines).
+    head_size = 22
+    head_runs = descriptor["head_runs"]
+    cur_y = draw_headline(
+        draw, (box.x0, cur_y, box.w, head_size * 2 + 8),
+        head_runs, line_height_px=head_size + 4, max_lines=2,
+    )
+
+    # Deck (one line, italic, muted).
+    deck = descriptor.get("deck")
+    if deck:
+        deck_font = fonts.serif(13, italic=True)
+        cur_y = draw_paragraph(
+            draw, (box.x0, cur_y + 4, box.w, 36),
+            deck, font=deck_font, fill=P.muted, line_height_px=18,
+            max_lines=2,
+        )
+
+    # Fact cells anchored at the bottom of the co-lead box so paired
+    # stories' strips share a Y baseline.
+    cells = descriptor.get("cells") or []
+    if cells:
+        cell_h = 38
+        cells_y = box.y1 - cell_h - 4
+        _draw_compact_fact_strip(draw, P, box.x0, cells_y, box.w, cells)
+
+
+def _draw_compact_fact_strip(draw, P, x0, y, w, cells) -> int:
+    """Two-or-three cell fact strip sized for the co-lead row.
+
+    Same drawing approach as ``_draw_fact_strip`` but with tighter
+    vertical proportions so two strips fit one above the other in the
+    body column.
+    """
+    cell_w = w // max(1, len(cells))
+    cell_h = 34
+    draw.rectangle([(x0, y), (x0 + w - 1, y + 1)], fill=P.rule)
+    bottom = y + 2 + cell_h
+    hairline_hr(draw, x0, x0 + w, bottom, fill=P.rule)
+    label_font = fonts.pix_cherry_small(9, bold=True)
+    tracking = em_to_px(9, 0.18)
+    val_factory = lambda s: fonts.serif(s, weight="bold")
+    val_candidates = (18, 17, 16, 14, 12)
+    fm_l = font_metrics(label_font)
+    inner_pad = 6
+    for i, c in enumerate(cells):
+        cx0 = x0 + i * cell_w
+        if i > 0:
+            draw.rectangle([(cx0, y + 2), (cx0, bottom - 1)], fill=P.rule)
+        cell_cx = cx0 + cell_w // 2
+        label = (c.get("k") or "").upper()
+        label_baseline = y + 3 + fm_l.ascent
+        max_label_w = cell_w - inner_pad * 2
+        s_label = label
+        while s_label and tracked_width(label_font, s_label, tracking) > max_label_w:
+            s_label = s_label[:-1]
+        if s_label:
+            draw_tracked_text_bl_center(
+                draw, (cell_cx, label_baseline),
+                s_label, label_font, P.muted, tracking,
+            )
+        val = c.get("v") or "\u2014"
+        color = c.get("accent") or P.ink
+        val_font, _val_size = pick_fitting_size(
+            val_factory, val, max(20, cell_w - inner_pad * 2), val_candidates,
+        )
+        fm_v = font_metrics(val_font)
+        val_baseline = label_baseline + fm_l.descent + 2 + fm_v.ascent
+        draw_text_bl_center(draw, (cell_cx, val_baseline), val, val_font, color)
+    return bottom + 2
+
+
+# Per-kind descriptors for co-lead stories. Each builder returns a
+# dict with `head_runs`, optional `deck`, `cells` (list of {k, v}),
+# and an optional `badge` (e.g. "UNLOAD"). Keeping this table next to
+# EDITORIAL_LEAD_DRAWERS makes it obvious that adding a new appliance
+# means adding *two* rows: one full-hero drawer + one co-lead builder.
+
+
+def _co_lead_runs_normal_italic(size: int = 22):
+    return (fonts.serif(size, weight="bold"),
+            fonts.serif(size, italic=True, weight="bold"))
+
+
+def _co_washer(view: ApplianceView, ctx: RenderContext) -> dict:
+    P = ctx.palette
+    norm, ital = _co_lead_runs_normal_italic()
+    return {
+        "head_runs": [Run(view.status_label, norm, P.ink),
+                      Run(", then spin.", ital, P.ink)],
+        "deck": (f"Cycle #{view.extras.get('cycle_no', 0)} \u00b7 "
+                 f"finishes {view.finish_label}."),
+        "cells": [
+            {"k": "Remaining", "v": view.remaining_label,
+             "accent": ctx.accent(view.accent_kind)},
+            {"k": "Done by",   "v": view.finish_label},
+        ],
+    }
+
+
+def _co_washer_done(view: ApplianceView, ctx: RenderContext) -> dict:
+    P = ctx.palette
+    norm, ital = _co_lead_runs_normal_italic()
+    return {
+        "head_runs": [Run("Wash complete \u2014 ", norm, P.ink),
+                      Run("move it.", ital, P.ink)],
+        "deck": (f"Cycle #{view.extras.get('cycle_no', 0)} finished "
+                 f"{view.finish_label} \u00b7 {view.relative_label}."),
+        "cells": [
+            {"k": "Finished", "v": view.finish_label,
+             "accent": ctx.accent(view.accent_kind)},
+            {"k": "Ago",      "v": view.relative_label or "\u2014"},
+        ],
+        "badge": "UNLOAD",
+    }
+
+
+def _co_dryer(view: ApplianceView, ctx: RenderContext) -> dict:
+    P = ctx.palette
+    norm, ital = _co_lead_runs_normal_italic()
+    phase = view.extras.get("phase") or "running"
+    if phase in _EDITORIAL_DRYER_PHASE_HEADS:
+        runs = [Run(_EDITORIAL_DRYER_PHASE_HEADS[phase], ital, P.ink)]
+    else:
+        runs = [Run(view.status_label, norm, P.ink),
+                Run(", then fold.", ital, P.ink)]
+    return {
+        "head_runs": runs,
+        "deck": f"Finishing around {view.finish_label}.",
+        "cells": [
+            {"k": "Remaining", "v": view.remaining_label,
+             "accent": ctx.accent(view.accent_kind)},
+            {"k": "Done by",   "v": view.finish_label},
+        ],
+    }
+
+
+def _co_dryer_done(view: ApplianceView, ctx: RenderContext) -> dict:
+    P = ctx.palette
+    norm, ital = _co_lead_runs_normal_italic()
+    return {
+        "head_runs": [Run("Drying complete \u2014 ", norm, P.ink),
+                      Run("unload it.", ital, P.ink)],
+        "deck": f"Finished {view.finish_label} \u00b7 {view.relative_label}.",
+        "cells": [
+            {"k": "Finished", "v": view.finish_label,
+             "accent": ctx.accent(view.accent_kind)},
+            {"k": "Ago",      "v": view.relative_label or "\u2014"},
+        ],
+        "badge": "UNLOAD",
+    }
+
+
+def _co_dishwasher(view: ApplianceView, ctx: RenderContext) -> dict:
+    P = ctx.palette
+    norm, ital = _co_lead_runs_normal_italic()
+    program = view.program_label or "Auto"
+    prog = view.progress_pct
+    prog_s = f"{prog}%" if prog is not None else "\u2014"
+    return {
+        "head_runs": [Run(f"{program} ", norm, P.ink),
+                      Run("cycle.", ital, P.ink)],
+        "deck": (f"Finishing {view.relative_label} ({view.finish_label})."),
+        "cells": [
+            {"k": "Progress", "v": prog_s,
+             "accent": ctx.accent(view.accent_kind)},
+            {"k": "Finish",   "v": view.finish_label},
+        ],
+    }
+
+
+def _co_sauna(view: ApplianceView, ctx: RenderContext) -> dict:
+    P = ctx.palette
+    norm, ital = _co_lead_runs_normal_italic()
+    return {
+        "head_runs": [Run("Cabin warming to ", norm, P.ink),
+                      Run(f"{safe_round(view.target)}\u00b0.", ital,
+                          ctx.accent(view.accent_kind))],
+        "deck": (f"Now {safe_round(view.current)}\u00b0 \u00b7 "
+                 f"{view.extras.get('heaters', 0)}/3 elements."),
+        "cells": [
+            {"k": "Cabin",  "v": fmt_temp(view.current),
+             "accent": ctx.accent(view.accent_kind)},
+            {"k": "Target", "v": fmt_temp(view.target)},
+        ],
+    }
+
+
+def _co_pool(view: ApplianceView, ctx: RenderContext) -> dict:
+    P = ctx.palette
+    norm, ital = _co_lead_runs_normal_italic()
+    return {
+        "head_runs": [Run("Pool climbing to ", norm, P.ink),
+                      Run(f"{safe_round(view.target)}\u00b0.", ital,
+                          ctx.accent(view.accent_kind))],
+        "deck": (f"Water {safe_round(view.current)}\u00b0 \u00b7 "
+                 f"air {fmt_temp(view.extras.get('air_temp'))}."),
+        "cells": [
+            {"k": "Water",  "v": fmt_temp(view.current),
+             "accent": ctx.accent(view.accent_kind)},
+            {"k": "Target", "v": fmt_temp(view.target)},
+        ],
+    }
+
+
+def _co_unknown(view: ApplianceView, ctx: RenderContext) -> dict:
+    P = ctx.palette
+    norm, _ital = _co_lead_runs_normal_italic()
+    return {
+        "head_runs": [Run(view.kind.replace("-", " ").title() + ".",
+                          norm, P.ink)],
+        "deck": None,
+        "cells": [],
+    }
+
+
+_CO_LEAD_DESCRIBERS = {
+    "sauna":        _co_sauna,
+    "washer":       _co_washer,
+    "washer-done":  _co_washer_done,
+    "dryer":        _co_dryer,
+    "dryer-done":   _co_dryer_done,
+    "dishwasher":   _co_dishwasher,
+    "pool":         _co_pool,
+}
+
+
+def _co_lead_descriptor(view: ApplianceView, ctx: RenderContext) -> dict:
+    """Build the co-lead descriptor for `view`. Falls back to a minimal
+    placeholder for any kind not yet wired into ``_CO_LEAD_DESCRIBERS``."""
+    builder = _CO_LEAD_DESCRIBERS.get(view.kind, _co_unknown)
+    return builder(view, ctx)
 
 
 def _draw_calm_lead(draw, P, ha, x0, y, w) -> int:
@@ -1225,13 +1586,18 @@ EDITORIAL_LEAD_DRAWERS = {
 
 def _draw_brief(draw, ctx: RenderContext, ha, x0, y, w, item: ActiveAppliance, *, last) -> int:
     """One-row "also active" entry. Reads the appliance view rather than
-    the raw HA dict so timestamps stay in the user's zone."""
+    the raw HA dict so timestamps stay in the user's zone.
+
+    The row is intentionally a fixed 40 px so the lead column can
+    pre-compute how many briefs fit below the hero without re-measuring
+    after every draw.
+    """
     P = ctx.palette
     view = item.view
     builder = EDITORIAL_BRIEFS.get(view.kind, _brief_unknown)
     title, sub, value = builder(view)
-    row_h = 32
-    diamond(draw, x0 + 3, y + 8, 6, ctx.accent(view.accent_kind))
+    row_h = 40
+    diamond(draw, x0 + 3, y + 10, 6, ctx.accent(view.accent_kind))
     title_font = fonts.serif(14, weight="semibold")
     sub_font = fonts.serif(12, italic=True)
     val_font = fonts.serif(16, weight="bold")
@@ -1242,12 +1608,15 @@ def _draw_brief(draw, ctx: RenderContext, ha, x0, y, w, item: ActiveAppliance, *
     sub_baseline = title_baseline + fm_t.descent + 2 + fm_s.ascent
     val_baseline = y + fm_v.ascent + 4
     text_x = x0 + 14
-    draw_text_bl(draw, (text_x, title_baseline), title, title_font, P.ink)
-    draw_text_bl(draw, (text_x, sub_baseline), sub, sub_font, P.muted)
+    text_max_w = max(40, (x0 + w) - text_x - 60)
+    draw_text_clipped_bl(draw, (text_x, title_baseline), title,
+                         title_font, P.ink, max_w=text_max_w)
+    draw_text_clipped_bl(draw, (text_x, sub_baseline), sub,
+                         sub_font, P.muted, max_w=text_max_w)
     draw_text_bl_right(draw, (x0 + w, val_baseline), value, val_font,
                        ctx.accent(view.accent_kind))
     if not last:
-        dotted_hr(draw, x0, x0 + w, y + row_h - 1, dash=1, gap=3, fill=P.rule)
+        dotted_hr(draw, x0, x0 + w, y + row_h - 2, dash=1, gap=3, fill=P.rule)
     return y + row_h
 
 
