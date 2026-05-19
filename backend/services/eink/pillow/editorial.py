@@ -223,6 +223,35 @@ def _draw_masthead(draw: ImageDraw.ImageDraw, P: Palette, now: datetime, weather
     )
 
 
+# HA weather condition -> Weather Icons (Erik Flowers) Unicode codepoint.
+# Every HA condition has a dedicated glyph in this font, which is exactly
+# why we replaced the hand-drawn primitives: the old fallbacks for
+# `hail` / `windy` / `exceptional` / `snowy-rainy` / `lightning-rainy`
+# rendered as a plain circle.
+_WI_CODEPOINT = {
+    "sunny":           "\uf00d",  # wi-day-sunny
+    "clear":           "\uf00d",  # wi-day-sunny
+    "clear-night":     "\uf02e",  # wi-night-clear
+    "partlycloudy":    "\uf002",  # wi-day-cloudy
+    "mostlycloudy":    "\uf013",  # wi-cloudy
+    "cloudy":          "\uf013",  # wi-cloudy
+    "rainy":           "\uf019",  # wi-rain
+    "pouring":         "\uf01a",  # wi-showers
+    "snowy":           "\uf01b",  # wi-snow
+    "lightning":       "\uf016",  # wi-lightning
+    "lightning-rainy": "\uf01e",  # wi-thunderstorm
+    "snowy-rainy":     "\uf0b5",  # wi-sleet
+    "fog":             "\uf014",  # wi-fog
+    "mist":            "\uf014",
+    "haze":            "\uf014",
+    "hail":            "\uf015",  # wi-hail
+    "windy":           "\uf021",  # wi-windy
+    "windy-variant":   "\uf050",  # wi-strong-wind
+    "exceptional":     "\uf01e",  # wi-thunderstorm (severe-weather catch-all)
+}
+_WI_FALLBACK = "\uf07b"  # wi-na (Not Available)
+
+
 def _draw_weather_glyph(
     draw: ImageDraw.ImageDraw,
     xy: tuple,
@@ -231,103 +260,24 @@ def _draw_weather_glyph(
     state: str,
     P: Palette,
 ) -> None:
-    """Tiny sun/cloud/rain/etc. icon. Reconstructed from the .pyc constants;
-    visually similar to the original but not necessarily byte-identical."""
-    x, y = xy
-    blue = P.blue
-    s = state.lower()
-
-    def _sun_disk(cx: int, cy: int, r: int, rays: bool = True) -> None:
-        draw.ellipse([(cx - r, cy - r), (cx + r, cy + r)],
-                     fill=None, outline=P.ink, width=1)
-        if rays:
-            r1 = r + 2
-            r2 = r + int(r * 0.18)
-            for deg in (0, 45, 90, 135, 180, 225, 270, 315):
-                a = math.radians(deg)
-                x1 = cx + int(r1 * math.cos(a))
-                y1 = cy + int(r1 * math.sin(a))
-                x2 = cx + int((r2 + 4) * math.cos(a))
-                y2 = cy + int((r2 + 4) * math.sin(a))
-                draw.line([(x1, y1), (x2, y2)], fill=P.ink, width=1)
-
-    def _cloud(cx: int, cy: int, w: int) -> None:
-        h = int(w * 0.6)
-        # Three overlapping ellipses to fake a cloud silhouette.
-        draw.ellipse([(cx - w // 2, cy - h // 2), (cx + w // 2, cy + h // 2)],
-                     fill=P.bg, outline=P.ink, width=1)
-        ex = int(w * 0.25)
-        ey = int(h * 0.15)
-        er = int(w * 0.3)
-        draw.ellipse([(cx - ex - er, cy - ey - er), (cx - ex + er, cy - ey + er)],
-                     fill=P.bg, outline=P.ink, width=1)
-        draw.ellipse([(cx + ex - er, cy - ey - er), (cx + ex + er, cy - ey + er)],
-                     fill=P.bg, outline=P.ink, width=1)
-        # Re-fill the central blob to hide the underlying outlines.
-        draw.ellipse(
-            [(cx - int(w * 0.45), cy - int(h * 0.05)),
-             (cx + int(w * 0.45), cy + int(h * 0.55))],
-            fill=P.bg,
-        )
-
-    cx = x + size // 2
-    cy = y + size // 2
-    if s == "clear-night":
-        # Crescent moon: one disk, then a smaller bg disk to subtract.
-        r = int(size * 0.38)
-        draw.ellipse([(cx - r, cy - r), (cx + r, cy + r)],
-                     fill=P.ink)
-        r2 = int(size * 0.35)
-        cx2 = cx + int(size * 0.2)
-        draw.ellipse([(cx2 - r2, cy - r2), (cx2 + r2, cy + r2)],
-                     fill=P.bg)
-    elif s in ("sunny", "clear"):
-        _sun_disk(cx, cy, int(size * 0.24))
-    elif s.startswith("partly"):
-        _sun_disk(cx + int(size * 0.18), cy - int(size * 0.18),
-                  int(size * 0.18))
-        _cloud(cx, cy + int(size * 0.1), int(size * 0.62))
-    elif "cloud" in s:
-        _cloud(cx, cy, int(size * 0.78))
-    elif "rain" in s or "pouring" in s:
-        _cloud(cx, cy - int(size * 0.05), int(size * 0.7))
-        for fx in (0.3, 0.5, 0.7):
-            x0a = x + int(size * fx)
-            y0 = y + int(size * 0.7)
-            x1a = x0a - int(size * 0.05)
-            y1 = y + int(size * 0.92)
-            draw.line([(x0a, y0), (x1a, y1)], fill=blue, width=1)
-    elif "snow" in s:
-        _cloud(cx, cy - int(size * 0.05), int(size * 0.7))
-        for fx in (0.3, 0.5, 0.7):
-            fy = y + int(size * 0.82)
-            xc = x + int(size * fx)
-            r = 2
-            draw.ellipse([(xc - r, fy - r), (xc + r, fy + r)],
-                         fill=P.ink)
-    elif "lightning" in s or "thunderstorm" in s:
-        _cloud(cx, cy - int(size * 0.05), int(size * 0.7))
-        # Simple zig-zag bolt.
-        x1 = x + int(size * 0.4)
-        y1 = y + int(size * 0.5)
-        pts = [
-            (x1, y1),
-            (x1 - int(size * 0.12), y1 + int(size * 0.22)),
-            (x1 + int(size * 0.02), y1 + int(size * 0.22)),
-            (x1 - int(size * 0.1), y1 + int(size * 0.42)),
-        ]
-        for i in range(len(pts) - 1):
-            draw.line([pts[i], pts[i + 1]], fill=P.ink, width=1)
-    elif s in ("fog", "mist", "haze"):
-        for fy in (int(size * 0.3), int(size * 0.5), int(size * 0.7)):
-            draw.line([(x + int(size * 0.15), y + fy),
-                       (x + int(size * 0.85), y + fy)],
-                      fill=P.ink, width=1)
-    else:
-        # Fallback: small outlined circle.
-        r = int(size * 0.3)
-        draw.ellipse([(cx - r, cy - r), (cx + r, cy + r)],
-                     outline=P.ink, width=1)
+    """Render a Weather Icons glyph for HA condition `state`, centered in
+    a (size x size) box at `xy`. Single-color (P.ink); the 1-bit panel
+    can't render the JSX prototype's color accents (yellow sun, blue
+    raindrops) anyway, and a clean monochrome glyph reads much better at
+    20--34 px than the old hand-drawn primitives."""
+    s = (state or "").lower()
+    cp = _WI_CODEPOINT.get(s, _WI_FALLBACK)
+    # Weather Icons leaves substantial vertical padding inside the em
+    # square; oversizing slightly fills the box without clipping the
+    # actual ink (the bbox math below uses the rendered glyph's bounds,
+    # not the em).
+    font = fonts.icon_weather(int(size * 1.15))
+    bbox = font.getbbox(cp)
+    gw = bbox[2] - bbox[0]
+    gh = bbox[3] - bbox[1]
+    x = xy[0] + (size - gw) // 2 - bbox[0]
+    y = xy[1] + (size - gh) // 2 - bbox[1]
+    draw.text((x, y), cp, font=font, fill=P.ink)
 
 
 # ── Section kickers (rail + lead headers) ──────────────────────────────

@@ -49,6 +49,12 @@ _SERIF_BIT = os.path.join(_FONTS_ROOT, "source-serif-4", "SourceSerif4-BoldIt.tt
 _SANS_MED = os.path.join(_FONTS_ROOT, "inter", "Inter-Medium.ttf")
 _SANS_BOLD = os.path.join(_FONTS_ROOT, "inter", "Inter-Bold.ttf")
 
+# Weather Icons (Erik Flowers, SIL OFL 1.1) -- icon font used for the
+# masthead + forecast rail weather glyphs. See `_WI_CODEPOINT` in
+# `editorial.py` for the HA condition -> codepoint map.
+_WEATHER_ICONS = os.path.join(_FONTS_ROOT, "weather-icons",
+                              "weathericons-regular-webfont.ttf")
+
 # Pixel-font bitmap files. Fixed sizes; do NOT ask these for non-native sizes.
 _CHERRY_R = os.path.join(_FONTS_ROOT, "cherry", "cherry-13-r.ttf")
 _CHERRY_B = os.path.join(_FONTS_ROOT, "cherry", "cherry-13-b.ttf")
@@ -104,6 +110,13 @@ def sans(size: int, *, weight: str = "medium") -> ImageFont.FreeTypeFont:
     w = (weight or "medium").lower()
     path = _SANS_BOLD if w == "bold" else _SANS_MED
     return _load(path, size)
+
+
+def icon_weather(size: int) -> ImageFont.FreeTypeFont:
+    """Erik Flowers' Weather Icons font at `size` px. Each glyph is a
+    full weather symbol (sun / cloud / cloud-rain / hail / etc.); the
+    HA condition -> codepoint map lives next to the renderer."""
+    return _load(_WEATHER_ICONS, size)
 
 
 # Pixel fonts: honor the bitmap's native size. Non-native requests round

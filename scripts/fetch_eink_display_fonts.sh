@@ -20,8 +20,9 @@ FONTS_DIR="${REPO_ROOT}/backend/services/eink/static/fonts"
 
 SS_DIR="${FONTS_DIR}/source-serif-4"
 INTER_DIR="${FONTS_DIR}/inter"
+WI_DIR="${FONTS_DIR}/weather-icons"
 
-mkdir -p "${SS_DIR}" "${INTER_DIR}"
+mkdir -p "${SS_DIR}" "${INTER_DIR}" "${WI_DIR}"
 
 # Pin versions so hashes don't drift unexpectedly across checkouts.
 SS_VER="4.005R"
@@ -66,6 +67,12 @@ for f in "${INTER_FILES[@]}"; do
     need_any_inter=1
   fi
 done
+
+# Weather Icons (Erik Flowers) -- icon font used by the e-ink dashboard
+# for weather glyphs. SIL OFL 1.1.
+WI_VER="2.0.10"
+WI_URL="https://github.com/erikflowers/weather-icons/raw/${WI_VER}/font/weathericons-regular-webfont.ttf"
+fetch_if_missing "${WI_URL}" "${WI_DIR}/weathericons-regular-webfont.ttf"
 
 if [[ "${need_any_inter}" -eq 1 ]]; then
   echo "Inter @ ${INTER_VER} -> ${INTER_DIR} (via release zip)"
