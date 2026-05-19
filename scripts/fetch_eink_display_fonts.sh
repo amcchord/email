@@ -32,6 +32,7 @@ SS_FILES=(
   "SourceSerif4-Semibold.ttf"
   "SourceSerif4-Bold.ttf"
   "SourceSerif4-It.ttf"
+  "SourceSerif4-SemiboldIt.ttf"
   "SourceSerif4-BoldIt.ttf"
 )
 

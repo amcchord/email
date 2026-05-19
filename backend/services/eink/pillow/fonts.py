@@ -43,6 +43,7 @@ _SERIF_REG = os.path.join(_FONTS_ROOT, "source-serif-4", "SourceSerif4-Regular.t
 _SERIF_SEMI = os.path.join(_FONTS_ROOT, "source-serif-4", "SourceSerif4-Semibold.ttf")
 _SERIF_BOLD = os.path.join(_FONTS_ROOT, "source-serif-4", "SourceSerif4-Bold.ttf")
 _SERIF_IT = os.path.join(_FONTS_ROOT, "source-serif-4", "SourceSerif4-It.ttf")
+_SERIF_SIT = os.path.join(_FONTS_ROOT, "source-serif-4", "SourceSerif4-SemiboldIt.ttf")
 _SERIF_BIT = os.path.join(_FONTS_ROOT, "source-serif-4", "SourceSerif4-BoldIt.ttf")
 
 _SANS_MED = os.path.join(_FONTS_ROOT, "inter", "Inter-Medium.ttf")
@@ -72,11 +73,19 @@ def serif(size: int, *, weight: str = "regular", italic: bool = False) -> ImageF
     """Return a Source Serif 4 face at `size` px.
 
     weight: 'regular' | 'semibold' | 'bold'
-    italic: True to use the italic variant (combined with bold => BoldItalic).
+    italic: True to use the italic variant. Combined with semibold/bold this
+    picks the SemiboldItalic / BoldItalic cuts respectively, which give
+    enough stem weight to stay legible at small px sizes on 1-bit panels
+    where the regular italic looks anemic.
     """
     w = (weight or "regular").lower()
     if italic:
-        path = _SERIF_BIT if w == "bold" else _SERIF_IT
+        if w == "bold":
+            path = _SERIF_BIT
+        elif w == "semibold":
+            path = _SERIF_SIT
+        else:
+            path = _SERIF_IT
     else:
         if w == "bold":
             path = _SERIF_BOLD

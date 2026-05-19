@@ -11,6 +11,7 @@ when blocks are absent (handoff Sec 11).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timezone
@@ -66,6 +67,61 @@ async def fetch_ha_states(
     if not isinstance(data, list):
         raise HAClientError("HA response was not a list of states")
     return data
+
+
+async def fetch_ha_forecast(
+    url: str,
+    token: str,
+    entity_id: str,
+    *,
+    kind: str = "daily",
+    timeout: float = 5.0,
+) -> list[dict[str, Any]]:
+    """Call HA's `weather.get_forecasts` service for `entity_id`.
+
+    Returns the list of forecast slot dicts (each: condition / temperature /
+    templow / datetime / precipitation_probability / etc.) for the requested
+    `kind` ("daily" | "hourly" | "twice_daily"). Returns an empty list on any
+    failure -- the renderer's job is to draw a "Forecast unavailable" fallback,
+    not to crash, when HA is older than 2024.4 or the weather integration
+    doesn't expose forecasts.
+    """
+    if not url or not token or not entity_id:
+        return []
+    base = url.rstrip("/")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    body = {"entity_id": entity_id, "type": kind}
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(
+                f"{base}/api/services/weather/get_forecasts",
+                headers=headers,
+                json=body,
+                params={"return_response": "true"},
+            )
+    except httpx.RequestError as e:
+        logger.warning("HA forecast fetch failed (%s, %s): %s", entity_id, kind, e)
+        return []
+    if resp.status_code != 200:
+        logger.warning(
+            "HA forecast fetch returned HTTP %s for %s (%s)",
+            resp.status_code, entity_id, kind,
+        )
+        return []
+    try:
+        data = resp.json()
+    except Exception:
+        return []
+    svc = (data or {}).get("service_response") or {}
+    entry = svc.get(entity_id) or {}
+    forecast = entry.get("forecast") or []
+    if not isinstance(forecast, list):
+        return []
+    return forecast
 
 
 # ── State shaping (port of ha-data.js) ─────────────────────────────────
@@ -154,6 +210,28 @@ def _to_int(v: Any) -> Optional[int]:
     return int(round(f))
 
 
+def _normalize_forecast_slots(slots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Trim a `weather.get_forecasts` response down to the fields renderers
+    actually use. Unknown extra keys (humidity, wind_speed, dew_point) are
+    preserved so the Swiss / Editorial designs can read more detail without
+    a follow-up shape change."""
+    out: list[dict[str, Any]] = []
+    for s in slots or []:
+        if not isinstance(s, dict):
+            continue
+        out.append({
+            "datetime": s.get("datetime"),
+            "condition": s.get("condition"),
+            "temperature": s.get("temperature"),
+            "templow": s.get("templow"),
+            "precipitation_probability": s.get("precipitation_probability"),
+            "humidity": s.get("humidity"),
+            "wind_speed": s.get("wind_speed"),
+            "wind_bearing": s.get("wind_bearing"),
+        })
+    return out
+
+
 def _floor_of(entity_id: str) -> Optional[str]:
     """Heuristic floor classification matching the JS ha-data.js helper."""
     if re.match(r"^climate\.(1st|first)", entity_id):
@@ -174,12 +252,18 @@ def shape_ha_state(
     *,
     fetched_at: Optional[datetime] = None,
     weather_entity_id: Optional[str] = None,
+    forecast_daily: Optional[list[dict[str, Any]]] = None,
+    forecast_hourly: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """Reshape `/api/states` into the HAShape consumed by the React designs.
 
     `weather_entity_id` overrides the default; the JS shape stores this as a
     top-level pointer in lastState.json. Defaults to `weather.forecast_home`
     if the install has it, otherwise the first `weather.*` entity found.
+
+    `forecast_daily` / `forecast_hourly` are optional pre-fetched lists from
+    `fetch_ha_forecast`. When provided they're attached to
+    `weather["forecast"]` so renderers don't have to know about HA services.
     """
     fetched_at = fetched_at or datetime.now(timezone.utc)
     idx = {s.get("entity_id"): s for s in states if s.get("entity_id")}
@@ -223,6 +307,10 @@ def shape_ha_state(
             "windBearing": a.get("wind_bearing"),
             "pressure": a.get("pressure"),
             "visibility": a.get("visibility"),
+        }
+        weather["forecast"] = {
+            "daily": _normalize_forecast_slots(forecast_daily or []),
+            "hourly": _normalize_forecast_slots(forecast_hourly or []),
         }
 
     # ── Climate helper ─────────────────────────────────────────────
@@ -442,7 +530,16 @@ def empty_ha_shape(*, fetched_at: Optional[datetime] = None) -> dict[str, Any]:
     fetched_at = fetched_at or datetime.now(timezone.utc)
     return {
         "fetchedAt": fetched_at.isoformat(),
-        "weather": None,
+        "weather": {
+            "state": None,
+            "temperature": None,
+            "humidity": None,
+            "windSpeed": None,
+            "windBearing": None,
+            "pressure": None,
+            "visibility": None,
+            "forecast": {"daily": [], "hourly": []},
+        },
         "climates": {},
         "temps": {},
         "people": [],
@@ -491,11 +588,17 @@ def empty_ha_shape(*, fetched_at: Optional[datetime] = None) -> dict[str, Any]:
 
 
 async def fetch_and_shape(settings: TerminalSettings) -> Optional[dict[str, Any]]:
-    """Fetch HA states using a TerminalSettings row and return the shaped HAShape.
+    """Fetch HA states + forecasts using a TerminalSettings row and return the
+    shaped HAShape.
 
-    Returns `None` if HA is not configured or the call fails. The caller
-    should treat None as "render the calm state" rather than 500'ing -- a
-    dashboard with a stale-but-painted face is better than a missing one.
+    Issues `/api/states` and (in parallel) two `weather.get_forecasts` service
+    calls so the forecast rail has fresh data on every render without doubling
+    end-to-end latency. Forecast failures fall back to empty lists so the
+    state fetch still produces a usable shape.
+
+    Returns `None` if HA is not configured or the states call fails. The
+    caller should treat None as "render the calm state" rather than 500'ing
+    -- a dashboard with a stale-but-painted face is better than a missing one.
     """
     url = (settings.home_assistant_url or "").strip()
     if not url or not settings.home_assistant_token_encrypted:
@@ -505,9 +608,20 @@ async def fetch_and_shape(settings: TerminalSettings) -> Optional[dict[str, Any]
     except Exception:
         logger.exception("Failed to decrypt HA token for user_id=%s", settings.user_id)
         return None
+
+    weather_eid = _WEATHER_ENTITY_ID
     try:
-        states = await fetch_ha_states(url, token)
+        states, daily, hourly = await asyncio.gather(
+            fetch_ha_states(url, token),
+            fetch_ha_forecast(url, token, weather_eid, kind="daily"),
+            fetch_ha_forecast(url, token, weather_eid, kind="hourly"),
+        )
     except HAClientError as e:
         logger.warning("HA fetch failed for user_id=%s: %s", settings.user_id, e)
         return None
-    return shape_ha_state(states, fetched_at=datetime.now(timezone.utc))
+    return shape_ha_state(
+        states,
+        fetched_at=datetime.now(timezone.utc),
+        forecast_daily=daily,
+        forecast_hourly=hourly,
+    )

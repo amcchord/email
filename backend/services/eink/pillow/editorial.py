@@ -439,9 +439,8 @@ def _draw_left_rail(draw, ctx: RenderContext, ha, box: Box) -> None:
 
     cur_y += 8
     hairline_hr(draw, box.x0, box.x1, cur_y, fill=P.rule); cur_y += 6
-    _section("At Home")
-    for p in (ha.get("people") or [])[:5]:
-        cur_y = _draw_person_row_editorial(draw, P, box.x0, cur_y, box.w, p)
+    _section("Forecast")
+    cur_y = _draw_forecast_rows(draw, ctx, ha, box.x0, cur_y, box.w)
 
 
 def _draw_rail_stat(draw, P, x0, y, w, *, k, v, u) -> int:
@@ -451,7 +450,8 @@ def _draw_rail_stat(draw, P, x0, y, w, *, k, v, u) -> int:
     ``pick_fitting_size`` so a 3-digit number or a long pressure string
     can shrink instead of spilling into the unit column.
     """
-    label_font = fonts.serif(layout.EditorialType.RAIL_LABEL_PX, italic=True)
+    label_font = fonts.serif(layout.EditorialType.RAIL_LABEL_PX,
+                             italic=True, weight="semibold")
     value_factory = lambda s: fonts.serif(s, weight="bold")
     unit_font = fonts.pix_cherry_small(9, bold=True)
     unit_tracking = em_to_px(9, 0.10)
@@ -488,41 +488,85 @@ def _draw_rail_stat(draw, P, x0, y, w, *, k, v, u) -> int:
     return under_y + 2
 
 
-def _draw_person_row_editorial(draw, P, x0, y, w, p) -> int:
-    """One At Home row. The state label is fixed-width (it's always
-    short: ``home`` / ``not_home`` / ``away``); the name auto-fits to
-    the remaining width so a long first name like ``Maximillian`` can't
-    overlap the bullet + state column to its right.
+def _draw_forecast_rows(draw, ctx: RenderContext, ha, x0, y, w) -> int:
+    """Render up to 4 daily forecast slots in the left rail.
+
+    Each row: condition glyph + weekday label + high/low temp cluster. The
+    first slot is labelled "Today" rather than its weekday so it reads as
+    the immediate outlook. When HA returns no forecast (older Core, weather
+    integration without forecast support, transient service failure) we
+    render a single muted italic "Forecast unavailable" line so the layout
+    rhythm doesn't silently collapse.
     """
-    state_font = fonts.pix_cherry_small(10, bold=True)
-    tracking = em_to_px(10, 0.14)
-    home = (p or {}).get("state") == "home"
-    color = P.green if home else P.muted
-    label = "home" if home else ((p or {}).get("state") or "away")
-    label_w = tracked_width(state_font, label, tracking)
-    bullet_dia = 8
-    gap = 6
-    label_x = x0 + w - label_w
-    bullet_cx = label_x - gap - bullet_dia // 2
-    name = ((p or {}).get("name") or "").split(" ")[0]
-    # Name fits into [x0, bullet left edge - 4px gap].
-    name_max_w = max(20, bullet_cx - bullet_dia // 2 - 4 - x0)
-    name_factory = lambda s: fonts.serif(s, weight="semibold")
-    name_font, _ = pick_fitting_size(
-        name_factory, name, name_max_w, (14, 13, 12, 11),
-    )
-    fm_n = font_metrics(name_font)
-    fm_s = font_metrics(state_font)
-    baseline = y + max(fm_n.ascent, fm_s.ascent)
-    bullet(draw, bullet_cx, baseline - fm_s.ascent // 2 + 1, 3,
-           filled=home, color=color)
-    draw_tracked_text_bl(draw, (label_x, baseline), label,
-                         state_font, color, tracking)
-    # Even with auto-fit, fall back to ellipsis if the smallest size
-    # still wouldn't fit (e.g. an absurdly long first name).
-    draw_text_clipped_bl(draw, (x0, baseline), name,
-                         name_font, P.ink, max_w=name_max_w)
-    return baseline + max(fm_n.descent, fm_s.descent) + 4
+    P = ctx.palette
+    weather = ha.get("weather") or {}
+    forecast = (weather.get("forecast") or {}).get("daily") or []
+    if not forecast:
+        font = fonts.serif(12, italic=True, weight="semibold")
+        fm = font_metrics(font)
+        draw_text_bl(draw, (x0, y + fm.ascent),
+                     "Forecast unavailable", font, P.muted)
+        return y + fm.line_height + 4
+
+    cur_y = y
+    row_h = 30
+    glyph_sz = 20
+    weekday_font = fonts.serif(13, weight="semibold")
+    hi_factory = lambda s: fonts.serif(s, weight="bold")
+    lo_font = fonts.serif(12, italic=True, weight="semibold")
+    sep_font = fonts.serif(12, italic=True, weight="semibold")
+    fm_n = font_metrics(weekday_font)
+
+    slots = forecast[:4]
+    for idx, slot in enumerate(slots):
+        dt = parse_iso(slot.get("datetime"))
+        if dt is not None and ctx.zone is not None:
+            dt = dt.astimezone(ctx.zone)
+        if idx == 0:
+            label = "Today"
+        elif dt is not None:
+            label = dt.strftime("%a")
+        else:
+            label = "\u2014"
+
+        glyph_y = cur_y + (row_h - glyph_sz) // 2
+        _draw_weather_glyph(draw, (x0, glyph_y),
+                            size=glyph_sz,
+                            state=slot.get("condition") or "",
+                            P=P)
+
+        text_x = x0 + glyph_sz + 6
+        baseline = cur_y + fm_n.ascent + 6
+        draw_text_bl(draw, (text_x, baseline), label, weekday_font, P.ink)
+
+        hi = slot.get("temperature")
+        lo = slot.get("templow")
+        hi_s = f"{safe_round(hi)}\u00b0" if hi is not None else "\u2014"
+        lo_s = f"{safe_round(lo)}\u00b0" if lo is not None else "\u2014"
+        sep_s = "/"
+
+        label_w = text_width(weekday_font, label)
+        avail = max(24, (x0 + w) - text_x - label_w - 8)
+        hi_font, _hs = pick_fitting_size(
+            hi_factory, hi_s, avail, (16, 15, 14, 13),
+        )
+        right_x = x0 + w
+        lo_w = text_width(lo_font, lo_s)
+        sep_w = text_width(sep_font, sep_s)
+        hi_w = text_width(hi_font, hi_s)
+        lo_x = right_x - lo_w
+        sep_x = lo_x - sep_w
+        hi_x = sep_x - hi_w
+        draw_text_bl(draw, (hi_x, baseline), hi_s, hi_font, P.ink)
+        draw_text_bl(draw, (sep_x, baseline), sep_s, sep_font, P.muted)
+        draw_text_bl(draw, (lo_x, baseline), lo_s, lo_font, P.muted)
+
+        if idx != len(slots) - 1:
+            dotted_hr(draw, x0, x0 + w,
+                      cur_y + row_h - 1, dash=1, gap=3, fill=P.rule)
+        cur_y += row_h
+
+    return cur_y
 
 
 def _draw_sun_arc(draw, P, x0, y, w, ha, zone) -> int:
@@ -562,7 +606,7 @@ def _draw_sun_arc(draw, P, x0, y, w, ha, zone) -> int:
     disk_color = P.yellow if P.yellow != P.ink else P.ink
     draw.ellipse([(sx - r, sy - r), (sx + r, sy + r)],
                  fill=disk_color, outline=P.ink, width=1)
-    lf = fonts.serif(11, italic=True)
+    lf = fonts.serif(12, italic=True, weight="semibold")
     fm = font_metrics(lf)
     baseline = y + H + 4 + fm.ascent
     arrow_sz = 8
@@ -945,7 +989,7 @@ def _draw_co_lead_story(draw, ctx: RenderContext,
     # Deck (one line, italic, muted).
     deck = descriptor.get("deck")
     if deck:
-        deck_font = fonts.serif(13, italic=True)
+        deck_font = fonts.serif(13, italic=True, weight="semibold")
         cur_y = draw_paragraph(
             draw, (box.x0, cur_y + 4, box.w, 36),
             deck, font=deck_font, fill=P.muted, line_height_px=18,
@@ -1193,7 +1237,7 @@ def _draw_calm_lead(draw, P, ha, x0, y, w) -> int:
     baseline += line_height
     draw_text_bl(draw, (x0, baseline), "home front.", italic_font, P.ink)
     cur_y = baseline + fm_h.descent + 6
-    deck_font = fonts.serif(14, italic=True)
+    deck_font = fonts.serif(14, italic=True, weight="semibold")
     fm_d = font_metrics(deck_font)
     draw_text_bl(draw, (x0, cur_y + fm_d.ascent),
                  "Nothing running, nothing demanding.", deck_font, P.muted)
@@ -1244,7 +1288,7 @@ def _draw_story_shell(draw, P, x0, y, w, *, kicker, accent, headline_runs,
                           line_height_px=32, align="left",
                           max_lines=2)
     if deck:
-        deck_font = fonts.serif(14, italic=True)
+        deck_font = fonts.serif(14, italic=True, weight="semibold")
         cur_y = draw_paragraph(draw, (x0, cur_y + 6, w, 36),
             deck, font=deck_font, fill=P.muted, line_height_px=18,
             max_lines=2)
@@ -1597,7 +1641,7 @@ def _draw_brief(draw, ctx: RenderContext, ha, x0, y, w, item: ActiveAppliance, *
     row_h = 40
     diamond(draw, x0 + 3, y + 10, 6, ctx.accent(view.accent_kind))
     title_font = fonts.serif(14, weight="semibold")
-    sub_font = fonts.serif(12, italic=True)
+    sub_font = fonts.serif(12, italic=True, weight="semibold")
     val_font = fonts.serif(16, weight="bold")
     fm_t = font_metrics(title_font)
     fm_s = font_metrics(sub_font)
@@ -1797,7 +1841,7 @@ def _draw_colophon(draw, ctx: RenderContext, ha) -> None:
                              label_font, P.muted, tracking)
 
     # ── Center column: italic quote (last so it can use the real gap) ──
-    quote_font = fonts.serif(11, italic=True)
+    quote_font = fonts.serif(12, italic=True, weight="semibold")
     fm_q = font_metrics(quote_font)
     quote_full = "\u201cAll the news that fits the house.\u201d"
     quote_short = "\u201cAll the news.\u201d"
