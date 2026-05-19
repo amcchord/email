@@ -280,17 +280,20 @@ def test_dryer_done_active_only_when_powered_off():
 def test_washer_done_dismissed_when_dryer_running():
     """The strongest 'I moved the laundry' signal: the dryer is running.
     The washer-done card must drop the moment we see that, even if the
-    washer notification is still well within its 6h cap."""
+    washer notification is still well within its 1h cap."""
     from datetime import datetime, timezone
     from backend.services.eink.pillow.appliances import _washer_done_active
-    now = datetime(2026, 5, 5, 18, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 5, 17, 30, tzinfo=timezone.utc)
     notif = {"type": "washing_is_complete",
              "at": "2026-05-05T17:00:00+00:00"}
-    base_washer = {"status": "power_off", "powerOn": False,
+    # Washer stays powered ON between cycle end and unload -- that's the
+    # window where the card belongs on screen.
+    base_washer = {"status": "end", "powerOn": True,
                    "lastNotification": notif}
-    # Without a running dryer: card is active.
+    # Without any dryer engagement: card is active.
     assert _washer_done_active(
-        {"washer": base_washer, "dryer": {"status": "power_off"}},
+        {"washer": base_washer, "dryer": {"status": "power_off",
+                                          "powerOn": False}},
         now,
     ) is True
     # With a running dryer: card is dismissed.
@@ -298,6 +301,82 @@ def test_washer_done_dismissed_when_dryer_running():
         {"washer": base_washer, "dryer": {"status": "running"}},
         now,
     ) is False
+
+
+def test_washer_done_dismissed_when_dryer_touched():
+    """Broader 'user engaged the dryer' signals also dismiss the card.
+    The narrow `_dryer_active` check used to miss these because LG's
+    `initial` state and `switch.dryer_power=on` both fall outside the
+    'running' status enum."""
+    from datetime import datetime, timezone
+    from backend.services.eink.pillow.appliances import _washer_done_active
+    now = datetime(2026, 5, 5, 17, 30, tzinfo=timezone.utc)
+    notif = {"type": "washing_is_complete",
+             "at": "2026-05-05T17:00:00+00:00"}
+    base_washer = {"status": "end", "powerOn": True,
+                   "lastNotification": notif}
+    # Dryer power flipped on (user pressed the power button).
+    assert _washer_done_active(
+        {"washer": base_washer,
+         "dryer": {"status": "power_off", "powerOn": True}},
+        now,
+    ) is False
+    # Dryer status went to `initial` (powered on, awaiting cycle pick).
+    assert _washer_done_active(
+        {"washer": base_washer,
+         "dryer": {"status": "initial", "powerOn": False}},
+        now,
+    ) is False
+    # Dryer has a programmed cycle (remaining time set).
+    assert _washer_done_active(
+        {"washer": base_washer,
+         "dryer": {"status": "power_off", "powerOn": False,
+                   "remaining": "2026-05-05T18:30:00+00:00"}},
+        now,
+    ) is False
+
+
+def test_washer_done_dismissed_when_washer_powered_off():
+    """We have no washer door sensor, so `switch.washer_power` going off
+    is our proxy for 'user opened the door and unloaded'. As long as the
+    washer is powered on, the card stays; the moment it's off, drop it."""
+    from datetime import datetime, timezone
+    from backend.services.eink.pillow.appliances import _washer_done_active
+    now = datetime(2026, 5, 5, 17, 30, tzinfo=timezone.utc)
+    notif = {"type": "washing_is_complete",
+             "at": "2026-05-05T17:00:00+00:00"}
+    dryer = {"status": "power_off", "powerOn": False}
+    # Powered ON, status `end`: card belongs on screen.
+    assert _washer_done_active(
+        {"washer": {"status": "end", "powerOn": True,
+                    "lastNotification": notif}, "dryer": dryer},
+        now,
+    ) is True
+    # Powered OFF (user hit power after unloading): card dismissed.
+    assert _washer_done_active(
+        {"washer": {"status": "power_off", "powerOn": False,
+                    "lastNotification": notif}, "dryer": dryer},
+        now,
+    ) is False
+
+
+def test_washer_done_drops_after_one_hour():
+    """The window shrank from 6h to 1h -- stale 'wash complete' cards
+    that have been ignored for an hour aren't useful anymore."""
+    from datetime import datetime, timedelta, timezone
+    from backend.services.eink.pillow.appliances import _washer_done_active
+    finished_at = datetime(2026, 5, 5, 17, 0, tzinfo=timezone.utc)
+    notif = {"type": "washing_is_complete",
+             "at": finished_at.isoformat()}
+    base = {
+        "washer": {"status": "end", "powerOn": True,
+                   "lastNotification": notif},
+        "dryer": {"status": "power_off", "powerOn": False},
+    }
+    # 59 minutes after completion: still within the 1h window.
+    assert _washer_done_active(base, finished_at + timedelta(minutes=59)) is True
+    # 61 minutes after completion: dropped.
+    assert _washer_done_active(base, finished_at + timedelta(minutes=61)) is False
 
 
 def test_appliance_view_handles_missing_time():

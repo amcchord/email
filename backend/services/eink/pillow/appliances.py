@@ -87,26 +87,37 @@ def _washer_active(ha: dict, now: datetime) -> bool:
 
 
 def _washer_done_active(ha: dict, now: datetime) -> bool:
-    """The washer is "done" until 6h after the completion notification.
-    The active-washer predicate above takes precedence; this only
-    surfaces when the washer itself isn't running.
+    """The washer is "done" for up to 1h after the completion
+    notification, while the washer is still powered on.
 
-    Also dismissed the moment the dryer starts running -- that's the
-    strongest "I moved the laundry" signal we have, and the dryer card
-    will take over the hero anyway.
+    Dismissal signals (any one drops the card):
+      * The washer is running again (`_washer_active`).
+      * The user powered the washer off -- we have no door sensor, so
+        `switch.washer_power` flipping to off is our proxy for "door
+        was opened and laundry was unloaded".
+      * The dryer was touched in any way (`_dryer_engaged`): running,
+        powered on, freshly-on in `initial`, or with a programmed
+        `remaining` time. `_dryer_active` alone misses the "user just
+        pressed the dryer power button" case.
+      * 1 hour has passed since the completion notification. The old
+        6h window left the card stuck on screen long after the user
+        had clearly moved on.
     """
     if _washer_active(ha, now):
         return False
-    if _dryer_active(ha, now):
+    if _dryer_engaged(ha, now):
         return False
-    notif = ((ha.get("washer") or {}).get("lastNotification")) or {}
+    wsh = ha.get("washer") or {}
+    if not wsh.get("powerOn"):
+        return False
+    notif = wsh.get("lastNotification") or {}
     if notif.get("type") != "washing_is_complete":
         return False
     at = parse_iso(notif.get("at"))
     if at is None:
         return False
     age_hrs = (now - at).total_seconds() / 3600
-    return 0 <= age_hrs < 6
+    return 0 <= age_hrs < 1
 
 
 def _dryer_active(ha: dict, now: datetime) -> bool:
@@ -115,6 +126,33 @@ def _dryer_active(ha: dict, now: datetime) -> bool:
     the post-cycle anti-wrinkle phase (the door's still locked then)."""
     d = ha.get("dryer") or {}
     return (d.get("status") not in _RUNNING_WASHER_STATES_EXCLUDED)
+
+
+def _dryer_engaged(ha: dict, now: datetime) -> bool:
+    """Broader 'user is touching the dryer' signal, used only to
+    dismiss the washer-done card.
+
+    `_dryer_active` stays narrow because it also drives the "DRYER
+    RUNNING" hero -- we don't want that card to appear just because
+    someone pressed power. But for *dismissing* washer-done, any of
+    these counts:
+
+      * dryer is running / cooling / wrinkle_care / pause (the
+        existing `_dryer_active` check).
+      * `switch.dryer_power` is on -- user pressed the power button.
+      * status is `initial` -- powered on, awaiting a cycle pick.
+      * `remaining` time is set -- a cycle has been programmed.
+    """
+    if _dryer_active(ha, now):
+        return True
+    d = ha.get("dryer") or {}
+    if d.get("powerOn"):
+        return True
+    if (d.get("status") or "").lower() == "initial":
+        return True
+    if d.get("remaining"):
+        return True
+    return False
 
 
 def _dryer_done_active(ha: dict, now: datetime) -> bool:
