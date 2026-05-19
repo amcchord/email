@@ -209,10 +209,16 @@ def _draw_masthead(draw: ImageDraw.ImageDraw, P: Palette, now: datetime, weather
     )
     temp_w = text_width(temp_fit_font, temp_s)
     glyph_top = content_y0 + 2
-    glyph_x = weather_col.x1 - temp_w - 10 - glyph_sz
+    # Weather Icons sits with extra whitespace on the right of its em
+    # square, so we nudge it 2 px left to balance the optical gap to the
+    # temperature digits next to it.
+    glyph_x = weather_col.x1 - temp_w - 10 - glyph_sz - 2
     _draw_weather_glyph(draw, (glyph_x, glyph_top),
                         size=glyph_sz, state=weather.get("state") or "", P=P)
-    draw.text((weather_col.x1 - temp_w, display_baseline), temp_s,
+    # Drop the temperature 4 px below the time/wordmark baseline -- with
+    # the new icon-font weather glyph the temp was sitting too high
+    # relative to the icon's optical center.
+    draw.text((weather_col.x1 - temp_w, display_baseline + 4), temp_s,
               font=temp_fit_font, fill=P.ink, anchor="ls")
     weather_label = fmt_weather(weather.get("state") or "").upper()
     l_tracking = em_to_px(TY.LABEL_PX, TY.WEATHER_LABEL_TRACKING_EM)
@@ -467,7 +473,7 @@ def _draw_forecast_rows(draw, ctx: RenderContext, ha, x0, y, w) -> int:
     sep_font = fonts.serif(12, italic=True, weight="semibold")
     fm_n = font_metrics(weekday_font)
 
-    slots = forecast[:4]
+    slots = forecast[:3]
     for idx, slot in enumerate(slots):
         dt = parse_iso(slot.get("datetime"))
         if dt is not None and ctx.zone is not None:
