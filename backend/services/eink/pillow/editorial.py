@@ -173,10 +173,16 @@ def _draw_masthead(draw: ImageDraw.ImageDraw, P: Palette, now: datetime, weather
     # Display baseline sits high enough that label row has the
     # MASTHEAD_LABEL_GAP_PX of breathing space below the descender.
     display_baseline = label_baseline - fm_label.ascent - TY.MASTHEAD_LABEL_GAP_PX - fm_time.descent
-    draw.text((time_col.x0, display_baseline), time_s,
+    # Time + temp share a "display row" baseline that's pulled 8 px down
+    # from the wordmark baseline so the digits sit at the optical center
+    # of the masthead instead of jamming against the top rule. The
+    # CAMBRIDGE wordmark stays on the original baseline so it still
+    # reads as the flag's anchor.
+    display_row_baseline = display_baseline + 8
+    draw.text((time_col.x0, display_row_baseline), time_s,
               font=fit_font, fill=P.ink, anchor="ls")
     tw = text_width(fit_font, time_s)
-    draw.text((time_col.x0 + tw + 4, display_baseline), ampm,
+    draw.text((time_col.x0 + tw + 4, display_row_baseline), ampm,
               font=ampm_font, fill=P.muted, anchor="ls")
     draw_text_bl(draw, (time_col.x0, label_baseline),
                  "EASTERN \u00b7 LIVE", label_font, P.muted)
@@ -215,10 +221,10 @@ def _draw_masthead(draw: ImageDraw.ImageDraw, P: Palette, now: datetime, weather
     glyph_x = weather_col.x1 - temp_w - 10 - glyph_sz - 4
     _draw_weather_glyph(draw, (glyph_x, glyph_top),
                         size=glyph_sz, state=weather.get("state") or "", P=P)
-    # Drop the temperature 4 px below the time/wordmark baseline -- with
-    # the new icon-font weather glyph the temp was sitting too high
-    # relative to the icon's optical center.
-    draw.text((weather_col.x1 - temp_w, display_baseline + 4), temp_s,
+    # Temp shares the display row baseline with the time, sitting 8 px
+    # below the wordmark so the digits land at the icon's optical
+    # center.
+    draw.text((weather_col.x1 - temp_w, display_row_baseline), temp_s,
               font=temp_fit_font, fill=P.ink, anchor="ls")
     weather_label = fmt_weather(weather.get("state") or "").upper()
     l_tracking = em_to_px(TY.LABEL_PX, TY.WEATHER_LABEL_TRACKING_EM)
