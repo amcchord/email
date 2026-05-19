@@ -208,11 +208,11 @@ def _draw_masthead(draw: ImageDraw.ImageDraw, P: Palette, now: datetime, weather
         temp_s, temp_max_w, TY.TEMP_CANDIDATES,
     )
     temp_w = text_width(temp_fit_font, temp_s)
-    glyph_top = content_y0 + 2
+    glyph_top = content_y0
     # Weather Icons sits with extra whitespace on the right of its em
-    # square, so we nudge it 2 px left to balance the optical gap to the
+    # square, so we nudge it 4 px left to balance the optical gap to the
     # temperature digits next to it.
-    glyph_x = weather_col.x1 - temp_w - 10 - glyph_sz - 2
+    glyph_x = weather_col.x1 - temp_w - 10 - glyph_sz - 4
     _draw_weather_glyph(draw, (glyph_x, glyph_top),
                         size=glyph_sz, state=weather.get("state") or "", P=P)
     # Drop the temperature 4 px below the time/wordmark baseline -- with
