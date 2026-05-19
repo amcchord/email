@@ -69,6 +69,18 @@ async def fetch_ha_states(
     return data
 
 
+# HA WeatherEntityFeature bits (declared by each weather integration on its
+# `supported_features` attribute):
+#   FORECAST_DAILY       = 1
+#   FORECAST_HOURLY      = 2
+#   FORECAST_TWICE_DAILY = 4
+# NWS in particular reports 6 (HOURLY + TWICE_DAILY) -- asking it for "daily"
+# returns HTTP 500. We use these bits to skip kinds we know will fail.
+WEATHER_FEATURE_DAILY = 1
+WEATHER_FEATURE_HOURLY = 2
+WEATHER_FEATURE_TWICE_DAILY = 4
+
+
 async def fetch_ha_forecast(
     url: str,
     token: str,
@@ -108,8 +120,8 @@ async def fetch_ha_forecast(
         return []
     if resp.status_code != 200:
         logger.warning(
-            "HA forecast fetch returned HTTP %s for %s (%s)",
-            resp.status_code, entity_id, kind,
+            "HA forecast fetch returned HTTP %s for %s (%s): %s",
+            resp.status_code, entity_id, kind, resp.text[:200],
         )
         return []
     try:
@@ -122,6 +134,107 @@ async def fetch_ha_forecast(
     if not isinstance(forecast, list):
         return []
     return forecast
+
+
+def _consolidate_twice_daily(slots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Collapse a twice-daily forecast (alternating daytime/night slots, each
+    carrying a single `temperature`) into one entry per day with `temperature`
+    (the daytime high) and `templow` (the following nighttime low).
+
+    NWS (and other US providers) reports forecasts as day/night periods --
+    typical pattern is [Today daytime, Tonight, Tomorrow day, Tomorrow night,
+    ...]. If the first slot is a nighttime period (e.g. we're rendering after
+    sundown) we use it as the low for the prior day rather than dropping the
+    most-recent overnight low on the floor.
+    """
+    out: list[dict[str, Any]] = []
+    i = 0
+    n = len(slots)
+    while i < n:
+        s = slots[i]
+        is_day = bool(s.get("is_daytime"))
+        if is_day:
+            entry = {
+                "datetime": s.get("datetime"),
+                "condition": s.get("condition"),
+                "temperature": s.get("temperature"),
+                "templow": None,
+                "precipitation_probability": s.get("precipitation_probability"),
+                "humidity": s.get("humidity"),
+                "wind_speed": s.get("wind_speed"),
+                "wind_bearing": s.get("wind_bearing"),
+            }
+            if i + 1 < n and slots[i + 1].get("is_daytime") is False:
+                entry["templow"] = slots[i + 1].get("temperature")
+                i += 2
+            else:
+                i += 1
+            out.append(entry)
+        else:
+            # Lone nighttime slot. If we have a previous entry without a low,
+            # attach it there; otherwise emit a stub day so the row still
+            # shows a low temperature for "tonight".
+            if out and out[-1].get("templow") is None:
+                out[-1]["templow"] = s.get("temperature")
+            else:
+                out.append({
+                    "datetime": s.get("datetime"),
+                    "condition": s.get("condition"),
+                    "temperature": None,
+                    "templow": s.get("temperature"),
+                    "precipitation_probability": s.get("precipitation_probability"),
+                    "humidity": s.get("humidity"),
+                    "wind_speed": s.get("wind_speed"),
+                    "wind_bearing": s.get("wind_bearing"),
+                })
+            i += 1
+    return out
+
+
+async def fetch_ha_daily_forecast(
+    url: str,
+    token: str,
+    entity_id: str,
+    supported_features: Optional[int] = None,
+    *,
+    timeout: float = 5.0,
+) -> list[dict[str, Any]]:
+    """Fetch a daily-shape forecast for `entity_id`, honoring the integration's
+    advertised support. Tries `daily` first when available, falls back to
+    consolidating a `twice_daily` response (used by NWS, met.no, etc.).
+    """
+    feats = int(supported_features or 0)
+    can_daily = bool(feats & WEATHER_FEATURE_DAILY) or feats == 0
+    can_twice = bool(feats & WEATHER_FEATURE_TWICE_DAILY) or feats == 0
+
+    if can_daily:
+        daily = await fetch_ha_forecast(url, token, entity_id, kind="daily",
+                                        timeout=timeout)
+        if daily:
+            return daily
+    if can_twice:
+        twice = await fetch_ha_forecast(url, token, entity_id, kind="twice_daily",
+                                        timeout=timeout)
+        if twice:
+            return _consolidate_twice_daily(twice)
+    return []
+
+
+async def fetch_ha_hourly_forecast(
+    url: str,
+    token: str,
+    entity_id: str,
+    supported_features: Optional[int] = None,
+    *,
+    timeout: float = 5.0,
+) -> list[dict[str, Any]]:
+    """Fetch an hourly forecast for `entity_id`. Returns [] if the integration
+    doesn't advertise hourly support."""
+    feats = int(supported_features or 0)
+    if feats and not (feats & WEATHER_FEATURE_HOURLY):
+        return []
+    return await fetch_ha_forecast(url, token, entity_id, kind="hourly",
+                                   timeout=timeout)
 
 
 # ── State shaping (port of ha-data.js) ─────────────────────────────────
@@ -587,13 +700,45 @@ def empty_ha_shape(*, fetched_at: Optional[datetime] = None) -> dict[str, Any]:
 # ── Convenience: settings -> shape ─────────────────────────────────────
 
 
+def _resolve_weather_entity(
+    states: list[dict[str, Any]],
+) -> tuple[Optional[str], Optional[int]]:
+    """Pick the weather entity we should fetch forecasts against.
+
+    Prefers `_WEATHER_ENTITY_ID` ("weather.forecast_home") so existing
+    installs that have it still get it; otherwise falls back to the first
+    available `weather.*` entity (matching the existing fallback in
+    `shape_ha_state`). Returns `(entity_id, supported_features)` so the
+    forecast call can skip kinds the integration doesn't advertise.
+    """
+    chosen: Optional[dict[str, Any]] = None
+    for s in states:
+        if (s.get("entity_id") or "") == _WEATHER_ENTITY_ID:
+            chosen = s
+            break
+    if chosen is None:
+        for s in states:
+            if (s.get("entity_id") or "").startswith("weather."):
+                chosen = s
+                break
+    if chosen is None:
+        return None, None
+    feats = (chosen.get("attributes") or {}).get("supported_features")
+    try:
+        feats_i = int(feats) if feats is not None else None
+    except (TypeError, ValueError):
+        feats_i = None
+    return chosen.get("entity_id"), feats_i
+
+
 async def fetch_and_shape(settings: TerminalSettings) -> Optional[dict[str, Any]]:
     """Fetch HA states + forecasts using a TerminalSettings row and return the
     shaped HAShape.
 
-    Issues `/api/states` and (in parallel) two `weather.get_forecasts` service
-    calls so the forecast rail has fresh data on every render without doubling
-    end-to-end latency. Forecast failures fall back to empty lists so the
+    Issues `/api/states` first, discovers the actual `weather.*` entity (some
+    installs use `weather.forecast_home`, others use `weather.nws_...` etc.),
+    then fires the daily + hourly forecast service calls in parallel against
+    the discovered entity. Forecast failures fall back to empty lists so the
     state fetch still produces a usable shape.
 
     Returns `None` if HA is not configured or the states call fails. The
@@ -609,19 +754,25 @@ async def fetch_and_shape(settings: TerminalSettings) -> Optional[dict[str, Any]
         logger.exception("Failed to decrypt HA token for user_id=%s", settings.user_id)
         return None
 
-    weather_eid = _WEATHER_ENTITY_ID
     try:
-        states, daily, hourly = await asyncio.gather(
-            fetch_ha_states(url, token),
-            fetch_ha_forecast(url, token, weather_eid, kind="daily"),
-            fetch_ha_forecast(url, token, weather_eid, kind="hourly"),
-        )
+        states = await fetch_ha_states(url, token)
     except HAClientError as e:
         logger.warning("HA fetch failed for user_id=%s: %s", settings.user_id, e)
         return None
+
+    weather_eid, feats = _resolve_weather_entity(states)
+    daily: list[dict[str, Any]] = []
+    hourly: list[dict[str, Any]] = []
+    if weather_eid:
+        daily, hourly = await asyncio.gather(
+            fetch_ha_daily_forecast(url, token, weather_eid, feats),
+            fetch_ha_hourly_forecast(url, token, weather_eid, feats),
+        )
+
     return shape_ha_state(
         states,
         fetched_at=datetime.now(timezone.utc),
+        weather_entity_id=weather_eid,
         forecast_daily=daily,
         forecast_hourly=hourly,
     )
