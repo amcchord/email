@@ -336,10 +336,11 @@ def test_washer_done_dismissed_when_dryer_touched():
     ) is False
 
 
-def test_washer_done_dismissed_when_washer_powered_off():
-    """We have no washer door sensor, so `switch.washer_power` going off
-    is our proxy for 'user opened the door and unloaded'. As long as the
-    washer is powered on, the card stays; the moment it's off, drop it."""
+def test_washer_done_persists_through_washer_power_off():
+    """The LG ThinQ washer flips its power switch off the instant a
+    cycle finishes -- before the user can react. So `powerOn=False` is
+    NOT a "user unloaded" signal; the card must stay up regardless of
+    the switch state until the 1h cap fires or the dryer is touched."""
     from datetime import datetime, timezone
     from backend.services.eink.pillow.appliances import _washer_done_active
     now = datetime(2026, 5, 5, 17, 30, tzinfo=timezone.utc)
@@ -352,12 +353,13 @@ def test_washer_done_dismissed_when_washer_powered_off():
                     "lastNotification": notif}, "dryer": dryer},
         now,
     ) is True
-    # Powered OFF (user hit power after unloading): card dismissed.
+    # Powered OFF (the washer auto-shut-off after the cycle finished):
+    # card STAYS up because power-off doesn't mean the user unloaded.
     assert _washer_done_active(
         {"washer": {"status": "power_off", "powerOn": False,
                     "lastNotification": notif}, "dryer": dryer},
         now,
-    ) is False
+    ) is True
 
 
 def test_washer_done_drops_after_one_hour():

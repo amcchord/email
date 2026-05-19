@@ -87,29 +87,31 @@ def _washer_active(ha: dict, now: datetime) -> bool:
 
 
 def _washer_done_active(ha: dict, now: datetime) -> bool:
-    """The washer is "done" for up to 1h after the completion
-    notification, while the washer is still powered on.
+    """The washer is "done" for up to 1 hour after the completion
+    notification, regardless of the washer's power switch.
+
+    The LG ThinQ washer flips ``switch.washer_power`` off the instant a
+    cycle finishes -- *before* the user gets a chance to unload -- so we
+    can't use power-off as a proxy for "user emptied the drum". The
+    card stays up until one of the real "I moved the laundry" signals
+    fires:
 
     Dismissal signals (any one drops the card):
-      * The washer is running again (`_washer_active`).
-      * The user powered the washer off -- we have no door sensor, so
-        `switch.washer_power` flipping to off is our proxy for "door
-        was opened and laundry was unloaded".
+      * The washer is running again (`_washer_active`) -- a new load
+        was started.
       * The dryer was touched in any way (`_dryer_engaged`): running,
         powered on, freshly-on in `initial`, or with a programmed
         `remaining` time. `_dryer_active` alone misses the "user just
         pressed the dryer power button" case.
-      * 1 hour has passed since the completion notification. The old
-        6h window left the card stuck on screen long after the user
-        had clearly moved on.
+      * 1 hour has passed since the completion notification. Stale
+        "wash complete" cards that have been ignored for an hour
+        aren't useful anymore.
     """
     if _washer_active(ha, now):
         return False
     if _dryer_engaged(ha, now):
         return False
     wsh = ha.get("washer") or {}
-    if not wsh.get("powerOn"):
-        return False
     notif = wsh.get("lastNotification") or {}
     if notif.get("type") != "washing_is_complete":
         return False
