@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from PIL import Image, ImageDraw, ImageFont
 
 from backend.models.terminal import TerminalDevice, TerminalSettings
+from backend.services.dashboard_snippet import get_current_snippet_dict
 from backend.services.eink.ha_client import empty_ha_shape, fetch_and_shape
 from backend.services.eink.pillow import render_eink_image
 from backend.services.terminal.bmp import (
@@ -225,6 +226,19 @@ async def render_dashboard_bmp(
     design = _resolve_design(device)
     palette = _palette_for_variant(variant)
     tz_name = (settings.timezone or "UTC").strip() or "UTC"
+
+    # Attach the current-hour AI snippet (if the cron worker has produced
+    # one for this local hour); the editorial renderer's calm-state hero
+    # reads ha_shape["dashboardSnippet"] and falls back to a deterministic
+    # curated quote when the key is missing. A DB hiccup here must never
+    # break a render, so we swallow exceptions.
+    try:
+        snippet = await get_current_snippet_dict(tz_name)
+    except Exception:
+        logger.exception("Failed to read dashboard snippet; falling back to curated pool")
+        snippet = None
+    if snippet is not None:
+        ha_shape["dashboardSnippet"] = snippet
 
     # Pillow renderer is CPU-bound; keep the event loop free while it paints.
     img = await asyncio.to_thread(

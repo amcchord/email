@@ -26,7 +26,7 @@ from typing import Any, Optional
 
 from PIL import Image, ImageDraw
 
-from . import fonts, layout
+from . import flavor, fonts, layout
 from .appliances import ActiveAppliance, pick_active
 from .draw import (
     Box,
@@ -36,7 +36,6 @@ from .draw import (
     dotted_hr,
     double_hr,
     draw_arrow_down,
-    draw_arrow_right,
     draw_arrow_up,
     draw_dashed_arc,
     draw_drop_cap_paragraph,
@@ -70,11 +69,9 @@ from .ha_view import (
     ApplianceView,
     FloorView,
     HvacSummary,
-    ZoneView,
     build_appliance_view,
     build_floor_views,
     build_hvac_summary,
-    build_zone_view,
 )
 from .helpers import (
     clamp,
@@ -605,18 +602,14 @@ def _draw_right_rail(draw, ctx: RenderContext, ha, box: Box) -> None:
 
     cur_y += 8
     hairline_hr(draw, box.x0, box.x1, cur_y, fill=P.rule); cur_y += 6
-    _section("Hearth \u00b7 Radiant")
-    climates = ha.get("climates") or {}
-    cur_y = _draw_radiant_row(draw, ctx, box.x0, cur_y, box.w, "Main",
-                              build_zone_view(climates.get("radiantMain"), name="Main"))
-    cur_y = _draw_radiant_row(draw, ctx, box.x0, cur_y, box.w, "Apt",
-                              build_zone_view(climates.get("radiantApt"), name="Apt"))
+    _section("Solar \u00b7 Roof")
+    cur_y = _draw_solar_section(draw, ctx, ha, box.x0, cur_y, box.w)
 
     cur_y += 8
     hairline_hr(draw, box.x0, box.x1, cur_y, fill=P.rule); cur_y += 6
     if pool and pool.get("heating"):
         _section("Pool")
-        _draw_pool_mini(draw, P, box.x0, cur_y, box.w, pool)
+        cur_y = _draw_pool_temp(draw, ctx, box.x0, cur_y, box.w, pool)
 
 
 def _draw_floor_list(draw, ctx: RenderContext, ha, x0, y, w) -> int:
@@ -680,115 +673,127 @@ def _draw_floor_list(draw, ctx: RenderContext, ha, x0, y, w) -> int:
     return cur_y
 
 
-def _draw_radiant_row(draw, ctx: RenderContext, x0, y, w, label, view: ZoneView) -> int:
-    """Radiant zone row. Reads ``ZoneView.state`` so heating shows red,
-    cooling shows blue, idle/off stays in ink. The `→ target` glyph is
-    drawn as primitives because Cherry pixel font lacks U+2192.
+# Per-microinverter AC nameplate (~Enphase IQ8) used to scale the power
+# bar's full range from the panel count, and a fallback full-scale for
+# installs where the inverter count isn't available.
+_SOLAR_PANEL_KW = 0.30
+_SOLAR_PEAK_KW = 10.0
+
+
+def _draw_solar_section(draw, ctx: RenderContext, ha, x0, y, w) -> int:
+    """Rooftop solar stat block (Enphase Envoy).
+
+    Today's generated kWh as the hero number, the live output as a bar
+    filled to ``currentKw / peak_kw``, and a 7-day total + panel count
+    sub-line. Reads ``ha['solar']`` directly -- these are plain numeric
+    snapshot values (no state reconciliation or timestamp localization),
+    so they don't need a ha_view wrapper, same as the ``ha['temps']``
+    reads elsewhere in this renderer.
     """
     P = ctx.palette
-    if view is None or view.state == "unknown":
-        return y
-    active = view.state in ("heating", "cooling")
-    color = ctx.accent(view.accent_kind) if active else P.ink
-    left_font = fonts.pix_cherry_small(10, bold=True)
-    l_tracking = em_to_px(10, 0.14)
-    cur_factory = lambda s: fonts.serif(s, weight="bold")
-    tgt_font = fonts.pix_cherry_small(9, bold=True)
-    tgt_tracking = em_to_px(9, 0.10)
-    fm_l = font_metrics(left_font)
-    fm_t = font_metrics(tgt_font)
-    cur_s = fmt_temp(view.current)
-    tgt_temp_s = fmt_temp(view.target) if view.target is not None else ""
-    label_w = tracked_width(left_font, label.upper(), l_tracking)
-    bullet_w = 10
-    arrow_sz = 7
-    arrow_block_w = (arrow_sz + 3 + tracked_width(tgt_font, tgt_temp_s, tgt_tracking)) if tgt_temp_s else 0
-    available = w - bullet_w - label_w - 6 - arrow_block_w - 5
-    cur_font, _cur_size = pick_fitting_size(
-        cur_factory, cur_s, max(20, available), (15, 14, 13, 12),
-    )
-    fm_c = font_metrics(cur_font)
-    baseline = y + max(fm_c.ascent, fm_l.ascent, fm_t.ascent)
-    bullet(draw, x0 + 3, baseline - fm_l.ascent // 2, 3,
-           filled=active, color=color)
-    draw_tracked_text_bl(draw, (x0 + 10, baseline),
-                         label.upper(), left_font, color, l_tracking)
-    cur_w = text_width(cur_font, cur_s)
-    right = x0 + w
-    tgt_temp_w = tracked_width(tgt_font, tgt_temp_s, tgt_tracking) if tgt_temp_s else 0
-    if tgt_temp_s:
-        tgt_x = right - tgt_temp_w
-        arrow_x = tgt_x - arrow_sz - 3
-        cur_x = arrow_x - 5 - cur_w
-        draw_text_bl(draw, (cur_x, baseline), cur_s, cur_font, color)
-        draw_arrow_right(draw, arrow_x, baseline, size=arrow_sz, fill=P.muted)
-        draw_tracked_text_bl(draw, (tgt_x, baseline),
-                             tgt_temp_s, tgt_font, P.muted, tgt_tracking)
-    else:
-        cur_x = right - cur_w
-        draw_text_bl(draw, (cur_x, baseline), cur_s, cur_font, color)
-    return baseline + max(fm_c.descent, fm_l.descent, fm_t.descent) + 2
+    solar = ha.get("solar") or {}
+    today = solar.get("todayKwh")
+    # Solar reads as the sun's yellow where the palette has one; on the
+    # 1-bit panel it collapses to ink like the sun disk does.
+    accent = P.yellow if P.yellow != P.ink else P.ink
 
+    if today is None:
+        font = fonts.serif(12, italic=True, weight="semibold")
+        fm = font_metrics(font)
+        draw_text_bl(draw, (x0, y + fm.ascent), "Solar offline", font, P.muted)
+        return y + fm.line_height + 4
 
-def _draw_pool_mini(draw, P, x0, y, w, pool) -> None:
-    if not pool:
-        return
-    heating = bool(pool.get("heating"))
-    accent = P.red if heating else P.blue
-    therm_w, therm_h = 14, 56
-    _draw_vertical_thermometer(draw, P, x0, y, therm_w, therm_h,
-        from_v=50, to_v=95,
-        now=pool.get("current"), target=pool.get("target"), accent=accent)
-    text_x = x0 + therm_w + 10
-    text_max_w = max(20, x0 + w - text_x)
-    cur_factory = lambda s: fonts.serif(s, weight="bold")
-    cur_s = fmt_temp(pool.get("current"))
-    cur_font, _cur_size = pick_fitting_size(
-        cur_factory, cur_s, text_max_w, (28, 24, 22, 20, 18),
-    )
-    stat_font = fonts.pix_cherry_small(9, bold=True)
-    s_tracking = em_to_px(9, 0.14)
-    fm_c = font_metrics(cur_font)
-    fm_s = font_metrics(stat_font)
-    color = P.red if heating else P.ink
-    baseline = y + fm_c.ascent
-    draw_text_bl(draw, (text_x, baseline), cur_s, cur_font, color)
-    sub_baseline = baseline + fm_c.descent + 6 + fm_s.ascent
-    arrow_sz = 7
-    draw_arrow_right(draw, text_x, sub_baseline, size=arrow_sz, fill=P.muted)
-    draw_tracked_text_bl(draw, (text_x + arrow_sz + 3, sub_baseline),
-                         fmt_temp(pool.get("target")),
-                         stat_font, P.muted, s_tracking)
-    air = pool.get("air")
-    if air is not None:
-        draw_tracked_text_bl(
-            draw, (text_x, sub_baseline + fm_s.line_height + 2),
-            f"AIR {safe_round(air)}\u00b0",
-            stat_font, P.muted, s_tracking,
-        )
+    unit_font = fonts.pix_cherry_small(9, bold=True)
+    u_tracking = em_to_px(9, 0.12)
+    val_factory = lambda s: fonts.serif(s, weight="bold")
 
+    # ── Hero: today's kWh (accent, left) + live kW (ink, right) ────
+    cur_kw = solar.get("currentKw")
+    now_val_s = f"{float(cur_kw):.1f}" if cur_kw is not None else "\u2014"
+    now_font = fonts.serif(13, weight="bold")
+    now_unit_w = tracked_width(unit_font, "kW", u_tracking)
+    now_val_w = text_width(now_font, now_val_s)
+    now_cluster_w = now_val_w + 3 + now_unit_w
 
-def _draw_vertical_thermometer(
-    draw, P, x0, y, w, h, *,
-    from_v, to_v, now, target, accent,
-) -> None:
-    """Vertical version of _draw_thermometer used by the pool mini panel."""
-    draw.rectangle([(x0, y), (x0 + w - 1, y + h - 1)],
+    today_s = f"{float(today):.1f}"
+    unit_s = "kWh TODAY"
+    unit_w = tracked_width(unit_font, unit_s, u_tracking)
+    # The today number gets whatever width is left after reserving the
+    # unit caption and the right-hand live-kW cluster, so a 3-digit day
+    # shrinks rather than colliding.
+    avail = max(34, w - unit_w - 4 - now_cluster_w - 8)
+    val_font, _ = pick_fitting_size(val_factory, today_s, avail, (18, 16, 15))
+    fm_v = font_metrics(val_font)
+    baseline = y + fm_v.ascent
+    draw_text_bl(draw, (x0, baseline), today_s, val_font, accent)
+    val_w = text_width(val_font, today_s)
+    draw_tracked_text_bl(draw, (x0 + val_w + 4, baseline),
+                         unit_s, unit_font, P.muted, u_tracking)
+    nu_x = x0 + w - now_unit_w
+    nv_x = nu_x - 3 - now_val_w
+    draw_text_bl(draw, (nv_x, baseline), now_val_s, now_font, P.ink)
+    draw_tracked_text_bl(draw, (nu_x, baseline), "kW", unit_font, P.muted, u_tracking)
+    cur_y = baseline + fm_v.descent + 2
+
+    # ── Live-output bar: current / rated peak ──────────────────────
+    panel_count = solar.get("panelCount")
+    peak_kw = panel_count * _SOLAR_PANEL_KW if panel_count else _SOLAR_PEAK_KW
+    bar_h = 6
+    draw.rectangle([(x0, cur_y), (x0 + w - 1, cur_y + bar_h - 1)],
                    outline=P.rule, width=1)
-    if now is None:
-        return
-    pct = lerp_pct(float(now), from_v, to_v)
-    fill_h = int((h - 2) * pct)
-    if fill_h > 0:
-        draw.rectangle(
-            [(x0 + 1, y + h - 1 - fill_h),
-             (x0 + w - 2, y + h - 2)],
-            fill=accent,
-        )
-    if target is not None:
-        tpct = lerp_pct(float(target), from_v, to_v)
-        ty = y + h - 1 - int((h - 2) * tpct)
-        draw.line([(x0 - 2, ty), (x0 + w + 1, ty)], fill=P.ink, width=1)
+    if cur_kw is not None and peak_kw > 0:
+        pct = clamp(float(cur_kw) / float(peak_kw), 0.0, 1.0)
+        fill_w = int((w - 2) * pct)
+        if fill_w > 0:
+            draw.rectangle([(x0 + 1, cur_y + 1), (x0 + fill_w, cur_y + bar_h - 2)],
+                           fill=accent)
+    cur_y += bar_h
+
+    # ── Sub-line: 7-day total as a balanced label .... value stat ──
+    week = solar.get("weekKwh")
+    sub_font = fonts.pix_cherry_small(9, bold=True)
+    s_tracking = em_to_px(9, 0.12)
+    fm_s = font_metrics(sub_font)
+    sub_baseline = cur_y + 2 + fm_s.ascent
+    draw_tracked_text_bl(draw, (x0, sub_baseline), "7-DAY",
+                         sub_font, P.muted, s_tracking)
+    if week is not None:
+        draw_tracked_text_bl_right(draw, (x0 + w, sub_baseline),
+                                   f"{float(week):.0f} KWH",
+                                   sub_font, P.ink, s_tracking)
+    return sub_baseline + fm_s.descent + 2
+
+
+def _draw_pool_temp(draw, ctx: RenderContext, x0, y, w, pool) -> int:
+    """Compact pool row -- just the current water temperature.
+
+    Sized to a single rail row (bullet + state caption on the left, big
+    temp on the right) so it always fits beneath the solar section. The
+    old mini-thermometer panel that lived here was ~60 px tall and got
+    pushed off the bottom of the right rail once the solar block took the
+    radiant section's place; the dashboard only needs the live temp here.
+    """
+    P = ctx.palette
+    if not pool:
+        return y
+    heating = bool(pool.get("heating"))
+    color = ctx.accent("heat") if heating else P.ink
+    label_font = fonts.pix_cherry_small(10, bold=True)
+    l_tracking = em_to_px(10, 0.14)
+    temp_factory = lambda s: fonts.serif(s, weight="bold")
+    cur_s = fmt_temp(pool.get("current"))
+    label = "HEATING" if heating else "WATER"
+    label_w = tracked_width(label_font, label, l_tracking)
+    bullet_w = 10
+    avail = max(24, w - bullet_w - label_w - 8)
+    temp_font, _ = pick_fitting_size(temp_factory, cur_s, avail, (20, 18, 16, 15))
+    fm_l = font_metrics(label_font)
+    fm_t = font_metrics(temp_font)
+    baseline = y + max(fm_t.ascent, fm_l.ascent)
+    bullet(draw, x0 + 3, baseline - fm_l.ascent // 2, 3, filled=heating, color=color)
+    draw_tracked_text_bl(draw, (x0 + 10, baseline), label, label_font, color, l_tracking)
+    draw_text_bl_right(draw, (x0 + w, baseline), cur_s, temp_font, color)
+    return baseline + max(fm_t.descent, fm_l.descent) + 2
 
 
 # ── Lead column ────────────────────────────────────────────────────────
@@ -839,7 +844,7 @@ def _draw_lead_column(img: Image.Image, draw, ctx: RenderContext, ha,
     sdraw = ImageDraw.Draw(scratch)
 
     if lead is None:
-        y_end = _draw_calm_lead(sdraw, P, ha, 0, 0, box.w)
+        y_end = _draw_calm_lead(sdraw, ctx, ha, 0, 0, box.w)
     else:
         y_end = _draw_lead(sdraw, ctx, ha, lead, 0, 0, box.w)
         if rest:
@@ -1026,11 +1031,13 @@ def _co_lead_runs_normal_italic(size: int = 22):
 def _co_washer(view: ApplianceView, ctx: RenderContext) -> dict:
     P = ctx.palette
     norm, ital = _co_lead_runs_normal_italic()
+    copy = flavor.pick_appliance_copy(view, ctx)
+    runs = [Run(copy["head_pre"], norm, P.ink)]
+    if copy["head_italic"]:
+        runs.append(Run(copy["head_italic"], ital, P.ink))
     return {
-        "head_runs": [Run(view.status_label, norm, P.ink),
-                      Run(", then spin.", ital, P.ink)],
-        "deck": (f"Cycle #{view.extras.get('cycle_no', 0)} \u00b7 "
-                 f"finishes {view.finish_label}."),
+        "head_runs": runs,
+        "deck": copy["deck"],
         "cells": [
             {"k": "Remaining", "v": view.remaining_label,
              "accent": ctx.accent(view.accent_kind)},
@@ -1059,15 +1066,13 @@ def _co_washer_done(view: ApplianceView, ctx: RenderContext) -> dict:
 def _co_dryer(view: ApplianceView, ctx: RenderContext) -> dict:
     P = ctx.palette
     norm, ital = _co_lead_runs_normal_italic()
-    phase = view.extras.get("phase") or "running"
-    if phase in _EDITORIAL_DRYER_PHASE_HEADS:
-        runs = [Run(_EDITORIAL_DRYER_PHASE_HEADS[phase], ital, P.ink)]
-    else:
-        runs = [Run(view.status_label, norm, P.ink),
-                Run(", then fold.", ital, P.ink)]
+    copy = flavor.pick_appliance_copy(view, ctx)
+    runs = [Run(copy["head_pre"], norm, P.ink)]
+    if copy["head_italic"]:
+        runs.append(Run(copy["head_italic"], ital, P.ink))
     return {
         "head_runs": runs,
-        "deck": f"Finishing around {view.finish_label}.",
+        "deck": copy["deck"],
         "cells": [
             {"k": "Remaining", "v": view.remaining_label,
              "accent": ctx.accent(view.accent_kind)},
@@ -1095,13 +1100,15 @@ def _co_dryer_done(view: ApplianceView, ctx: RenderContext) -> dict:
 def _co_dishwasher(view: ApplianceView, ctx: RenderContext) -> dict:
     P = ctx.palette
     norm, ital = _co_lead_runs_normal_italic()
-    program = view.program_label or "Auto"
     prog = view.progress_pct
     prog_s = f"{prog}%" if prog is not None else "\u2014"
+    copy = flavor.pick_appliance_copy(view, ctx)
+    runs = [Run(copy["head_pre"] + " ", norm, P.ink)]
+    if copy["head_italic"]:
+        runs.append(Run(copy["head_italic"], ital, P.ink))
     return {
-        "head_runs": [Run(f"{program} ", norm, P.ink),
-                      Run("cycle.", ital, P.ink)],
-        "deck": (f"Finishing {view.relative_label} ({view.finish_label})."),
+        "head_runs": runs,
+        "deck": copy["deck"],
         "cells": [
             {"k": "Progress", "v": prog_s,
              "accent": ctx.accent(view.accent_kind)},
@@ -1173,11 +1180,16 @@ def _co_lead_descriptor(view: ApplianceView, ctx: RenderContext) -> dict:
     return builder(view, ctx)
 
 
-def _draw_calm_lead(draw, P, ha, x0, y, w) -> int:
-    kicker_font = fonts.pix_cherry_small(11, bold=True)
-    k_tracking = em_to_px(11, 0.30)
+def _draw_calm_lead(draw, ctx: RenderContext, ha, x0, y, w) -> int:
+    """Calm-state hero. The "All quiet" headline is compact so the
+    hourly-rotating snippet (AI-generated when available,
+    ``flavor.fallback_idle_snippet`` otherwise) gets to be the visual
+    focal point under the double-rule."""
+    P = ctx.palette
+    kicker_font = fonts.pix_cherry_small(10, bold=True)
+    k_tracking = em_to_px(10, 0.30)
     fm_k = font_metrics(kicker_font)
-    star_sz = 9
+    star_sz = 8
     kicker_label = "THE CALM EDITION"
     label_w = tracked_width(kicker_font, kicker_label, k_tracking)
     block_w = star_sz + 8 + label_w + 8 + star_sz
@@ -1189,39 +1201,156 @@ def _draw_calm_lead(draw, P, ha, x0, y, w) -> int:
                          kicker_label, kicker_font, P.muted, k_tracking)
     draw_star_marker(draw, block_x + star_sz + 8 + label_w + 8,
                      kicker_baseline, size=star_sz, fill=P.muted)
-    head_font = fonts.serif(38, weight="bold")
-    italic_font = fonts.serif(38, italic=True, weight="bold")
+    # Compact headline: 26-28 px serif (vs the old 38 px) keeps the
+    # editorial flag but leaves room below for a much larger snippet.
+    head_font = fonts.serif(26, weight="bold")
+    italic_font = fonts.serif(26, italic=True, weight="bold")
     fm_h = font_metrics(head_font)
-    line_height = fm_h.line_height + 2
-    cur_y = y + fm_k.line_height + 8
+    line_height = fm_h.line_height + 1
+    cur_y = y + fm_k.line_height + 6
     baseline = cur_y + fm_h.ascent
-    draw_text_bl(draw, (x0, baseline), "All quiet on the", head_font, P.ink)
-    baseline += line_height
-    draw_text_bl(draw, (x0, baseline), "home front.", italic_font, P.ink)
-    cur_y = baseline + fm_h.descent + 6
-    deck_font = fonts.serif(14, italic=True, weight="semibold")
+    # Try to fit "All quiet on the home front." as a single line; fall
+    # back to the two-line version if it doesn't measure.
+    one_line = "All quiet on the "
+    one_line_w = (text_width(head_font, one_line)
+                  + text_width(italic_font, "home front."))
+    if one_line_w <= w:
+        draw_text_bl(draw, (x0, baseline), one_line, head_font, P.ink)
+        draw_text_bl(draw, (x0 + text_width(head_font, one_line), baseline),
+                     "home front.", italic_font, P.ink)
+    else:
+        draw_text_bl(draw, (x0, baseline), "All quiet on the", head_font, P.ink)
+        baseline += line_height
+        draw_text_bl(draw, (x0, baseline), "home front.", italic_font, P.ink)
+    cur_y = baseline + fm_h.descent + 4
+    deck_font = fonts.serif(12, italic=True, weight="semibold")
     fm_d = font_metrics(deck_font)
     draw_text_bl(draw, (x0, cur_y + fm_d.ascent),
                  "Nothing running, nothing demanding.", deck_font, P.muted)
-    cur_y += fm_d.line_height + 6
+    cur_y += fm_d.line_height + 5
     double_hr(draw, x0, x0 + w, cur_y, fill=P.rule)
     cur_y += 10
-    open_windows = ha.get("openWindows") or []
-    garage = (ha.get("garage") or {}).get("state") or "unknown"
-    if open_windows:
-        wins = f"{len(open_windows)} window{'s' if len(open_windows) > 1 else ''} open"
-    else:
-        wins = "All windows closed"
-    body = (f"ll appliances idle. Climate within bounds across the four floors. "
-            f"{wins}, garage {garage}.")
-    body_font = fonts.serif(13)
-    cap_font = fonts.serif(36, weight="bold")
-    cur_y = draw_drop_cap_paragraph(
-        draw, (x0, cur_y, w, 200), "A", body,
-        cap_font=cap_font, body_font=body_font, fill=P.ink,
-        line_height_px=18, cap_lines=2, cap_right_gutter=6,
-    )
+
+    snippet = _resolve_idle_snippet(ctx, ha)
+    cur_y = _draw_idle_snippet_block(draw, ctx, x0, cur_y, w, snippet)
     return cur_y
+
+
+def _resolve_idle_snippet(ctx: RenderContext, ha: dict) -> dict:
+    """Pick the snippet to render in the calm body.
+
+    Priority:
+    1. ``ha['dashboardSnippet']`` (populated by the renderer when the
+       cron-generated row is available for the current local hour).
+    2. ``flavor.fallback_idle_snippet`` (curated quotes + computed
+       calendar facts).
+
+    Returned dict shape: ``{"kind": str, "text": str, "byline": str}``.
+    """
+    candidate = ha.get("dashboardSnippet")
+    if isinstance(candidate, dict):
+        text = (candidate.get("text") or "").strip()
+        if text:
+            return {
+                "kind": str(candidate.get("kind") or "quote"),
+                "text": text,
+                "byline": str(candidate.get("byline") or "").strip(),
+            }
+    return flavor.fallback_idle_snippet(ctx)
+
+
+_SNIPPET_KICKER = {
+    "quote": "QUOTE OF THE HOUR",
+    "observation": "OBSERVED THIS HOUR",
+}
+
+
+def _draw_idle_snippet_block(draw, ctx: RenderContext, x0: int, y: int,
+                             w: int, snippet: dict) -> int:
+    """Render the snippet body + byline under the calm hero.
+
+    Quotes get wrapped in curly quotes and rendered in italic so the
+    feel is closer to a magazine pull-quote; observations stay in
+    upright serif to read as a fact box. Both are sized to be the
+    visual focal point of the calm hero (the headline above is
+    intentionally compact to give this block the room).
+    """
+    P = ctx.palette
+    kind = snippet.get("kind") or "quote"
+    text = snippet.get("text") or ""
+    byline = snippet.get("byline") or ""
+
+    sub_kicker_font = fonts.pix_cherry_small(10, bold=True)
+    sub_tracking = em_to_px(10, 0.22)
+    fm_sub = font_metrics(sub_kicker_font)
+    kicker_text = _SNIPPET_KICKER.get(kind, "NOTE OF THE HOUR")
+    sub_baseline = y + fm_sub.ascent
+    draw_tracked_text_bl(draw, (x0, sub_baseline), kicker_text,
+                         sub_kicker_font, P.muted, sub_tracking)
+    cur_y = y + fm_sub.line_height + 8
+
+    # Snippet body candidates -- pick the largest that lets the rendered
+    # paragraph fit the remaining lead column height (we cap at 5 lines
+    # so a verbose quote doesn't push the byline off the panel).
+    if kind == "quote":
+        size_candidates = (22, 20, 18, 17, 16)
+        font_factory = lambda s: fonts.serif(s, italic=True, weight="semibold")
+        body_text = "\u201c" + text + "\u201d"
+    else:
+        size_candidates = (20, 19, 18, 17, 16)
+        font_factory = lambda s: fonts.serif(s, weight="semibold")
+        body_text = text
+    body_font = _pick_snippet_size(font_factory, body_text, w, size_candidates)
+    fm_b = font_metrics(body_font)
+    line_h = fm_b.line_height + 3
+    end_y = draw_paragraph(
+        draw, (x0, cur_y, w, line_h * 5),
+        body_text, font=body_font, fill=P.ink,
+        line_height_px=line_h, max_lines=5,
+    )
+    cur_y = end_y + 8
+
+    if byline:
+        byline_font = fonts.serif(13, italic=True, weight="semibold")
+        fm_y = font_metrics(byline_font)
+        baseline = cur_y + fm_y.ascent
+        draw_text_bl_right(draw, (x0 + w, baseline),
+                           "\u2014 " + byline, byline_font, P.muted)
+        cur_y = baseline + fm_y.descent + 2
+    return cur_y
+
+
+def _pick_snippet_size(factory, text: str, w: int, sizes):
+    """Pick the largest snippet size that fits in <=4 lines.
+
+    Falls back to the smallest candidate. ``draw_paragraph`` will then
+    cap whatever's left at 5 lines, so this just biases the typography
+    toward "big when it can be."
+    """
+    for size in sizes:
+        font = factory(size)
+        if _wrap_line_count(font, text, w) <= 4:
+            return font
+    return factory(sizes[-1])
+
+
+def _wrap_line_count(font, text: str, w: int) -> int:
+    """Approximate line count for a word-wrapped paragraph in width ``w``."""
+    if not text:
+        return 0
+    words = text.split(" ")
+    lines = 1
+    cur = ""
+    for word in words:
+        candidate = word
+        if cur:
+            candidate = cur + " " + word
+        if text_width(font, candidate) <= w:
+            cur = candidate
+        else:
+            lines += 1
+            cur = word
+    return lines
 
 
 def _draw_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) -> int:
@@ -1412,12 +1541,11 @@ def _draw_washer_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y
     P = ctx.palette
     view = item.view
     accent = ctx.accent(view.accent_kind)
-    status = view.status_label
-    runs = [Run(status, _hero_font(), P.ink),
-            Run(", then spin.", _hero_italic_bold_font(), P.ink)]
-    deck = f"Cycle #{view.extras.get('cycle_no', 0)}, finishing around {view.finish_label}."
-    if view.remaining_label and view.remaining_label != "\u2014":
-        deck += f" {view.remaining_label} remaining."
+    copy = flavor.pick_appliance_copy(view, ctx)
+    runs = [Run(copy["head_pre"], _hero_font(), P.ink)]
+    if copy["head_italic"]:
+        runs.append(Run(copy["head_italic"], _hero_italic_bold_font(), P.ink))
+    deck = copy["deck"]
     cur_y = _draw_story_shell(draw, P, x0, y, w,
         kicker=view.eyebrow_kicker, accent=accent,
         headline_runs=runs, deck=deck)
@@ -1461,15 +1589,11 @@ def _draw_dryer_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y,
     view = item.view
     accent = ctx.accent(view.accent_kind)
     phase = view.extras.get("phase") or "running"
-    if phase in _EDITORIAL_DRYER_PHASE_HEADS:
-        runs = [Run(_EDITORIAL_DRYER_PHASE_HEADS[phase],
-                    _hero_italic_bold_font(), P.ink)]
-    else:
-        runs = [Run(view.status_label, _hero_font(), P.ink),
-                Run(", then fold.", _hero_italic_bold_font(), P.ink)]
-    deck = f"Finishing around {view.finish_label}."
-    if view.remaining_label and view.remaining_label != "\u2014":
-        deck += f" {view.remaining_label} remaining."
+    copy = flavor.pick_appliance_copy(view, ctx)
+    runs = [Run(copy["head_pre"], _hero_font(), P.ink)]
+    if copy["head_italic"]:
+        runs.append(Run(copy["head_italic"], _hero_italic_bold_font(), P.ink))
+    deck = copy["deck"]
     cur_y = _draw_story_shell(draw, P, x0, y, w,
         kicker=view.eyebrow_kicker, accent=accent,
         headline_runs=runs, deck=deck)
@@ -1504,12 +1628,11 @@ def _draw_dishwasher_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x
     accent = ctx.accent(view.accent_kind)
     prog = view.progress_pct
     prog_pct = f"{prog}%" if prog is not None else "\u2014"
-    program = view.program_label or "\u2014"
-    runs = [Run(f"{program} ", _hero_font(), P.ink),
-            Run("cycle.", _hero_italic_bold_font(), P.ink)]
-    deck = f"Finishing {view.relative_label} ({view.finish_label})."
-    if prog is not None:
-        deck += f" {prog}% complete."
+    copy = flavor.pick_appliance_copy(view, ctx)
+    runs = [Run(copy["head_pre"] + " ", _hero_font(), P.ink)]
+    if copy["head_italic"]:
+        runs.append(Run(copy["head_italic"], _hero_italic_bold_font(), P.ink))
+    deck = copy["deck"]
     cur_y = _draw_story_shell(draw, P, x0, y, w,
         kicker=view.eyebrow_kicker, accent=accent,
         headline_runs=runs, deck=deck)

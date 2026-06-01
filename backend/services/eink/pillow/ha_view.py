@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
+from . import flavor
 from .helpers import (
     HvacState,
     clean_program,
@@ -347,13 +348,19 @@ def _build_sauna_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
 
 
 def _build_washer_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
-    """extras: cycle_no:int, energy_kwh_month:float
+    """extras: cycle_no:int, energy_kwh_month:float, phase:str (lowercase raw status)
     Time fields refer to the cycle's projected finish.
+
+    ``status_label`` runs through ``flavor.friendly_washer_status`` so the
+    headline reads as "Rinsing" / "Spinning" / "Wrapping up" rather than the
+    raw HA codes ("rinse" / "spin" / "end"). ``extras['phase']`` keeps the
+    lowercase raw token so per-phase flavor lookups stay clean.
     """
     wsh = ha.get("washer") or {}
     finish_iso = wsh.get("remaining")
     finish_at = _localize(finish_iso, ctx)
     energy = _safe_float(wsh.get("energyMonth")) or 0.0
+    raw_status = (wsh.get("status") or "").strip().lower()
     return ApplianceView(
         kind="washer",
         eyebrow_kicker="Laundry \u00b7 Running",
@@ -363,10 +370,11 @@ def _build_washer_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
         finish_label=_clock(finish_iso, ctx),
         remaining_label=_duration(finish_iso, ctx),
         relative_label=_relative(finish_iso, ctx),
-        status_label=title_case(wsh.get("status")),
+        status_label=flavor.friendly_washer_status(wsh.get("status")),
         extras={
             "cycle_no": safe_int(wsh.get("cycles")),
             "energy_kwh_month": energy / 1000.0,
+            "phase": raw_status,
         },
     )
 
@@ -399,7 +407,7 @@ def _build_dryer_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
         finish_label=_clock(finish_iso, ctx),
         remaining_label=_duration(finish_iso, ctx),
         relative_label=_relative(finish_iso, ctx),
-        status_label=title_case(d.get("status")),
+        status_label=flavor.friendly_dryer_status(d.get("status")),
         extras={
             "phase": phase,
         },

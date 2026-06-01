@@ -306,6 +306,16 @@ _SUN_DUSK = "sensor.sun_next_dusk"
 _SUN_RISING = "sensor.sun_next_rising"
 _SUN_SETTING = "sensor.sun_next_setting"
 
+# Enphase Envoy rooftop array. Serial (202329034883) is install-specific,
+# consistent with every other hard-coded entity ID in this module. The
+# microinverters report one `sensor.inverter_<serial>` each; counting them
+# gives the panel count, which scales the right-rail power bar's full scale.
+_SOLAR_POWER_NOW = "sensor.envoy_202329034883_current_power_production"      # kW
+_SOLAR_ENERGY_TODAY = "sensor.envoy_202329034883_energy_production_today"    # kWh
+_SOLAR_ENERGY_WEEK = "sensor.envoy_202329034883_energy_production_last_seven_days"  # kWh
+_SOLAR_ENERGY_LIFETIME = "sensor.envoy_202329034883_lifetime_energy_production"     # MWh
+_SOLAR_INVERTER_RE = re.compile(r"^sensor\.inverter_\d+$")
+
 
 def _to_float(v: Any) -> Optional[float]:
     if v is None or v == "" or v == "unknown" or v == "unavailable":
@@ -612,6 +622,18 @@ def shape_ha_state(
         "nextSetting": state_str(_SUN_SETTING),
     }
 
+    # ── Solar (Enphase Envoy) ──────────────────────────────────────
+    panel_count = sum(
+        1 for s in states if _SOLAR_INVERTER_RE.match(s.get("entity_id") or "")
+    )
+    solar = {
+        "currentKw": state_num(_SOLAR_POWER_NOW),
+        "todayKwh": state_num(_SOLAR_ENERGY_TODAY),
+        "weekKwh": state_num(_SOLAR_ENERGY_WEEK),
+        "lifetimeMwh": state_num(_SOLAR_ENERGY_LIFETIME),
+        "panelCount": panel_count or None,
+    }
+
     return {
         "fetchedAt": fetched_at.isoformat(),
         "weather": weather,
@@ -621,6 +643,7 @@ def shape_ha_state(
         "garage": garage,
         "openWindows": open_windows,
         "sun": sun,
+        "solar": solar,
         "pool": pool,
         "sauna": sauna,
         "washer": washer,
@@ -659,6 +682,13 @@ def empty_ha_shape(*, fetched_at: Optional[datetime] = None) -> dict[str, Any]:
         "garage": {"state": "closed"},
         "openWindows": [],
         "sun": {"state": "below_horizon"},
+        "solar": {
+            "currentKw": None,
+            "todayKwh": None,
+            "weekKwh": None,
+            "lifetimeMwh": None,
+            "panelCount": None,
+        },
         "pool": None,
         "sauna": None,
         "washer": {

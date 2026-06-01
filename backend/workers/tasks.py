@@ -1348,6 +1348,68 @@ async def sync_all_calendars(ctx):
             await asyncio.sleep(1)
 
 
+_dashboard_snippet_lock = asyncio.Lock()
+
+
+async def generate_dashboard_snippet_task(ctx):
+    """Hourly generation of the e-ink calm-state snippet.
+
+    Loads the singleton ``TerminalSettings`` row (a single self-hosted
+    user, mirroring how every other terminal-related task does it) and
+    asks ``dashboard_snippet.generate_snippet_for_now`` to upsert a row
+    for the user's *current* local hour. The function itself is
+    idempotent on ``(date_local, hour_local)``, so duplicate ticks are
+    safe.
+
+    We intentionally fetch a fresh HA shape here too -- the AI prompt
+    for "observation" hours benefits from current weather/sun context,
+    and the cron tick rate (hourly) matches the panel's natural pace
+    so the extra HA call is negligible.
+    """
+    if _dashboard_snippet_lock.locked():
+        return
+
+    async with _dashboard_snippet_lock:
+        from backend.models.terminal import TerminalSettings
+        from backend.services.dashboard_snippet import generate_snippet_for_now
+        from backend.services.eink.ha_client import fetch_and_shape
+
+        async with async_session() as db:
+            result = await db.execute(select(TerminalSettings))
+            settings_row = result.scalars().first()
+
+        if settings_row is None:
+            logger.info(
+                "generate_dashboard_snippet_task: no TerminalSettings; skipping",
+            )
+            return
+
+        try:
+            ha_shape = await fetch_and_shape(settings_row)
+        except Exception:
+            logger.exception(
+                "generate_dashboard_snippet_task: HA fetch failed; "
+                "proceeding without context",
+            )
+            ha_shape = None
+
+        try:
+            row = await generate_snippet_for_now(settings_row, ha_shape=ha_shape)
+        except Exception:
+            logger.exception("generate_dashboard_snippet_task: generation failed")
+            return
+
+        if row is None:
+            logger.info(
+                "generate_dashboard_snippet_task: no row produced (likely no API key)"
+            )
+        else:
+            logger.info(
+                "generate_dashboard_snippet_task: stored %s for %s hour %d",
+                row.kind, row.date_local, row.hour_local,
+            )
+
+
 async def startup(ctx):
     """Worker startup."""
     logger.info("ARQ worker started")
@@ -1412,14 +1474,19 @@ class CronWorkerSettings:
         sync_calendar_full,
         sync_calendar_incremental,
         sync_all_calendars,
+        generate_dashboard_snippet_task,
     ]
     # Schedule periodic incremental sync for all accounts every minute.
     # Deliberately NOT using run_at_startup to avoid a burst of API calls
     # when the worker boots.  The first tick will fire within 60 seconds.
     # Calendar sync runs every 5 minutes (less frequent than email).
+    # Dashboard snippet runs at minute 2 of every hour so it's well clear
+    # of the on-the-hour sync burst and gives the panel a fresh quote/
+    # observation for the upcoming hour shortly after it rolls over.
     cron_jobs = [
         cron(sync_all_accounts, minute={i for i in range(0, 60)}),
         cron(sync_all_calendars, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
+        cron(generate_dashboard_snippet_task, minute={2}, run_at_startup=True),
     ]
     on_startup = startup
     on_shutdown = shutdown

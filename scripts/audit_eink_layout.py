@@ -71,6 +71,10 @@ def _base_state() -> dict:
         "heating": False, "pumpRunning": True, "schedule": True,
         "freezeProtect": False,
     }
+    base["solar"] = {
+        "currentKw": 0.69, "todayKwh": 0.2, "weekKwh": 562.8,
+        "lifetimeMwh": 39.6, "panelCount": 56,
+    }
     return base
 
 
@@ -136,6 +140,10 @@ def _stress_state(base: dict) -> dict:
         "status": "wrinkle_care", "operation": "cycle",
         "remaining": "2026-05-05T23:59:00+00:00",
         "lastNotification": None, "powerOn": True,
+    }
+    out["solar"] = {
+        "currentKw": 18.4, "todayKwh": 188.8, "weekKwh": 1234.5,
+        "lifetimeMwh": 999.9, "panelCount": 120,
     }
     return out
 
