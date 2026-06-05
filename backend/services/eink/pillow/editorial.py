@@ -94,6 +94,19 @@ from .render_ctx import RenderContext, build_render_context
 # ── Top-level ──────────────────────────────────────────────────────────
 
 
+def _pool_near_target(view: ApplianceView, tol: float = 1.0) -> bool:
+    """True when the pool is at target or within ``tol`` degrees of it.
+
+    Used to drop the pool from the editorial center column once it's
+    effectively done heating; the right-rail pool stat still shows the
+    live water temp. Returns False on missing data so we never hide the
+    pool on an incomplete snapshot.
+    """
+    if view.current is None or view.target is None:
+        return False
+    return abs(view.current - view.target) <= tol
+
+
 def render_dashboard(
     img: Image.Image,
     ha: dict,
@@ -105,6 +118,13 @@ def render_dashboard(
 
     ctx = build_render_context(ha, P, tz_name=tz_name)
     active = pick_active(ha, ctx)
+    # Editorial-only: drop the pool from the center column once it's
+    # within a degree of target. The right-rail pool stat (drawn from
+    # ha["pool"] directly) still shows the live water temperature.
+    active = [
+        a for a in active
+        if not (a.kind == "pool" and _pool_near_target(a.view))
+    ]
     lead = active[0] if active else None
     rest = active[1:]
 
@@ -607,7 +627,7 @@ def _draw_right_rail(draw, ctx: RenderContext, ha, box: Box) -> None:
 
     cur_y += 8
     hairline_hr(draw, box.x0, box.x1, cur_y, fill=P.rule); cur_y += 6
-    if pool and pool.get("heating"):
+    if pool and pool.get("current") is not None:
         _section("Pool")
         cur_y = _draw_pool_temp(draw, ctx, box.x0, cur_y, box.w, pool)
 
