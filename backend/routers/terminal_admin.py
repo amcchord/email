@@ -30,6 +30,7 @@ from backend.services.eink.ha_client import (
 from backend.services.terminal.renderer import (
     _palette_for_variant,
     render_dashboard_bmp,
+    render_day_ahead_bmp,
 )
 from backend.services.terminal.variants import VARIANTS, parse_variant
 from backend.utils.security import decrypt_value, encrypt_value
@@ -44,6 +45,7 @@ router = APIRouter(prefix="/api/terminal", tags=["terminal-admin"])
 SUPPORTED_CONTENT_TYPES: list[dict] = [
     {"key": "clock", "label": "Clock", "available": True},
     {"key": "eink_dashboard", "label": "E-Ink Dashboard (HA)", "available": True},
+    {"key": "day_ahead", "label": "Day Ahead (Editorial, portrait)", "available": True},
     {"key": "calendar", "label": "Calendar (coming soon)", "available": False},
 ]
 _VALID_CONTENT_KEYS = {c["key"] for c in SUPPORTED_CONTENT_TYPES if c["available"]}
@@ -371,10 +373,21 @@ async def update_device(
             if not cfg.get("design"):
                 cfg["design"] = "editorial"
                 device.content_config = cfg
+        # Day Ahead is Editorial-only and is an hourly wall display; seed the
+        # design and default the cadence to 1h if the device has no override.
+        elif ct == "day_ahead":
+            cfg = device.content_config or {}
+            cfg["design"] = "editorial"
+            device.content_config = cfg
+            if not device.refresh_interval_sec:
+                device.refresh_interval_sec = 3600
     if payload.content_config is not None:
         cfg = dict(payload.content_config)
         target_ct = (payload.content_type or device.content_type or "clock").lower()
-        if target_ct == "eink_dashboard":
+        if target_ct == "day_ahead":
+            # Editorial-only; ignore any other requested design.
+            cfg["design"] = "editorial"
+        elif target_ct == "eink_dashboard":
             design = str(cfg.get("design") or "editorial").lower()
             if design not in _VALID_DESIGN_KEYS:
                 raise HTTPException(
@@ -482,28 +495,37 @@ async def preview_device_png(
 
     settings = await _get_or_create_settings(db, user)
 
-    # Pin the variant we render for: respect the device's last-seen variant,
-    # honoring the optional ?palette= override (for the UI's "show as B&W"
-    # toggle without making the user wait for a real BW device check-in).
-    variant = VARIANTS.get(device.variant or "") if device.variant else None
-    if palette and palette.lower() == "bw":
-        variant = VARIANTS.get("bw") or variant
-    elif palette and palette.lower() == "six":
-        variant = VARIANTS.get("spectra6_800x480") or variant
-    if variant is None:
-        variant = VARIANTS.get("spectra6_800x480") or next(iter(VARIANTS.values()))
-
-    # Force eink_dashboard rendering even if the device is currently
-    # configured for the clock placeholder, so the preview always shows the
-    # designs the user is choosing between.
-    saved_ct = device.content_type
-    device.content_type = "eink_dashboard"
-    try:
-        body, _etag = await render_dashboard_bmp(
+    # The Day Ahead design is portrait-native (1200x1600); everything else
+    # previews at the landscape 800x480 panel. Honor the ?palette= override
+    # (the UI's "show as B&W" toggle) without waiting for a real BW check-in.
+    is_day_ahead = (device.content_type or "") == "day_ahead"
+    bw = bool(palette and palette.lower() == "bw")
+    if is_day_ahead:
+        variant = VARIANTS.get("bw") if bw else VARIANTS.get("spectra6_1200x1600")
+        variant = variant or next(iter(VARIANTS.values()))
+        body, _etag = await render_day_ahead_bmp(
             variant, device=device, settings=settings
         )
-    finally:
-        device.content_type = saved_ct
+    else:
+        variant = VARIANTS.get(device.variant or "") if device.variant else None
+        if bw:
+            variant = VARIANTS.get("bw") or variant
+        elif palette and palette.lower() == "six":
+            variant = VARIANTS.get("spectra6_800x480") or variant
+        if variant is None:
+            variant = VARIANTS.get("spectra6_800x480") or next(iter(VARIANTS.values()))
+
+        # Force eink_dashboard rendering even if the device is currently
+        # configured for the clock placeholder, so the preview always shows
+        # the designs the user is choosing between.
+        saved_ct = device.content_type
+        device.content_type = "eink_dashboard"
+        try:
+            body, _etag = await render_dashboard_bmp(
+                variant, device=device, settings=settings
+            )
+        finally:
+            device.content_type = saved_ct
 
     # Decode the BMP back to a PNG so browsers can show it.
     img = Image.open(BytesIO(body)).convert("RGB")

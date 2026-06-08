@@ -193,6 +193,12 @@ X-Last-Image-ETag: "abc123def"
     in particular take ~20 s of wall-clock per refresh.
   - For dev/test, the server may return small values (e.g. 60 s) for a
     specific device or behind a `?dev=1` query. The firmware will follow.
+  - **Wall-clock aligned (UTC).** The server returns the gap to the next UTC
+    boundary that is a multiple of the device's cadence, so an hourly device
+    wakes on `:00` and a 15-min device wakes on `:00/:15/:30/:45` regardless of
+    when it first booted. The first value after boot is therefore a *partial*
+    interval (e.g. an hourly device that wakes at `10:07` gets `next_checkin_sec`
+    `3180`, not `3600`).
 - `next_checkin_utc` (optional, RFC 3339 UTC):
   - Informational. Should equal `server_time_utc + next_checkin_sec`. Useful for
   debugging and for human-readable logs.

@@ -20,8 +20,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
 from backend.models.terminal import TerminalDevice, TerminalSettings
-from backend.services.terminal.renderer import render_bmp, render_dashboard_bmp
-from backend.services.terminal.variants import Variant, parse_variant
+from backend.services.terminal.renderer import (
+    render_bmp,
+    render_dashboard_bmp,
+    render_day_ahead_bmp,
+)
+from backend.services.terminal.variants import (
+    Variant,
+    aligned_next_checkin_sec,
+    parse_variant,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +155,15 @@ async def _render_for_device(
                 getattr(device, "id", None),
             )
             return render_bmp(variant, device_name=device_name, tz_name=tz_name)
+    if content_type == "day_ahead":
+        try:
+            return await render_day_ahead_bmp(variant, device=device, settings=settings)
+        except Exception:
+            logger.exception(
+                "day_ahead render failed; falling back to clock for device_id=%s",
+                getattr(device, "id", None),
+            )
+            return render_bmp(variant, device_name=device_name, tz_name=tz_name)
     return render_bmp(variant, device_name=device_name, tz_name=tz_name)
 
 
@@ -182,9 +199,13 @@ async def schedule(
     # Per-device cadence override beats the variant baseline. Clamp to
     # [30s, 6h] so a buggy/old override never wedges or wakes the device.
     if device and device.refresh_interval_sec:
-        next_checkin_sec = max(30, min(int(device.refresh_interval_sec), 21600))
+        interval = max(30, min(int(device.refresh_interval_sec), 21600))
     else:
-        next_checkin_sec = max(30, int(v.next_checkin_sec))
+        interval = max(30, int(v.next_checkin_sec))
+    # Align the next wake to the wall clock (UTC) so e.g. hourly lands on :00
+    # and 15-min lands on :00/:15/:30/:45 instead of drifting off boot time.
+    # The first value after boot is therefore a partial interval.
+    next_checkin_sec = aligned_next_checkin_sec(now, interval)
     next_at = now + timedelta(seconds=next_checkin_sec)
 
     image_url = f"/terminal/{code}/image.bmp"

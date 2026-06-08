@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -174,6 +175,84 @@ def render_bmp(
         raise ValueError(f"unsupported variant {variant.image_format}")
 
     etag = '"img-' + hashlib.sha1(body).hexdigest()[:16] + '"'
+    return body, etag
+
+
+# ── Portrait "Day Ahead" renderer (Editorial) ──────────────────────────
+
+
+# A device check-in hits schedule.json then image.bmp seconds apart, and
+# both render the canonical frame. Assembling the DayShape touches the DB +
+# Home Assistant, so cache the encoded body briefly per (code, variant) to
+# avoid doing that work twice for the same poll. TTL is far below the hourly
+# cadence so real data changes still surface promptly.
+_DAY_CACHE: "dict[tuple[str, str], tuple[bytes, str, float]]" = {}
+_DAY_CACHE_TTL = 30.0
+
+
+def _day_cache_get(key: tuple[str, str]) -> Optional[tuple[bytes, str]]:
+    entry = _DAY_CACHE.get(key)
+    if not entry:
+        return None
+    body, etag, expires_at = entry
+    if expires_at < time.time():
+        _DAY_CACHE.pop(key, None)
+        return None
+    return body, etag
+
+
+def _day_cache_put(key: tuple[str, str], body: bytes, etag: str) -> None:
+    if len(_DAY_CACHE) > 64:
+        _DAY_CACHE.clear()
+    _DAY_CACHE[key] = (body, etag, time.time() + _DAY_CACHE_TTL)
+
+
+async def render_day_ahead_bmp(
+    variant: Variant,
+    *,
+    device: Optional[TerminalDevice],
+    settings: TerminalSettings,
+) -> tuple[bytes, str]:
+    """Assemble the DayShape and encode the portrait Day Ahead frame.
+
+    Portrait-native at 1200x1600; the intended target is the E1004
+    Spectra-6 panel. If some other variant requests it, the NEAREST resize
+    letterboxes/squashes -- acceptable per the spec's fallback note.
+    """
+    from backend.services.eink.day_client import assemble_day_shape
+    from backend.services.eink.pillow.day_ahead import render_day_ahead_image
+
+    cache_key = (settings.code or str(settings.user_id), variant.key)
+    cached = _day_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    day = await assemble_day_shape(settings)
+    palette = _palette_for_variant(variant)
+    tz_name = (settings.timezone or "UTC").strip() or "UTC"
+
+    img = await asyncio.to_thread(
+        render_day_ahead_image, "editorial", palette, day, tz_name=tz_name
+    )
+    if img.size != (variant.width, variant.height):
+        img = img.resize((variant.width, variant.height), Image.NEAREST)
+
+    # Dither OFF -- same rationale as the HA dashboard: the design is built
+    # from flat palette colours + drawn dot-grid halftones, and FS dither
+    # would shred the TRMNL pixel-font glyphs.
+    if variant.image_format == "bmp1-bw-800x480":
+        body = encode_bw(img, dither=False)
+    elif variant.image_format == "bmp4-spectra6-800x480":
+        body = encode_spectra6(img, width=800, height=480, dither=False)
+    elif variant.image_format == "bmp4-spectra6-1200x1600":
+        body = encode_spectra6(img, width=1200, height=1600, dither=False)
+    elif variant.image_format == "bmp4-gray16-800x480":
+        body = encode_gray16(img)
+    else:
+        raise ValueError(f"unsupported variant for day_ahead: {variant.image_format}")
+
+    etag = '"img-' + hashlib.sha1(body).hexdigest()[:16] + '"'
+    _day_cache_put(cache_key, body, etag)
     return body, etag
 
 

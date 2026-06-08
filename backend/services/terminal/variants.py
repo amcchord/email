@@ -12,6 +12,7 @@ The query-string spelling for each variant comes from docs/terminal/firmware-var
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
 
 
@@ -93,3 +94,22 @@ _QUERY_MAP: dict[str, Variant] = {
 def parse_variant(query: Optional[str]) -> Variant:
     """Resolve a `?variant=` query value to its Variant. Unknown -> default."""
     return _QUERY_MAP.get((query or "").strip().lower(), SPECTRA6_800)
+
+
+def aligned_next_checkin_sec(
+    now: datetime, interval_sec: int, floor_sec: int = 30, ceiling_sec: int = 21600
+) -> int:
+    """Seconds until the next UTC wall-clock boundary that is a multiple of
+    interval_sec.
+
+    Boundaries are multiples of interval_sec from the unix epoch, so every
+    cadence that divides a day (all of ours) lands on clean clock times:
+    hourly -> :00, 15-min -> :00/:15/:30/:45, etc. The result is clamped to
+    [floor_sec, ceiling_sec] so a device that woke a few seconds early never
+    gets a sub-floor sleep (it re-aligns on the following check-in instead).
+    """
+    interval = max(1, int(interval_sec))
+    epoch = int(now.timestamp())
+    # 1..interval; a full interval when we're exactly on a boundary.
+    remaining = interval - (epoch % interval)
+    return max(floor_sec, min(remaining, ceiling_sec))

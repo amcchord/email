@@ -21,8 +21,9 @@ FONTS_DIR="${REPO_ROOT}/backend/services/eink/static/fonts"
 SS_DIR="${FONTS_DIR}/source-serif-4"
 INTER_DIR="${FONTS_DIR}/inter"
 WI_DIR="${FONTS_DIR}/weather-icons"
+TRMNL_DIR="${FONTS_DIR}/trmnl"
 
-mkdir -p "${SS_DIR}" "${INTER_DIR}" "${WI_DIR}"
+mkdir -p "${SS_DIR}" "${INTER_DIR}" "${WI_DIR}" "${TRMNL_DIR}"
 
 # Pin versions so hashes don't drift unexpectedly across checkouts.
 SS_VER="4.005R"
@@ -104,6 +105,32 @@ else
   for f in "${INTER_FILES[@]}"; do
     echo "skip  ${INTER_DIR}/${f} (present)"
   done
+fi
+
+# TRMNL pixel font (Day Ahead portrait design). Three native bitmap sizes
+# (12 / 16 / 21), Regular + Bold. TRMNL has no canonical download URL, so the
+# TTFs are committed to the repo and are the source of truth -- this block only
+# verifies they're present and warns (without failing) if any are missing.
+TRMNL_FILES=(
+  "TRMNL12-Regular.ttf"
+  "TRMNL12-Bold.ttf"
+  "TRMNL16-Regular.ttf"
+  "TRMNL16-Bold.ttf"
+  "TRMNL21-Regular.ttf"
+  "TRMNL21-Bold.ttf"
+)
+echo "TRMNL (committed in-repo) -> ${TRMNL_DIR}"
+trmnl_missing=0
+for f in "${TRMNL_FILES[@]}"; do
+  if [[ -f "${TRMNL_DIR}/${f}" ]]; then
+    echo "skip  ${TRMNL_DIR}/${f} (present)"
+  else
+    echo "WARN  ${TRMNL_DIR}/${f} missing (commit it from the Day Ahead package server-fonts/trmnl/)"
+    trmnl_missing=1
+  fi
+done
+if [[ "${trmnl_missing}" -eq 1 ]]; then
+  echo "WARN  TRMNL fonts incomplete; the Day Ahead display will fail to render until they are added."
 fi
 
 echo "done."

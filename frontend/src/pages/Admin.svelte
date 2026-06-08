@@ -1707,6 +1707,7 @@
 
       <!-- E-Ink Preview modal -->
       {#if previewDevice}
+        {@const isPortraitPreview = (previewDevice.content_type || '') === 'day_ahead'}
         <div
           class="fixed inset-0 z-50 flex items-center justify-center p-4"
           style="background: rgba(0,0,0,0.55)"
@@ -1761,15 +1762,15 @@
               </div>
               <div
                 class="rounded-lg border overflow-hidden mx-auto flex items-center justify-center"
-                style="border-color: var(--border-color); width: 800px; height: 480px; background: white; max-width: 100%;"
+                style="border-color: var(--border-color); width: {isPortraitPreview ? 480 : 800}px; height: {isPortraitPreview ? 640 : 480}px; background: white; max-width: 100%;"
               >
                 <img
                   src={previewPngUrl()}
                   alt="Quantized panel preview"
-                  style="width: 800px; height: 480px; image-rendering: pixelated; max-width: 100%;"
+                  style="width: {isPortraitPreview ? 480 : 800}px; height: {isPortraitPreview ? 640 : 480}px; image-rendering: pixelated; max-width: 100%;"
                 />
               </div>
-              <p class="text-[10px] mt-1.5 text-center" style="color: var(--text-tertiary)">Native 800 × 480 BMP — exactly what the panel will show</p>
+              <p class="text-[10px] mt-1.5 text-center" style="color: var(--text-tertiary)">{isPortraitPreview ? 'Native 1200 × 1600 BMP — exactly what the panel will show' : 'Native 800 × 480 BMP — exactly what the panel will show'}</p>
             </div>
           </div>
         </div>

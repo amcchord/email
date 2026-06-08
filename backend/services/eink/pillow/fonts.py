@@ -66,6 +66,20 @@ _TAMZEN_BIG = os.path.join(_FONTS_ROOT, "tamzen", "Tamzen10x20b.ttf")
 _SPLEEN = os.path.join(_FONTS_ROOT, "spleen", "spleen-12x24.ttf")
 _SPLEEN_BIG = os.path.join(_FONTS_ROOT, "spleen", "spleen-16x32.ttf")
 
+# TRMNL pixel font (Day Ahead portrait design). Three native bitmap sizes
+# (12 / 16 / 21), Regular + Bold. Like the other pixel families, FreeType
+# corrupts glyphs if asked for a non-native size, so callers must request
+# one of the three; `pix_trmnl` clamps to the nearest native size defensively.
+_TRMNL = {
+    (12, False): os.path.join(_FONTS_ROOT, "trmnl", "TRMNL12-Regular.ttf"),
+    (12, True): os.path.join(_FONTS_ROOT, "trmnl", "TRMNL12-Bold.ttf"),
+    (16, False): os.path.join(_FONTS_ROOT, "trmnl", "TRMNL16-Regular.ttf"),
+    (16, True): os.path.join(_FONTS_ROOT, "trmnl", "TRMNL16-Bold.ttf"),
+    (21, False): os.path.join(_FONTS_ROOT, "trmnl", "TRMNL21-Regular.ttf"),
+    (21, True): os.path.join(_FONTS_ROOT, "trmnl", "TRMNL21-Bold.ttf"),
+}
+_TRMNL_SIZES = (12, 16, 21)
+
 
 _font_lock = threading.Lock()
 
@@ -159,3 +173,15 @@ def pix_spleen(size: int = 24) -> ImageFont.FreeTypeFont:
 
 def pix_spleen_big(size: int = 32) -> ImageFont.FreeTypeFont:
     return _load(_SPLEEN_BIG, 32)
+
+
+def pix_trmnl(size: int = 16, *, bold: bool = False) -> ImageFont.FreeTypeFont:
+    """TRMNL pixel font. `size` MUST be 12, 16, or 21 (native bitmap sizes).
+
+    Any other request is clamped to the nearest native size so a stray
+    `fontSize: 14` from the design transcription can never trip the
+    bitmap-scaling corruption that turned 'HOME' into 'HONE' in the old
+    Chromium pipeline.
+    """
+    native = min(_TRMNL_SIZES, key=lambda s: abs(s - size))
+    return _load(_TRMNL[(native, bool(bold))], native)
