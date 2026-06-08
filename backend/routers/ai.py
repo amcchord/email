@@ -18,6 +18,7 @@ from backend.models.ai import AIAnalysis
 from backend.routers.auth import get_current_user
 from backend.services.ai import AIService, get_model_for_user, get_custom_prompt_model_for_user
 from backend.services.credentials import get_google_credentials
+from backend.services.mail_queues import fetch_awaiting_response, fetch_needs_reply
 from backend.schemas.auth import DEFAULT_AI_PREFERENCES
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -543,123 +544,21 @@ async def get_needs_reply(
     """Get emails that the user should respond to."""
     account_ids = await _get_user_account_ids(db, user)
 
-    if not account_ids:
-        return {"emails": [], "total": 0}
-
-    account_filter = Email.account_id.in_(account_ids)
-
-    # Correlated subquery: check whether a sent email exists in the same
-    # thread with a date AFTER the candidate "needs reply" email.  This
-    # avoids the old bug where any sent message in the thread (including
-    # the user's original outbound message) would blanket-exclude the
-    # whole thread.
-    from sqlalchemy.orm import aliased
-    SentEmail = aliased(Email, flat=True)
-    has_later_reply = (
-        select(literal(1))
-        .where(
-            SentEmail.gmail_thread_id == Email.gmail_thread_id,
-            SentEmail.account_id.in_(account_ids),
-            SentEmail.is_sent == True,
-            SentEmail.is_trash == False,
-            SentEmail.date > Email.date,
-        )
-        .correlate(Email)
-        .exists()
-    )
-
-    # Cross-thread reply detection: check whether a sent email's
-    # In-Reply-To header matches this email's Message-ID.  This catches
-    # replies that Gmail placed in a different thread (e.g. after a
-    # threadId 404 retry or subject change).  Deterministic -- if B's
-    # In-Reply-To equals A's Message-ID, B IS a reply to A.
-    SentEmail2 = aliased(Email, flat=True)
-    has_direct_reply_to = (
-        select(literal(1))
-        .where(
-            SentEmail2.in_reply_to == Email.message_id_header,
-            SentEmail2.account_id.in_(account_ids),
-            SentEmail2.is_sent == True,
-            SentEmail2.is_trash == False,
-            Email.message_id_header.isnot(None),
-        )
-        .correlate(Email)
-        .exists()
-    )
-
-    # Inner query: use DISTINCT ON (gmail_thread_id) to keep only the
-    # latest "needs reply" email per thread.  DISTINCT ON requires the
-    # ORDER BY to start with the DISTINCT ON columns.
-    deduped_by_thread = (
-        select(
-            Email.id,
-            Email.subject,
-            Email.from_name,
-            Email.from_address,
-            Email.date,
-            Email.snippet,
-            Email.is_read,
-            Email.gmail_thread_id,
-            Email.message_id_header,
-            GoogleAccount.email.label("account_email"),
-            AIAnalysis.category,
-            AIAnalysis.priority,
-            AIAnalysis.summary,
-            AIAnalysis.suggested_reply,
-            AIAnalysis.reply_options,
-        )
-        .join(AIAnalysis, AIAnalysis.email_id == Email.id)
-        .join(GoogleAccount, GoogleAccount.id == Email.account_id)
-        .where(
-            account_filter,
-            AIAnalysis.needs_reply == True,
-            AIAnalysis.needs_reply_ignored == False,
-            # Exclude snoozed emails (snoozed_until is NULL or in the past)
-            (AIAnalysis.needs_reply_snoozed_until == None) | (AIAnalysis.needs_reply_snoozed_until <= datetime.now(timezone.utc)),
-            Email.is_trash == False,
-            Email.is_spam == False,
-            AIAnalysis.is_subscription == False,
-            ~has_later_reply,
-            ~has_direct_reply_to,
-            *([AIAnalysis.category != exclude_category] if exclude_category else []),
-        )
-        .distinct(Email.gmail_thread_id)
-        .order_by(Email.gmail_thread_id, desc(Email.date))
-    ).subquery()
-
-    # Second dedup layer: collapse cross-account duplicates.  The same
-    # email delivered to multiple connected accounts shares the same
-    # Message-ID header but gets different gmail_thread_ids.  COALESCE
-    # falls back to gmail_thread_id when message_id_header is NULL.
-    dedup_key = func.coalesce(
-        deduped_by_thread.c.message_id_header,
-        deduped_by_thread.c.gmail_thread_id,
-    )
-    deduped = (
-        select(deduped_by_thread)
-        .distinct(dedup_key)
-        .order_by(dedup_key, desc(deduped_by_thread.c.date))
-    ).subquery()
-
-    # Count total (after dedup)
-    count_result = await db.scalar(
-        select(func.count()).select_from(deduped)
-    )
-    total = count_result or 0
-
-    # Outer query: re-sort by date descending for display and paginate
-    result = await db.execute(
-        select(deduped)
-        .order_by(desc(deduped.c.date))
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+    # Thread-dedup + reply-exclusion query lives in services/mail_queues so the
+    # e-ink Day Ahead display shares exactly the same "needs a reply" logic.
+    total, rows = await fetch_needs_reply(
+        db,
+        account_ids,
+        limit=page_size,
+        offset=(page - 1) * page_size,
+        exclude_category=exclude_category,
     )
 
     now_utc = datetime.now(timezone.utc)
     thirty_days_ago = now_utc - timedelta(days=30)
 
     emails = []
-    for row in result.all():
+    for row in rows:
         category = row.category
         priority = row.priority
 
@@ -942,164 +841,20 @@ async def get_awaiting_response(
     Filters out threads that are resolved (per AI ThreadDigest) and
     short reply-like closing messages that don't expect a response.
     """
-    from sqlalchemy.orm import aliased
-    from sqlalchemy import or_, func as sqla_func
-    from backend.models.ai import ThreadDigest
-
     account_ids = await _get_user_account_ids(db, user)
 
-    if not account_ids:
-        return {"emails": [], "total": 0}
-
-    account_filter = Email.account_id.in_(account_ids)
-
-    # Find sent emails where no reply has been received in the same thread
-    # after the sent email's date
-    ReplyEmail = aliased(Email, flat=True)
-    has_reply = (
-        select(literal(1))
-        .where(
-            ReplyEmail.gmail_thread_id == Email.gmail_thread_id,
-            ReplyEmail.account_id.in_(account_ids),
-            ReplyEmail.is_sent == False,
-            ReplyEmail.is_trash == False,
-            ReplyEmail.date > Email.date,
-        )
-        .correlate(Email)
-        .exists()
-    )
-
-    # AI classification: if expects_reply has been set to False, exclude.
-    # LEFT JOIN with AIAnalysis to check the expects_reply field.
-    SentAnalysis = aliased(AIAnalysis, flat=True)
-
-    # Heuristic fallback for emails not yet classified by AI.
-    # Strips quoted reply text from body_text before measuring length,
-    # so replies like "Yes okay to lock it in!" aren't inflated by
-    # quoted "On ... wrote:" blocks.
-    PriorEmail = aliased(Email, flat=True)
-    has_prior_received = (
-        select(literal(1))
-        .where(
-            PriorEmail.gmail_thread_id == Email.gmail_thread_id,
-            PriorEmail.account_id.in_(account_ids),
-            PriorEmail.is_sent == False,
-            PriorEmail.is_trash == False,
-            PriorEmail.date < Email.date,
-        )
-        .correlate(Email)
-        .exists()
-    )
-    # Strip quoted content: remove everything after "On ... wrote:" and
-    # lines starting with ">", then measure the remaining length.
-    raw_body = sqla_func.coalesce(Email.body_text, Email.snippet, '')
-    stripped_body = sqla_func.regexp_replace(
-        raw_body,
-        r'\r?\nOn [^\n]+wrote:\s*[\s\S]*$',
-        '',
-        'n',
-    )
-    stripped_body = sqla_func.regexp_replace(
-        stripped_body,
-        r'\r?\n-- ?\r?\n[\s\S]*$',
-        '',
-        'n',
-    )
-    stripped_len = sqla_func.length(sqla_func.trim(stripped_body))
-
-    is_short_closing_reply = and_(
-        has_prior_received,
-        stripped_len < 200,
-    )
-
-    # An email should be excluded when either:
-    # (a) AI classified it as not expecting a reply, OR
-    # (b) AI hasn't classified it yet but the heuristic says it's a
-    #     short closing reply.
-    ai_says_no_reply = (SentAnalysis.expects_reply == False)
-    heuristic_closing = and_(
-        SentAnalysis.expects_reply.is_(None),
-        is_short_closing_reply,
-    )
-    should_exclude = or_(ai_says_no_reply, heuristic_closing)
-
-    fourteen_days_ago = datetime.now(timezone.utc) - timedelta(days=14)
-
-    # Use DISTINCT ON to get only the latest sent email per thread.
-    # LEFT JOIN with ThreadDigest to exclude resolved threads and
-    # LEFT JOIN with AIAnalysis to check expects_reply.
-    deduped_by_thread = (
-        select(
-            Email.id,
-            Email.subject,
-            Email.to_addresses,
-            Email.date,
-            Email.snippet,
-            Email.gmail_thread_id,
-            Email.account_id,
-            Email.message_id_header,
-            GoogleAccount.email.label("account_email"),
-        )
-        .join(GoogleAccount, GoogleAccount.id == Email.account_id)
-        .outerjoin(
-            ThreadDigest,
-            and_(
-                ThreadDigest.gmail_thread_id == Email.gmail_thread_id,
-                ThreadDigest.account_id == Email.account_id,
-            ),
-        )
-        .outerjoin(
-            SentAnalysis,
-            SentAnalysis.email_id == Email.id,
-        )
-        .where(
-            account_filter,
-            Email.is_sent == True,
-            Email.is_trash == False,
-            Email.is_spam == False,
-            Email.date >= fourteen_days_ago,
-            ~has_reply,
-            # Exclude threads the AI has marked as resolved
-            or_(
-                ThreadDigest.is_resolved == False,
-                ThreadDigest.is_resolved.is_(None),
-            ),
-            # Exclude emails that don't expect a reply (AI or heuristic)
-            ~should_exclude,
-        )
-        .distinct(Email.gmail_thread_id)
-        .order_by(Email.gmail_thread_id, desc(Email.date))
-    ).subquery()
-
-    # Second dedup layer: collapse cross-account duplicates.  The same
-    # sent email visible in multiple accounts shares the same Message-ID.
-    ar_dedup_key = func.coalesce(
-        deduped_by_thread.c.message_id_header,
-        deduped_by_thread.c.gmail_thread_id,
-    )
-    deduped = (
-        select(deduped_by_thread)
-        .distinct(ar_dedup_key)
-        .order_by(ar_dedup_key, desc(deduped_by_thread.c.date))
-    ).subquery()
-
-    # Count total
-    count_result = await db.scalar(
-        select(func.count()).select_from(deduped)
-    )
-    total = count_result or 0
-
-    # Paginate
-    result = await db.execute(
-        select(deduped)
-        .order_by(desc(deduped.c.date))
-        .offset((page - 1) * page_size)
-        .limit(page_size)
+    # The sent/no-reply/not-resolved query lives in services/mail_queues so the
+    # e-ink Day Ahead display shares exactly the same "awaiting response" logic.
+    total, rows = await fetch_awaiting_response(
+        db,
+        account_ids,
+        limit=page_size,
+        offset=(page - 1) * page_size,
     )
 
     emails = []
     thread_account_pairs = []
-    for row in result.all():
+    for row in rows:
         to_addrs = row.to_addresses or []
         # Extract first recipient name/address
         first_to = ""
