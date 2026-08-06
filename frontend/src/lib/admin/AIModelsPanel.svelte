@@ -231,6 +231,12 @@
       </thead>
       <tbody>
         <tr class="border-b" style="border-color: var(--border-color)">
+          <td class="py-2 font-medium" style="color: var(--text-primary)">Opus 4.8</td>
+          <td class="py-2" style="color: var(--status-success)">Highest</td>
+          <td class="py-2" style="color: var(--text-secondary)">Slower</td>
+          <td class="py-2" style="color: var(--text-secondary)">$$$</td>
+        </tr>
+        <tr class="border-b" style="border-color: var(--border-color)">
           <td class="py-2 font-medium" style="color: var(--text-primary)">Opus 4.7</td>
           <td class="py-2" style="color: var(--status-success)">Highest</td>
           <td class="py-2" style="color: var(--text-secondary)">Slower</td>

@@ -81,6 +81,7 @@ from .helpers import (
     fmt_temp,
     fmt_time,
     fmt_weather,
+    forecast_day_date,
     lerp_pct,
     parse_iso,
     safe_int,
@@ -216,13 +217,22 @@ def _draw_masthead(draw: ImageDraw.ImageDraw, P: Palette, now: datetime, weather
     )
     date_s = fmt_date(now)
     d_tracking = em_to_px(TY.LABEL_PX, TY.DATE_TRACKING_EM)
+    date_w = tracked_width(label_font, date_s.upper(), d_tracking)
     draw_tracked_text_bl_center(
         draw, (wm_col.cx, label_baseline),
         date_s.upper(), label_font, P.muted, d_tracking,
     )
+    # Right edge of the centered date -- the label row in the weather
+    # column may borrow the empty band between here and the condition
+    # label (see the feels/AQI cluster below).
+    date_end_x = wm_col.cx + date_w // 2
 
     # ── Weather column (right) ─────────────────────────────────────
-    temp = weather.get("temperature")
+    # Prefer the on-house outdoor sensor; fall back to the weather entity
+    # (often NWS/API) when the sensor is unavailable.
+    temp = weather.get("outdoorTemp")
+    if temp is None:
+        temp = weather.get("temperature")
     temp_s = (f"{safe_round(temp)}\u00b0" if temp is not None else "\u2014")
     glyph_sz = TY.WEATHER_GLYPH_PX
     temp_max_w = weather_col.w - glyph_sz - 12
@@ -250,6 +260,35 @@ def _draw_masthead(draw: ImageDraw.ImageDraw, P: Palette, now: datetime, weather
         (weather_col.x1, label_baseline),
         weather_label, label_font, P.muted, l_tracking,
     )
+    # Feels-like + AQI cluster sits left of the condition on the same
+    # label baseline. It anchors at the weather column's left edge but may
+    # slide further left into the empty band after the centered date when
+    # a long condition ("PARTLY CLOUDY") squeezes the column. If even that
+    # can't fit, the AQI tail drops first, then the whole cluster -- the
+    # runs on this row must never collide.
+    feels = weather.get("feelsLike")
+    aqi = weather.get("aqi")
+    parts = []
+    if feels is not None:
+        parts.append(f"FEELS {safe_round(feels)}\u00b0")
+    if aqi is not None:
+        parts.append(f"AQI {safe_round(aqi)}")
+    if parts:
+        cond_x0 = weather_col.x1 - tracked_width(label_font, weather_label,
+                                                 l_tracking)
+        min_x = date_end_x + 12
+        candidates = [" \u00b7 ".join(parts)]
+        if len(parts) > 1:
+            candidates.append(parts[0])
+        for candidate in candidates:
+            cw = tracked_width(label_font, candidate, l_tracking)
+            cx0 = min(weather_col.x0, cond_x0 - 16 - cw)
+            if cx0 >= min_x:
+                draw_tracked_text_bl(
+                    draw, (cx0, label_baseline),
+                    candidate, label_font, P.muted, l_tracking,
+                )
+                break
 
 
 # HA weather condition -> Weather Icons (Erik Flowers) Unicode codepoint.
@@ -402,10 +441,12 @@ def _draw_left_rail(draw, ctx: RenderContext, ha, box: Box) -> None:
         u=f"mph {compass(weather.get('windBearing'))}")
     cur_y = _draw_rail_stat(draw, P, box.x0, cur_y, box.w,
         k="Humidity", v=f"{safe_round(weather.get('humidity'))}", u="%")
-    pressure = weather.get("pressure")
-    pressure_s = f"{float(pressure):.2f}" if pressure is not None else "\u2014"
+    uv = weather.get("uvIndex")
+    uv_s = f"{safe_round(uv)}" if uv is not None else "\u2014"
+    uv_peak = weather.get("uvPeak")
+    uv_u = f"peak {safe_round(uv_peak)}" if uv_peak is not None else ""
     cur_y = _draw_rail_stat(draw, P, box.x0, cur_y, box.w,
-        k="Pressure", v=pressure_s, u="inHg")
+        k="UV Index", v=uv_s, u=uv_u)
     cur_y = _draw_rail_stat(draw, P, box.x0, cur_y, box.w,
         k="Visibility", v=f"{safe_round(weather.get('visibility'))}", u="mi")
 
@@ -496,15 +537,20 @@ def _draw_forecast_rows(draw, ctx: RenderContext, ha, x0, y, w) -> int:
     sep_font = fonts.serif(12, italic=True, weight="semibold")
     fm_n = font_metrics(weekday_font)
 
+    # Label rows from each slot's *calendar date* (via forecast_day_date,
+    # which knows daily slots are day markers, not instants) instead of
+    # assuming slot 0 is today and tz-shifting the rest -- that assumption
+    # is what printed "Today, Monday, Tuesday" on a Monday.
+    today = ctx.now_local.date()
     slots = forecast[:3]
     for idx, slot in enumerate(slots):
-        dt = parse_iso(slot.get("datetime"))
-        if dt is not None and ctx.zone is not None:
-            dt = dt.astimezone(ctx.zone)
-        if idx == 0:
+        slot_date = forecast_day_date(slot.get("datetime"), ctx.zone)
+        if slot_date == today:
             label = "Today"
-        elif dt is not None:
-            label = dt.strftime("%a")
+        elif slot_date is not None:
+            label = slot_date.strftime("%a")
+        elif idx == 0:
+            label = "Today"
         else:
             label = "\u2014"
 

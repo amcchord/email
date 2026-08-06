@@ -23,7 +23,9 @@ CHEAP_MODEL = "claude-haiku-4-5-20251001"
 # Model registry: ordered for the UI dropdown.
 # Each entry is (id, human-readable label).
 MODEL_REGISTRY: list[tuple[str, str]] = [
-    ("claude-opus-4-7", "Claude Opus 4.7 — Most capable"),
+    ("claude-opus-4-8", "Claude Opus 4.8 — Most capable"),
+    ("claude-opus-4-8-fast", "Claude Opus 4.8 (Fast) — 2.5x speed, 6x cost"),
+    ("claude-opus-4-7", "Claude Opus 4.7 — Previous flagship"),
     ("claude-opus-4-7-fast", "Claude Opus 4.7 (Fast) — 2.5x speed, 6x cost"),
     ("claude-sonnet-4-6", "Claude Sonnet 4.6 — Balanced"),
     ("claude-haiku-4-5-20251001", "Claude Haiku 4.5 — Fastest"),
@@ -35,9 +37,9 @@ MODEL_LABELS: dict[str, str] = {model_id: label for model_id, label in MODEL_REG
 
 # Per-feature defaults. Keys must match `AIPreferencesResponse` fields.
 DEFAULT_AI_PREFERENCES: dict[str, str] = {
-    "chat_plan_model": "claude-opus-4-7",
-    "chat_execute_model": "claude-opus-4-7",
-    "chat_verify_model": "claude-opus-4-7",
+    "chat_plan_model": "claude-opus-4-8",
+    "chat_execute_model": "claude-opus-4-8",
+    "chat_verify_model": "claude-opus-4-8",
     "agentic_model": "claude-sonnet-4-6",
     "custom_prompt_model": "claude-sonnet-4-6",
     "unsubscribe_model": "claude-sonnet-4-6",
@@ -47,6 +49,8 @@ DEFAULT_AI_PREFERENCES: dict[str, str] = {
 # Computer Use beta + tool-type per model. Models not listed here cannot be
 # used for the AI-powered unsubscribe flow.
 CU_CONFIG: dict[str, tuple[str, str]] = {
+    "claude-opus-4-8": ("computer-use-2025-11-24", "computer_20251124"),
+    "claude-opus-4-8-fast": ("computer-use-2025-11-24", "computer_20251124"),
     "claude-opus-4-7": ("computer-use-2025-11-24", "computer_20251124"),
     "claude-opus-4-7-fast": ("computer-use-2025-11-24", "computer_20251124"),
     "claude-sonnet-4-6": ("computer-use-2025-11-24", "computer_20251124"),

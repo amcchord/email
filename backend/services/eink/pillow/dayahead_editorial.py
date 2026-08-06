@@ -61,9 +61,9 @@ RAILS_TIMELINE_GAP = 16
 HOUSE_COL_W = 340
 RAILS_GAP = 26
 
-# Needs-reply rail layout (shared by the drawer and the height calc so they
-# can never disagree -> no text-through-rules).
-NR_COUNT_SIZE = 56
+# Priorities rail layout (shared by the drawer and the height calc so they can
+# never disagree -> no text-through-rules). Two-line rows: bold action line +
+# muted detail line.
 NR_MAX_ROWS = 5
 NR_PAD_TOP = 4
 NR_MID_GAP = 2
@@ -85,6 +85,17 @@ def _accent(P: Palette, name: Optional[str]):
 
 # Event kind -> accent (meeting=blue, focus=ink, personal=green, travel=gold)
 KIND_ACCENT = {"meeting": "blue", "focus": "ink", "personal": "green", "travel": "yellow"}
+
+# Priority kind -> accent for the "what matters now" rail. prep=blue (meeting),
+# reply/decision=red (acts on you), review=ink, personal=green, travel=gold.
+PRIO_ACCENT = {
+    "prep": "blue",
+    "reply": "red",
+    "decision": "red",
+    "review": "ink",
+    "personal": "green",
+    "travel": "yellow",
+}
 
 
 def _temp_color(P: Palette, t, kind: str):
@@ -855,20 +866,86 @@ def _draw_lead_calm(draw: ImageDraw.ImageDraw, day: dict, P: Palette, y: int) ->
 # ── Timeline ───────────────────────────────────────────────────────────
 
 
+def _layout_allday(titles: list, font, widths: list) -> tuple[list, int]:
+    """Greedy-pack `titles` (joined by a dot separator) into up to 2 lines of
+    the given pixel `widths`. Returns ``(lines, remaining)`` where lines is a
+    2-list of strings and remaining is the count that didn't fit."""
+    sep = "  \u00b7  "
+    lines = ["", ""]
+    li = 0
+    i = 0
+    n = len(titles)
+    while i < n and li < len(lines):
+        t = titles[i]
+        trial = t if not lines[li] else lines[li] + sep + t
+        if text_width(font, trial) <= widths[li]:
+            lines[li] = trial
+            i += 1
+        elif not lines[li]:
+            lines[li] = t  # lone over-long title: place it, draw clips it
+            i += 1
+            li += 1
+        else:
+            li += 1  # this line is full; retry the same title on the next one
+    return lines, n - i
+
+
+def _draw_allday_band(draw: ImageDraw.ImageDraw, x0: int, x1: int, y: int,
+                      allday: list, P: Palette) -> int:
+    """Compress every all-day event into a hanging 'ALL DAY' label plus at most
+    two wrapped lines of titles (with a '+N MORE' tail on overflow)."""
+    if not allday:
+        return y
+    titles = [(e.get("title") or "").strip() or "(untitled)" for e in allday]
+    f_lbl = _tr(16, bold=True)
+    f_t = _serif(22, "semibold")
+    fm_t = font_metrics(f_t)
+    a = _accent(P, "green")
+
+    base1 = y + fm_t.ascent
+    _gem(draw, x0 + 5, base1 - int(fm_t.ascent * 0.42), 10, a)
+    lbl_x = x0 + 18
+    lbl_w = draw_tracked_text_bl(draw, (lbl_x, base1), "ALL DAY", f_lbl, a, _em(16, 0.12))
+    titles_x = lbl_x + lbl_w + 16
+    w1 = x1 - titles_x
+    w2 = x1 - x0
+
+    lines, remaining = _layout_allday(titles, f_t, [w1, w2])
+    if remaining > 0:
+        suffix_w = text_width(f_t, "  +99 MORE")
+        lines, remaining = _layout_allday(titles, f_t, [w1, max(0, w2 - suffix_w)])
+        suffix = f"  +{remaining} MORE"
+        lines[1] = (lines[1] + suffix) if lines[1] else suffix
+
+    if lines[0]:
+        draw_text_clipped_bl(draw, (titles_x, base1), lines[0], f_t, P.ink, max_w=w1)
+    base2 = base1
+    if lines[1]:
+        base2 = base1 + int(fm_t.line_height * 0.98)
+        draw_text_clipped_bl(draw, (x0, base2), lines[1], f_t, P.ink, max_w=w2)
+    bottom = base2 + fm_t.descent
+    return hr(draw, x0, x1, bottom + 10, thickness=2, fill=P.rule) + 10
+
+
 def _draw_timeline(draw: ImageDraw.ImageDraw, day: dict, prep: dict, P: Palette,
                    y: int, *, max_bottom: int) -> int:
     y += 24
     upcoming = prep["upcoming"]
     allday = prep["allday"]
-    rows = allday + upcoming
     y = _kicker(draw, CX0, CX1, y, f"THE DAY \u00b7 {len(upcoming)} AHEAD", P)
     y += 8
 
-    if not rows:
+    # All-day events are compressed into a single 2-line band above the timed
+    # rows so a stack of them can't eat the screen.
+    if allday:
+        y = _draw_allday_band(draw, CX0, CX1, y, allday, P)
+
+    if not upcoming:
         f = _serif(26, "regular", italic=True)
         fm = font_metrics(f)
-        draw_text_bl(draw, (CX0, y + fm.ascent + 4),
-                     "No further events scheduled today.", f, P.ink)
+        msg = "Nothing else on the schedule today." if allday else \
+            "No further events scheduled today."
+        draw_text_bl(draw, (CX0, y + fm.ascent + 4), msg, f, P.ink)
         return y + fm.line_height + 6
 
     f_time = _serif(34, "bold")
@@ -882,7 +959,7 @@ def _draw_timeline(draw: ImageDraw.ImageDraw, day: dict, prep: dict, P: Palette,
     dia_gutter = 16
 
     drawn = 0
-    for i, e in enumerate(rows):
+    for i, e in enumerate(upcoming):
         if y + row_h > max_bottom:
             break
         a = _accent(P, KIND_ACCENT.get(e.get("kind"), "ink"))
@@ -893,21 +970,16 @@ def _draw_timeline(draw: ImageDraw.ImageDraw, day: dict, prep: dict, P: Palette,
             hr(draw, CX0, CX1, top, thickness=2, fill=P.rule)
         title_base = top + 13 + fm_title.ascent
         right_edge = CX0 + time_col_w
-        # Time / all-day column, right-aligned within time_col_w so nothing
-        # spills into the diamond gutter.
-        if e.get("allDay"):
-            f_ad = _tr(16, bold=True)
-            draw_tracked_text_bl_right(draw, (right_edge, title_base), "ALL DAY",
-                                       f_ad, a, _em(16, 0.08))
-        else:
-            fm_time = font_metrics(f_time)
-            t_base = top + 13 + fm_time.ascent
-            mer = e.get("startMer") or ""
-            merw = text_width(f_mer, mer)
-            if mer:
-                draw_text_bl(draw, (right_edge - merw, t_base), mer, f_mer, P.ink)
-            draw_text_bl_right(draw, (right_edge - merw - (3 if mer else 0), t_base),
-                               e["startLabel"], f_time, a)
+        # Time column, right-aligned within time_col_w so nothing spills into
+        # the diamond gutter.
+        fm_time = font_metrics(f_time)
+        t_base = top + 13 + fm_time.ascent
+        mer = e.get("startMer") or ""
+        merw = text_width(f_mer, mer)
+        if mer:
+            draw_text_bl(draw, (right_edge - merw, t_base), mer, f_mer, P.ink)
+        draw_text_bl_right(draw, (right_edge - merw - (3 if mer else 0), t_base),
+                           e["startLabel"], f_time, a)
         # Diamond aligned to the title's cap-height centre, in the gutter.
         body_x = CX0 + time_col_w + dia_gutter + 12
         dia_cx = CX0 + time_col_w + dia_gutter // 2 + 4
@@ -916,7 +988,7 @@ def _draw_timeline(draw: ImageDraw.ImageDraw, day: dict, prep: dict, P: Palette,
         draw_text_clipped_bl(draw, (body_x, title_base), e.get("title") or "",
                              f_title, P.ink, max_w=CX1 - body_x)
         meta = (e.get("loc") or "").upper()
-        dur = "" if e.get("allDay") else (e.get("dur") or "").upper()
+        dur = (e.get("dur") or "").upper()
         parts = [p for p in [meta, dur] if p]
         if e.get("people"):
             parts.append(f"{e['people']}P")
@@ -939,20 +1011,19 @@ def _nr_row_h() -> int:
             + fm_subj.ascent + fm_subj.descent + NR_PAD_BOTTOM)
 
 
-def _nr_header_h() -> int:
+def _prio_header_h() -> int:
     fm_kick = font_metrics(_tr(21, bold=True))
-    fm_cnt = font_metrics(_serif(NR_COUNT_SIZE, "bold"))
-    # kicker baseline + gap + count line + gap + rule + gap
-    return (fm_kick.ascent + 4) + 8 + (fm_cnt.ascent + fm_cnt.descent) + 8 + 2 + 8
+    # kicker baseline + gap + rule + gap
+    return (fm_kick.ascent + 4) + 8 + 2 + 8
 
 
-def _needs_reply_height(day: dict) -> int:
-    nr = (day.get("mail") or {}).get("needsReply") or {}
-    header = _nr_header_h()
-    if int(nr.get("count", 0)) == 0:
+def _priorities_height(day: dict) -> int:
+    items = ((day.get("priorities") or {}).get("items")) or []
+    header = _prio_header_h()
+    if not items:
         fm = font_metrics(_serif(22, "regular", italic=True))
         return header + fm.ascent + fm.descent + 4
-    n = max(1, min(NR_MAX_ROWS, len(nr.get("top") or [])))
+    n = max(1, min(NR_MAX_ROWS, len(items)))
     return header + n * _nr_row_h()
 
 
@@ -973,73 +1044,55 @@ def _house_height(day: dict) -> int:
     return h
 
 
-def _draw_needs_reply(draw: ImageDraw.ImageDraw, x0: int, x1: int, y: int,
-                      bottom: int, day: dict, P: Palette) -> None:
-    mail = day.get("mail") or {}
-    nr = mail.get("needsReply") or {}
-    count = int(nr.get("count", 0))
-    empty = count == 0
-    a = _accent(P, "green") if empty else _accent(P, "red")
+def _draw_priorities(draw: ImageDraw.ImageDraw, x0: int, x1: int, y: int,
+                     bottom: int, day: dict, P: Palette) -> None:
+    """The 'what matters now' rail: up to five curated two-line priorities.
 
-    yy = _kicker(draw, x0, x1, y, "NEEDS A REPLY", P, color=a, rule=False)
+    Each row is a bold action line + a muted detail line, with a leading
+    accent diamond keyed to the priority kind. Layout is driven by the same
+    `_nr_row_h()` metrics as the height calc so dividers land in the gaps.
+    """
+    items = ((day.get("priorities") or {}).get("items")) or []
+    empty = not items
+    head_color = _accent(P, "green") if empty else _accent(P, "red")
+
+    yy = _kicker(draw, x0, x1, y, "WHAT MATTERS NOW", P, color=head_color, rule=False)
     yy += 8
-    f_count = _serif(NR_COUNT_SIZE, "bold")
-    fm_count = font_metrics(f_count)
-    f_lab = _tr(16)
-    count_base = yy + fm_count.ascent
-    cstr = "0" if empty else str(count)
-    cw = draw_text_bl(draw, (x0, count_base), cstr, f_count, a)
-    sub = "INBOX CLEAR" if empty else f"{mail.get('awaiting', 0)} AWAITING \u00b7 {mail.get('unread', 0)} UNREAD"
-    # Meta sits on the count's baseline (newspaper style).
-    draw_tracked_text_bl(draw, (x0 + cw + 12, count_base), sub, f_lab, P.ink, _em(16, 0.06))
-    yy = count_base + fm_count.descent + 8
     yy = hr(draw, x0, x1, yy, thickness=2, fill=P.rule) + 8
 
     if empty:
         f = _serif(22, "regular", italic=True)
         fm = font_metrics(f)
-        draw_text_bl(draw, (x0, yy + fm.ascent + 2), "No one is waiting on you.", f, P.ink)
+        draw_text_bl(draw, (x0, yy + fm.ascent + 2), "Nothing pressing right now.", f, P.ink)
         return
 
-    # Two-line rows (sender + subject) laid out from font metrics so the
-    # divider always lands in the inter-row gap, never through the type.
-    f_from = _tr(21, bold=True)
-    f_age = _tr(12)
-    f_subj = _serif(21, "regular", italic=True)
-    fm_from = font_metrics(f_from)
-    fm_age = font_metrics(f_age)
-    fm_subj = font_metrics(f_subj)
+    f_title = _tr(21, bold=True)
+    f_detail = _serif(21, "regular", italic=True)
+    fm_title = font_metrics(f_title)
+    fm_detail = font_metrics(f_detail)
     pad_top, mid_gap, pad_bottom = NR_PAD_TOP, NR_MID_GAP, NR_PAD_BOTTOM
-    from_box = fm_from.ascent + fm_from.descent
-    subj_box = fm_subj.ascent + fm_subj.descent
+    title_box = fm_title.ascent + fm_title.descent
     row_h = _nr_row_h()
 
-    rows = nr.get("top") or []
     avail = max(0, bottom - yy)
     max_rows = max(1, avail // row_h) if row_h else 0
-    rows = rows[:min(NR_MAX_ROWS, max_rows)]
-    n = len(rows)
-    for i, r in enumerate(rows):
+    items = items[:min(NR_MAX_ROWS, max_rows)]
+    n = len(items)
+    dia_x = x0 + 6
+    text_x = x0 + 24
+    for i, it in enumerate(items):
         row_top = yy + i * row_h
-        from_base = row_top + pad_top + fm_from.ascent
-        # Age tab (paper on red), top-aligned to the sender line.
-        age = (r.get("age") or "").strip()
-        from_max = x1 - x0
-        if age:
-            aw = text_width(f_age, age)
-            tab_w = aw + 12
-            tab_h = fm_age.ascent + 5
-            tab_top = row_top + pad_top
-            fill_box(draw, Box(x1 - tab_w, tab_top, x1, tab_top + tab_h),
-                     _accent(P, "red"))
-            draw_text_bl(draw, (x1 - tab_w + 6, tab_top + 3 + fm_age.ascent),
-                         age, f_age, P.bg)
-            from_max = (x1 - tab_w - 8) - x0
-        draw_text_clipped_bl(draw, (x0, from_base), (r.get("from") or "").upper(),
-                             f_from, P.ink, max_w=from_max)
-        subj_base = row_top + pad_top + from_box + mid_gap + fm_subj.ascent
-        draw_text_clipped_bl(draw, (x0, subj_base), r.get("subj") or "", f_subj,
-                             P.ink, max_w=x1 - x0)
+        a = _accent(P, PRIO_ACCENT.get(it.get("kind"), "ink"))
+        title_base = row_top + pad_top + fm_title.ascent
+        # Kind diamond, aligned to the action line's cap-height centre.
+        _gem(draw, dia_x, title_base - int(fm_title.ascent * 0.40), 11, a)
+        draw_text_clipped_bl(draw, (text_x, title_base), (it.get("title") or "").strip(),
+                             f_title, P.ink, max_w=x1 - text_x)
+        detail = (it.get("detail") or "").strip()
+        if detail:
+            detail_base = row_top + pad_top + title_box + mid_gap + fm_detail.ascent
+            draw_text_clipped_bl(draw, (text_x, detail_base), detail, f_detail,
+                                 P.ink, max_w=x1 - text_x)
         if i < n - 1:
             hr(draw, x0, x1, row_top + row_h - pad_bottom // 2, thickness=2, fill=P.rule)
 
@@ -1101,7 +1154,7 @@ def _draw_bottom(draw: ImageDraw.ImageDraw, day: dict, P: Palette,
     rule_x = right_x0 - gap
     left_x0, left_x1 = CX0, rule_x - gap
     vline(draw, rule_x - 1, rails_top, rails_bottom, thickness=2, fill=P.rule)
-    _draw_needs_reply(draw, left_x0, left_x1, rails_top, rails_bottom, day, P)
+    _draw_priorities(draw, left_x0, left_x1, rails_top, rails_bottom, day, P)
     _draw_house(draw, right_x0, right_x1, rails_top, day, P)
 
     # Colophon.
@@ -1181,7 +1234,7 @@ def render_dashboard(img: Image.Image, day: dict, P: Palette, *,
     # Size the bottom rails to their content and pin them above the colophon;
     # the timeline gets whatever space is left (its spacer absorbs slack).
     colophon_top = CANVAS_H - PAD_BOTTOM - COLOPHON_H
-    rails_h = max(_needs_reply_height(day), _house_height(day))
+    rails_h = max(_priorities_height(day), _house_height(day))
     rails_top = colophon_top - RAILS_COLOPHON_GAP - rails_h
 
     _draw_timeline(draw, day, prep, P, y, max_bottom=rails_top - RAILS_TIMELINE_GAP)

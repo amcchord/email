@@ -112,6 +112,29 @@ def _ev(start, end, **kw):
     return base
 
 
+def test_allday_layout_packs_two_lines_with_overflow():
+    f = de._serif(22, "semibold")
+    # Many long titles can't all fit -> packer caps at 2 lines, reports the rest.
+    titles = [f"All-day commitment number {i}" for i in range(12)]
+    lines, remaining = de._layout_allday(titles, f, [400, 600])
+    assert len(lines) == 2
+    assert remaining > 0
+    # A short list fits on one line with nothing left over.
+    lines2, remaining2 = de._layout_allday(["PTO", "Offsite"], f, [600, 600])
+    assert remaining2 == 0
+    assert lines2[0] and not lines2[1]
+
+
+def test_priorities_height_scales_with_items():
+    empty = de._priorities_height({"priorities": {"items": []}})
+    one = de._priorities_height({"priorities": {"items": [{"title": "x", "kind": "prep"}]}})
+    five = de._priorities_height({"priorities": {"items": [
+        {"title": str(i), "kind": "prep"} for i in range(5)
+    ]}})
+    assert empty > 0
+    assert five > one > 0
+
+
 def test_hero_pick_now_next_calm():
     # Happening now wins.
     day = {"nowMin": M(8, 15), "events": [_ev(M(8, 0), M(9, 0)), _ev(M(11, 0), M(11, 30))]}
@@ -160,6 +183,13 @@ def _busy_day():
             {"from": "Dad", "subj": "Flight options", "age": "1d"},
             {"from": "Stripe", "subj": "Invoice #4471", "age": "5h"},
         ]}, "awaiting": 4, "unread": 28},
+        "priorities": {"items": [
+            {"title": "Prep for design standup", "detail": "11 AM \u00b7 5 on invite", "kind": "prep"},
+            {"title": "Reply to Marisa on contract", "detail": "from Marisa Chen \u00b7 2d", "kind": "reply"},
+            {"title": "Decide on Dad's flight options", "detail": "from Dad \u00b7 1d", "kind": "decision"},
+            {"title": "Pay Stripe invoice #4471", "detail": "from Stripe \u00b7 5h", "kind": "review"},
+            {"title": "Groceries after work", "detail": "6 PM \u00b7 Market", "kind": "personal"},
+        ]},
         "house": {"temps": {"outdoor": 61, "first": 70, "second": 71, "third": 72, "basement": 68},
                   "people": [{"name": "Andrew", "home": True}, {"name": "Sam", "home": False}],
                   "advisory": "Garage open"},
@@ -177,6 +207,7 @@ def _calm_day():
                     "forecast": [{"dow": "SUN", "code": "sunny", "hi": 81, "lo": 63}]},
         "events": [],
         "mail": {"needsReply": {"count": 0, "top": []}, "awaiting": 1, "unread": 4},
+        "priorities": {"items": []},
         "house": {"temps": {"outdoor": 67, "first": 71, "second": 72, "third": 73, "basement": 69},
                   "people": [{"name": "Andrew", "home": True}], "advisory": ""},
         "tomorrow": {"first": {"start": "9:30", "title": "Brunch", "loc": "Tatte"}},
@@ -190,9 +221,31 @@ def _empty_day():
         "weather": {"now": {"temp": None, "code": "cloudy", "label": ""}, "hi": None, "lo": None,
                     "sunrise": None, "sunset": None, "forecast": []},
         "events": [], "mail": {"needsReply": {"count": 0, "top": []}, "awaiting": 0, "unread": 0},
+        "priorities": {"items": []},
         "house": {"temps": {}, "people": [], "advisory": ""},
         "tomorrow": {"first": None},
     }
+
+
+def _allday_heavy_day():
+    """Many all-day events (so the band overflows to '+N MORE') plus a few
+    timed rows -- exercises the calendar compaction path."""
+    day = _busy_day()
+    allday_titles = [
+        "Sarah PTO", "Quarterly release freeze", "Company offsite",
+        "Marketing campaign launch", "Hiring committee review",
+        "Dad's birthday", "Conference travel day", "Budget planning week",
+    ]
+    allday = [
+        {"start": "00:00", "end": "23:59", "startMin": 0, "endMin": 24 * 60,
+         "allDay": True, "title": t, "loc": "", "kind": "personal", "people": 0}
+        for t in allday_titles
+    ]
+    day["events"] = allday + [
+        _ev(M(11, 0), M(11, 30), title="Design standup", loc="Conf Room B", kind="meeting", people=5),
+        _ev(M(15, 0), M(16, 0), title="Budget sync", loc="Zoom", kind="meeting", people=3),
+    ]
+    return day
 
 
 def _unique_colours(body: bytes) -> int:
@@ -201,7 +254,7 @@ def _unique_colours(body: bytes) -> int:
 
 
 def test_render_size_and_palette_conformance():
-    for day in (_busy_day(), _calm_day(), _empty_day()):
+    for day in (_busy_day(), _calm_day(), _empty_day(), _allday_heavy_day()):
         img = render_day_ahead_image("editorial", "six", day, tz_name=day["tz"])
         assert img.size == (1200, 1600)
         body = encode_spectra6(img, width=1200, height=1600, dither=False)

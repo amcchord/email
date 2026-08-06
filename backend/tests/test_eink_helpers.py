@@ -10,7 +10,7 @@ Focused on the two robustness wins that motivated the refactor:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 from backend.services.eink.pillow.helpers import (
@@ -19,6 +19,7 @@ from backend.services.eink.pillow.helpers import (
     floor_cool_count,
     floor_heat_count,
     fmt_clock,
+    forecast_day_date,
     heating_zone_count,
     parse_iso,
 )
@@ -154,3 +155,38 @@ def test_fmt_clock_no_tz_falls_back_to_current_offset():
 def test_fmt_clock_em_dash_for_missing():
     assert fmt_clock(None) == "\u2014"
     assert fmt_clock("unknown") == "\u2014"
+
+
+# ── forecast_day_date (daily slots are day markers, not instants) ─────
+
+_NY = ZoneInfo("America/New_York")
+
+
+def test_forecast_day_date_keeps_date_only_strings():
+    """Open-Meteo emits date-only daily slots. parse_iso stamps them as UTC
+    midnight; converting that to Eastern used to shift Tuesday back to
+    Monday 8 PM, printing "Today, Monday, Tuesday" on a Monday."""
+    assert forecast_day_date("2026-07-21", _NY) == date(2026, 7, 21)
+
+
+def test_forecast_day_date_keeps_utc_midnight_markers():
+    assert forecast_day_date("2026-07-21T00:00:00+00:00", _NY) == date(2026, 7, 21)
+    assert forecast_day_date("2026-07-21T00:00:00Z", _NY) == date(2026, 7, 21)
+
+
+def test_forecast_day_date_keeps_local_midnight_markers():
+    assert forecast_day_date("2026-07-21T00:00:00-04:00", _NY) == date(2026, 7, 21)
+
+
+def test_forecast_day_date_converts_true_instants():
+    """NWS twice-daily periods carry a real daytime start (e.g. 10:00 UTC =
+    6 AM Eastern); those convert to the display zone normally."""
+    assert forecast_day_date("2026-07-21T10:00:00+00:00", _NY) == date(2026, 7, 21)
+    # 02:00 UTC is still the previous local day in Eastern.
+    assert forecast_day_date("2026-07-21T02:00:00+00:00", _NY) == date(2026, 7, 20)
+
+
+def test_forecast_day_date_none_for_missing():
+    assert forecast_day_date(None, _NY) is None
+    assert forecast_day_date("unknown", _NY) is None
+    assert forecast_day_date("not-a-date", _NY) is None

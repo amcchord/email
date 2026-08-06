@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import math
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from typing import Any, Literal, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -88,6 +88,33 @@ def parse_iso(s: Optional[str]) -> Optional[datetime]:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def forecast_day_date(raw: Any, zone: Optional[Any] = None) -> Optional[date]:
+    """Calendar date of a daily-forecast slot.
+
+    Daily forecast slots are *day markers*, not instants. Integrations
+    disagree on how they encode them: Open-Meteo emits date-only strings
+    ("2026-07-21"), others emit midnight timestamps (local- or UTC-offset),
+    and NWS twice-daily periods carry a real daytime start time. Blindly
+    converting a midnight marker to the display zone shifts it into the
+    previous local day (a UTC-midnight "Tuesday" becomes Monday 8 PM in
+    Boston), which is how the rail printed "Today, Monday, Tuesday" on a
+    Monday. So: a slot whose time-of-day is midnight *in its own offset*
+    keeps its calendar date verbatim; a true instant is converted to
+    ``zone`` first.
+    """
+    if isinstance(raw, datetime):
+        dt = raw
+    else:
+        dt = parse_iso(raw)
+    if dt is None:
+        return None
+    if dt.time() == time(0, 0):
+        return dt.date()
+    if zone is not None:
+        dt = dt.astimezone(zone)
+    return dt.date()
 
 
 def fmt_temp(v: Any) -> str:

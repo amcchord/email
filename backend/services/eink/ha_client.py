@@ -14,12 +14,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
+from urllib.parse import quote
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
 from backend.models.terminal import TerminalSettings
+from backend.services.eink.open_meteo_client import fetch_current as fetch_open_meteo
 from backend.utils.security import decrypt_value
 
 logger = logging.getLogger(__name__)
@@ -242,7 +245,16 @@ async def fetch_ha_hourly_forecast(
 
 # Hard-coded entity IDs from docs/design/HANDOFF.md Sec 4.2. These can be
 # wrong for your install -- missing entities just render as null/empty.
+#
+# Weather-entity preference: Open-Meteo (`weather.home`) gives a forecast and
+# condition that track the area model the rest of the dashboard is now built
+# around; fall through to the historical `weather.forecast_home`, then to any
+# `weather.*` entity (typically NWS) so other installs still resolve.
+_OPEN_METEO_WEATHER_ENTITY = "weather.home"
 _WEATHER_ENTITY_ID = "weather.forecast_home"
+_WEATHER_ENTITY_PREFERENCE = (_OPEN_METEO_WEATHER_ENTITY, _WEATHER_ENTITY_ID)
+
+_HOME_ZONE_ID = "zone.home"
 
 _POOL_ID = "water_heater.53_55_raymond_pool"
 _POOL_AIR = "sensor.53_55_raymond_air_sensor"
@@ -297,6 +309,12 @@ _TEMP_FIRST = "sensor.first_floor_temperature"
 _TEMP_SECOND = "sensor.second_floor_temperature"
 _TEMP_THIRD = "sensor.third_floor_temperature"
 _TEMP_OUTDOOR = "sensor.weather_station_outdoor_temperature"
+_FEELS_LIKE = "sensor.weather_station_feels_like_temperature"
+_UV_INDEX = "sensor.weather_station_uv_index"
+# Left-rail wind uses the local station's gust + direction (hyperlocal, what's
+# actually happening at the house) rather than the area weather entity.
+_WIND_GUST = "sensor.weather_station_wind_gust"
+_WIND_DIRECTION = "sensor.weather_station_wind_direction"
 
 _GARAGE_ID = "cover.smart_garage_door_25090565132271610701c4e7ae20a653_garage"
 
@@ -315,6 +333,7 @@ _SOLAR_ENERGY_TODAY = "sensor.envoy_202329034883_energy_production_today"    # k
 _SOLAR_ENERGY_WEEK = "sensor.envoy_202329034883_energy_production_last_seven_days"  # kWh
 _SOLAR_ENERGY_LIFETIME = "sensor.envoy_202329034883_lifetime_energy_production"     # MWh
 _SOLAR_INVERTER_RE = re.compile(r"^sensor\.inverter_\d+$")
+_SOLAR_HISTORY_WINDOW = timedelta(minutes=5)
 
 
 def _to_float(v: Any) -> Optional[float]:
@@ -331,6 +350,180 @@ def _to_int(v: Any) -> Optional[int]:
     if f is None:
         return None
     return int(round(f))
+
+
+def _solar_delta_kwh(
+    current_lifetime_mwh: Optional[float],
+    starting_lifetime_mwh: Optional[float],
+) -> Optional[float]:
+    """Convert two monotonic lifetime readings into period energy."""
+    if current_lifetime_mwh is None or starting_lifetime_mwh is None:
+        return None
+    delta = (current_lifetime_mwh - starting_lifetime_mwh) * 1000.0
+    if delta < 0:
+        return None
+    return delta
+
+
+def _solar_period_value(
+    computed: Any,
+    reported: Any,
+    lifetime_mwh: Optional[float],
+) -> Optional[float]:
+    """Prefer a history delta and reject Envoy's lifetime-as-period bug."""
+    computed_num = _to_float(computed)
+    if computed_num is not None and computed_num >= 0:
+        return computed_num
+
+    reported_num = _to_float(reported)
+    if reported_num is None or reported_num < 0:
+        return None
+    if lifetime_mwh is None:
+        return reported_num
+
+    lifetime_kwh = lifetime_mwh * 1000.0
+    # Current Envoy firmware can expose the lifetime total, converted to kWh,
+    # through both the "today" and "last seven days" entities. Never paint
+    # that value as a period total if recorder history is temporarily absent.
+    if lifetime_kwh > 1.0 and abs(reported_num - lifetime_kwh) < 0.1:
+        return None
+    return reported_num
+
+
+async def fetch_ha_state_near(
+    url: str,
+    token: str,
+    entity_id: str,
+    target: datetime,
+    *,
+    timeout: float = 5.0,
+) -> Optional[float]:
+    """Read the recorder value immediately before ``target``.
+
+    A narrow ten-minute history window keeps the response small even when an
+    Envoy sensor updates every few seconds. If there is no point before the
+    target, the first point after it is the closest available baseline.
+    """
+    if not url or not token or not entity_id:
+        return None
+    if target.tzinfo is None:
+        target = target.replace(tzinfo=timezone.utc)
+    else:
+        target = target.astimezone(timezone.utc)
+
+    start = target - _SOLAR_HISTORY_WINDOW
+    end = target + _SOLAR_HISTORY_WINDOW
+    encoded_start = quote(start.isoformat(), safe="")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    params = {
+        "filter_entity_id": entity_id,
+        "end_time": end.isoformat(),
+        "minimal_response": "true",
+        "no_attributes": "true",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(
+                f"{url.rstrip('/')}/api/history/period/{encoded_start}",
+                headers=headers,
+                params=params,
+            )
+    except httpx.RequestError as exc:
+        logger.warning("HA history fetch failed for %s: %s", entity_id, exc)
+        return None
+    if response.status_code != 200:
+        logger.warning(
+            "HA history fetch returned HTTP %s for %s: %s",
+            response.status_code,
+            entity_id,
+            response.text[:200],
+        )
+        return None
+    try:
+        payload = response.json()
+    except Exception:
+        return None
+    if not isinstance(payload, list) or not payload:
+        return None
+    history = payload[0]
+    if not isinstance(history, list):
+        return None
+
+    before: list[tuple[datetime, float]] = []
+    after: list[tuple[datetime, float]] = []
+    for item in history:
+        if not isinstance(item, dict):
+            continue
+        value = _to_float(item.get("state"))
+        stamp_raw = item.get("last_changed") or item.get("last_updated")
+        if value is None or not isinstance(stamp_raw, str):
+            continue
+        try:
+            stamp = datetime.fromisoformat(stamp_raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        else:
+            stamp = stamp.astimezone(timezone.utc)
+        point = (stamp, value)
+        if stamp <= target:
+            before.append(point)
+        else:
+            after.append(point)
+
+    if before:
+        return max(before, key=lambda point: point[0])[1]
+    if after:
+        return min(after, key=lambda point: point[0])[1]
+    return None
+
+
+async def fetch_ha_solar_period_totals(
+    url: str,
+    token: str,
+    current_lifetime_mwh: Optional[float],
+    timezone_name: str,
+    *,
+    now: Optional[datetime] = None,
+) -> dict[str, Optional[float]]:
+    """Derive today's and rolling seven-day energy from lifetime history."""
+    if current_lifetime_mwh is None:
+        return {"todayKwh": None, "weekKwh": None}
+
+    now_utc = now or datetime.now(timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    else:
+        now_utc = now_utc.astimezone(timezone.utc)
+
+    zone_name = timezone_name or "UTC"
+    try:
+        zone = ZoneInfo(zone_name)
+    except ZoneInfoNotFoundError:
+        logger.warning("Unknown terminal timezone %r; using UTC for solar totals", zone_name)
+        zone = ZoneInfo("UTC")
+
+    local_now = now_utc.astimezone(zone)
+    local_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    midnight_utc = local_midnight.astimezone(timezone.utc)
+    week_ago = now_utc - timedelta(days=7)
+    today_base, week_base = await asyncio.gather(
+        fetch_ha_state_near(
+            url, token, _SOLAR_ENERGY_LIFETIME, midnight_utc,
+        ),
+        fetch_ha_state_near(
+            url, token, _SOLAR_ENERGY_LIFETIME, week_ago,
+        ),
+    )
+    return {
+        "todayKwh": _solar_delta_kwh(current_lifetime_mwh, today_base),
+        "weekKwh": _solar_delta_kwh(current_lifetime_mwh, week_base),
+    }
 
 
 def _normalize_forecast_slots(slots: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -370,6 +563,20 @@ def _floor_of(entity_id: str) -> Optional[str]:
     return None
 
 
+def _any_weather_attr(states: list[dict[str, Any]], key: str) -> Any:
+    """First non-null `key` attribute across all `weather.*` entities.
+
+    Open-Meteo (`weather.home`) doesn't expose humidity or visibility, so we
+    borrow those from whichever other weather entity (e.g. NWS) still carries
+    them instead of rendering a misleading zero."""
+    for s in states:
+        if (s.get("entity_id") or "").startswith("weather."):
+            v = (s.get("attributes") or {}).get(key)
+            if v is not None:
+                return v
+    return None
+
+
 def shape_ha_state(
     states: list[dict[str, Any]],
     *,
@@ -377,6 +584,8 @@ def shape_ha_state(
     weather_entity_id: Optional[str] = None,
     forecast_daily: Optional[list[dict[str, Any]]] = None,
     forecast_hourly: Optional[list[dict[str, Any]]] = None,
+    open_meteo: Optional[dict[str, Any]] = None,
+    solar_periods: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Reshape `/api/states` into the HAShape consumed by the React designs.
 
@@ -387,6 +596,16 @@ def shape_ha_state(
     `forecast_daily` / `forecast_hourly` are optional pre-fetched lists from
     `fetch_ha_forecast`. When provided they're attached to
     `weather["forecast"]` so renderers don't have to know about HA services.
+
+    `open_meteo` is an optional dict from `open_meteo_client.fetch_current`
+    supplying `uv_index` / `apparent_temperature` (and today's `uv_peak`),
+    which the HA weather entity does not expose. Its values take precedence
+    over the local station's UV / feels-like sensors, which remain the
+    fallback when Open-Meteo is unavailable.
+
+    `solar_periods` contains recorder-history deltas for today and the rolling
+    seven-day window. Envoy's direct period sensors can incorrectly mirror the
+    lifetime total, so history-derived values take precedence.
     """
     fetched_at = fetched_at or datetime.now(timezone.utc)
     idx = {s.get("entity_id"): s for s in states if s.get("entity_id")}
@@ -422,14 +641,34 @@ def shape_ha_state(
     weather: Optional[dict] = None
     if w:
         a = w.get("attributes") or {}
+        om = open_meteo or {}
+
+        def om_val(key: str, fallback: Any) -> Any:
+            v = om.get(key)
+            return v if v is not None else fallback
+
+        # Wind shows the local station's gust + direction (hyperlocal), with
+        # the area weather entity as the fallback when the station is offline.
+        gust = state_num(_WIND_GUST)
+        wind_dir = state_num(_WIND_DIRECTION)
         weather = {
             "state": w.get("state"),
             "temperature": a.get("temperature"),
-            "humidity": a.get("humidity"),
-            "windSpeed": a.get("wind_speed"),
-            "windBearing": a.get("wind_bearing"),
+            "outdoorTemp": state_num(_TEMP_OUTDOOR),
+            "feelsLike": om_val("apparent_temperature", state_num(_FEELS_LIKE)),
+            "uvIndex": om_val("uv_index", state_num(_UV_INDEX)),
+            "uvPeak": om.get("uv_peak"),
+            # US AQI comes only from the Open-Meteo air-quality API; there is
+            # no local-station fallback, so it's simply absent on failure.
+            "aqi": om.get("aqi"),
+            # Open-Meteo's HA entity omits humidity/visibility, so prefer the
+            # Open-Meteo API humidity (matches the feels-like source) and
+            # borrow visibility from any weather entity that still reports it.
+            "humidity": om_val("humidity", _any_weather_attr(states, "humidity")),
+            "windSpeed": gust if gust is not None else a.get("wind_speed"),
+            "windBearing": wind_dir if wind_dir is not None else a.get("wind_bearing"),
             "pressure": a.get("pressure"),
-            "visibility": a.get("visibility"),
+            "visibility": _any_weather_attr(states, "visibility"),
         }
         weather["forecast"] = {
             "daily": _normalize_forecast_slots(forecast_daily or []),
@@ -626,11 +865,21 @@ def shape_ha_state(
     panel_count = sum(
         1 for s in states if _SOLAR_INVERTER_RE.match(s.get("entity_id") or "")
     )
+    lifetime_mwh = state_num(_SOLAR_ENERGY_LIFETIME)
+    periods = solar_periods or {}
     solar = {
         "currentKw": state_num(_SOLAR_POWER_NOW),
-        "todayKwh": state_num(_SOLAR_ENERGY_TODAY),
-        "weekKwh": state_num(_SOLAR_ENERGY_WEEK),
-        "lifetimeMwh": state_num(_SOLAR_ENERGY_LIFETIME),
+        "todayKwh": _solar_period_value(
+            periods.get("todayKwh"),
+            state_num(_SOLAR_ENERGY_TODAY),
+            lifetime_mwh,
+        ),
+        "weekKwh": _solar_period_value(
+            periods.get("weekKwh"),
+            state_num(_SOLAR_ENERGY_WEEK),
+            lifetime_mwh,
+        ),
+        "lifetimeMwh": lifetime_mwh,
         "panelCount": panel_count or None,
     }
 
@@ -669,6 +918,11 @@ def empty_ha_shape(*, fetched_at: Optional[datetime] = None) -> dict[str, Any]:
         "weather": {
             "state": None,
             "temperature": None,
+            "outdoorTemp": None,
+            "feelsLike": None,
+            "uvIndex": None,
+            "uvPeak": None,
+            "aqi": None,
             "humidity": None,
             "windSpeed": None,
             "windBearing": None,
@@ -735,16 +989,17 @@ def _resolve_weather_entity(
 ) -> tuple[Optional[str], Optional[int]]:
     """Pick the weather entity we should fetch forecasts against.
 
-    Prefers `_WEATHER_ENTITY_ID` ("weather.forecast_home") so existing
-    installs that have it still get it; otherwise falls back to the first
-    available `weather.*` entity (matching the existing fallback in
+    Walks `_WEATHER_ENTITY_PREFERENCE` in order ("weather.home" /
+    Open-Meteo first, then "weather.forecast_home"), then falls back to the
+    first available `weather.*` entity (matching the existing fallback in
     `shape_ha_state`). Returns `(entity_id, supported_features)` so the
     forecast call can skip kinds the integration doesn't advertise.
     """
+    idx = {s.get("entity_id"): s for s in states if s.get("entity_id")}
     chosen: Optional[dict[str, Any]] = None
-    for s in states:
-        if (s.get("entity_id") or "") == _WEATHER_ENTITY_ID:
-            chosen = s
+    for eid in _WEATHER_ENTITY_PREFERENCE:
+        if eid in idx:
+            chosen = idx[eid]
             break
     if chosen is None:
         for s in states:
@@ -759,6 +1014,21 @@ def _resolve_weather_entity(
     except (TypeError, ValueError):
         feats_i = None
     return chosen.get("entity_id"), feats_i
+
+
+def _home_coords(states: list[dict[str, Any]]) -> Optional[tuple[float, float]]:
+    """Read the Home zone's latitude/longitude so we can query Open-Meteo for
+    the same location HA is configured for. Returns None if `zone.home` is
+    missing or doesn't carry numeric coordinates."""
+    for s in states:
+        if (s.get("entity_id") or "") == _HOME_ZONE_ID:
+            a = s.get("attributes") or {}
+            lat = a.get("latitude")
+            lon = a.get("longitude")
+            if isinstance(lat, (int, float)) and isinstance(lon, (int, float)):
+                return float(lat), float(lon)
+            return None
+    return None
 
 
 async def fetch_and_shape(settings: TerminalSettings) -> Optional[dict[str, Any]]:
@@ -791,12 +1061,37 @@ async def fetch_and_shape(settings: TerminalSettings) -> Optional[dict[str, Any]
         return None
 
     weather_eid, feats = _resolve_weather_entity(states)
+    coords = _home_coords(states)
+    state_index = {s.get("entity_id"): s for s in states if s.get("entity_id")}
+    lifetime_state = state_index.get(_SOLAR_ENERGY_LIFETIME) or {}
+    lifetime_mwh = _to_float(lifetime_state.get("state"))
+
+    async def _open_meteo() -> Optional[dict[str, Any]]:
+        if not coords:
+            return None
+        return await fetch_open_meteo(coords[0], coords[1])
+
+    async def _solar_periods() -> dict[str, Optional[float]]:
+        return await fetch_ha_solar_period_totals(
+            url,
+            token,
+            lifetime_mwh,
+            settings.timezone,
+        )
+
     daily: list[dict[str, Any]] = []
     hourly: list[dict[str, Any]] = []
     if weather_eid:
-        daily, hourly = await asyncio.gather(
+        daily, hourly, open_meteo, solar_periods = await asyncio.gather(
             fetch_ha_daily_forecast(url, token, weather_eid, feats),
             fetch_ha_hourly_forecast(url, token, weather_eid, feats),
+            _open_meteo(),
+            _solar_periods(),
+        )
+    else:
+        open_meteo, solar_periods = await asyncio.gather(
+            _open_meteo(),
+            _solar_periods(),
         )
 
     return shape_ha_state(
@@ -805,4 +1100,6 @@ async def fetch_and_shape(settings: TerminalSettings) -> Optional[dict[str, Any]
         weather_entity_id=weather_eid,
         forecast_daily=daily,
         forecast_hourly=hourly,
+        open_meteo=open_meteo,
+        solar_periods=solar_periods,
     )

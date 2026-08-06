@@ -21,6 +21,7 @@ Design notes
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -34,7 +35,11 @@ from backend.models.account import GoogleAccount
 from backend.models.calendar import CalendarEvent
 from backend.models.terminal import TerminalSettings
 from backend.services.eink.ha_client import empty_ha_shape, fetch_and_shape
-from backend.services.eink.pillow.helpers import fmt_clock, parse_iso, resolve_zone
+from backend.services.eink.pillow.helpers import (
+    fmt_clock,
+    forecast_day_date,
+    resolve_zone,
+)
 from backend.services.mail_queues import (
     fetch_awaiting_response,
     fetch_needs_reply,
@@ -287,172 +292,301 @@ def _empty_mail() -> dict:
     return {"needsReply": {"count": 0, "top": []}, "awaiting": 0, "unread": 0}
 
 
-# How many emails the wall display surfaces in the needs-reply rail, and how
-# many recent candidates the ranker considers.
+# How many needs-reply emails the priorities curator considers, and how many
+# we keep in the mail block's recency list.
 _NEEDS_REPLY_SHOW = 5
 _NEEDS_REPLY_CANDIDATES = 15
 
-# Cache the AI ranking per (user, local hour) so the display is stable within
-# the hour (stable ETag) and we make at most one ranking call per hour. Stored
-# in Redis so all uvicorn workers agree (an in-process dict would let two
-# workers serve different rankings for schedule.json vs image.bmp). A tiny
-# in-process map backs it up when Redis is unreachable.
-_RANK_CACHE: "dict[tuple[int, str], list[int]]" = {}
-_RANK_TTL_SEC = 2 * 60 * 60
 
+async def _build_mail(db, account_ids: list[int], now: datetime) -> tuple[dict, list[Any]]:
+    """Return ``(mail_block, needs_reply_rows)``.
 
-def _rank_redis_key(user_id: int, hour_key: str) -> str:
-    return f"day_ahead:rank:{user_id}:{hour_key}"
-
-
-async def _rank_cache_get(user_id: int, hour_key: str) -> Optional[list[int]]:
-    try:
-        import redis.asyncio as aioredis
-
-        r = aioredis.from_url(get_app_settings().redis_url, decode_responses=True)
-        try:
-            val = await r.get(_rank_redis_key(user_id, hour_key))
-        finally:
-            await r.aclose()
-        if val:
-            return [int(x) for x in val.split(",") if x]
-    except Exception:
-        return _RANK_CACHE.get((user_id, hour_key))
-    return None
-
-
-async def _rank_cache_set(user_id: int, hour_key: str, ids: list[int]) -> None:
-    _RANK_CACHE[(user_id, hour_key)] = ids
-    if len(_RANK_CACHE) > 256:
-        _RANK_CACHE.clear()
-        _RANK_CACHE[(user_id, hour_key)] = ids
-    try:
-        import redis.asyncio as aioredis
-
-        r = aioredis.from_url(get_app_settings().redis_url, decode_responses=True)
-        try:
-            await r.set(_rank_redis_key(user_id, hour_key),
-                        ",".join(str(i) for i in ids), ex=_RANK_TTL_SEC)
-        finally:
-            await r.aclose()
-    except Exception:
-        pass
-
-_RANK_TOOL = {
-    "name": "rank_emails",
-    "description": "Pick the emails that most deserve a reply now, in priority order.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "ids": {
-                "type": "array",
-                "items": {"type": "integer"},
-                "description": "Chosen email ids, most important first (up to 5).",
-            },
-        },
-        "required": ["ids"],
-    },
-}
-
-_RANK_SYSTEM = (
-    "You triage a busy person's inbox for a glanceable e-ink wall display. "
-    "Given emails that are already flagged as needing a reply, choose the ones "
-    "that most deserve a reply now. Prioritise real people awaiting a decision "
-    "or answer, time-sensitive items, money/commitments, and direct personal or "
-    "work threads. Deprioritise newsletters, automated notifications, mass "
-    "invitations, and FYIs. Return only the chosen email ids, most important first."
-)
-
-
-async def _rank_needs_reply(rows: list[Any], user_id: int, hour_key: str) -> list[int]:
-    """Return up to 5 email ids in importance order.
-
-    Uses the cheap Claude model, cached per (user, hour). Falls back to the
-    existing recency order if there's no API key, the call fails, or there
-    are already <= 5 candidates.
+    The mail block still powers the calm-edition lead (needs-reply count,
+    awaiting, unread); the raw rows feed the priorities curator below. No AI
+    call happens here -- ``top`` is plain recency order.
     """
-    ids_all = [r.id for r in rows]
-    if len(ids_all) <= _NEEDS_REPLY_SHOW:
-        return ids_all[:_NEEDS_REPLY_SHOW]
-
-    id_set = set(ids_all)
-    cached = await _rank_cache_get(user_id, hour_key)
-    if cached is not None:
-        ordered = [i for i in cached if i in id_set]
-        return (ordered or ids_all)[:_NEEDS_REPLY_SHOW]
-
-    app = get_app_settings()
-    if not getattr(app, "claude_api_key", None):
-        return ids_all[:_NEEDS_REPLY_SHOW]
-
-    lines = []
-    for r in rows:
-        sender = (r.from_name or r.from_address or "").strip()
-        subj = (r.subject or "").strip()
-        snip = (r.snippet or "").strip().replace("\n", " ")[:140]
-        lines.append(f"[{r.id}] from {sender} | {subj} | {snip}")
-    user_message = (
-        "Emails needing a reply:\n" + "\n".join(lines)
-        + f"\n\nReturn the {_NEEDS_REPLY_SHOW} most important ids, most important first."
-    )
-
-    try:
-        from backend.services.ai import AIService
-        from backend.services.ai_models import CHEAP_MODEL
-
-        svc = AIService(model=CHEAP_MODEL)
-        parsed, _tokens = await asyncio.wait_for(
-            svc._call_claude_tool(
-                model=CHEAP_MODEL,
-                max_tokens=120,
-                messages=[{"role": "user", "content": user_message}],
-                tool=_RANK_TOOL,
-                system=_RANK_SYSTEM,
-            ),
-            timeout=8.0,
-        )
-    except Exception:
-        logger.exception("day_ahead: needs-reply ranking failed; using recency order")
-        return ids_all[:_NEEDS_REPLY_SHOW]
-
-    chosen: list[int] = []
-    if parsed and isinstance(parsed.get("ids"), list):
-        for i in parsed["ids"]:
-            if isinstance(i, int) and i in id_set and i not in chosen:
-                chosen.append(i)
-    # Backfill with recency order if the model returned fewer than we show.
-    for i in ids_all:
-        if i not in chosen:
-            chosen.append(i)
-    result = chosen[:_NEEDS_REPLY_SHOW]
-    await _rank_cache_set(user_id, hour_key, result)
-    return result
-
-
-async def _build_mail(db, account_ids: list[int], now: datetime, *,
-                     user_id: int, hour_key: str) -> dict:
     if not account_ids:
-        return _empty_mail()
+        return _empty_mail(), []
     nr_total, nr_rows = await fetch_needs_reply(db, account_ids, limit=_NEEDS_REPLY_CANDIDATES)
     aw_total, _ = await fetch_awaiting_response(db, account_ids, limit=1)
     unread_total, _ = await fetch_unread_counts(db, account_ids)
 
-    order = await _rank_needs_reply(nr_rows, user_id, hour_key)
-    by_id = {r.id: r for r in nr_rows}
-    chosen = [by_id[i] for i in order if i in by_id]
     top = [
         {
             "from": (r.from_name or r.from_address or "").strip(),
             "subj": (r.subject or "").strip() or "(no subject)",
             "age": _compact_age(r.date, now),
         }
-        for r in chosen[:_NEEDS_REPLY_SHOW]
+        for r in nr_rows[:_NEEDS_REPLY_SHOW]
     ]
-    return {
+    mail = {
         "needsReply": {"count": int(nr_total), "top": top},
         "awaiting": int(aw_total),
         "unread": int(unread_total),
     }
+    return mail, nr_rows
+
+
+# ── Priorities ("what matters now") ────────────────────────────────────
+#
+# The bottom-left rail used to be a raw needs-reply list. It's now a curated
+# "most important things for the next few hours" list spanning calendar prep
+# and email. A capable model distils it once per local hour; the result is
+# cached in Redis so every render within the hour is byte-identical (stable
+# ETag) and we make at most one call per user per hour. Falls back to a
+# deterministic merge of imminent meetings + recent needs-reply email when
+# there's no API key or the call fails.
+
+# Most-capable model from backend/services/ai_models.py MODEL_REGISTRY -- the
+# Day Ahead priorities are worth the good model, not CHEAP_MODEL.
+_PRIORITIES_MODEL = "claude-opus-4-7"
+_PRIORITIES_SHOW = 5
+_PRIORITIES_WINDOW_MIN = 4 * 60
+_PRIORITIES_KINDS = {"prep", "reply", "review", "decision", "personal", "travel"}
+
+_PRIO_CACHE: "dict[tuple[int, str], list[dict]]" = {}
+_PRIO_TTL_SEC = 2 * 60 * 60
+
+
+def _empty_priorities() -> dict:
+    return {"items": []}
+
+
+def _prio_redis_key(user_id: int, hour_key: str) -> str:
+    return f"day_ahead:prio:{user_id}:{hour_key}"
+
+
+async def _prio_cache_get(user_id: int, hour_key: str) -> Optional[list[dict]]:
+    try:
+        import redis.asyncio as aioredis
+
+        r = aioredis.from_url(get_app_settings().redis_url, decode_responses=True)
+        try:
+            val = await r.get(_prio_redis_key(user_id, hour_key))
+        finally:
+            await r.aclose()
+        if val:
+            data = json.loads(val)
+            if isinstance(data, list):
+                return data
+    except Exception:
+        return _PRIO_CACHE.get((user_id, hour_key))
+    return None
+
+
+async def _prio_cache_set(user_id: int, hour_key: str, items: list[dict]) -> None:
+    _PRIO_CACHE[(user_id, hour_key)] = items
+    if len(_PRIO_CACHE) > 256:
+        _PRIO_CACHE.clear()
+        _PRIO_CACHE[(user_id, hour_key)] = items
+    try:
+        import redis.asyncio as aioredis
+
+        r = aioredis.from_url(get_app_settings().redis_url, decode_responses=True)
+        try:
+            await r.set(_prio_redis_key(user_id, hour_key), json.dumps(items), ex=_PRIO_TTL_SEC)
+        finally:
+            await r.aclose()
+    except Exception:
+        pass
+
+
+def _clock_label(minute: int) -> str:
+    """'2 PM' / '2:30 PM' from minutes-since-local-midnight."""
+    h24 = (minute // 60) % 24
+    m = minute % 60
+    h = ((h24 + 11) % 12) + 1
+    mer = "AM" if h24 < 12 else "PM"
+    return f"{h} {mer}" if m == 0 else f"{h}:{m:02d} {mer}"
+
+
+def _upcoming_in_window(events: list[dict], now_min: int, window_min: int) -> list[dict]:
+    """Timed events happening now or starting within ``window_min``, in order."""
+    out = [
+        e for e in (events or [])
+        if not e.get("allDay")
+        and int(e.get("endMin", 0)) > now_min
+        and int(e.get("startMin", 0)) <= now_min + window_min
+    ]
+    out.sort(key=lambda e: int(e.get("startMin", 0)))
+    return out
+
+
+def _fallback_priorities(upcoming: list[dict], nr_rows: list[Any]) -> list[dict]:
+    """Deterministic priorities: imminent meetings (prep) then recent replies."""
+    items: list[dict] = []
+    for e in upcoming:
+        kind = e.get("kind")
+        title = (e.get("title") or "").strip() or "Untitled event"
+        loc = (e.get("loc") or "").strip()
+        people = int(e.get("people") or 0)
+        when = _clock_label(int(e.get("startMin", 0)))
+        if kind == "travel":
+            pkind, ptitle = "travel", title
+        elif kind == "personal":
+            pkind, ptitle = "personal", title
+        else:
+            pkind, ptitle = "prep", f"Prep: {title}"
+        if loc:
+            detail = f"{when} \u00b7 {loc}"
+        elif people:
+            detail = f"{when} \u00b7 {people} on invite"
+        else:
+            detail = when
+        items.append({"title": ptitle, "detail": detail, "kind": pkind})
+        if len(items) >= _PRIORITIES_SHOW:
+            return items
+    for r in nr_rows:
+        sender = (getattr(r, "from_name", None) or getattr(r, "from_address", None) or "").strip()
+        subj = (getattr(r, "subject", None) or "").strip() or "(no subject)"
+        items.append({
+            "title": f"Reply: {sender}" if sender else "Reply needed",
+            "detail": subj,
+            "kind": "reply",
+        })
+        if len(items) >= _PRIORITIES_SHOW:
+            break
+    return items[:_PRIORITIES_SHOW]
+
+
+def _sanitize_priorities(parsed: Optional[dict]) -> list[dict]:
+    """Coerce the model's tool output into clean item dicts (defensive)."""
+    if not parsed or not isinstance(parsed.get("items"), list):
+        return []
+    out: list[dict] = []
+    for it in parsed["items"]:
+        if not isinstance(it, dict):
+            continue
+        title = (it.get("title") or "").strip()
+        if not title:
+            continue
+        kind = (it.get("kind") or "").strip().lower()
+        if kind not in _PRIORITIES_KINDS:
+            kind = "review"
+        out.append({
+            "title": title[:80],
+            "detail": (it.get("detail") or "").strip()[:90],
+            "kind": kind,
+        })
+        if len(out) >= _PRIORITIES_SHOW:
+            break
+    return out
+
+
+_PRIORITIES_TOOL = {
+    "name": "pick_priorities",
+    "description": "Choose the few most important things to focus on in the next few hours.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "description": f"Up to {_PRIORITIES_SHOW} items, most important first.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {
+                            "type": "string",
+                            "description": "One concrete action, scannable, ~36 chars max. e.g. 'Prep for the board review'.",
+                        },
+                        "detail": {
+                            "type": "string",
+                            "description": "Short supporting context, ~44 chars max. e.g. '2 PM \u00b7 6 on invite' or 'from Dana Wu'.",
+                        },
+                        "kind": {
+                            "type": "string",
+                            "enum": sorted(_PRIORITIES_KINDS),
+                            "description": "prep=meeting prep, reply=email reply, review/decision=think or decide, personal, travel.",
+                        },
+                    },
+                    "required": ["title", "kind"],
+                },
+            },
+        },
+        "required": ["items"],
+    },
+}
+
+_PRIORITIES_SYSTEM = (
+    "You are a sharp chief of staff curating a glanceable e-ink wall display. "
+    "From the person's upcoming calendar events and the emails awaiting their "
+    "reply, choose the few things they should actually be thinking about or "
+    "acting on in the next few hours, most important first. Distil hard: each "
+    "item is one concrete, specific action -- 'Prep for the 2 PM board review', "
+    "'Decide on Dana's contract deadline' -- never a vague restatement. Favour "
+    "prep for imminent meetings, time-sensitive decisions, commitments to real "
+    "people, and money matters. Ignore newsletters, automated notifications, "
+    "and FYIs. Keep titles short and scannable; put times, names, or places in "
+    "the detail."
+)
+
+
+async def _build_priorities(
+    events: list[dict],
+    nr_rows: list[Any],
+    now_local: datetime,
+    *,
+    user_id: int,
+    hour_key: str,
+) -> dict:
+    """Curate up to five priorities for the next few hours. Never raises."""
+    now_min = _minutes(now_local)
+    upcoming = _upcoming_in_window(events, now_min, _PRIORITIES_WINDOW_MIN)
+    if not upcoming and not nr_rows:
+        return _empty_priorities()
+
+    cached = await _prio_cache_get(user_id, hour_key)
+    if cached is not None:
+        return {"items": cached}
+
+    fallback = _fallback_priorities(upcoming, nr_rows)
+    if not getattr(get_app_settings(), "claude_api_key", None):
+        return {"items": fallback}
+
+    ev_lines = [
+        f"- {_clock_label(int(e.get('startMin', 0)))} | {(e.get('title') or '').strip()} | "
+        f"loc={(e.get('loc') or '').strip() or '-'} | attendees={int(e.get('people') or 0)} | "
+        f"kind={e.get('kind')}"
+        for e in upcoming
+    ]
+    em_lines = []
+    for r in nr_rows:
+        sender = (getattr(r, "from_name", None) or getattr(r, "from_address", None) or "").strip()
+        subj = (getattr(r, "subject", None) or "").strip()
+        snip = (getattr(r, "snippet", None) or "").strip().replace("\n", " ")[:160]
+        em_lines.append(f"- from {sender or '(unknown)'} | {subj} | {snip}")
+
+    user_message = (
+        f"Local time: {now_local.strftime('%A %-I:%M %p')}. "
+        f"Horizon: the next {_PRIORITIES_WINDOW_MIN // 60} hours.\n\n"
+        "Upcoming calendar events:\n"
+        + ("\n".join(ev_lines) if ev_lines else "(none)")
+        + "\n\nEmails awaiting a reply:\n"
+        + ("\n".join(em_lines) if em_lines else "(none)")
+        + f"\n\nReturn the {_PRIORITIES_SHOW} most important things, most important first."
+    )
+
+    try:
+        from backend.services.ai import AIService
+
+        svc = AIService(model=_PRIORITIES_MODEL)
+        parsed, _tokens = await asyncio.wait_for(
+            svc._call_claude_tool(
+                model=_PRIORITIES_MODEL,
+                max_tokens=700,
+                messages=[{"role": "user", "content": user_message}],
+                tool=_PRIORITIES_TOOL,
+                system=_PRIORITIES_SYSTEM,
+            ),
+            timeout=20.0,
+        )
+    except Exception:
+        logger.exception("day_ahead: priorities generation failed; using fallback")
+        return {"items": fallback}
+
+    items = _sanitize_priorities(parsed) or fallback
+    await _prio_cache_set(user_id, hour_key, items)
+    return {"items": items}
 
 
 # ── House + weather (Home Assistant) ───────────────────────────────────
@@ -483,8 +617,10 @@ def _build_weather(ha: dict, zone) -> dict:
 
     forecast: list[dict] = []
     for slot in daily[1:4]:
-        dt = parse_iso(slot.get("datetime"))
-        dow = dt.astimezone(zone).strftime("%a").upper()[:3] if dt else ""
+        # forecast_day_date treats daily slots as day markers so a UTC- or
+        # local-midnight datetime can't tz-shift into the previous weekday.
+        slot_date = forecast_day_date(slot.get("datetime"), zone)
+        dow = slot_date.strftime("%a").upper()[:3] if slot_date else ""
         forecast.append({
             "dow": dow,
             "code": _condition_to_code(slot.get("condition")),
@@ -556,6 +692,7 @@ async def assemble_day_shape(
     events: list[dict] = _empty_events()
     tomorrow_first: Optional[dict] = None
     mail = _empty_mail()
+    nr_rows: list[Any] = []
     try:
         async with async_session() as db:
             account_ids = await _active_account_ids(db, settings.user_id)
@@ -565,12 +702,23 @@ async def assemble_day_shape(
             except Exception:
                 logger.exception("day_ahead: calendar assembly failed")
             try:
-                mail = await _build_mail(db, account_ids, bnow,
-                                         user_id=settings.user_id, hour_key=hour_key)
+                mail, nr_rows = await _build_mail(db, account_ids, bnow)
             except Exception:
                 logger.exception("day_ahead: mail assembly failed")
     except Exception:
         logger.exception("day_ahead: DB session failed; events/mail empty")
+
+    # Priorities ("what matters now") -- AI curation over events + mail. Runs
+    # outside the DB session (no DB needed) so the up-to-20s call never holds a
+    # connection open. Cached per local hour for a stable ETag.
+    priorities = _empty_priorities()
+    try:
+        priorities = await _build_priorities(
+            events, nr_rows, now_local,
+            user_id=settings.user_id, hour_key=hour_key,
+        )
+    except Exception:
+        logger.exception("day_ahead: priorities assembly failed")
 
     # House + weather (Home Assistant).
     weather = _empty_weather()
@@ -593,6 +741,7 @@ async def assemble_day_shape(
         "weather": weather,
         "events": events,
         "mail": mail,
+        "priorities": priorities,
         "house": house,
         "tomorrow": {"first": tomorrow_first},
     }
