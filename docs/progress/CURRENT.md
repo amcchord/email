@@ -4,13 +4,18 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Add At a Glance as a first-class application route after the coordinated
-Durable Replies release clears the shared shell baseline. Keep browser Serial,
-device writes, firmware flashing, and OTA disabled until physical E1001/E1002
-recovery evidence exists.
+Qualify physical E1001/E1002 enrollment and recovery before adding browser
+Serial or any terminal write path. Then replace insecure device TLS and design
+signed A/B OTA with pending-image validation and automatic rollback. At a
+Glance is now a first-class application destination; keep the released daily
+experience separate from destructive terminal management.
 
 ## Baseline
 
+- The deployed first-class At a Glance application/runtime commit is
+  `945b71860e08d79e6ddeb5e3faccffe372418ff1`. The authenticated primary route,
+  canonical 16:9/9:16 previews, terminal battery/charge overview, and
+  credential-free experience API are live. The following closeout is docs only.
 - The deployed Calendar scope-preservation runtime is
   `a9295b8fae1dee97f1f85be3530396bc5390dd80`. Gmail and Calendar now refresh
   their shared token with the same recorded data-scope set, so Gmail cannot
@@ -41,18 +46,29 @@ live state.
 
 ## Active Work Items
 
-### P1 — First-class At a Glance application destination
+### P1 — Physical E1001/E1002 browser-install qualification
 
-- State: queued by explicit live-QA requirement; Settings currently owns only
-  the management section and does not satisfy the product-navigation contract.
-- Scope: authenticated app route, lazy route registration, primary desktop and
-  narrow-screen navigation, daily view/design/display experience, session
-  generation safety, and management links back to Settings.
-- Acceptance: At a Glance is discoverable and directly navigable like Flow,
-  Email, Calendar, and Todos; it uses the existing shared catalog/adapters and
-  preserves responsive, loading, empty, and error behavior.
-- Next: rebase onto the exact Durable Replies GitHub/production closeout and
-  implement the route in a separate migration-free slice.
+- State: software foundations are complete and production remains locked. No
+  device write or enrollment key has been enabled.
+- Scope: physical RET1 enrollment, interrupted serial/config write, three-slot
+  selection, same-owner pending continuity, rollback grace, revocation,
+  preserve-config, CA failure, power loss, and ROM recovery on both models.
+- Acceptance: repeatable recovery evidence proves a failed or interrupted
+  operation cannot silently strand a terminal or disclose credentials. Only
+  qualified exact release/model pairs may enter the allowlist.
+- Next: identify dedicated E1001/E1002 HIL devices and execute the documented
+  physical matrix before importing any Web Serial transport into production.
+
+## Recent First-Class At a Glance Release
+
+- The primary `?page=at-a-glance` destination is live with catalog-driven
+  view/design/profile selection, canonical previews, direct navigation, and
+  terminal connection/battery/charge summaries.
+- The everyday route consumes a credential-free, owner-scoped read API. Scoped
+  HTML links and all terminal/firmware mutations remain in Settings.
+- Consolidated checks passed 561 backend and 307 frontend tests; production
+  built 526 modules. Full behavior, production, and rollback evidence is in
+  `AT_A_GLANCE_FIRST_CLASS_RELEASE_2026-08-30.md`.
 
 ## Recent Durable Replies Release
 

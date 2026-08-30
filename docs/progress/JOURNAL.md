@@ -3,6 +3,56 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — First-class At a Glance release
+
+### Scope
+
+Promote At a Glance from a Settings-only management section to a discoverable,
+authenticated primary application destination while keeping terminal
+credentials, firmware, Serial, and destructive actions out of the daily route.
+
+### Completed
+
+- Added the `at-a-glance` lazy route, direct primary tab, tablet/mobile label
+  behavior, command-palette registration, and unique `g g` shortcut.
+- Added a catalog-driven 16:9/9:16 experience with canonical previews, current
+  Editorial/Swiss/Day Ahead/Clock designs, explicit loading/error/empty states,
+  session/request generation guards, and Settings handoff for scoped HTML
+  display links.
+- Added owner-scoped connection, battery, runtime, charge, learning, stale,
+  pending, review, and revoked summaries without raw identifiers or credentials.
+- Added credential-free authenticated experience/preview endpoints. The read
+  path neither exposes nor mints shared codes, display tokens/URLs, HA values,
+  firmware artifacts, or terminal credentials.
+
+### Verification
+
+- Consolidated validation passed 561 backend tests with 35 skips and all 307
+  frontend tests. Local build transformed 524 modules; production transformed
+  526 and emitted the At a Glance lazy chunk.
+- Authenticated read-only production QA loaded the direct route, primary tab,
+  view/design/profile controls, canonical preview, management handoff, and
+  charge notice. Anonymous experience access returned 401. No real state was
+  mutated.
+
+### Production Actions
+
+- Rebased onto exact Calendar docs-closeout
+  `e4da24a37dcfcea02fa0d888315cbe4e96b89111`, then pushed and deployed exact
+  application/runtime `945b71860e08d79e6ddeb5e3faccffe372418ff1`.
+- Restarted only `mailapp`. The retired process exceeded its graceful-stop
+  window; the replacement is active with zero automatic restarts. All seven
+  services and public health are healthy; Git is clean and Alembic remains
+  `f3a4b5c6d7e8 (head)`.
+- Recorded the complete release in
+  `AT_A_GLANCE_FIRST_CLASS_RELEASE_2026-08-30.md`.
+
+### Next
+
+Move to physical E1001/E1002 enrollment/recovery HIL. Keep browser Serial,
+device writes, enrollment keys, firmware flashing, and OTA locked until that
+matrix passes; then address trusted device TLS and signed A/B OTA.
+
 ## 2026-08-30 — Preserve Calendar scope across Gmail refresh
 
 ### Scope
