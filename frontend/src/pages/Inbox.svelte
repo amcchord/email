@@ -11,9 +11,20 @@
   import { registerActions } from '../lib/shortcutStore.js';
   import { lastEvent } from '../lib/realtime.js';
   import { canActOnInboxEmails, createLatestRequestGuard, inboxDatasetKey } from '../lib/inboxDataset.js';
+  import {
+    actionPastTense,
+    applyEmailAction,
+    canUndoAction,
+    captureInboxAction,
+    idempotencyKey,
+    optimisticInboxAction,
+    remainingUndoMs,
+    restoreInboxAction,
+  } from '../lib/mailActionUX.js';
   import EmailList from '../components/email/EmailList.svelte';
   import EmailTable from '../components/email/EmailTable.svelte';
   import EmailView from '../components/email/EmailView.svelte';
+  import MailActionStatus from '../components/email/MailActionStatus.svelte';
   import Icon from '../components/common/Icon.svelte';
 
   let selectedEmail = $state(null);
@@ -32,6 +43,7 @@
   const emailRequests = createLatestRequestGuard();
   let requestedDatasetKey = null;
   let committedDatasetKey = null;
+  let latestUndo = null;
 
   // Resizable panel splits (persisted)
   let columnListWidth = $state(parseInt(localStorage.getItem('columnListWidth') || '380', 10));
@@ -60,7 +72,9 @@
         if ($selectedEmailId) handleAction('trash', [$selectedEmailId]);
       },
       'inbox.star': () => {
-        if ($selectedEmailId) handleAction('star', [$selectedEmailId]);
+        if (!$selectedEmailId) return;
+        const target = get(emails).find(email => email.id === $selectedEmailId) || selectedEmail;
+        handleAction(target?.is_starred ? 'unstar' : 'star', [$selectedEmailId]);
       },
       'inbox.read': () => {
         if ($selectedEmailId) handleAction('mark_read', [$selectedEmailId]);
@@ -89,6 +103,7 @@
       'inbox.focused': () => {
         hideIgnored.update(v => !v);
       },
+      'inbox.undo': runLatestUndo,
     });
 
     return () => {
@@ -105,6 +120,7 @@
     listRequests.invalidate();
     emailRequests.invalidate();
     selectionEpoch += 1;
+    latestUndo = null;
     datasetAuthoritative = false;
     datasetUpdating = false;
     selectedEmailId.set(null);
@@ -344,9 +360,9 @@
       if (!isCurrentEmailRequest(requestId, id)) return;
       selectedEmail = result;
       if (!result.is_read) {
-        await api.emailActions([id], 'mark_read');
-        if (!isCurrentEmailRequest(requestId, id)) return;
-        emails.update(list => list.map(e => e.id === id ? { ...e, is_read: true } : e));
+        // Rendering the message must never wait for a mailbox mutation. The
+        // durable action path owns retries and exposes any terminal failure.
+        void handleAction('mark_read', [id], { announce: false, offerUndo: false });
       }
     } catch (err) {
       if (emailRequests.isCurrent(requestId)) showToast(err.message, 'error');
@@ -382,17 +398,130 @@
     return canAct;
   }
 
-  async function handleAction(action, emailIds) {
-    if (!canActOnEmails(emailIds)) return;
-    const actionEpoch = selectionEpoch;
+  function actionContextIsCurrent(actionEpoch, datasetKey) {
+    return mounted
+      && actionEpoch === selectionEpoch
+      && datasetAuthoritative
+      && currentDatasetSnapshot().key === datasetKey;
+  }
+
+  function restoreOptimisticAction({ snapshot, optimistic, detailBefore, removedCount }) {
+    emails.update(current => restoreInboxAction(current, snapshot));
+    if (removedCount > 0) emailsTotal.update(total => total + removedCount);
+    if (get(selectedEmailId) === optimistic.selectedId) {
+      selectedEmailId.set(snapshot.selectedId);
+    }
+    if (detailBefore && selectedEmail?.id === detailBefore.id) selectedEmail = detailBefore;
+  }
+
+  async function submitMailAction(emailIds, action, requestKey) {
     try {
-      await api.emailActions(emailIds, action);
-      if (actionEpoch !== selectionEpoch) return;
-      showToast(`${action.replace('_', ' ')} applied`, 'success');
-      await refreshDataset();
-      if (action === 'trash' || action === 'spam' || action === 'archive') selectedEmailId.set(null);
+      return await api.emailActions(emailIds, action, requestKey);
     } catch (err) {
-      if (actionEpoch === selectionEpoch) showToast(err.message, 'error');
+      // A lost response is ambiguous. Replaying once with the same key is safe
+      // and lets the server return the original accepted operation.
+      if (!(err instanceof TypeError) && !/network|failed to fetch/i.test(err.message || '')) throw err;
+      return api.emailActions(emailIds, action, requestKey);
+    }
+  }
+
+  async function undoAcceptedAction(context) {
+    try {
+      const operation = await api.undoMailAction(context.operation.request_id);
+      if (actionContextIsCurrent(context.actionEpoch, context.datasetKey)) {
+        restoreOptimisticAction(context);
+      }
+      if (latestUndo?.requestId === context.operation.request_id) latestUndo = null;
+      showToast(`${actionPastTense(context.action, context.emailIds.length)} — undone`, 'success');
+      return operation;
+    } catch (err) {
+      showToast(err.message || 'This action can no longer be undone', 'error');
+      throw err;
+    }
+  }
+
+  function runLatestUndo() {
+    if (!latestUndo) return;
+    if (latestUndo.expiresAt <= Date.now()) {
+      latestUndo = null;
+      showToast('The undo window has closed', 'info');
+      return;
+    }
+    return latestUndo.run();
+  }
+
+  async function handleAction(action, emailIds, { announce = true, offerUndo = true } = {}) {
+    if (!canActOnEmails(emailIds)) return false;
+    const uniqueIds = [...new Set(emailIds)];
+    const actionEpoch = selectionEpoch;
+    const datasetKey = currentDatasetSnapshot().key;
+    const detailBefore = selectedEmail;
+    const snapshot = captureInboxAction(get(emails), get(selectedEmailId), uniqueIds);
+    const optimistic = optimisticInboxAction({
+      emails: get(emails),
+      selectedId: get(selectedEmailId),
+      emailIds: uniqueIds,
+      action,
+      mailbox: get(currentMailbox),
+    });
+    const removedCount = optimistic.removed ? snapshot.items.length : 0;
+
+    emails.set(optimistic.emails);
+    if (removedCount > 0) emailsTotal.update(total => Math.max(0, total - removedCount));
+    selectedEmailId.set(optimistic.selectedId);
+    if (!optimistic.removed && selectedEmail && uniqueIds.includes(selectedEmail.id)) {
+      selectedEmail = applyEmailAction(selectedEmail, action);
+    }
+
+    const context = {
+      action,
+      actionEpoch,
+      datasetKey,
+      detailBefore,
+      emailIds: uniqueIds,
+      optimistic,
+      removedCount,
+      snapshot,
+    };
+
+    try {
+      const operation = await submitMailAction(uniqueIds, action, idempotencyKey());
+      if (!actionContextIsCurrent(actionEpoch, datasetKey)) return true;
+
+      if (announce) {
+        const undoMs = offerUndo && canUndoAction(operation) ? remainingUndoMs(operation.undo_until) : 0;
+        if (undoMs > 0) {
+          const undoContext = { ...context, operation };
+          let undoPromise = null;
+          const runUndo = () => {
+            if (!undoPromise) {
+              undoPromise = undoAcceptedAction(undoContext).finally(() => {
+                undoPromise = null;
+              });
+            }
+            return undoPromise;
+          };
+          latestUndo = {
+            requestId: operation.request_id,
+            expiresAt: Date.parse(operation.undo_until),
+            run: runUndo,
+          };
+          showToast(actionPastTense(action, uniqueIds.length), 'success', undoMs, {
+            actionLabel: 'Undo',
+            onAction: latestUndo.run,
+            dismissLabel: 'Dismiss action confirmation',
+          });
+        } else {
+          showToast(actionPastTense(action, uniqueIds.length), 'success');
+        }
+      }
+      return true;
+    } catch (err) {
+      if (actionContextIsCurrent(actionEpoch, datasetKey)) {
+        restoreOptimisticAction(context);
+        showToast(err.message, 'error');
+      }
+      return false;
     }
   }
 
@@ -499,6 +628,7 @@
       </button>
     </div>
   {/if}
+  <MailActionStatus />
   <div class="inbox-split flex-1 min-h-0 flex">
   {#if useTableLayout}
     <!-- Table view: vertical split (table on top, preview below) -->

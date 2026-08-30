@@ -53,6 +53,7 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'inbox.viewMode', key: 'v',       label: 'Toggle table/column',   context: 'inbox', category: 'Inbox' },
   { id: 'inbox.sidebar',  key: '[',       label: 'Toggle sidebar',        context: 'inbox', category: 'Inbox' },
   { id: 'inbox.focused',  key: 'Shift+f', label: 'Toggle focused filter', context: 'inbox', category: 'Inbox' },
+  { id: 'inbox.undo',     key: 'z',       label: 'Undo last email action', context: 'inbox', category: 'Inbox' },
 
   // ── Email View ───────────────────────────────────────────────────
   { id: 'email.reply',   key: 'r',       label: 'Reply',             context: 'email-view', category: 'Email View' },

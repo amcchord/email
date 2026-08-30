@@ -1,0 +1,53 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { api } from './api.js';
+
+function jsonResponse(payload, status = 200) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+test('mail action creation sends the durable idempotency contract', async t => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let call = null;
+  globalThis.fetch = async (url, options) => {
+    call = { url, options };
+    return jsonResponse({ request_id: 'request-1', state: 'staged' }, 202);
+  };
+
+  const result = await api.emailActions([11, 12], 'archive', 'client-key');
+
+  assert.equal(call.url, '/api/emails/actions');
+  assert.equal(call.options.method, 'POST');
+  assert.deepEqual(JSON.parse(call.options.body), {
+    email_ids: [11, 12],
+    action: 'archive',
+    idempotency_key: 'client-key',
+  });
+  assert.equal(result.state, 'staged');
+});
+
+test('mail action lifecycle helpers use request-scoped routes', async t => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, method: options.method });
+    return jsonResponse([]);
+  };
+
+  await api.getMailAction('request-2');
+  await api.listRecentMailActions(7);
+  await api.undoMailAction('request-2');
+  await api.retryMailAction('request-2');
+
+  assert.deepEqual(calls, [
+    { url: '/api/emails/actions/request-2', method: 'GET' },
+    { url: '/api/emails/actions/recent?limit=7', method: 'GET' },
+    { url: '/api/emails/actions/request-2/undo', method: 'POST' },
+    { url: '/api/emails/actions/request-2/retry', method: 'POST' },
+  ]);
+});

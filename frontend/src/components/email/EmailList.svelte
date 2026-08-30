@@ -26,6 +26,7 @@
   let showAccountDot = $derived($selectedAccountId === null);
 
   let selectedIds = $state(new Set());
+  let bulkActionPending = $state(false);
   let expandedThreads = $state(new Set());
   let sentinelEl = $state(null);
   let observer = null;
@@ -104,10 +105,14 @@
     }
   }
 
-  function handleBulkAction(action) {
-    if (!actionsDisabled && selectedIds.size > 0 && onAction) {
-      onAction(action, Array.from(selectedIds));
-      selectedIds = new Set();
+  async function handleBulkAction(action) {
+    if (actionsDisabled || bulkActionPending || selectedIds.size === 0 || !onAction) return;
+    bulkActionPending = true;
+    try {
+      const accepted = await onAction(action, Array.from(selectedIds));
+      if (accepted) selectedIds = new Set();
+    } finally {
+      bulkActionPending = false;
     }
   }
 
@@ -241,19 +246,19 @@
     <div class="h-10 flex items-center gap-2 px-3 border-b shrink-0" style="border-color: var(--border-color); background: var(--bg-tertiary)">
       <span class="text-xs font-medium" style="color: var(--text-secondary)">{selectedIds.size} selected</span>
       <div class="flex gap-1 ml-auto">
-        <button onclick={() => handleBulkAction('mark_read')} disabled={actionsDisabled} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Read</button>
-        <button onclick={() => handleBulkAction('mark_unread')} disabled={actionsDisabled} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Unread</button>
-        <button onclick={() => handleBulkAction('archive')} disabled={actionsDisabled} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Archive</button>
-        <button onclick={() => handleBulkAction('star')} disabled={actionsDisabled} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Star</button>
+        <button onclick={() => handleBulkAction('mark_read')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Read</button>
+        <button onclick={() => handleBulkAction('mark_unread')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Unread</button>
+        <button onclick={() => handleBulkAction('archive')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Archive</button>
+        <button onclick={() => handleBulkAction('star')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Star</button>
         {#if mailbox === 'SPAM'}
-          <button onclick={() => handleBulkAction('unspam')} disabled={actionsDisabled} class="px-2 py-1 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Not Spam</button>
+          <button onclick={() => handleBulkAction('unspam')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Not Spam</button>
         {:else}
-          <button onclick={() => handleBulkAction('spam')} disabled={actionsDisabled} class="px-2 py-1 text-xs rounded text-red-500 disabled:opacity-50">Spam</button>
+          <button onclick={() => handleBulkAction('spam')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded text-red-500 disabled:opacity-50">Spam</button>
         {/if}
         {#if mailbox === 'TRASH'}
-          <button onclick={() => handleBulkAction('untrash')} disabled={actionsDisabled} class="px-2 py-1 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Restore</button>
+          <button onclick={() => handleBulkAction('untrash')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Restore</button>
         {:else}
-          <button onclick={() => handleBulkAction('trash')} disabled={actionsDisabled} class="px-2 py-1 text-xs rounded text-red-500 disabled:opacity-50">Trash</button>
+          <button onclick={() => handleBulkAction('trash')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded text-red-500 disabled:opacity-50">Trash</button>
         {/if}
       </div>
     </div>

@@ -152,8 +152,17 @@ export const api = {
     const params = order ? `?order=${order}` : '';
     return request('GET', `/emails/thread/${threadId}${params}`);
   },
-  emailActions: (emailIds, action, label = null) =>
-    request('POST', '/emails/actions', { email_ids: emailIds, action, label }),
+  emailActions: (emailIds, action, idempotencyKey = null) =>
+    request('POST', '/emails/actions', {
+      email_ids: emailIds,
+      action,
+      ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
+    }),
+  getMailAction: (requestId) => request('GET', `/emails/actions/${requestId}`),
+  listRecentMailActions: (limit = 20) =>
+    request('GET', `/emails/actions/recent?limit=${encodeURIComponent(limit)}`),
+  undoMailAction: (requestId) => request('POST', `/emails/actions/${requestId}/undo`, {}),
+  retryMailAction: (requestId) => request('POST', `/emails/actions/${requestId}/retry`, {}),
   getLabels: (accountId = null) => {
     const params = accountId ? `?account_id=${accountId}` : '';
     return request('GET', `/emails/labels/all${params}`);
