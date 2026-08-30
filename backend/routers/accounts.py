@@ -12,6 +12,10 @@ from backend.routers.auth import get_current_user, _check_allowed
 from backend.utils.security import encrypt_value, decrypt_value, sign_oauth_state, verify_oauth_state
 from backend.config import get_settings
 from backend.services.google_oauth import build_google_flow, new_code_verifier
+from backend.services.google_scopes import (
+    CALENDAR_READONLY_SCOPE,
+    GOOGLE_DATA_SCOPES,
+)
 import json
 import logging
 import secrets
@@ -23,11 +27,7 @@ logger = logging.getLogger(__name__)
 
 GMAIL_SCOPES = [
     "openid",
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/gmail.labels",
-    "https://www.googleapis.com/auth/calendar.readonly",
+    *GOOGLE_DATA_SCOPES,
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
 ]
@@ -454,8 +454,7 @@ async def oauth_callback(
             return _account_oauth_redirect(state_data, error="not_allowed")
 
         actual_scopes = _credential_scopes(credentials)
-        calendar_scope = "https://www.googleapis.com/auth/calendar.readonly"
-        if calendar_scope not in actual_scopes:
+        if CALENDAR_READONLY_SCOPE not in actual_scopes:
             return _account_oauth_redirect(state_data, error="calendar_scope_missing")
         if not REQUIRED_GMAIL_SCOPES.issubset(actual_scopes):
             return _account_oauth_redirect(state_data, error="required_scopes_missing")

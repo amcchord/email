@@ -23,6 +23,7 @@ from backend.models.account import GoogleAccount
 from backend.utils.security import decrypt_value, encrypt_value
 from backend.config import get_settings
 from backend.services.rate_limiter import gmail_rate_limiter, COST_DEFAULT, COST_GET
+from backend.services.google_scopes import runtime_scopes_for_account
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -154,12 +155,7 @@ class GmailService:
             token_uri="https://oauth2.googleapis.com/token",
             client_id=self._client_id,
             client_secret=self._client_secret,
-            scopes=[
-                "https://www.googleapis.com/auth/gmail.readonly",
-                "https://www.googleapis.com/auth/gmail.send",
-                "https://www.googleapis.com/auth/gmail.modify",
-                "https://www.googleapis.com/auth/gmail.labels",
-            ],
+            scopes=runtime_scopes_for_account(getattr(self.account, "scopes", None)),
         )
         self._creds = creds
         return creds

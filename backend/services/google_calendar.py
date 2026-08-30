@@ -11,6 +11,7 @@ from backend.models.account import GoogleAccount
 from backend.utils.security import decrypt_value
 from backend.config import get_settings
 from backend.services.rate_limiter import gmail_rate_limiter, COST_DEFAULT
+from backend.services.google_scopes import runtime_scopes_for_account
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -49,23 +50,15 @@ class GoogleCalendarService:
         access_token = decrypt_value(self.account.encrypted_access_token)
         refresh_token = decrypt_value(self.account.encrypted_refresh_token)
         self._original_token = access_token
-        # IMPORTANT: list ALL scopes the account was authorized with, not just
-        # calendar.  When google-auth refreshes the token it requests these
-        # scopes -- if we only list calendar.readonly, the new token loses
-        # Gmail access and breaks email sync.
+        # Gmail and Calendar share one access token. Either service can refresh
+        # it, so both must request the same recorded data-scope grant.
         creds = Credentials(
             token=access_token,
             refresh_token=refresh_token,
             token_uri="https://oauth2.googleapis.com/token",
             client_id=self._client_id,
             client_secret=self._client_secret,
-            scopes=[
-                "https://www.googleapis.com/auth/gmail.readonly",
-                "https://www.googleapis.com/auth/gmail.send",
-                "https://www.googleapis.com/auth/gmail.modify",
-                "https://www.googleapis.com/auth/gmail.labels",
-                "https://www.googleapis.com/auth/calendar.readonly",
-            ],
+            scopes=runtime_scopes_for_account(getattr(self.account, "scopes", None)),
         )
         self._creds = creds
         return creds
