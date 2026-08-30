@@ -11,8 +11,9 @@ continue without overlapping files or Git state.
 
 ## Baseline
 
-- Product worktree: `codex/product-polish-cycle-1` at `a41a90d`, pushed to
-  `origin/codex/product-polish-cycle-1`.
+- Product worktree: `codex/product-polish-cycle-1`, pushed to
+  `origin/codex/product-polish-cycle-1`; product implementation is complete
+  through `a41a90d`, followed only by progress documentation.
 - Repository source baseline: `origin/main` at `41d2898`.
 - Concurrent AI-model work is owned by another process in the original
   checkout; do not edit, stage, or reconcile its files from this worktree.
