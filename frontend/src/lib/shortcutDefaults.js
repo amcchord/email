@@ -85,6 +85,7 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'compose.send',    key: 'Ctrl+Enter',   label: 'Send email',  context: 'compose', category: 'Compose' },
   { id: 'compose.draft',   key: 'Ctrl+s',       label: 'Save draft',  context: 'compose', category: 'Compose' },
   { id: 'compose.discard', key: 'Escape',        label: 'Close and keep draft', context: 'compose', category: 'Compose' },
+  { id: 'compose.deleteDraft', key: 'Ctrl+Shift+,', label: 'Discard draft', context: 'compose', category: 'Compose' },
   { id: 'compose.cc',      key: 'Ctrl+Shift+c', label: 'Toggle Cc',   context: 'compose', category: 'Compose' },
   { id: 'compose.bcc',     key: 'Ctrl+Shift+b', label: 'Toggle Bcc',  context: 'compose', category: 'Compose' },
 

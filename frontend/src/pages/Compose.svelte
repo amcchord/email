@@ -16,14 +16,20 @@
   } from '../lib/stores.js';
   import { registerActions } from '../lib/shortcutStore.js';
   import {
-    composeDraftHasContent,
-    composeDraftStorageKey,
     composeLastAccountStorageKey,
     composeReplyContext,
+    createComposeDraftIntent,
+    newComposeIntent,
   } from '../lib/composeDraft.js';
+  import {
+    createIndexedDbDraftStorage,
+    migrateLegacyScopedDrafts,
+  } from '../lib/draftStorage.js';
+  import { createDraftSessionController } from '../lib/draftSession.js';
   import Button from '../components/common/Button.svelte';
   import Icon from '../components/common/Icon.svelte';
   import DeferredRichEditor from '../components/email/DeferredRichEditor.svelte';
+  import DraftStatus from '../components/email/DraftStatus.svelte';
 
   let to = $state('');
   let cc = $state('');
@@ -42,6 +48,13 @@
   let writingSurfaceReady = $state(false);
   let savingDraft = $state(false);
   let activeDraftKey = $state(null);
+  let draftState = $state({ status: 'pristine', canSend: false, snapshot: {} });
+  let draftController = $state.raw(null);
+  let durableStorage = null;
+  let unsubscribeDraft = null;
+  let lastPersistedFingerprint = '';
+  let openingDraftGeneration = 0;
+  let editorRevision = $state(0);
   let replyContext = $state({ in_reply_to: null, references: null, thread_id: null, source_email_id: null });
   let suppressLocalPersistence = false;
   let sessionGuard = null;
@@ -49,6 +62,7 @@
   let senderAccount = $derived(accountList.find(account => account.id === Number(selectedAccountId)) || null);
   let recipientChips = $derived(parseRecipients(to));
   let totalAttachmentBytes = $derived(attachments.reduce((sum, item) => sum + item.size, 0));
+  let draftLocked = $derived(draftState.status === 'discard-pending' || draftState.status === 'discarded');
 
   function parseRecipients(value) {
     return (value || '').split(/[;,]/).map(item => item.trim()).filter(Boolean);
@@ -71,75 +85,152 @@
 
   function draftSnapshot() {
     return {
-      account_id: selectedAccountId,
-      to,
-      cc,
-      bcc,
+      account_id: Number(selectedAccountId) || null,
+      to: parseRecipients(to),
+      cc: parseRecipients(cc),
+      bcc: parseRecipients(bcc),
       subject,
       body_html: bodyHtml,
+      body_text: bodyHtml.replace(/<[^>]*>/g, ''),
+      is_draft: true,
+      attachments: attachments.map(({ size: _size, ...item }) => ({ ...item })),
       in_reply_to: replyContext.in_reply_to,
       references: replyContext.references,
       thread_id: replyContext.thread_id,
       source_email_id: replyContext.source_email_id,
-      saved_at: new Date().toISOString(),
     };
   }
 
-  function persistedDraftFingerprint(draft) {
+  function draftFingerprint(draft) {
     if (!draft || typeof draft !== 'object') return null;
-    const { saved_at: _savedAt, ...content } = draft;
-    return JSON.stringify(content);
-  }
-
-  function removeCapturedDraftIfUnchanged(draftKey, fingerprint) {
-    if (!draftKey || !fingerprint) return;
-    try {
-      const stored = JSON.parse(localStorage.getItem(draftKey) || 'null');
-      if (persistedDraftFingerprint(stored) === fingerprint) {
-        localStorage.removeItem(draftKey);
-      }
-    } catch {
-      // Preserve an unreadable or concurrently replaced value. Deleting it
-      // could erase a newer draft that reused the ordinary `new` intent key.
-    }
+    return JSON.stringify(draft);
   }
 
   function persistLocalDraft(draft = draftSnapshot()) {
-    if (suppressLocalPersistence || !activeDraftKey || !sessionGuard?.isCurrent()) return;
+    if (suppressLocalPersistence || !draftController || !autosaveReady || !sessionGuard?.isCurrent()) return;
+    const fingerprint = draftFingerprint(draft);
+    if (!fingerprint || fingerprint === lastPersistedFingerprint) return;
     try {
-      if (!composeDraftHasContent(draft)) {
-        localStorage.removeItem(activeDraftKey);
-        autosaveStatus = '';
-        return;
-      }
-      localStorage.setItem(activeDraftKey, JSON.stringify(draft));
-      autosaveStatus = `Saved locally at ${new Date(draft.saved_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
-    } catch {
-      autosaveStatus = 'Local autosave unavailable';
+      draftController.update(draft);
+      lastPersistedFingerprint = fingerprint;
+    } catch (error) {
+      autosaveStatus = error?.message || 'Local autosave unavailable';
     }
   }
 
-  function restoreLocalDraft() {
-    if (!activeDraftKey || !sessionGuard?.isCurrent()) return;
-    try {
-      const serialized = localStorage.getItem(activeDraftKey);
-      const draft = JSON.parse(serialized || 'null');
-      if (!composeDraftHasContent(draft)) return;
-      to = draft.to || '';
-      cc = draft.cc || '';
-      bcc = draft.bcc || '';
-      subject = draft.subject || '';
-      bodyHtml = draft.body_html || '';
-      initialContent = bodyHtml;
-      if (Number.isSafeInteger(Number(draft.account_id)) && Number(draft.account_id) > 0) {
-        selectedAccountId = Number(draft.account_id);
-      }
-      replyContext = composeReplyContext(draft);
-      showCcBcc = Boolean(cc || bcc);
-      autosaveStatus = `Restored local draft from ${new Date(draft.saved_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
-    } catch {
-      localStorage.removeItem(activeDraftKey);
+  function normalizeDraftAttachment(item = {}) {
+    return {
+      ...(item.attachment_id ? { attachment_id: item.attachment_id } : {}),
+      filename: item.filename || 'attachment',
+      content_type: item.content_type || 'application/octet-stream',
+      data_base64: item.data_base64 || '',
+      size: Number(item.size ?? item.size_bytes) || 0,
+    };
+  }
+
+  function hydrateDraftSnapshot(draft = {}) {
+    suppressLocalPersistence = true;
+    to = recipientFieldValue(draft.to);
+    cc = recipientFieldValue(draft.cc);
+    bcc = recipientFieldValue(draft.bcc);
+    subject = draft.subject || '';
+    bodyHtml = draft.body_html || '';
+    initialContent = bodyHtml;
+    attachments = Array.isArray(draft.attachments)
+      ? draft.attachments.map(normalizeDraftAttachment)
+      : [];
+    if (Number.isSafeInteger(Number(draft.account_id)) && Number(draft.account_id) > 0) {
+      selectedAccountId = Number(draft.account_id);
     }
+    replyContext = composeReplyContext(draft);
+    showCcBcc = Boolean(cc || bcc);
+    lastPersistedFingerprint = draftFingerprint(draftSnapshot());
+    editorRevision += 1;
+    queueMicrotask(() => { suppressLocalPersistence = false; });
+  }
+
+  async function seedServerDraftIfNeeded(intent, data) {
+    if (!data?.draft_revision || !data?.client_draft_id) return;
+    const existing = await durableStorage.get(sessionGuard.userId, intent.client_draft_id);
+    if (existing) return;
+    const snapshot = {
+      ...draftSnapshot(),
+      account_id: Number(data.account_id),
+      to: Array.isArray(data.to) ? data.to : parseRecipients(data.to),
+      cc: Array.isArray(data.cc) ? data.cc : parseRecipients(data.cc),
+      bcc: Array.isArray(data.bcc) ? data.bcc : parseRecipients(data.bcc),
+      subject: data.subject || '',
+      body_html: data.body_html || '',
+      body_text: data.body_text || '',
+      attachments: (data.attachments || []).map(({ size: _size, size_bytes: _bytes, ...item }) => item),
+      ...composeReplyContext(data),
+    };
+    const now = new Date().toISOString();
+    await durableStorage.put({
+      user_id: sessionGuard.userId,
+      client_draft_id: intent.client_draft_id,
+      intent_key: intent.intent_key,
+      draft_key: intent.draft_key,
+      revision: Number(data.draft_revision),
+      mutation_id: crypto.randomUUID(),
+      synced_revision: Number(data.synced_revision || data.draft_revision),
+      status: data.draft_state === 'synced' ? 'synced' : 'local-only',
+      snapshot,
+      server: { state: data.draft_state || 'synced', revision: Number(data.synced_revision || data.draft_revision) },
+      error: null,
+      conflict: null,
+      tombstone: null,
+      created_at: data.created_at || now,
+      updated_at: data.updated_at || now,
+    });
+  }
+
+  async function openDraftIntent(data = {}) {
+    if (!sessionGuard?.isCurrent() || !durableStorage) return;
+    const requestGeneration = ++openingDraftGeneration;
+    const suppliedClientId = data?.client_draft_id || null;
+    const intent = createComposeDraftIntent(data || newComposeIntent());
+    if (activeDraftKey === intent.client_draft_id && draftController) return;
+
+    if (draftController) {
+      persistLocalDraft();
+      await draftController.flush();
+      draftController.dispose();
+      unsubscribeDraft?.();
+    }
+    autosaveReady = false;
+    writingSurfaceReady = false;
+    if (requestGeneration !== openingDraftGeneration || !sessionGuard.isCurrent()) return;
+
+    hydrateDraftSnapshot(data);
+    await seedServerDraftIfNeeded(intent, data);
+    draftController = createDraftSessionController({
+      userId: sessionGuard.userId,
+      storage: durableStorage,
+      api,
+      discardDelayMs: 10000,
+      captureSession: captureAuthenticatedSession,
+      isSessionCurrent: isAuthenticatedSessionCurrent,
+      onDiscard: () => {
+        if (!sessionGuard?.isCurrent()) return;
+        suppressLocalPersistence = true;
+        composeData.set(null);
+        currentPage.set('inbox');
+      },
+    });
+    unsubscribeDraft = draftController.subscribe(state => {
+      if (requestGeneration !== openingDraftGeneration || !sessionGuard?.isCurrent()) return;
+      draftState = state;
+      autosaveStatus = '';
+      lastPersistedFingerprint = draftFingerprint(state.snapshot);
+    });
+    activeDraftKey = intent.client_draft_id;
+    const state = suppliedClientId
+      ? await draftController.load({ clientDraftId: intent.client_draft_id, intent, initialSnapshot: draftSnapshot() })
+      : await draftController.load({ intent, initialSnapshot: draftSnapshot() });
+    if (requestGeneration !== openingDraftGeneration || !sessionGuard.isCurrent()) return;
+    hydrateDraftSnapshot(state.snapshot);
+    autosaveReady = true;
   }
 
   onMount(() => {
@@ -147,7 +238,9 @@
     if (!sessionGuard.isCurrent()) {
       return () => sessionGuard?.dispose();
     }
-    activeDraftKey = composeDraftStorageKey(sessionGuard.userId, get(composeData));
+    durableStorage = createIndexedDbDraftStorage();
+    let unsubCompose = null;
+    let disposed = false;
 
     const unsubAccounts = accounts.subscribe(v => {
       if (!sessionGuard?.isCurrent()) return;
@@ -157,32 +250,16 @@
       }
     });
 
-    // Pre-fill from composeData (reply/forward)
-    const unsub = composeData.subscribe(data => {
-      if (!sessionGuard?.isCurrent()) return;
-      if (data) {
-        activeDraftKey = composeDraftStorageKey(sessionGuard.userId, data);
-        if (data.to) to = recipientFieldValue(data.to);
-        if (data.cc) cc = recipientFieldValue(data.cc);
-        if (data.bcc) bcc = recipientFieldValue(data.bcc);
-        if (data.subject) subject = data.subject;
-        if (data.body_html) {
-          initialContent = data.body_html;
-          bodyHtml = data.body_html;
-        }
-        showCcBcc = Boolean(data.cc?.length || data.bcc?.length);
-        if (data.account_id) selectedAccountId = data.account_id;
-        if (Array.isArray(data.attachments)) attachments = data.attachments;
-        replyContext = composeReplyContext(data);
-      }
-    });
-
     // Register keyboard shortcut actions for the Compose page
     const cleanupShortcuts = registerActions({
       'compose.send': {
         run: () => handleSend(),
-        isEnabled: () => !sending && writingSurfaceReady,
-        disabledReason: () => sending ? 'Email is already sending' : 'Message editor is still opening',
+        isEnabled: () => !sending && writingSurfaceReady && draftState.canSend,
+        disabledReason: () => sending
+          ? 'Email is already sending'
+          : !draftState.canSend
+            ? 'Draft is not ready to send'
+            : 'Message editor is still opening',
       },
       'compose.draft': {
         run: () => handleSaveDraft(),
@@ -190,21 +267,53 @@
         disabledReason: () => savingDraft ? 'Draft is already saving' : 'Message editor is still opening',
       },
       'compose.discard': () => returnToInbox(),
+      'compose.deleteDraft': () => discardDraft(),
       'compose.cc': () => { showCcBcc = !showCcBcc; },
       'compose.bcc': () => { showCcBcc = !showCcBcc; },
     });
 
-    queueMicrotask(() => {
-      restoreLocalDraft();
-      autosaveReady = true;
-    });
+    const onlineHandler = () => draftController?.handleOnlineChange();
+    window.addEventListener('online', onlineHandler);
+    window.addEventListener('offline', onlineHandler);
+
+    void (async () => {
+      try {
+        await migrateLegacyScopedDrafts({
+          storage: durableStorage,
+          localStorage,
+          userId: sessionGuard.userId,
+        });
+        if (disposed || !sessionGuard.isCurrent()) return;
+        const initialIntent = get(composeData) || newComposeIntent();
+        await openDraftIntent(initialIntent);
+        if (disposed || !sessionGuard.isCurrent()) return;
+        unsubCompose = composeData.subscribe(data => {
+          if (!data || !sessionGuard?.isCurrent()) return;
+          if (data.client_draft_id === activeDraftKey) return;
+          void openDraftIntent(data);
+        });
+      } catch (error) {
+        if (sessionGuard?.isCurrent()) {
+          autosaveStatus = 'Durable draft storage is unavailable';
+          showToast(error?.message || autosaveStatus, 'error');
+        }
+      }
+    })();
 
     return () => {
+      disposed = true;
+      openingDraftGeneration += 1;
       if (autosaveReady) persistLocalDraft();
+      void draftController?.flush();
+      unsubscribeDraft?.();
+      draftController?.dispose();
       unsubAccounts();
-      unsub();
+      unsubCompose?.();
+      window.removeEventListener('online', onlineHandler);
+      window.removeEventListener('offline', onlineHandler);
       composeData.set(null);
       cleanupShortcuts();
+      void durableStorage?.close();
       sessionGuard?.dispose();
     };
   });
@@ -229,11 +338,7 @@
     if (!autosaveReady) return;
     const draft = draftSnapshot();
     suppressLocalPersistence = false;
-    autosaveStatus = 'Saving locally…';
-    const timer = setTimeout(() => {
-      persistLocalDraft(draft);
-    }, 650);
-    return () => clearTimeout(timer);
+    persistLocalDraft(draft);
   });
 
   $effect(() => {
@@ -256,19 +361,31 @@
       event.currentTarget.value = '';
       return;
     }
-    const encoded = await Promise.all(files.map(file => new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve({
-        filename: file.name,
-        content_type: file.type || 'application/octet-stream',
-        data_base64: String(reader.result).split(',')[1] || '',
-        size: file.size,
-      });
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    })));
-    if (!sessionGuard?.isCurrent()) return;
-    attachments = [...attachments, ...encoded];
+    await Promise.all(files.map(async file => {
+      const importId = draftController?.beginAttachmentImport({ filename: file.name }) || crypto.randomUUID();
+      try {
+        const encoded = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve({
+            attachment_id: importId,
+            filename: file.name,
+            content_type: file.type || 'application/octet-stream',
+            data_base64: String(reader.result).split(',')[1] || '',
+            size: file.size,
+          });
+          reader.onerror = () => reject(reader.error || new Error(`Could not read ${file.name}`));
+          reader.readAsDataURL(file);
+        });
+        if (!sessionGuard?.isCurrent()) return;
+        if (draftController) draftController.completeAttachmentImport(importId, encoded);
+        else attachments = [...attachments, encoded];
+      } catch (error) {
+        draftController?.failAttachmentImport(importId, error, file.name);
+      }
+    }));
+    if (draftController && sessionGuard?.isCurrent()) {
+      attachments = (draftController.getState().snapshot.attachments || []).map(normalizeDraftAttachment);
+    }
     event.currentTarget.value = '';
   }
 
@@ -276,26 +393,43 @@
     attachments = attachments.filter((_, itemIndex) => itemIndex !== index);
   }
 
-  function discardDraft() {
+  async function discardDraft() {
+    if (!sessionGuard?.isCurrent() || !draftController || draftLocked) return;
+    persistLocalDraft();
+    await draftController.flush();
+    if (!sessionGuard.isCurrent()) return;
+    await draftController.discard({ delayMs: 10000 });
+  }
+
+  async function undoDiscardDraft() {
+    if (!sessionGuard?.isCurrent() || !draftController) return;
+    await draftController.undoDiscard();
+  }
+
+  async function returnToInbox() {
     if (!sessionGuard?.isCurrent()) return;
-    suppressLocalPersistence = true;
-    if (activeDraftKey) localStorage.removeItem(activeDraftKey);
+    persistLocalDraft();
+    await draftController?.flush();
+    if (!sessionGuard.isCurrent()) return;
     composeData.set(null);
     currentPage.set('inbox');
   }
 
-  function returnToInbox() {
-    if (!sessionGuard?.isCurrent()) return;
-    persistLocalDraft();
-    if (attachments.length > 0) {
-      showToast('Draft saved locally without attachments; add them again when you return', 'info');
+  async function resolveDraftConflict() {
+    if (draftState.status !== 'conflict' || !draftController) return;
+    const useServer = window.confirm(
+      'This draft changed elsewhere. Choose OK to use the provider version, or Cancel to keep and resync this version.',
+    );
+    try {
+      const state = await draftController.resolveConflict(useServer ? 'server' : 'local');
+      if (useServer && state?.snapshot) hydrateDraftSnapshot(state.snapshot);
+    } catch (error) {
+      showToast(error?.message || 'The draft versions could not be reconciled', 'error');
     }
-    composeData.set(null);
-    currentPage.set('inbox');
   }
 
   async function handleSend() {
-    if (sending || !writingSurfaceReady || !sessionGuard?.isCurrent()) return false;
+    if (sending || !writingSurfaceReady || !draftState.canSend || !sessionGuard?.isCurrent()) return false;
     if (!to.trim()) {
       showToast('Please add recipients', 'error');
       return false;
@@ -305,16 +439,26 @@
       return false;
     }
 
+    persistLocalDraft();
+    await draftController?.markSending(true);
+    if (!sessionGuard.isCurrent()) return false;
     const sendSession = captureAuthenticatedSession();
-    const capturedDraftKey = activeDraftKey;
-    const capturedDraftFingerprint = persistedDraftFingerprint(draftSnapshot());
+    const capturedDraftKey = draftController?.clientDraftId || activeDraftKey;
+    const capturedDraftRevision = draftController?.revision || 0;
     let editorReleased = false;
     const releaseEditor = () => {
       if (editorReleased || !isAuthenticatedSessionCurrent(sendSession)) return;
       editorReleased = true;
-      suppressLocalPersistence = true;
-      removeCapturedDraftIfUnchanged(capturedDraftKey, capturedDraftFingerprint);
       if (!sessionGuard?.isCurrent()) return;
+      if (
+        draftController?.clientDraftId !== capturedDraftKey
+        || draftController?.revision !== capturedDraftRevision
+      ) {
+        showToast('Message queued; newer edits are still saved as a draft', 'info');
+        return;
+      }
+      suppressLocalPersistence = true;
+      void durableStorage?.delete(sessionGuard.userId, capturedDraftKey);
       composeData.set(null);
       currentPage.set('inbox');
     };
@@ -330,6 +474,8 @@
         body_html: bodyHtml,
         body_text: bodyHtml.replace(/<[^>]*>/g, ''),
         attachments: attachments.map(({ size, ...item }) => item),
+        client_draft_id: capturedDraftKey,
+        draft_revision: capturedDraftRevision,
       };
 
       if (replyContext.in_reply_to) data.in_reply_to = replyContext.in_reply_to;
@@ -341,6 +487,7 @@
       const restoreDraft = {
         ...data,
         draft_key: composeIntent?.draft_key,
+        client_draft_id: capturedDraftKey,
         attachments: attachments.map(item => ({ ...item })),
       };
       const restoreEditor = (operation, reason) => (
@@ -361,7 +508,10 @@
       if (sessionGuard?.isCurrent()) showToast(err.message, 'error');
       return false;
     } finally {
-      if (sessionGuard?.isCurrent()) sending = false;
+      if (sessionGuard?.isCurrent()) {
+        sending = false;
+        await draftController?.markSending(false);
+      }
     }
   }
 
@@ -369,25 +519,12 @@
     if (!selectedAccountId || savingDraft || !writingSurfaceReady || !sessionGuard?.isCurrent()) return false;
     savingDraft = true;
     try {
-      await api.saveDraft({
-        account_id: selectedAccountId,
-        to: parseRecipients(to),
-        cc: parseRecipients(cc),
-        bcc: parseRecipients(bcc),
-        subject: subject,
-        body_html: bodyHtml,
-        body_text: bodyHtml.replace(/<[^>]*>/g, ''),
-        is_draft: true,
-        attachments: attachments.map(({ size, ...item }) => item),
-        in_reply_to: replyContext.in_reply_to,
-        references: replyContext.references,
-        thread_id: replyContext.thread_id,
-        source_email_id: replyContext.source_email_id,
-      });
+      persistLocalDraft();
+      await draftController?.flush();
       if (!sessionGuard.isCurrent()) return false;
-      suppressLocalPersistence = true;
-      if (activeDraftKey) localStorage.removeItem(activeDraftKey);
-      showToast('Draft saved', 'success');
+      const state = draftController?.getState();
+      if (state?.status === 'failed') throw new Error(state.error?.message || 'Draft sync failed');
+      showToast(state?.status === 'synced' ? 'Draft saved' : 'Draft is safe and syncing', 'success');
       return true;
     } catch (err) {
       if (sessionGuard?.isCurrent()) showToast(err.message, 'error');
@@ -406,7 +543,7 @@
         onclick={returnToInbox}
         class="p-1.5 rounded-md transition-fast"
         style="color: var(--text-secondary)"
-        aria-label="Back to inbox; keep local draft"
+        aria-label="Back to inbox; keep draft"
       >
         <Icon name="arrow-left" size={20} />
       </button>
@@ -414,14 +551,21 @@
     </div>
     <div class="flex items-center gap-2">
       {#if autosaveStatus}
-        <span class="autosave-label text-[11px]" style="color: var(--text-tertiary)" aria-hidden="true">{autosaveStatus}</span>
-        <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">{autosaveStatus}</span>
+        <span class="autosave-label text-[11px]" role="alert" style="color: var(--status-error)">{autosaveStatus}</span>
+      {:else}
+        <DraftStatus
+          state={draftState}
+          onretry={() => draftController?.retry()}
+          onundo={undoDiscardDraft}
+          onreview={resolveDraftConflict}
+          compact={true}
+        />
       {/if}
-      <Button size="sm" onclick={discardDraft}>Discard</Button>
-      <Button size="sm" onclick={handleSaveDraft} disabled={savingDraft || !writingSurfaceReady}>
+      <Button size="sm" onclick={discardDraft} disabled={draftLocked || !draftController}>Discard</Button>
+      <Button size="sm" onclick={handleSaveDraft} disabled={savingDraft || !writingSurfaceReady || draftLocked}>
         {savingDraft ? 'Saving…' : 'Save Draft'}
       </Button>
-      <Button variant="primary" size="sm" onclick={handleSend} disabled={sending || !writingSurfaceReady}>
+      <Button variant="primary" size="sm" onclick={handleSend} disabled={sending || !writingSurfaceReady || !draftState.canSend}>
         {#if sending}
           Sending...
         {:else}
@@ -441,6 +585,7 @@
           <select
             id="compose-from"
             bind:value={selectedAccountId}
+            disabled={Boolean(replyContext.source_email_id) || draftLocked}
             class="w-0 min-w-0 flex-1 h-full text-sm outline-none border-0"
             style="background: transparent; color: var(--text-primary)"
           >
@@ -464,6 +609,7 @@
             type="text"
             id="compose-to"
             bind:value={to}
+            readonly={draftLocked}
             use:focusInitialRecipient
             placeholder="recipient@example.com"
             class="w-full h-8 text-sm outline-none"
@@ -498,6 +644,7 @@
             type="text"
             id="compose-cc"
             bind:value={cc}
+            readonly={draftLocked}
             class="flex-1 h-full text-sm outline-none"
             style="background: transparent; color: var(--text-primary)"
           />
@@ -508,6 +655,7 @@
             type="text"
             id="compose-bcc"
             bind:value={bcc}
+            readonly={draftLocked}
             class="flex-1 h-full text-sm outline-none"
             style="background: transparent; color: var(--text-primary)"
           />
@@ -521,6 +669,7 @@
           type="text"
           id="compose-subject"
           bind:value={subject}
+          readonly={draftLocked}
           placeholder="Subject"
           class="flex-1 h-full text-sm outline-none"
           style="background: transparent; color: var(--text-primary)"
@@ -533,6 +682,7 @@
           <input id="compose-files" bind:this={fileInput} type="file" multiple class="hidden" onchange={addAttachments} />
           <button
             onclick={() => fileInput?.click()}
+            disabled={draftLocked || draftState.importingAttachments?.length > 0}
             class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-medium"
             style="border-color: var(--border-color); color: var(--text-secondary)"
           >
@@ -550,7 +700,7 @@
               <span class="text-[10px] self-center" style="color: var(--text-tertiary)">{(totalAttachmentBytes / 1024 / 1024).toFixed(1)} of 18 MB</span>
             </div>
             <p class="mt-1 text-[10px]" style="color: var(--text-tertiary)">
-              Attachments stay only while this composer is open and are not included in local autosave.
+              Attachments are stored with this draft and restored when you return.
             </p>
           {/if}
         </div>
@@ -558,15 +708,19 @@
     </div>
 
     <!-- Rich Editor Body -->
-    <DeferredRichEditor
-      content={initialContent}
-      onUpdate={handleEditorUpdate}
-      onReady={() => { writingSurfaceReady = true; }}
-      placeholder="Write your message..."
-      autofocus={true}
-      ariaLabel="Message body"
-      surface="compose"
-    />
+    <div class:pointer-events-none={draftLocked} class:opacity-60={draftLocked} class="flex-1 min-h-0">
+      {#key editorRevision}
+        <DeferredRichEditor
+          content={initialContent}
+          onUpdate={handleEditorUpdate}
+          onReady={() => { writingSurfaceReady = true; }}
+          placeholder="Write your message..."
+          autofocus={true}
+          ariaLabel="Message body"
+          surface="compose"
+        />
+      {/key}
+    </div>
   </div>
 </div>
 

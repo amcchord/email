@@ -121,3 +121,12 @@ test('durable send shortcuts remain palette-visible and keep their existing bind
   assert.equal(byId['compose.send'].key, 'Ctrl+Enter');
   assert.equal(byId['flow.send'].key, 'Ctrl+Enter');
 });
+
+test('compose separates safe close from destructive discard', () => {
+  const byId = Object.fromEntries(SHORTCUT_DEFAULTS.map(shortcut => [shortcut.id, shortcut]));
+
+  assert.equal(byId['compose.discard'].key, 'Escape');
+  assert.match(byId['compose.discard'].label, /keep draft/i);
+  assert.equal(byId['compose.deleteDraft'].key, 'Ctrl+Shift+,');
+  assert.match(byId['compose.deleteDraft'].label, /discard draft/i);
+});

@@ -59,6 +59,12 @@ class OutboundMessage(Base):
         ForeignKey("emails.id", ondelete="SET NULL"),
         nullable=True,
     )
+    draft_session_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("draft_sessions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    client_draft_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
 
     # Payload is intentionally nullable: delivery and cancellation scrub all
     # recipients, bodies, and attachment bytes while retaining safe metadata.
@@ -148,6 +154,12 @@ class OutboundMessage(Base):
         ),
         Index("ix_outbound_messages_user_created", "user_id", "created_at"),
         Index("ix_outbound_messages_account_created", "account_id", "created_at"),
+        Index(
+            "ix_outbound_messages_draft_session",
+            "draft_session_id",
+            unique=True,
+            postgresql_where=text("draft_session_id IS NOT NULL"),
+        ),
         Index(
             "ix_outbound_messages_user_capacity",
             "user_id",

@@ -1,5 +1,6 @@
 <script>
-  import { currentPage, currentMailbox, sidebarCollapsed, composeOpen, accounts, selectedAccountId, labels as labelsStore, syncStatus, smartFilter, todos, accountColorMap, createAuthenticatedSessionGuard } from '../../lib/stores.js';
+  import { currentPage, currentMailbox, sidebarCollapsed, composeOpen, composeData, accounts, selectedAccountId, labels as labelsStore, syncStatus, smartFilter, todos, accountColorMap, createAuthenticatedSessionGuard } from '../../lib/stores.js';
+  import { newComposeIntent } from '../../lib/composeDraft.js';
   import { api } from '../../lib/api.js';
   import { onMount } from 'svelte';
   import Icon from '../common/Icon.svelte';
@@ -10,6 +11,12 @@
   let smartViewsExpanded = $state(true);
 
   let pendingTodoCount = $derived($todos.filter(t => t.status === 'pending').length);
+
+  function startNewCompose() {
+    composeData.set(newComposeIntent());
+    composeOpen.set(true);
+    currentPage.set('compose');
+  }
 
   const aiCategories = [
     { id: 'urgent', label: 'Urgent', color: 'bg-red-500' },
@@ -106,7 +113,7 @@
   <!-- Compose Button -->
   <div class="p-3">
     <button
-      onclick={() => { composeOpen.set(true); currentPage.set('compose'); }}
+      onclick={startNewCompose}
       class="w-full h-9 flex items-center justify-center gap-2 rounded-lg text-sm font-medium bg-accent-600 text-white hover:bg-accent-700 transition-fast"
       data-shortcut="nav.compose"
     >

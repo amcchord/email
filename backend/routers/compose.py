@@ -1,17 +1,38 @@
+import base64
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
-from backend.models.account import GoogleAccount
+from backend.models.draft import DraftSession
 from backend.models.outbound_message import OutboundMessage
 from backend.models.user import User
 from backend.routers.auth import get_current_user
-from backend.schemas.email import ComposeDraftRequest, ComposeRequest, OutboundSendResponse
-from backend.services.credentials import get_google_credentials
-from backend.services.gmail import GmailService
+from backend.schemas.email import (
+    ComposeDraftRequest,
+    ComposeRequest,
+    DraftAttachmentDetail,
+    DraftMutationRequest,
+    DraftSessionDetailResponse,
+    DraftSessionResponse,
+    OutboundSendResponse,
+)
+from backend.services.drafts import (
+    DraftConflict,
+    DraftNotFound,
+    DraftPersistenceError,
+    DraftQuotaExceeded,
+    DraftValidationError,
+    discard_draft_session,
+    draft_can_undo_discard,
+    get_draft_session,
+    get_draft_session_for_email,
+    recent_draft_sessions,
+    stage_draft_upsert,
+    try_enqueue_draft_drain,
+    undo_discard_draft_session,
+)
 from backend.services.outbound_messages import (
     OutboundMessageConflict,
     OutboundMessageNotFound,
@@ -39,6 +60,7 @@ def _outbound_response(outbound: OutboundMessage) -> OutboundSendResponse:
         idempotency_key=outbound.idempotency_key,
         account_id=outbound.account_id,
         source_email_id=outbound.source_email_id,
+        client_draft_id=outbound.client_draft_id,
         state=outbound.state,
         execute_after=outbound.execute_after,
         undo_until=outbound.undo_until,
@@ -92,6 +114,94 @@ def _raise_outbound_http_error(error: Exception) -> None:
     raise error
 
 
+def _draft_response(draft: DraftSession) -> DraftSessionResponse:
+    return DraftSessionResponse(
+        client_draft_id=draft.client_draft_id,
+        account_id=draft.account_id,
+        source_email_id=draft.source_email_id_snapshot,
+        revision=draft.revision,
+        synced_revision=draft.synced_revision,
+        state=draft.state,
+        next_attempt_at=draft.next_attempt_at,
+        attempt_count=draft.attempt_count,
+        can_undo_discard=draft_can_undo_discard(draft),
+        discard_at=draft.discard_at,
+        discard_undo_until=draft.discard_undo_until,
+        linked_send_id=draft.linked_send_id,
+        error_code=draft.error_code,
+        error_message=draft.error_message,
+        attachment_count=draft.attachment_count,
+        attachment_bytes=draft.attachment_bytes,
+        created_at=draft.created_at,
+        updated_at=draft.updated_at,
+        synced_at=draft.synced_at,
+        discarded_at=draft.discarded_at,
+    )
+
+
+def _draft_detail_response(draft: DraftSession) -> DraftSessionDetailResponse:
+    metadata = _draft_response(draft).model_dump()
+    payload = draft.payload if isinstance(draft.payload, dict) else {}
+    attachments = [
+        DraftAttachmentDetail(
+            attachment_id=attachment.attachment_id,
+            filename=attachment.filename,
+            content_type=attachment.content_type,
+            size_bytes=attachment.size_bytes,
+            sha256=attachment.sha256,
+            data_base64=base64.b64encode(attachment.content).decode("ascii"),
+        )
+        for attachment in sorted(draft.attachments, key=lambda item: item.sort_order)
+    ]
+    return DraftSessionDetailResponse(
+        **metadata,
+        to=list(payload.get("to") or []),
+        cc=list(payload.get("cc") or []),
+        bcc=list(payload.get("bcc") or []),
+        subject=str(payload.get("subject") or ""),
+        body_html=str(payload.get("body_html") or ""),
+        body_text=str(payload.get("body_text") or ""),
+        in_reply_to=payload.get("in_reply_to"),
+        references=payload.get("references"),
+        thread_id=payload.get("thread_id"),
+        attachments=attachments,
+    )
+
+
+def _raise_draft_http_error(error: Exception) -> None:
+    if isinstance(error, DraftQuotaExceeded):
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "draft_rate_limited", "message": str(error)},
+            headers={"Retry-After": str(error.retry_after_seconds)},
+        ) from error
+    if isinstance(error, DraftNotFound):
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "draft_not_found", "message": str(error)},
+        ) from error
+    if isinstance(error, DraftConflict):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "draft_conflict", "message": str(error)},
+        ) from error
+    if isinstance(error, DraftValidationError):
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "draft_invalid", "message": str(error)},
+        ) from error
+    if isinstance(error, DraftPersistenceError):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "draft_unavailable",
+                "message": "Draft could not be accepted right now",
+            },
+            headers={"Retry-After": "5"},
+        ) from error
+    raise error
+
+
 @router.post(
     "/send",
     response_model=OutboundSendResponse,
@@ -119,6 +229,8 @@ async def send_email(
         _raise_outbound_http_error(error)
     if created:
         background_tasks.add_task(try_enqueue_outbound_drain)
+        if outbound.draft_session_id is not None:
+            background_tasks.add_task(try_enqueue_draft_drain)
     return _outbound_response(outbound)
 
 
@@ -193,41 +305,132 @@ async def retry_send(
     return _outbound_response(outbound)
 
 
-@router.post("/draft")
+@router.post(
+    "/draft",
+    response_model=DraftSessionResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def save_draft(
     request: ComposeDraftRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(GoogleAccount).where(
-            GoogleAccount.id == request.account_id,
-            GoogleAccount.user_id == user.id,
-        )
-    )
-    account = result.scalar_one_or_none()
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-    if getattr(account, "is_active", True) is False:
-        raise HTTPException(status_code=422, detail="Account is inactive")
-
-    client_id, client_secret = await get_google_credentials(db)
-    gmail = GmailService(account, client_id=client_id, client_secret=client_secret)
     try:
-        draft_id = await gmail.create_draft(
-            to=request.to,
-            cc=request.cc,
-            bcc=request.bcc,
-            subject=request.subject,
-            body_html=request.body_html,
-            body_text=request.body_text,
-            in_reply_to=request.in_reply_to,
-            references=request.references,
-            thread_id=request.thread_id,
-            attachments=request.attachments,
+        draft, created = await stage_draft_upsert(
+            db,
+            user_id=user.id,
+            request=request,
         )
-        return {"message": "Draft saved", "draft_id": draft_id}
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail="Draft content is invalid") from error
-    except Exception as error:
-        raise HTTPException(status_code=503, detail="Gmail is temporarily unavailable") from error
+    except (
+        DraftNotFound,
+        DraftConflict,
+        DraftQuotaExceeded,
+        DraftValidationError,
+        DraftPersistenceError,
+    ) as error:
+        _raise_draft_http_error(error)
+    if created or draft.state in {"pending", "reconciling"}:
+        background_tasks.add_task(try_enqueue_draft_drain)
+    return _draft_response(draft)
+
+
+@router.get("/drafts/recent", response_model=list[DraftSessionResponse])
+async def recent_drafts(
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    drafts = await recent_draft_sessions(db, user_id=user.id, limit=limit)
+    return [_draft_response(draft) for draft in drafts]
+
+
+@router.get(
+    "/drafts/by-client-id/{client_draft_id}",
+    response_model=DraftSessionDetailResponse,
+)
+async def get_draft_by_client_id(
+    client_draft_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        draft = await get_draft_session(
+            db,
+            user_id=user.id,
+            client_draft_id=client_draft_id,
+            include_attachments=True,
+        )
+    except DraftNotFound as error:
+        _raise_draft_http_error(error)
+    return _draft_detail_response(draft)
+
+
+@router.get(
+    "/drafts/by-email/{email_id}",
+    response_model=DraftSessionDetailResponse,
+)
+async def get_draft_by_email(
+    email_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        draft = await get_draft_session_for_email(
+            db,
+            user_id=user.id,
+            email_id=email_id,
+        )
+    except DraftNotFound as error:
+        _raise_draft_http_error(error)
+    return _draft_detail_response(draft)
+
+
+@router.post(
+    "/drafts/{client_draft_id}/discard",
+    response_model=DraftSessionResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def discard_draft(
+    client_draft_id: UUID,
+    request: DraftMutationRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        draft = await discard_draft_session(
+            db,
+            user_id=user.id,
+            client_draft_id=client_draft_id,
+            mutation_id=request.mutation_id,
+        )
+    except (DraftNotFound, DraftConflict) as error:
+        _raise_draft_http_error(error)
+    background_tasks.add_task(try_enqueue_draft_drain)
+    return _draft_response(draft)
+
+
+@router.post(
+    "/drafts/{client_draft_id}/undo-discard",
+    response_model=DraftSessionResponse,
+)
+async def undo_discard_draft(
+    client_draft_id: UUID,
+    request: DraftMutationRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        draft = await undo_discard_draft_session(
+            db,
+            user_id=user.id,
+            client_draft_id=client_draft_id,
+            mutation_id=request.mutation_id,
+        )
+    except (DraftNotFound, DraftConflict) as error:
+        _raise_draft_http_error(error)
+    if draft.state in {"pending", "reconciling"}:
+        background_tasks.add_task(try_enqueue_draft_drain)
+    return _draft_response(draft)

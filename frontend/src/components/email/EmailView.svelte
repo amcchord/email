@@ -50,6 +50,8 @@
   let attachmentPreview = $state(null);
   let attachmentPreviewReturnFocus = $state(null);
   let inlineReplyMode = $state(REPLY_ENVELOPE_MODES.REPLY);
+  let openingManagedDraft = $state(false);
+  let draftOpenMessage = $state('');
 
   let replyEnvelopeResult = $derived(buildReplyEnvelope({
     message: email,
@@ -712,6 +714,33 @@
     currentPage.set('compose');
   }
 
+  async function openManagedDraft() {
+    if (!email?.is_draft || openingManagedDraft || !sessionIsCurrent()) return;
+    const emailIdAtStart = email.id;
+    openingManagedDraft = true;
+    draftOpenMessage = '';
+    try {
+      const detail = await api.getComposeDraftByEmail(email.id);
+      if (!sessionIsCurrent() || email?.id !== emailIdAtStart || !detail?.client_draft_id) return;
+      composeData.set({
+        ...detail,
+        client_draft_id: detail.client_draft_id,
+        draft_key: `client:${detail.client_draft_id}`,
+        intent_key: `provider:${detail.client_draft_id}`,
+        draft_revision: detail.revision,
+        draft_state: detail.state,
+      });
+      currentPage.set('compose');
+    } catch (error) {
+      if (!sessionIsCurrent()) return;
+      draftOpenMessage = error?.status === 404
+        ? 'This provider draft was not created by this app, so it remains read-only here.'
+        : error?.message || 'This draft could not be opened for editing.';
+    } finally {
+      if (sessionIsCurrent()) openingManagedDraft = false;
+    }
+  }
+
   function handleForward() {
     if (!email) return;
     const source = replySourceResult;
@@ -1314,27 +1343,39 @@
 
     <!-- Reply actions -->
     <div class="px-6 py-3 border-t shrink-0 flex gap-2" style="border-color: var(--border-color)">
-      <Button size="sm" class="min-h-11" onclick={handleReply} disabled={!replyEnvelopeResult.available}>
+      {#if email.is_draft}
+        <Button size="sm" class="min-h-11" onclick={openManagedDraft} disabled={openingManagedDraft}>
+          <Icon name="edit-3" size={16} />
+          {openingManagedDraft ? 'Opening…' : 'Edit draft'}
+        </Button>
+        {#if draftOpenMessage}
+          <p class="min-w-0 self-center text-xs" style="color: var(--text-secondary)" role="status">
+            {draftOpenMessage}
+          </p>
+        {/if}
+      {:else}
+        <Button size="sm" class="min-h-11" onclick={handleReply} disabled={!replyEnvelopeResult.available}>
         <Icon name="corner-up-left" size={16} />
         Reply
-      </Button>
-      {#if showReplyAll}
-        <Button size="sm" class="min-h-11" onclick={handleReplyAll} disabled={!replyAllEnvelopeResult.available}>
-          <Icon name="users" size={16} />
-          Reply All
         </Button>
-      {/if}
-      <Button size="sm" class="min-h-11" onclick={handleForward} disabled={!replySourceResult.available}>
-        <Icon name="corner-up-right" size={16} />
-        Forward
-      </Button>
-      {#if !replyEnvelopeResult.available}
-        <p
-          class="min-w-0 self-center text-xs"
-          style="color: var(--status-error)"
-          role="status"
-          data-reply-unavailable="inbox"
-        >{replyUnavailableMessage(replyEnvelopeResult.reason)}</p>
+        {#if showReplyAll}
+          <Button size="sm" class="min-h-11" onclick={handleReplyAll} disabled={!replyAllEnvelopeResult.available}>
+            <Icon name="users" size={16} />
+            Reply All
+          </Button>
+        {/if}
+        <Button size="sm" class="min-h-11" onclick={handleForward} disabled={!replySourceResult.available}>
+          <Icon name="corner-up-right" size={16} />
+          Forward
+        </Button>
+        {#if !replyEnvelopeResult.available}
+          <p
+            class="min-w-0 self-center text-xs"
+            style="color: var(--status-error)"
+            role="status"
+            data-reply-unavailable="inbox"
+          >{replyUnavailableMessage(replyEnvelopeResult.reason)}</p>
+        {/if}
       {/if}
       {#if email.is_subscription && email.unsubscribe_info}
         <button

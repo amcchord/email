@@ -4,6 +4,7 @@ from backend.models.api_token import ApiToken
 from backend.models.calendar import CalendarEvent, CalendarSyncStatus
 from backend.models.chat import ChatConversation, ChatMessage
 from backend.models.dashboard import DashboardSnippet
+from backend.models.draft import DraftAttachment, DraftMutation, DraftSession
 from backend.models.email import Attachment, Email, EmailLabel
 from backend.models.mail_action import MailAction
 from backend.models.outbound_message import OutboundMessage
@@ -39,4 +40,7 @@ __all__ = [
     "TerminalBatterySample",
     "TerminalWebDisplay",
     "DashboardSnippet",
+    "DraftSession",
+    "DraftAttachment",
+    "DraftMutation",
 ]

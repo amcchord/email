@@ -8,7 +8,14 @@ import {
   composeLastAccountStorageKey,
   composeDraftStorageKey,
   composeReplyContext,
+  createComposeDraftIntent,
+  newComposeIntent,
 } from './composeDraft.js';
+
+function uuidFactory() {
+  let counter = 0;
+  return () => `00000000-0000-4000-8000-${String(++counter).padStart(12, '0')}`;
+}
 
 test('new, reply, thread, and forward drafts use isolated local keys', () => {
   const keys = [
@@ -85,6 +92,23 @@ test('reply metadata alone keeps a handoff draft recoverable', () => {
   });
 });
 
+test('new compose intents are stable per object and distinct per invocation', () => {
+  const randomUUID = uuidFactory();
+  const first = newComposeIntent({}, { randomUUID });
+  const second = newComposeIntent({}, { randomUUID });
+  const retained = createComposeDraftIntent(first, { randomUUID });
+
+  assert.notEqual(first.client_draft_id, second.client_draft_id);
+  assert.equal(first.client_draft_id, retained.client_draft_id);
+  assert.equal(first.intent_key, `new:${first.client_draft_id}`);
+  assert.equal(first.draft_key, `client:${first.client_draft_id}`);
+});
+
+test('attachment-only snapshots remain recoverable', () => {
+  assert.equal(composeDraftHasContent({ attachments: [] }), false);
+  assert.equal(composeDraftHasContent({ attachments: [{ filename: 'generated.txt' }] }), true);
+});
+
 test('Compose persists the latest edit before navigation disposes its session guard', async () => {
   const text = await readFile(new URL('../pages/Compose.svelte', import.meta.url), 'utf8');
   const cleanup = text.match(/return \(\) => \{([\s\S]*?)\n\s*\};\n\s*\}\);/)?.[1] || '';
@@ -95,20 +119,27 @@ test('Compose persists the latest edit before navigation disposes its session gu
   assert.doesNotMatch(text, /onDestroy\(/);
 });
 
-test('Compose hands one restorable draft to the durable send controller', async () => {
+test('Compose owns one durable, attachment-complete draft through send handoff', async () => {
   const text = await readFile(new URL('../pages/Compose.svelte', import.meta.url), 'utf8');
 
+  assert.match(text, /createIndexedDbDraftStorage\(\)/);
+  assert.match(text, /migrateLegacyScopedDrafts\(\{/);
+  assert.match(text, /createDraftSessionController\(\{/);
+  assert.match(text, /draftController\?\.beginAttachmentImport/);
+  assert.match(text, /draftController\.completeAttachmentImport/);
+  assert.match(text, /Attachments are stored with this draft and restored when you return\./);
   assert.match(text, /const restoreDraft = \{\s*\.\.\.data,[\s\S]*attachments: attachments\.map/);
   assert.match(text, /await submitOutboundSend\(data, \{[\s\S]*onAccepted: releaseEditor,[\s\S]*onRestore: restoreEditor/);
   assert.match(text, /if \(replyContext\.source_email_id\) data\.source_email_id = replyContext\.source_email_id;/);
-  assert.match(text, /if \(Array\.isArray\(data\.attachments\)\) attachments = data\.attachments;/);
-  assert.match(text, /recipientFieldValue\(data\.to\)/);
-  assert.match(text, /recipientFieldValue\(data\.cc\)/);
-  assert.match(text, /recipientFieldValue\(data\.bcc\)/);
-  assert.match(text, /const capturedDraftKey = activeDraftKey;/);
-  assert.match(text, /const capturedDraftFingerprint = persistedDraftFingerprint\(draftSnapshot\(\)\);/);
-  assert.match(text, /removeCapturedDraftIfUnchanged\(capturedDraftKey, capturedDraftFingerprint\);\s*if \(!sessionGuard\?\.isCurrent\(\)\) return;/);
-  assert.match(text, /persistedDraftFingerprint\(stored\) === fingerprint/);
+  assert.match(text, /attachments = Array\.isArray\(draft\.attachments\)/);
+  assert.match(text, /recipientFieldValue\(draft\.to\)/);
+  assert.match(text, /recipientFieldValue\(draft\.cc\)/);
+  assert.match(text, /recipientFieldValue\(draft\.bcc\)/);
+  assert.match(text, /client_draft_id: capturedDraftKey,/);
+  assert.match(text, /draft_revision: capturedDraftRevision,/);
+  assert.match(text, /draftController\?\.revision !== capturedDraftRevision/);
+  assert.match(text, /durableStorage\?\.delete\(sessionGuard\.userId, capturedDraftKey\)/);
   assert.match(text, /source_email_id: replyContext\.source_email_id,/);
+  assert.doesNotMatch(text, /localStorage\.setItem\(activeDraftKey/);
   assert.doesNotMatch(text, /await api\.sendEmail\(/);
 });

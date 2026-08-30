@@ -7,7 +7,8 @@
   import ShortcutHelpModal from '../common/ShortcutHelpModal.svelte';
   import CommandPalette from '../common/CommandPalette.svelte';
   import OutboundSendStatus from '../email/OutboundSendStatus.svelte';
-  import { sidebarCollapsed, currentPage } from '../../lib/stores.js';
+  import { sidebarCollapsed, currentPage, composeData } from '../../lib/stores.js';
+  import { newComposeIntent } from '../../lib/composeDraft.js';
   import { getLazyRouteLabel, normalizeAuthenticatedPage, preloadAuthenticatedPage } from '../../lib/lazyRoutes.js';
   import { openCommandPalette, registerActions, toggleShortcutHelp, loadUserShortcuts } from '../../lib/shortcutStore.js';
   import { theme } from '../../lib/theme.js';
@@ -25,6 +26,12 @@
 
   function navigateByShortcut(page) {
     currentPage.set(page);
+    focusMainRegion();
+  }
+
+  function startNewCompose() {
+    composeData.set(newComposeIntent());
+    currentPage.set('compose');
     focusMainRegion();
   }
 
@@ -62,7 +69,7 @@
       'nav.chat':     () => navigateByShortcut('chat'),
       'nav.subscriptions': () => navigateByShortcut('subscriptions'),
       'nav.settings': () => navigateByShortcut('admin'),
-      'nav.compose':  () => navigateByShortcut('compose'),
+      'nav.compose':  startNewCompose,
       // Do not return the promise: the command palette must close and remove
       // its inert shell before the delayed task moves focus to search.
       'nav.search':   () => { void focusInboxSearchWhenReady(); },

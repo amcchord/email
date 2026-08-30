@@ -1,4 +1,4 @@
-"""Bound compose-send request bodies before FastAPI parses sensitive JSON."""
+"""Bound compose message bodies before FastAPI parses sensitive JSON."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 
 MAX_COMPOSE_SEND_BODY_BYTES = 50 * 1024 * 1024
-_COMPOSE_SEND_PATH = "/api/compose/send"
+_COMPOSE_BODY_PATHS = frozenset({"/api/compose/send", "/api/compose/draft"})
 
 
 class _ComposeBodyTooLarge(Exception):
@@ -15,7 +15,7 @@ class _ComposeBodyTooLarge(Exception):
 
 
 class ComposeSendBodyLimitMiddleware:
-    """Apply a byte-verified request cap only to the compose send endpoint."""
+    """Apply a byte-verified request cap to compose send and draft upsert."""
 
     def __init__(
         self,
@@ -32,7 +32,7 @@ class ComposeSendBodyLimitMiddleware:
         if (
             scope["type"] != "http"
             or scope.get("method") != "POST"
-            or scope.get("path") != _COMPOSE_SEND_PATH
+            or scope.get("path") not in _COMPOSE_BODY_PATHS
         ):
             await self.app(scope, receive, send)
             return

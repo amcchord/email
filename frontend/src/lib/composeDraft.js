@@ -1,10 +1,11 @@
 export const LEGACY_COMPOSE_DRAFT_KEY = 'composeLocalDraftV1';
 export const UNSCOPED_COMPOSE_DRAFT_PREFIX = 'composeLocalDraftV2:';
 export const LEGACY_COMPOSE_LAST_ACCOUNT_KEY = 'composeLastAccountId';
-const SCOPED_COMPOSE_DRAFT_PREFIX = 'composeLocalDraftV3';
+export const SCOPED_COMPOSE_DRAFT_PREFIX = 'composeLocalDraftV3';
 const SCOPED_COMPOSE_LAST_ACCOUNT_PREFIX = 'composeLastAccountV2';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-function storageUserId(userId) {
+export function normalizeComposeDraftUserId(userId) {
   if (typeof userId === 'number') {
     return Number.isSafeInteger(userId) && userId > 0 ? String(userId) : null;
   }
@@ -15,7 +16,7 @@ function storageUserId(userId) {
 }
 
 export function composeDraftStorageKey(userId, data) {
-  const safeUserId = storageUserId(userId);
+  const safeUserId = normalizeComposeDraftUserId(userId);
   if (!safeUserId) return null;
   const identity = data?.draft_key
     || (data?.thread_id ? `thread:${data.thread_id}` : null)
@@ -28,10 +29,65 @@ export function composeDraftStorageKey(userId, data) {
 }
 
 export function composeLastAccountStorageKey(userId) {
-  const safeUserId = storageUserId(userId);
+  const safeUserId = normalizeComposeDraftUserId(userId);
   return safeUserId
     ? `${SCOPED_COMPOSE_LAST_ACCOUNT_PREFIX}:user:${safeUserId}`
     : null;
+}
+
+export function composeDraftStoragePrefix(userId) {
+  const safeUserId = normalizeComposeDraftUserId(userId);
+  return safeUserId ? `${SCOPED_COMPOSE_DRAFT_PREFIX}:user:${safeUserId}:` : null;
+}
+
+export function isComposeDraftUuid(value) {
+  return typeof value === 'string' && UUID_PATTERN.test(value);
+}
+
+function defaultRandomUuid() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  throw new Error('Secure random UUID generation is unavailable');
+}
+
+export function composeDraftIntentKey(data = {}) {
+  return data?.draft_key
+    || (data?.thread_id ? `thread:${data.thread_id}` : null)
+    || (data?.in_reply_to ? `reply:${data.in_reply_to}` : null)
+    || 'new';
+}
+
+/**
+ * Give one writing intent a stable client identity. Callers retain the returned
+ * object for the lifetime of that composer; invoking this for a genuinely new
+ * intent deliberately produces a different UUID even when both are `new`.
+ */
+export function createComposeDraftIntent(data = {}, { randomUUID = defaultRandomUuid } = {}) {
+  const existingId = isComposeDraftUuid(data?.client_draft_id)
+    ? data.client_draft_id.toLowerCase()
+    : null;
+  const clientDraftId = existingId || randomUUID();
+  if (!isComposeDraftUuid(clientDraftId)) {
+    throw new Error('Draft identity must be a UUID');
+  }
+  return Object.freeze({
+    ...data,
+    client_draft_id: clientDraftId.toLowerCase(),
+    intent_key: data?.intent_key || composeDraftIntentKey(data),
+    draft_key: data?.draft_key || `client:${clientDraftId.toLowerCase()}`,
+  });
+}
+
+/** Create a genuinely new compose intent, even if another composer is open. */
+export function newComposeIntent(data = {}, { randomUUID = defaultRandomUuid } = {}) {
+  const clientDraftId = randomUUID();
+  if (!isComposeDraftUuid(clientDraftId)) throw new Error('Draft identity must be a UUID');
+  const normalizedId = clientDraftId.toLowerCase();
+  return createComposeDraftIntent({
+    ...data,
+    client_draft_id: normalizedId,
+    intent_key: `new:${normalizedId}`,
+    draft_key: `client:${normalizedId}`,
+  }, { randomUUID });
 }
 
 /**
@@ -59,6 +115,7 @@ export function composeDraftHasContent(draft) {
   if (!draft || typeof draft !== 'object') return false;
   return Boolean(
     draft.to || draft.cc || draft.bcc || draft.subject || draft.body_html
+    || (Array.isArray(draft.attachments) && draft.attachments.length > 0)
     || draft.in_reply_to || draft.thread_id || draft.source_email_id,
   );
 }

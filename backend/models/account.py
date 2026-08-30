@@ -33,6 +33,7 @@ class GoogleAccount(Base):
     labels = relationship("EmailLabel", back_populates="account", cascade="all, delete-orphan")
     calendar_events = relationship("CalendarEvent", back_populates="account", cascade="all, delete-orphan")
     calendar_sync_status = relationship("CalendarSyncStatus", back_populates="account", uselist=False, cascade="all, delete-orphan")
+    draft_sessions = relationship("DraftSession", cascade="all, delete-orphan")
 
 
 class SyncStatus(Base):

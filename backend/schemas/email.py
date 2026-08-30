@@ -195,6 +195,7 @@ def _normalize_mailbox(value: str) -> str:
 
 
 class ComposeAttachment(BaseModel):
+    attachment_id: Optional[UUID] = None
     filename: str = Field(min_length=1, max_length=255)
     content_type: str = Field(default="application/octet-stream", min_length=1, max_length=255)
     data_base64: str = Field(min_length=1, max_length=25 * 1024 * 1024)
@@ -266,6 +267,8 @@ class ComposeMessageBase(BaseModel):
 
 class ComposeRequest(ComposeMessageBase):
     idempotency_key: UUID
+    client_draft_id: Optional[UUID] = None
+    draft_revision: Optional[StrictInt] = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def require_primary_recipient(self):
@@ -273,11 +276,76 @@ class ComposeRequest(ComposeMessageBase):
             raise ValueError("A message requires at least one To recipient")
         if self.is_draft:
             raise ValueError("The send endpoint does not accept draft payloads")
+        if (self.client_draft_id is None) != (self.draft_revision is None):
+            raise ValueError("A linked draft requires both client_draft_id and draft_revision")
         return self
 
 
 class ComposeDraftRequest(ComposeMessageBase):
-    pass
+    client_draft_id: UUID
+    revision: StrictInt = Field(gt=0)
+    mutation_id: UUID
+
+
+DraftSessionState = Literal[
+    "pending",
+    "syncing",
+    "reconciling",
+    "synced",
+    "failed",
+    "discard_pending",
+    "discarded",
+    "sending",
+]
+
+
+class DraftMutationRequest(BaseModel):
+    mutation_id: UUID
+
+
+class DraftAttachmentDetail(BaseModel):
+    attachment_id: UUID
+    filename: str
+    content_type: str
+    size_bytes: int
+    sha256: str
+    data_base64: str
+
+
+class DraftSessionResponse(BaseModel):
+    client_draft_id: UUID
+    account_id: int
+    source_email_id: Optional[int] = None
+    revision: int
+    synced_revision: Optional[int] = None
+    state: DraftSessionState
+    next_attempt_at: Optional[datetime] = None
+    attempt_count: int
+    can_undo_discard: bool
+    discard_at: Optional[datetime] = None
+    discard_undo_until: Optional[datetime] = None
+    linked_send_id: Optional[UUID] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    attachment_count: int = 0
+    attachment_bytes: int = 0
+    created_at: datetime
+    updated_at: datetime
+    synced_at: Optional[datetime] = None
+    discarded_at: Optional[datetime] = None
+
+
+class DraftSessionDetailResponse(DraftSessionResponse):
+    to: list[str] = []
+    cc: list[str] = []
+    bcc: list[str] = []
+    subject: str = ""
+    body_html: str = ""
+    body_text: str = ""
+    in_reply_to: Optional[str] = None
+    references: Optional[str] = None
+    thread_id: Optional[str] = None
+    attachments: list[DraftAttachmentDetail] = []
 
 
 OutboundSendState = Literal[
@@ -296,6 +364,7 @@ class OutboundSendResponse(BaseModel):
     idempotency_key: UUID
     account_id: int
     source_email_id: Optional[int] = None
+    client_draft_id: Optional[UUID] = None
     state: OutboundSendState
     execute_after: datetime
     undo_until: datetime

@@ -448,6 +448,29 @@ async def _stage_outbound_message(
     )
     undo_until = accepted_at + timedelta(seconds=OUTBOUND_UNDO_SECONDS)
     send_id = uuid4()
+    linked_draft = None
+    if request.client_draft_id is not None:
+        from backend.services.drafts import (
+            DraftConflict,
+            DraftNotFound,
+            DraftValidationError,
+            link_draft_for_outbound_send,
+        )
+
+        try:
+            linked_draft = await link_draft_for_outbound_send(
+                db,
+                user_id=user_id,
+                request=request,
+                send_id=send_id,
+                discard_at=undo_until,
+            )
+        except DraftNotFound as error:
+            raise OutboundMessageNotFound(str(error)) from error
+        except DraftConflict as error:
+            raise OutboundMessageConflict(str(error)) from error
+        except DraftValidationError as error:
+            raise OutboundMessageValidationError(str(error)) from error
     outbound = OutboundMessage(
         send_id=send_id,
         idempotency_key=request.idempotency_key,
@@ -455,10 +478,16 @@ async def _stage_outbound_message(
         user_id=user_id,
         account_id=account.id,
         source_email_id=request.source_email_id,
+        draft_session_id=linked_draft.id if linked_draft is not None else None,
+        client_draft_id=request.client_draft_id,
         payload=_canonical_payload(request),
         retry_authorized=False,
         retry_expires_at=None,
-        rfc_message_id=f"<mail-{send_id}@{OUTBOUND_RFC_MESSAGE_ID_DOMAIN}>",
+        rfc_message_id=(
+            linked_draft.rfc_message_id
+            if linked_draft is not None
+            else f"<mail-{send_id}@{OUTBOUND_RFC_MESSAGE_ID_DOMAIN}>"
+        ),
         state="staged",
         execute_after=undo_until,
         undo_until=undo_until,

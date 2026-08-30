@@ -504,6 +504,8 @@ class GmailService:
         references: str | None = None,
         attachments: list | None = None,
         message_id_header: str | None = None,
+        draft_id_header: str | None = None,
+        draft_revision: int | None = None,
     ) -> MIMEMultipart:
         """Build a safe multipart message shared by send and draft paths."""
         attachments = attachments or []
@@ -554,6 +556,15 @@ class GmailService:
             ):
                 raise ValueError("Message-ID is invalid")
             msg["Message-ID"] = stable_message_id
+        if draft_id_header:
+            normalized_draft_id = draft_id_header.strip()
+            if not re.fullmatch(r"[0-9a-fA-F-]{36}", normalized_draft_id):
+                raise ValueError("Draft identity is invalid")
+            msg["X-Mail-Client-Draft-ID"] = normalized_draft_id.lower()
+        if draft_revision is not None:
+            if not isinstance(draft_revision, int) or draft_revision <= 0:
+                raise ValueError("Draft revision is invalid")
+            msg["X-Mail-Client-Draft-Revision"] = str(draft_revision)
         if in_reply_to:
             msg["In-Reply-To"] = in_reply_to
         if references:
@@ -673,23 +684,225 @@ class GmailService:
         references: Optional[str] = None,
     ) -> str:
         """Create a draft."""
-        service = self._get_service()
-
-        msg = self._build_compose_message(
-            to=to, cc=cc, bcc=bcc, subject=subject,
-            body_html=body_html, body_text=body_text,
-            in_reply_to=in_reply_to, references=references,
+        result = await self.create_draft_resource(
+            to=to,
+            cc=cc,
+            bcc=bcc,
+            subject=subject,
+            body_html=body_html,
+            body_text=body_text,
+            thread_id=thread_id,
             attachments=attachments,
+            in_reply_to=in_reply_to,
+            references=references,
+            max_retries=None,
+        )
+        return result.get("id", "")
+
+    def _build_draft_body(
+        self,
+        *,
+        to: list[str],
+        cc: list[str] | None,
+        bcc: list[str] | None,
+        subject: str,
+        body_html: str,
+        body_text: str,
+        thread_id: str | None,
+        attachments: list | None,
+        in_reply_to: str | None,
+        references: str | None,
+        message_id_header: str | None,
+        draft_id_header: str | None,
+        draft_revision: int | None,
+    ) -> dict:
+        msg = self._build_compose_message(
+            to=to,
+            cc=cc,
+            bcc=bcc,
+            subject=subject,
+            body_html=body_html,
+            body_text=body_text,
+            in_reply_to=in_reply_to,
+            references=references,
+            attachments=attachments,
+            message_id_header=message_id_header,
+            draft_id_header=draft_id_header,
+            draft_revision=draft_revision,
+        )
+        body = {"message": {"raw": base64.urlsafe_b64encode(msg.as_bytes()).decode()}}
+        if thread_id:
+            body["message"]["threadId"] = thread_id
+        return body
+
+    async def create_draft_resource(
+        self,
+        *,
+        to: list[str],
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        subject: str = "",
+        body_html: str = "",
+        body_text: str = "",
+        thread_id: str | None = None,
+        attachments: list | None = None,
+        in_reply_to: str | None = None,
+        references: str | None = None,
+        message_id_header: str | None = None,
+        draft_id_header: str | None = None,
+        draft_revision: int | None = None,
+        max_retries: int | None = 1,
+    ) -> dict:
+        """Create one Gmail Draft resource and return its full identity."""
+        service = self._get_service()
+        body = self._build_draft_body(
+            to=to,
+            cc=cc,
+            bcc=bcc,
+            subject=subject,
+            body_html=body_html,
+            body_text=body_text,
+            thread_id=thread_id,
+            attachments=attachments,
+            in_reply_to=in_reply_to,
+            references=references,
+            message_id_header=message_id_header,
+            draft_id_header=draft_id_header,
+            draft_revision=draft_revision,
+        )
+        request = service.users().drafts().create(userId="me", body=body)
+        if max_retries is None:
+            return await self._execute_with_retry(request, context="create_draft")
+        return await self._execute_with_retry(
+            request,
+            context="create_draft",
+            max_retries=max_retries,
         )
 
-        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
-        draft_body = {"message": {"raw": raw}}
-        if thread_id:
-            draft_body["message"]["threadId"] = thread_id
+    async def update_draft_resource(
+        self,
+        draft_id: str,
+        *,
+        to: list[str],
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        subject: str = "",
+        body_html: str = "",
+        body_text: str = "",
+        thread_id: str | None = None,
+        attachments: list | None = None,
+        in_reply_to: str | None = None,
+        references: str | None = None,
+        message_id_header: str | None = None,
+        draft_id_header: str | None = None,
+        draft_revision: int | None = None,
+        max_retries: int | None = 1,
+    ) -> dict:
+        """Replace content within one immutable Gmail Draft identity."""
+        if not draft_id:
+            raise ValueError("Draft identity is required")
+        service = self._get_service()
+        body = self._build_draft_body(
+            to=to,
+            cc=cc,
+            bcc=bcc,
+            subject=subject,
+            body_html=body_html,
+            body_text=body_text,
+            thread_id=thread_id,
+            attachments=attachments,
+            in_reply_to=in_reply_to,
+            references=references,
+            message_id_header=message_id_header,
+            draft_id_header=draft_id_header,
+            draft_revision=draft_revision,
+        )
+        return await self._execute_with_retry(
+            service.users().drafts().update(userId="me", id=draft_id, body=body),
+            context="update_draft",
+            max_retries=max_retries,
+        )
 
-        request = service.users().drafts().create(userId="me", body=draft_body)
-        result = await self._execute_with_retry(request, context="create_draft")
-        return result.get("id", "")
+    async def get_draft_resource(
+        self,
+        draft_id: str,
+        *,
+        format: str = "metadata",
+        max_retries: int | None = 1,
+    ) -> dict:
+        service = self._get_service()
+        kwargs = {"userId": "me", "id": draft_id, "format": format}
+        if format == "metadata":
+            kwargs["metadataHeaders"] = [
+                "Message-ID",
+                "X-Mail-Client-Draft-ID",
+                "X-Mail-Client-Draft-Revision",
+            ]
+        return await self._execute_with_retry(
+            service.users().drafts().get(**kwargs),
+            context="get_draft",
+            max_retries=max_retries,
+        )
+
+    async def list_draft_resources(
+        self,
+        *,
+        query: str | None = None,
+        max_results: int = 20,
+        max_retries: int | None = 1,
+    ) -> list[dict]:
+        service = self._get_service()
+        kwargs = {"userId": "me", "maxResults": max(1, min(max_results, 100))}
+        if query:
+            kwargs["q"] = query
+        result = await self._execute_with_retry(
+            service.users().drafts().list(**kwargs),
+            context="list_drafts",
+            max_retries=max_retries,
+        )
+        return list(result.get("drafts") or [])
+
+    async def find_drafts_by_rfc_message_id(
+        self,
+        message_id_header: str,
+        *,
+        max_retries: int | None = 1,
+    ) -> list[dict]:
+        normalized = message_id_header.strip()
+        if not re.fullmatch(r"<[^<>\s@]+@[^<>\s@]+>", normalized):
+            raise ValueError("Message-ID is invalid")
+        candidates = await self.list_draft_resources(
+            query=f"rfc822msgid:{normalized[1:-1]}",
+            max_results=10,
+            max_retries=max_retries,
+        )
+        results = []
+        for candidate in candidates:
+            draft_id = candidate.get("id")
+            if draft_id:
+                results.append(
+                    await self.get_draft_resource(
+                        str(draft_id),
+                        format="metadata",
+                        max_retries=max_retries,
+                    )
+                )
+        return results
+
+    async def delete_draft_resource(
+        self,
+        draft_id: str,
+        *,
+        max_retries: int | None = 1,
+    ) -> dict:
+        if not draft_id:
+            raise ValueError("Draft identity is required")
+        service = self._get_service()
+        return await self._execute_with_retry(
+            service.users().drafts().delete(userId="me", id=draft_id),
+            context="delete_draft",
+            max_retries=max_retries,
+        )
 
     @staticmethod
     def parse_message(msg: dict) -> dict:

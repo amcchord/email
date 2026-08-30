@@ -327,7 +327,32 @@ export const api = {
     request('POST', `/compose/sends/${encodeURIComponent(sendId)}/undo`, {}),
   retryOutboundSend: (sendId) =>
     request('POST', `/compose/sends/${encodeURIComponent(sendId)}/retry`, {}),
-  saveDraft: (data) => request('POST', '/compose/draft', data),
+  saveDraft: (data) => {
+    if (typeof data?.client_draft_id !== 'string' || !data.client_draft_id.trim()) {
+      throw new Error('A client draft ID is required');
+    }
+    if (!Number.isSafeInteger(Number(data?.revision)) || Number(data.revision) < 1) {
+      throw new Error('A positive draft revision is required');
+    }
+    if (typeof data?.mutation_id !== 'string' || !data.mutation_id.trim()) {
+      throw new Error('A draft mutation ID is required');
+    }
+    return request('POST', '/compose/draft', data);
+  },
+  getComposeDraft: (clientDraftId) =>
+    request('GET', `/compose/drafts/by-client-id/${encodeURIComponent(clientDraftId)}`),
+  getComposeDraftByEmail: (emailId) =>
+    request('GET', `/compose/drafts/by-email/${encodeURIComponent(emailId)}`),
+  listRecentComposeDrafts: (limit = 20) =>
+    request('GET', `/compose/drafts/recent?limit=${encodeURIComponent(limit)}`),
+  discardComposeDraft: (clientDraftId, mutationId) =>
+    request('POST', `/compose/drafts/${encodeURIComponent(clientDraftId)}/discard`, {
+      mutation_id: mutationId,
+    }),
+  undoComposeDraftDiscard: (clientDraftId, mutationId) =>
+    request('POST', `/compose/drafts/${encodeURIComponent(clientDraftId)}/undo-discard`, {
+      mutation_id: mutationId,
+    }),
 
   // Accounts
   listAccounts: () => request('GET', '/accounts/'),

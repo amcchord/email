@@ -1,9 +1,12 @@
 import base64
+from datetime import datetime, timezone
 from email import policy
 from email.parser import BytesParser
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
+from fastapi import BackgroundTasks
 
 import backend.routers.compose as compose_router
 from backend.schemas.email import ComposeDraftRequest
@@ -122,36 +125,44 @@ class _RouteDb:
 
 
 @pytest.mark.asyncio
-async def test_save_draft_forwards_reply_headers_to_gmail_service(monkeypatch):
+async def test_save_draft_accepts_durable_identity_and_reply_provenance(monkeypatch):
     captured = {}
-    account = SimpleNamespace(
-        id=17,
-        user_id=23,
-        email="sender@example.test",
-    )
+    now = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    client_draft_id = uuid4()
+    mutation_id = uuid4()
 
-    class FakeGmailService:
-        def __init__(self, account_arg, *, client_id, client_secret):
-            assert account_arg is account
-            assert (client_id, client_secret) == ("generated-client", "generated-secret")
+    async def fake_stage(_db, *, user_id, request):
+        captured.update(user_id=user_id, request=request)
+        return SimpleNamespace(
+            client_draft_id=request.client_draft_id,
+            account_id=request.account_id,
+            source_email_id_snapshot=request.source_email_id,
+            revision=request.revision,
+            synced_revision=None,
+            state="pending",
+            next_attempt_at=now,
+            attempt_count=0,
+            discard_at=None,
+            discard_undo_until=None,
+            linked_send_id=None,
+            error_code=None,
+            error_message=None,
+            attachment_count=0,
+            attachment_bytes=0,
+            created_at=now,
+            updated_at=now,
+            synced_at=None,
+            discarded_at=None,
+        ), True
 
-        async def create_draft(self, **kwargs):
-            captured.update(kwargs)
-            return "generated-draft-id"
-
-    async def fake_google_credentials(_db):
-        return "generated-client", "generated-secret"
-
-    monkeypatch.setattr(compose_router, "GmailService", FakeGmailService)
-    monkeypatch.setattr(
-        compose_router,
-        "get_google_credentials",
-        fake_google_credentials,
-    )
+    monkeypatch.setattr(compose_router, "stage_draft_upsert", fake_stage)
 
     response = await compose_router.save_draft(
         request=ComposeDraftRequest(
-            account_id=account.id,
+            client_draft_id=client_draft_id,
+            revision=1,
+            mutation_id=mutation_id,
+            account_id=17,
             to=["recipient@example.test"],
             subject="Re: Generated thread",
             body_html="<p>Generated reply</p>",
@@ -160,17 +171,19 @@ async def test_save_draft_forwards_reply_headers_to_gmail_service(monkeypatch):
                 "<generated-root@example.test> <generated-parent@example.test>"
             ),
             thread_id="generated-thread-id",
+            source_email_id=301,
         ),
-        db=_RouteDb(account),
-        user=SimpleNamespace(id=account.user_id),
+        background_tasks=BackgroundTasks(),
+        db=SimpleNamespace(),
+        user=SimpleNamespace(id=23),
     )
 
-    assert response == {
-        "message": "Draft saved",
-        "draft_id": "generated-draft-id",
-    }
-    assert captured["in_reply_to"] == "<generated-parent@example.test>"
-    assert captured["references"] == (
+    assert response.client_draft_id == client_draft_id
+    assert response.state == "pending"
+    assert captured["user_id"] == 23
+    assert captured["request"].in_reply_to == "<generated-parent@example.test>"
+    assert captured["request"].references == (
         "<generated-root@example.test> <generated-parent@example.test>"
     )
-    assert captured["thread_id"] == "generated-thread-id"
+    assert captured["request"].thread_id == "generated-thread-id"
+    assert captured["request"].source_email_id == 301

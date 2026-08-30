@@ -97,7 +97,7 @@ async def test_compose_limit_counts_streamed_bytes_without_content_length():
 
 
 @pytest.mark.asyncio
-async def test_compose_limit_allows_exact_bound_and_does_not_affect_other_routes():
+async def test_compose_limit_allows_exact_bound_caps_drafts_and_ignores_other_routes():
     sent, _received, app_called = await _run_middleware(
         max_bytes=5,
         chunks=[b"abc", b"de"],
@@ -106,11 +106,20 @@ async def test_compose_limit_allows_exact_bound_and_does_not_affect_other_routes
     assert _response(sent)[0] == 204
     assert app_called is True
 
-    other_sent, _received, other_called = await _run_middleware(
+    draft_sent, _received, draft_called = await _run_middleware(
         max_bytes=5,
         chunks=[b"oversized"],
         headers=[(b"content-length", b"999")],
         path="/api/compose/draft",
+    )
+    assert _response(draft_sent)[0] == 413
+    assert draft_called is False
+
+    other_sent, _received, other_called = await _run_middleware(
+        max_bytes=5,
+        chunks=[b"oversized"],
+        headers=[(b"content-length", b"999")],
+        path="/api/compose/drafts/recent",
     )
     assert _response(other_sent)[0] == 204
     assert other_called is True
