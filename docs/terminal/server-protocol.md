@@ -85,7 +85,7 @@ Both endpoints **MUST** support `If-None-Match` and respond `304 Not Modified`
 when the resource hasn't changed.
 
 Both endpoints **MUST** be served over HTTPS with a certificate chaining to the
-firmware's compiled ISRG Root X1/X2 bundle. Candidate.4 requires a fresh SNTP
+firmware's compiled ISRG Root X1/X2 bundle. Candidate.5 requires a fresh SNTP
 callback and a plausible 2024–2041 UTC clock before CA and hostname validation,
 rejects plaintext and scheme-relative URLs, and does not follow redirects.
 Production currently chains through X2. A non-ISRG image origin will fail
@@ -110,8 +110,11 @@ normalized, and match the credential-bound device or the response is the same
 | `X-Wake-Reason`     | enum                           | `timer`                 | One of `timer`, `button`, `reset`, `first_boot`, `unknown`.                                                                       |
 | `X-Boot-Count`      | uint32                         | `142`                   | Monotonically increasing. Persists across deep sleep via NVS.                                                                     |
 | `X-Uptime-Sec`      | uint32                         | `3`                     | Seconds since this wake. Useful for diagnosing slow boots.                                                                        |
-| `X-Battery-MV`      | uint16                         | `4180`                  | Raw battery voltage in millivolts (already accounts for the /2 divider).                                                          |
+| `X-Battery-MV`      | uint16                         | `4180`                  | Median cell voltage from the bounded battery burst; already accounts for the /2 divider.                                         |
 | `X-Battery-Pct`     | uint8 (0-100)                  | `95`                    | Firmware-side LiPo SoC estimate. Treat as fuzzy.                                                                                  |
+| `X-Battery-Spread-MV` | uint16                       | `18`                    | Maximum minus minimum voltage in the bounded seven-sample ADC burst.                                                              |
+| `X-Battery-Samples` | uint8                           | `7`                     | Number of samples summarized into `X-Battery-MV`.                                                                                 |
+| `X-Battery-Valid`   | `0` or `1`                      | `1`                     | `1` only when the burst has enough samples, a credible 1S LiPo range, and bounded spread.                                         |
 | `X-RSSI-Dbm`        | int (negative)                 | `-52`                   | RSSI in dBm at the moment of check-in.                                                                                            |
 | `X-Free-PSRAM`      | uint32                         | `8123456`               | Bytes of free PSRAM.                                                                                                              |
 | `X-Last-Image-ETag` | quoted ETag (RFC 7232)         | `"abc123def"`           | The ETag of the image currently painted on the panel; `""` if none.                                                               |
@@ -135,6 +138,9 @@ X-Boot-Count: 142
 X-Uptime-Sec: 3
 X-Battery-MV: 4180
 X-Battery-Pct: 95
+X-Battery-Spread-MV: 18
+X-Battery-Samples: 7
+X-Battery-Valid: 1
 X-RSSI-Dbm: -52
 X-Free-PSRAM: 8123456
 X-Last-Image-ETag: "abc123def"
@@ -597,9 +603,10 @@ add support for them; they need a coordinated firmware-side change first.
 - Authentication headers. Secure enrollment uses a revocable path credential
   because current firmware persists one schedule URL; see
   [`secure-enrollment.md`](secure-enrollment.md).
-- OTA schedule offers and update/event transport. Candidate.4 contains a
-  default-disabled signed A/B writer library, but the schedule parser and
-  network path intentionally do not invoke it yet.
+- OTA schedule offers and update/event transport. Candidate.5 contains a
+  default-disabled signed A/B writer and early pending-image validation gate,
+  but the schedule parser and network path intentionally do not invoke the
+  writer yet.
 - Server-initiated push (the device is asleep; it can't be pushed to).
 - Multiple images / playlists in a single response (use one `image` object).
 - Plug-in panel formats other than 4-bit Spectra 6 800x480.

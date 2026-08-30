@@ -119,8 +119,11 @@ behavior off":
   the routine schedule wake.
 - `X-Last-Image-ETag` — the ETag the firmware *thinks* is currently on
   the panel. Useful as a sanity check against your own state.
-- `X-Battery-MV` / `X-Battery-Pct` — millivolts of battery, plus a
-  fuzzy LiPo SoC estimate (linear 3.30 V → 0 %, 4.20 V → 100 %).
+- `X-Battery-MV` / `X-Battery-Pct` — median millivolts of a bounded ADC
+  burst, plus a fuzzy LiPo SoC estimate (linear 3.30 V → 0 %, 4.20 V → 100 %).
+- `X-Battery-Spread-MV` / `X-Battery-Samples` / `X-Battery-Valid` — quality
+  evidence for that burst. Treat an explicitly invalid or unusually noisy
+  reading as unknown rather than as proof that a terminal is charged.
 - `X-RSSI-Dbm` — RSSI at the moment of check-in.
 - `X-Boot-Count` / `X-Uptime-Sec` / `X-Free-PSRAM` — diagnostic.
 - `User-Agent` / `X-FW-Version` — firmware build.

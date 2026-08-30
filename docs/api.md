@@ -1255,6 +1255,18 @@ external-power signal, a corroborated rise resets the discharge segment but is
 described only as `possible_charging`; the API never claims active charging
 from inferred voltage rise. Low-charge notices always take precedence.
 
+Firmware candidate.5 adds a bounded seven-sample battery burst and sends its
+median, spread, sample count, and explicit quality result. When
+`X-Battery-Valid: 0` is present, the server ignores that percentage and voltage
+instead of adding misleading data to the predictor. Older firmware without the
+quality header retains the existing range-bounded ingestion behavior.
+
+Candidate.5 also emits exact RET1 status version 2 with read-only partition,
+boot-state, and source-build identity. The enrollment API continues accepting
+the exact candidate.4 status-v1 shape; the authenticated RET1 handshake remains
+version 1. A status-v1 terminal has no runtime identity evidence and must not be
+treated as a verified recovery boot.
+
 ### Authenticated firmware catalog and artifacts
 
 Firmware release inspection uses the normal authenticated browser session.

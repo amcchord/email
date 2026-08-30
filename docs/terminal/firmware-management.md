@@ -8,15 +8,15 @@ formats remain in [`firmware-variants.md`](firmware-variants.md).
 
 Baselines verified on 2026-08-30:
 
-- Email application and production at
-  `584e3e0c52f209c6e93e6a7abdaf93727548fbba`, with first-class At a Glance,
-  the default-locked secure enrollment foundation, and Alembic at
-  `f3a4b5c6d7e8`;
+- Email GitHub `main` and production closeout at
+  `4f85578d25292deabeb9f3c844ed1178afa8a72d`, with terminal-safety runtime
+  `92d22a54c49ec9b4ba74042ece01a1c6d527ea07`, first-class At a Glance, the
+  default-locked secure enrollment foundation, and Alembic at `f3a4b5c6d7e8`;
 - private `reterminal-color` `main` at
-  `2e835543dfe7095fe65a4f62b0da9e3c91ca47d1` (`0.2.0-candidate.4`); and
-- Exact-main GitHub Actions run `33336177159`, which passed the candidate's
-  keyed RET1, cross-language, power-loss, reproducibility, manifest, and bundle
-  verification gates.
+  `f23d6302ae4bc64326f385fe44593e2ec47febd0` (`0.2.0-candidate.5`); and
+- Exact-main GitHub Actions run `33338824057`, which exercises the candidate's
+  keyed RET1/OTA guards, cross-language and host safety tests, all-model
+  reproducibility, manifest, and bundle verification gates.
 
 ## Status today
 
@@ -24,10 +24,10 @@ Baselines verified on 2026-08-30:
 | --- | --- | --- |
 | USB build and flash | PlatformIO environments, pinned dependencies/toolchain evidence, exact per-model partitions, deterministic build metadata, and immutable checksummed bundles exist for E1001, E1002, and E1004. | Current artifacts truthfully declare `signed=false`; no browser may install them. Command-line PlatformIO/esptool remains the only qualified write path. |
 | Browser firmware gateway | Cookie-authenticated, rate-limited catalog/manifest/signature/artifact routes verify a signed approval catalog and every bundle byte from local immutable storage. The browser independently verifies exact manifest bytes with SHA-256 and detached Ed25519 against source-pinned contracts. | Production defaults contain no trusted key or approved catalog, and the browser key map is empty. The Admin surface is metadata-only; serial, artifact-download, provisioning, and write gates remain false. |
-| Runtime configuration | Candidate.4 retains bounded RET1 and three-slot atomic NVS configuration while keeping generic release images unkeyed, enrollment-disabled, and free of credentials. The application has a fail-closed policy, intent/ticket API, hashed per-device credentials, activation, bounded rollback, and revocation. | Production has no online enrollment key or qualified release/model allowlist, and the shipped browser does not import serial transport. Command-line `uploadfs` remains the only hardware workflow until HIL passes. |
-| Application partitions | Candidate.4 uses exact `ab-v1` on E1001/E1002: the legacy NVS, `ota_0`, LittleFS, and coredump ranges are unchanged and `ota_1` is appended at `0x400000`. E1004 remains exact single-slot. | Existing physical E1001/E1002 devices still need a qualified USB migration to install the new partition table. No model is OTA-eligible. |
-| Device check-in | Firmware reports bounded model, build, wake, battery, RSSI, memory, boot, and image metadata. The server stores sparse 90-day history and uses bounded robust discharge trends with coarse confidence wording. | MAC and the legacy shared terminal URL are routing data, not device authentication. Firmware lacks an external-power signal, so battery rises are only `possible_charging` and forecasts cannot gate a write. |
-| TLS and OTA | Candidate.4 requires fresh bounded SNTP, validates hostnames against an ISRG X1/X2 bundle, rejects plaintext/redirect downgrade, verifies exact Ed25519 OTA descriptors, writes only the inactive exact slot, and exposes pending-image valid/rollback APIs. | The OTA writer is compile-time disabled and unkeyed; schedule offers, artifact transport, event persistence, boot self-test integration, and HIL are absent. E1004 is hard-rejected. |
+| Runtime configuration | Candidate.5 retains bounded RET1 and three-slot atomic NVS configuration while keeping generic release images unkeyed, enrollment-disabled, and free of credentials. Exact status v2 adds read-only partition, boot-state, and source-build identity while the v1 handshake transcript stays unchanged; the application remains compatible with candidate.4 status v1. | Production has no online enrollment key or qualified release/model allowlist, and the shipped browser does not import serial transport. Command-line `uploadfs` remains the only hardware workflow until HIL passes. |
+| Application partitions | Candidate.5 validates the complete six-entry `ab-v1` table at runtime on E1001/E1002: the legacy NVS, `ota_0`, LittleFS, and coredump ranges are unchanged and `ota_1` is appended at `0x400000`. E1004 remains exact single-slot and OTA-ineligible. | Existing physical E1001/E1002 devices still need a qualified USB migration to install the new partition table. No model is OTA-eligible. |
+| Device check-in | Firmware reports bounded model, build, wake, battery, RSSI, memory, boot, and image metadata. Candidate.5 summarizes a seven-sample battery burst with median, spread, count, and explicit validity; the server excludes explicitly invalid readings from its sparse 90-day predictor. | MAC and the legacy shared terminal URL are routing data, not device authentication. Firmware lacks an external-power signal, so battery rises are only `possible_charging` and forecasts cannot gate a write. |
+| TLS and OTA | Candidate.5 requires fresh bounded SNTP, validates hostnames against an ISRG X1/X2 bundle, rejects plaintext/redirect downgrade, verifies exact Ed25519 OTA descriptors, writes only the inactive exact slot, and runs a bounded local self-test before accepting a pending image. | The OTA writer is compile-time disabled and unkeyed; schedule offers, artifact transport, event persistence, and HIL are absent. E1004 is hard-rejected. |
 | E1004 | The firmware builds reproducibly and its full-refresh dual-controller implementation is present. | No hardware qualification exists; E1004 browser installation and OTA are explicitly ineligible. |
 
 The personal checkout under `~/Development/reTerminalColor` remains dirty and
@@ -167,7 +167,7 @@ bootloader recovery instructions; it is not reported as a partial success.
 
 ### First-install partition migration
 
-Candidate.4 builds E1001/E1002 with `ab-v1`, but a device running the prior
+Candidate.5 builds E1001/E1002 with `ab-v1`, but a device running the prior
 single-slot partition table cannot safely rewrite that table through OTA. The
 first move is therefore a one-time USB/Web Serial migration:
 
@@ -239,17 +239,19 @@ physical E1001/E1002 HIL.
 
 ## TLS and device-side update sequence
 
-Candidate.4 implements the transport prerequisite: every wake requires a fresh
+Candidate.5 implements the transport prerequisite: every wake requires a fresh
 SNTP callback within 15 seconds and a plausible 2024–2041 clock, then validates
 the hostname and chain against compiled ISRG Root X1/X2. Certificate, clock, or
 handshake failure fails closed into the normal sleep/backoff path. Plain HTTP,
 scheme-relative URLs, redirect following, and `setInsecure()` are absent. The
 bundle must rotate before X2 expires in 2040 or before production changes CA.
 
-Candidate.4 also implements the local signed writer and rollback API described
-below, but `main.cpp` intentionally does not call either. Offer transport,
-durable device events, and bounded boot self-tests must land together before an
-enabled/keyed image can be distributed.
+Candidate.5 also implements the local signed writer and calls the pending-image
+validation/rollback gate before enrollment, panel, network, restart, or sleep
+work. A pending image must prove the enabled/keyed policy, durable boot counter,
+preserved enrolled configuration, read-only LittleFS mount, and two frame-sized
+PSRAM allocations. Offer/artifact transport and durable device events remain
+absent, so no enabled/keyed image may be distributed.
 
 For each offered update, firmware performs this sequence:
 
@@ -302,7 +304,7 @@ Example:
 }
 ```
 
-Candidate.4 defines an exact six-field OTA descriptor. Its detached signature
+Candidate.5 defines an exact six-field OTA descriptor. Its detached signature
 is 64 raw Ed25519 bytes over the exact descriptor bytes; `release_id` is the
 lowercase SHA-256 of those same bytes. The device verifies before trusting any
 parsed field:

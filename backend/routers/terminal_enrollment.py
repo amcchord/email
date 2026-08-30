@@ -93,6 +93,26 @@ class Ret1Status(StrictModel):
     attestation: Literal[False]
 
 
+class Ret1StatusV2(StrictModel):
+    v: Literal[2]
+    type: Literal["status"]
+    state: Literal["storage_error", "config_ready", "provisioning_required"]
+    model: Literal["E1001", "E1002", "E1004"]
+    firmware_version: str = Field(min_length=1, max_length=128)
+    factory_mac: str = Field(min_length=17, max_length=17)
+    config_source: Literal["nvs", "file", "fallback"]
+    config_generation: int = Field(ge=0, le=4_294_967_295)
+    enrollment_available: bool
+    enrollment_key_id: str = Field(max_length=64)
+    partition_layout: Literal["ab-v1", "unknown"]
+    running_partition: Literal["ota_0", "ota_1", "unknown"]
+    boot_state: Literal["stable", "pending_validation", "invalid"]
+    partition_identity_valid: bool
+    firmware_build_id: str = Field(min_length=7, max_length=46)
+    identity_strength: Literal["physical_cable_only"]
+    attestation: Literal[False]
+
+
 class Ret1Hello(StrictModel):
     v: Literal[1]
     type: Literal["hello"]
@@ -122,7 +142,7 @@ class Ret1HelloAck(StrictModel):
 class EnrollmentIntentRequest(StrictModel):
     client_intent_id: UUID
     operation: Literal["provision"]
-    status: Ret1Status
+    status: Ret1Status | Ret1StatusV2
     hello: Ret1Hello
     hello_ack: Ret1HelloAck
 

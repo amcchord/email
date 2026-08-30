@@ -85,6 +85,23 @@ def normalize_battery_mv(value: Optional[int]) -> Optional[int]:
     return value if 2500 <= value <= 5000 else None
 
 
+def normalize_battery_telemetry(
+    *,
+    battery_mv: Optional[int],
+    battery_pct: Optional[int],
+    measurement_valid: Optional[int],
+) -> tuple[Optional[int], Optional[int]]:
+    """Normalize one firmware reading and honor its explicit quality result.
+
+    Older firmware has no quality header and retains the established bounded
+    behavior. Candidate.5 sends 0 only when its seven-sample ADC burst is too
+    sparse, implausible, or noisy; that reading must not enter the predictor.
+    """
+    if measurement_valid == 0:
+        return None, None
+    return normalize_battery_mv(battery_mv), normalize_battery_pct(battery_pct)
+
+
 def _utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)

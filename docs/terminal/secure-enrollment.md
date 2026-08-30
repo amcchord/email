@@ -7,10 +7,10 @@ OTA remain separate gates in [`firmware-management.md`](firmware-management.md).
 
 ## Current release posture
 
-- Private firmware `main` is `2e835543dfe7095fe65a4f62b0da9e3c91ca47d1`
-  (`0.2.0-candidate.4`). Exact-main GitHub Actions run `33336177159` passed its
-  keyed, cross-language, power-loss, reproducibility, manifest, and bundle
-  checks.
+- Private firmware `main` is `f23d6302ae4bc64326f385fe44593e2ec47febd0`
+  (`0.2.0-candidate.5`). Exact-main GitHub Actions run `33338824057` exercises
+  its keyed RET1/OTA guards, cross-language and host safety tests, all-model
+  reproducibility, manifest, and bundle checks.
 - Generic firmware artifacts remain unkeyed and enrollment-disabled. No release
   signing key, enrollment private key, credential, Wi-Fi value, or device image
   is committed to either repository.
@@ -59,7 +59,10 @@ protected per-device attestation key, and their ROM downloader remains open.
    catalog and positive generation floor, matching schema-2 RET1 claim, and an
    explicit E1001/E1002 release/model HIL allowlist.
 2. A future transport adapter obtains an explicit user-selected serial port and
-   exchanges exact bounded `@RET1` status, hello, and hello-ack frames. The
+   exchanges exact bounded `@RET1` status, hello, and hello-ack frames. Exact
+   candidate.4 status v1 remains accepted; candidate.5 status v2 adds physical-
+   cable observations of partition layout, running slot, boot state, and source
+   build ID without changing the v1 hello/hello-ack transcript. The
    browser verifies canonical encoding, P-256 points, transcript/session hash,
    model, MAC, firmware version, key ID, and generation.
 3. The browser submits only that public transcript to create an owner-scoped,

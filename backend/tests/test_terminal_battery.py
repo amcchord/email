@@ -10,6 +10,7 @@ from backend.services.terminal.battery import (
     estimate_battery_health,
     normalize_battery_mv,
     normalize_battery_pct,
+    normalize_battery_telemetry,
     should_record_sample,
 )
 
@@ -58,6 +59,27 @@ def test_battery_percentage_validation(value, expected):
 )
 def test_battery_voltage_validation(value, expected):
     assert normalize_battery_mv(value) == expected
+
+
+def test_explicitly_invalid_firmware_burst_is_not_recorded():
+    assert normalize_battery_telemetry(
+        battery_mv=4100,
+        battery_pct=89,
+        measurement_valid=0,
+    ) == (None, None)
+
+
+def test_quality_header_is_backward_compatible_and_range_bounded():
+    assert normalize_battery_telemetry(
+        battery_mv=3900,
+        battery_pct=72,
+        measurement_valid=None,
+    ) == (3900, 72)
+    assert normalize_battery_telemetry(
+        battery_mv=6000,
+        battery_pct=101,
+        measurement_valid=1,
+    ) == (None, None)
 
 
 def test_invalid_readings_do_not_become_health_samples():

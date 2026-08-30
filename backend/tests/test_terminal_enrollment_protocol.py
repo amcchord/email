@@ -49,7 +49,7 @@ CONFIG_SHA256 = "7c41cd4d502120a909e1cf606953999941e8157a6f685e5e67c9bbfbe419bf8
 
 def _status() -> dict:
     return {
-        "v": 1,
+        "v": 2,
         "type": "status",
         "state": "provisioning_required",
         "model": "E1002",
@@ -59,6 +59,11 @@ def _status() -> dict:
         "config_generation": 0,
         "enrollment_available": True,
         "enrollment_key_id": "fixture-2026",
+        "partition_layout": "ab-v1",
+        "running_partition": "ota_0",
+        "boot_state": "stable",
+        "partition_identity_valid": True,
+        "firmware_build_id": "0123456789abcdef0123456789abcdef01234567",
         "identity_strength": "physical_cable_only",
         "attestation": False,
     }
@@ -112,6 +117,48 @@ def test_firmware_vector_handshake_has_exact_transcript_parity():
     assert validated.generation == 0
     assert validated.transcript_sha256_hex == TRANSCRIPT_SHA256
     assert validated.session_id == SESSION_ID
+
+
+def test_status_runtime_identity_is_exact_and_fail_closed():
+    status = parse_status(_status())
+    assert status.partition_layout == "ab-v1"
+    assert status.running_partition == "ota_0"
+    assert status.boot_state == "stable"
+    assert status.partition_identity_valid is True
+
+    for field, value in (
+        ("partition_layout", "ab-v2"),
+        ("running_partition", "factory"),
+        ("boot_state", "booted"),
+        ("firmware_build_id", "not-a-build"),
+    ):
+        candidate = _status()
+        candidate[field] = value
+        with pytest.raises(EnrollmentProtocolError, match="runtime identity"):
+            parse_status(candidate)
+
+
+def test_candidate_4_status_v1_remains_exact_and_compatible():
+    status = _status()
+    status["v"] = 1
+    for field in (
+        "partition_layout",
+        "running_partition",
+        "boot_state",
+        "partition_identity_valid",
+        "firmware_build_id",
+    ):
+        status.pop(field)
+
+    parsed = parse_status(status)
+    assert parsed.partition_layout == "unknown"
+    assert parsed.running_partition == "unknown"
+    assert parsed.boot_state == "unknown"
+    assert parsed.partition_identity_valid is False
+
+    status["partition_layout"] = "unknown"
+    with pytest.raises(EnrollmentProtocolError, match="fields are invalid"):
+        parse_status(status)
 
 
 @pytest.mark.parametrize(

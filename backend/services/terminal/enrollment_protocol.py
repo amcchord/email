@@ -40,8 +40,9 @@ KEY_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 LOWER_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 LOWER_MAC_RE = re.compile(r"[0-9a-f]{2}(?::[0-9a-f]{2}){5}")
 HEX_PSK_RE = re.compile(r"[0-9A-Fa-f]{64}")
+BUILD_ID_RE = re.compile(r"(?:[0-9a-f]{40}(?:-dirty)?|unknown)")
 
-STATUS_KEYS = frozenset(
+STATUS_V1_KEYS = frozenset(
     {
         "v",
         "type",
@@ -55,6 +56,15 @@ STATUS_KEYS = frozenset(
         "enrollment_key_id",
         "identity_strength",
         "attestation",
+    }
+)
+STATUS_V2_KEYS = STATUS_V1_KEYS | frozenset(
+    {
+        "partition_layout",
+        "running_partition",
+        "boot_state",
+        "partition_identity_valid",
+        "firmware_build_id",
     }
 )
 HELLO_KEYS = frozenset({"v", "type", "seq", "client_nonce", "client_public_key"})
@@ -98,6 +108,11 @@ class ParsedStatus:
     config_generation: int
     enrollment_available: bool
     enrollment_key_id: str
+    partition_layout: str
+    running_partition: str
+    boot_state: str
+    partition_identity_valid: bool
+    firmware_build_id: str
 
 
 @dataclass(frozen=True)
@@ -276,8 +291,12 @@ def _validate_generation(value: Any, *, allow_zero: bool) -> int:
 
 def parse_status(value: Any) -> ParsedStatus:
     status = _strict_object(value, "RET1 status")
-    _require_exact_keys(status, STATUS_KEYS, "RET1 status")
-    if not _is_int(status["v"]) or status["v"] != 1 or status["type"] != "status":
+    if not _is_int(status.get("v")) or status["v"] not in {1, 2}:
+        raise _error("invalid_status", "RET1 status version or type is invalid")
+    _require_exact_keys(
+        status, STATUS_V1_KEYS if status["v"] == 1 else STATUS_V2_KEYS, "RET1 status"
+    )
+    if status["type"] != "status":
         raise _error("invalid_status", "RET1 status version or type is invalid")
     if not isinstance(status["state"], str) or status["state"] not in {
         "storage_error",
@@ -301,6 +320,34 @@ def parse_status(value: Any) -> ParsedStatus:
         raise _error("invalid_status", "Unavailable RET1 status declares a key id")
     if status["identity_strength"] != "physical_cable_only" or status["attestation"] is not False:
         raise _error("invalid_identity", "RET1 identity claim is invalid")
+    partition_layout = "unknown"
+    running_partition = "unknown"
+    boot_state = "unknown"
+    partition_valid = False
+    build_id = "unknown"
+    if status["v"] == 2:
+        partition_layout = status["partition_layout"]
+        running_partition = status["running_partition"]
+        boot_state = status["boot_state"]
+        partition_valid = status["partition_identity_valid"]
+        build_id = status["firmware_build_id"]
+        if (
+            partition_layout not in {"ab-v1", "unknown"}
+            or running_partition not in {"ota_0", "ota_1", "unknown"}
+            or boot_state not in {"stable", "pending_validation", "invalid"}
+            or type(partition_valid) is not bool
+            or not isinstance(build_id, str)
+            or BUILD_ID_RE.fullmatch(build_id) is None
+        ):
+            raise _error("invalid_status", "RET1 runtime identity is invalid")
+        if partition_valid and (
+            partition_layout != "ab-v1" or running_partition not in {"ota_0", "ota_1"}
+        ):
+            raise _error("invalid_status", "RET1 partition identity is inconsistent")
+        if not partition_valid and (
+            partition_layout != "unknown" or running_partition != "unknown"
+        ):
+            raise _error("invalid_status", "Unvalidated RET1 partition identity is not unknown")
     return ParsedStatus(
         state=status["state"],
         model=_validate_model(status["model"]),
@@ -310,6 +357,11 @@ def parse_status(value: Any) -> ParsedStatus:
         config_generation=_validate_generation(status["config_generation"], allow_zero=True),
         enrollment_available=status["enrollment_available"],
         enrollment_key_id=key_id,
+        partition_layout=partition_layout,
+        running_partition=running_partition,
+        boot_state=boot_state,
+        partition_identity_valid=partition_valid,
+        firmware_build_id=build_id,
     )
 
 

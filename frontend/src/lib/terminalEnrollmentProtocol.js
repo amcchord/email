@@ -342,6 +342,27 @@ function validateModel(value, code) {
   return value;
 }
 
+const BUILD_ID_RE = /^(?:[0-9a-f]{40}(?:-dirty)?|unknown)$/;
+
+function validateRuntimeIdentity(message) {
+  if (!['ab-v1', 'unknown'].includes(message.partition_layout)
+    || !['ota_0', 'ota_1', 'unknown'].includes(message.running_partition)
+    || !['stable', 'pending_validation', 'invalid'].includes(message.boot_state)
+    || typeof message.partition_identity_valid !== 'boolean'
+    || typeof message.firmware_build_id !== 'string'
+    || !BUILD_ID_RE.test(message.firmware_build_id)) {
+    fail('invalid_status', 'Invalid firmware runtime identity.');
+  }
+  if (message.partition_identity_valid) {
+    if (message.partition_layout !== 'ab-v1'
+      || !['ota_0', 'ota_1'].includes(message.running_partition)) {
+      fail('invalid_status', 'Validated partition identity is inconsistent.');
+    }
+  } else if (message.partition_layout !== 'unknown' || message.running_partition !== 'unknown') {
+    fail('invalid_status', 'Unvalidated partition identity must remain unknown.');
+  }
+}
+
 export function validateHello(message) {
   assertExactKeys(message, ['v', 'type', 'seq', 'client_nonce', 'client_public_key'], 'invalid_hello');
   if (message.v !== 1 || message.type !== 'hello' || message.seq !== 0) fail('invalid_hello', 'Invalid hello envelope.');
@@ -352,12 +373,23 @@ export function validateHello(message) {
 }
 
 export function validateStatus(message) {
-  assertExactKeys(message, [
+  assertPlainObject(message, 'invalid_status');
+  const commonKeys = [
     'v', 'type', 'state', 'model', 'firmware_version', 'factory_mac',
     'config_source', 'config_generation', 'enrollment_available',
     'enrollment_key_id', 'identity_strength', 'attestation',
-  ], 'invalid_status');
-  if (message.v !== 1 || message.type !== 'status'
+  ];
+  if (message.v === 1) {
+    assertExactKeys(message, commonKeys, 'invalid_status');
+  } else if (message.v === 2) {
+    assertExactKeys(message, [
+      ...commonKeys, 'partition_layout', 'running_partition', 'boot_state',
+      'partition_identity_valid', 'firmware_build_id',
+    ], 'invalid_status');
+  } else {
+    fail('invalid_status', 'Unsupported RET1 status version.');
+  }
+  if (message.type !== 'status'
     || !['storage_error', 'config_ready', 'provisioning_required'].includes(message.state)
     || !['nvs', 'file', 'fallback'].includes(message.config_source)
     || typeof message.enrollment_available !== 'boolean'
@@ -369,6 +401,7 @@ export function validateStatus(message) {
   assertBoundedString(message.firmware_version, 1, 128, 'invalid_status');
   validateMac(message.factory_mac, 'invalid_status');
   assertInteger(message.config_generation, 0, UINT32_MAX, 'invalid_status');
+  if (message.v === 2) validateRuntimeIdentity(message);
   if (message.enrollment_available) {
     if (typeof message.enrollment_key_id !== 'string' || !IDENTIFIER_RE.test(message.enrollment_key_id)) {
       fail('invalid_status', 'Enrollment key id is invalid.');

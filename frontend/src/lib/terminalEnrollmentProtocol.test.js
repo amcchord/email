@@ -153,7 +153,7 @@ test('status, hello, and hello_ack validators enforce exact bounded firmware sha
   assert.equal(validateHello(fixtureHello()).clientNonce.length, 32);
   assert.equal(validateHelloAck(fixtureHelloAck()).devicePublicKey.length, 65);
   const status = {
-    v: 1,
+    v: 2,
     type: 'status',
     state: 'provisioning_required',
     model: 'E1002',
@@ -163,16 +163,43 @@ test('status, hello, and hello_ack validators enforce exact bounded firmware sha
     config_generation: 0,
     enrollment_available: true,
     enrollment_key_id: 'fixture-2026',
+    partition_layout: 'ab-v1',
+    running_partition: 'ota_0',
+    boot_state: 'stable',
+    partition_identity_valid: true,
+    firmware_build_id: '0123456789abcdef0123456789abcdef01234567',
     identity_strength: 'physical_cable_only',
     attestation: false,
   };
   assert.equal(validateStatus(status), status);
+  const legacyStatus = {
+    ...status,
+    v: 1,
+  };
+  delete legacyStatus.partition_layout;
+  delete legacyStatus.running_partition;
+  delete legacyStatus.boot_state;
+  delete legacyStatus.partition_identity_valid;
+  delete legacyStatus.firmware_build_id;
+  assert.equal(validateStatus(legacyStatus), legacyStatus);
+  assert.throws(
+    () => validateStatus({ ...legacyStatus, partition_layout: 'unknown' }),
+    expectCode('invalid_status'),
+  );
 
   assert.throws(() => validateHello({ ...fixtureHello(), extra: true }), expectCode('invalid_hello'));
   assert.throws(() => validateHelloAck(fixtureHelloAck({ session_id: 'not-base64!' })), expectCode('invalid_base64url'));
   assert.throws(() => validateHelloAck(fixtureHelloAck({ factory_mac: 'AA:BB:CC:DD:EE:FF' })), expectCode('invalid_hello_ack'));
   assert.throws(() => validateStatus({ ...status, enrollment_available: false }), expectCode('invalid_status'));
   assert.throws(() => validateStatus({ ...status, model: 'E9999' }), expectCode('invalid_status'));
+  assert.throws(() => validateStatus({ ...status, partition_layout: 'ab-v2' }), expectCode('invalid_status'));
+  assert.throws(() => validateStatus({ ...status, firmware_build_id: 'not-a-build' }), expectCode('invalid_status'));
+  assert.equal(validateStatus({
+    ...status,
+    partition_layout: 'unknown',
+    running_partition: 'unknown',
+    partition_identity_valid: false,
+  }).partition_identity_valid, false);
 });
 
 test('deterministic P-256 handshake derives the exact RET1 transcript, HKDF keys, nonces, and AAD', async () => {

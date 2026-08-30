@@ -30,8 +30,7 @@ from backend.models.terminal import (
 )
 from backend.services.terminal.battery import (
     BATTERY_RETENTION,
-    normalize_battery_mv,
-    normalize_battery_pct,
+    normalize_battery_telemetry,
     should_record_sample,
 )
 from backend.services.terminal.catalog import (
@@ -215,8 +214,11 @@ async def _apply_device_telemetry(
     device.variant = variant.key
     device.last_seen_at = now
     device.last_wake_reason = (h.get("x-wake-reason") or "").strip()[:32] or device.last_wake_reason
-    battery_mv = normalize_battery_mv(_safe_int(h.get("x-battery-mv")))
-    battery_pct = normalize_battery_pct(_safe_int(h.get("x-battery-pct")))
+    battery_mv, battery_pct = normalize_battery_telemetry(
+        battery_mv=_safe_int(h.get("x-battery-mv")),
+        battery_pct=_safe_int(h.get("x-battery-pct")),
+        measurement_valid=_safe_int(h.get("x-battery-valid")),
+    )
     rssi_dbm = _safe_int(h.get("x-rssi-dbm"))
     uptime_sec = _safe_int(h.get("x-uptime-sec"))
     boot_count = _safe_int(h.get("x-boot-count"))
