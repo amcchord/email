@@ -4,24 +4,24 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Release the default-locked secure terminal enrollment foundation, then add At a
-Glance as a first-class application route after the coordinated Durable Replies
-release clears the shared shell baseline. Keep browser Serial, device writes,
-firmware flashing, and OTA disabled until physical E1001/E1002 recovery evidence
-exists.
+Add At a Glance as a first-class application route after the coordinated
+Durable Replies release clears the shared shell baseline. Keep browser Serial,
+device writes, firmware flashing, and OTA disabled until physical E1001/E1002
+recovery evidence exists.
 
 ## Baseline
 
-- GitHub `main` and clean production are exact
-  `931cd50b042f008125e2b1eafb7f65ca325b2305`; deployed application runtime is
-  `61e0ad8f47bd12dff07b7c0e695ea3f5680af7a4`, and the deployment record is
-  `0c92e59bb47101f24a9c08afd692296cda8d47c0`.
-- Production Alembic is `e2f3a4b5c6d7 (head)`. The terminal-only additive
-  revision is allocated as direct child `f3a4b5c6d7e8`; no parallel task uses a
-  migration.
+- The deployed secure-enrollment application/runtime commit is
+  `8ff01848a2be2818dfd9eb88b84be9aab4befb0a`; the following closeout is docs
+  only. Production and GitHub were exact and clean at the runtime boundary.
+- Production Alembic is `f3a4b5c6d7e8 (head)`, the terminal-only additive
+  child of `e2f3a4b5c6d7`. The new credential and attempt tables remain empty,
+  all four existing terminals remain legacy, and the secure-MAC unique index is
+  present.
 - All seven checked production services are active, public health is `ok`, and
-  production Git is clean. No secure-enrollment configuration, online key,
-  qualified release, credential, or terminal row exists in production.
+  the replacement API process has zero automatic restarts and no post-start
+  warning-or-higher entries. Production has no secure-enrollment configuration,
+  online key, approved catalog, qualified release/model pair, or credential.
 - Private firmware `main` is
   `fd8671bd9a3641ecf9af37491bb8a00607dec4d6`
   (`0.2.0-candidate.3`). Exact-main run `33329094948` passed its software gates;
@@ -31,24 +31,6 @@ This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
 
 ## Active Work Items
-
-### P1 — Default-locked secure terminal enrollment release
-
-- State: ready for release; implementation and independent review report no
-  remaining P0/P1, and deterministic PostgreSQL contention/lifecycle coverage
-  closes the final P2 test gap. The production migration/deployment has not run.
-- Scope: signed schema-2 RET1 release claims, protected independent online
-  P-256 identity, exact transcript/ticket validation, three-slot firmware
-  configuration, owner-scoped attempts, hashed per-device credentials,
-  device-check-in activation, same-owner pending legacy continuity, bounded
-  rollback, full revocation, log suppression, and locked Admin policy UI.
-- Acceptance: full application checks, exact migration cycle, deterministic
-  PostgreSQL lock/race tests, Caddy validation, secret/diff review, and
-  authenticated post-deploy read-only QA pass; production remains locked and
-  all new enrollment tables remain empty.
-- Next: commit/push the reviewed runtime, take and validate a production backup,
-  advance Alembic to `f3a4b5c6d7e8`, deploy, verify, and publish the exact
-  release record.
 
 ### P1 — First-class At a Glance application destination
 
@@ -63,6 +45,18 @@ live state.
 - Next: receive the exact Durable Replies GitHub/production SHA after this f3
   release, rebase onto that shared-shell baseline, and implement the route in a
   separate migration-free slice.
+
+## Recent Terminal Release
+
+- The default-locked secure terminal enrollment foundation is deployed at
+  runtime `8ff01848a2be2818dfd9eb88b84be9aab4befb0a`, with Alembic
+  `f3a4b5c6d7e8 (head)`.
+- Full application checks, the exact migration cycle, deterministic PostgreSQL
+  contention/lifecycle tests, Caddy validation, secret/diff review, and
+  authenticated read-only production QA passed. The locked browser exposed no
+  serial or write operation and left all enrollment state untouched.
+- Full evidence and rollback boundaries are in
+  `SECURE_TERMINAL_ENROLLMENT_FOUNDATION_RELEASE_2026-08-30.md`.
 
 ## Near-Term Terminal Queue
 

@@ -3,6 +3,60 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Secure terminal enrollment foundation release
+
+### Scope
+
+Release a default-locked, owner-scoped RET1 server foundation without shipping
+or enabling browser Serial, Wi-Fi submission, device writes, firmware flashing,
+erase, or OTA. Preserve all existing legacy terminals and coordinate the shared
+frontend shell with Durable Replies.
+
+### Completed
+
+- Added signed schema-2 release claims, exact RET1 ticket validation,
+  owner-scoped intent/completion/status/revocation APIs, hashed per-device
+  credentials, device-check-in activation, same-owner pending legacy
+  continuity, bounded one-generation rollback, and full revocation.
+- Added canonical row/advisory locking, a partial unique secure-MAC index,
+  Caddy access-log suppression, outer ASGI path redaction, and a truthful locked
+  Admin policy surface. The browser imports no serial transport and exposes no
+  write action.
+- Published the complete architecture, threat boundary, enablement checklist,
+  operator recovery contract, and release evidence in `docs/terminal/` and
+  `docs/progress/SECURE_TERMINAL_ENROLLMENT_FOUNDATION_RELEASE_2026-08-30.md`.
+
+### Verification
+
+- `make check` passed 548 backend tests with 33 skips, 274 frontend tests, and a
+  518-module local build. Production built 520 modules.
+- Disposable PostgreSQL 17 passed the exact f3→e2→f3 migration cycle and all 12
+  focused lock/race/lifecycle regressions. Caddy validation, diff/secret scans,
+  and independent security review reported no remaining P0/P1 issue.
+- Authenticated production At a Glance QA reported both firmware and enrollment
+  locked, exposed no serial/write action, and left both enrollment tables empty
+  with every existing terminal still legacy.
+
+### Production Actions
+
+- Validated a protected 1,383,638,606-byte pre-migration backup, fast-forwarded
+  the application to `8ff01848a2be2818dfd9eb88b84be9aab4befb0a`, and advanced
+  Alembic from `e2f3a4b5c6d7` to `f3a4b5c6d7e8 (head)`.
+- Restarted only `mailapp`; the retired process exceeded its graceful-stop
+  window, while the replacement started cleanly with zero automatic restarts
+  and no post-start warning-or-higher entries. Caddy reloaded its validated
+  tracked configuration without a restart.
+- Verified all seven services active, public health `ok`, clean exact Git, the
+  production asset, anonymous 401 behavior, empty secure-enrollment state, and
+  the secure-MAC index.
+
+### Next
+
+Send the exact f3 release SHA to Durable Replies. After that release establishes
+the next shared-shell baseline, add At a Glance as a first-class migration-free
+application route. Keep Web Serial and OTA blocked pending physical E1001/E1002
+HIL and the later signed A/B design.
+
 ## 2026-08-30 — Durable draft sessions release
 
 ### Scope

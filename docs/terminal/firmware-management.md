@@ -8,8 +8,8 @@ formats remain in [`firmware-variants.md`](firmware-variants.md).
 
 Baselines verified on 2026-08-30:
 
-- Email application release `61e0ad8` as the production baseline before the
-  additive secure-enrollment foundation;
+- Email application release `8ff0184` with the additive, default-locked secure
+  enrollment foundation deployed and Alembic at `f3a4b5c6d7e8`;
 - private `reterminal-color` `main` at
   `fd8671bd9a3641ecf9af37491bb8a00607dec4d6` (`0.2.0-candidate.3`); and
 - exact-main GitHub Actions run `33329094948`, which passed the candidate's
