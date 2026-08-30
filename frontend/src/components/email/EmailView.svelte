@@ -1,19 +1,30 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
   import { currentPage, composeData, showToast, pendingReplyDraft, accounts, todos, accountColorMap } from '../../lib/stores.js';
-  import { registerActions } from '../../lib/shortcutStore.js';
+  import { commandPaletteOpen, helpModalOpen, registerActions } from '../../lib/shortcutStore.js';
   import { theme } from '../../lib/theme.js';
   import { api } from '../../lib/api.js';
   import {
+    MAX_ACTIVE_ATTACHMENT_REQUESTS,
     canStartAttachmentDownload,
     isCurrentAttachmentRequest,
     isRetryableAttachmentError,
+    safeClientFilename,
     saveAttachmentBlob,
   } from '../../lib/attachmentDownload.js';
+  import {
+    attachmentPreviewHint,
+    attachmentSafetyNotice,
+    attachmentTypeLabel,
+    isCurrentAttachmentPreviewRequest,
+    materializeAttachmentPreview,
+    releaseAttachmentPreview,
+  } from '../../lib/attachmentPreview.js';
   import { sanitizeHtml } from '../../lib/sanitize.js';
   import { get } from 'svelte/store';
   import Button from '../common/Button.svelte';
   import Icon from '../common/Icon.svelte';
+  import AttachmentPreview from './AttachmentPreview.svelte';
 
   let { email = null, loading = false, onAction = null, onClose = null, standalone = false } = $props();
 
@@ -22,10 +33,14 @@
   let addingTodos = $state(false);
   let showTodoPrompt = $state(false);
   let downloadingAttachmentIds = $state(new Set());
+  let attachmentTransferKinds = $state(new Map());
   let attachmentFeedback = $state(new Map());
   let attachmentRequestGeneration = 0;
+  let attachmentPreviewGeneration = 0;
   let attachmentEmailId = null;
   let attachmentAbortControllers = new Map();
+  let attachmentPreview = $state(null);
+  let attachmentPreviewReturnFocus = $state(null);
 
   onMount(() => registerActions({
     'inbox.reply': {
@@ -40,20 +55,26 @@
     },
   }));
 
-  onDestroy(() => abortAttachmentRequests());
+  onDestroy(() => {
+    closeAttachmentPreview();
+    abortAttachmentRequests();
+  });
 
   function abortAttachmentRequests() {
     for (const controller of attachmentAbortControllers.values()) controller.abort();
     attachmentAbortControllers = new Map();
+    attachmentTransferKinds = new Map();
   }
 
   $effect(() => {
     const nextEmailId = email?.id ?? null;
     if (nextEmailId !== attachmentEmailId) {
+      closeAttachmentPreview();
       abortAttachmentRequests();
       attachmentEmailId = nextEmailId;
       attachmentRequestGeneration += 1;
       downloadingAttachmentIds = new Set();
+      attachmentTransferKinds = new Map();
       attachmentFeedback = new Map();
     }
   });
@@ -64,61 +85,159 @@
     return `${Math.max(1, Math.ceil(sizeBytes / 1024))} KB`;
   }
 
-  function attachmentAccessibleLabel(attachment, isDownloading, isTerminal) {
-    const action = isDownloading
+  function attachmentAccessibleLabel(attachment, transferKind, isTerminal, transferCapReached) {
+    const action = transferKind === 'download'
       ? 'Downloading'
-      : (isTerminal ? 'Download unavailable for' : 'Download');
-    const filename = attachment.filename || 'attachment';
-    const contentType = attachment.content_type || 'unknown file type';
+      : (transferKind === 'preview'
+        ? 'Download unavailable while preparing preview for'
+        : (isTerminal || transferCapReached ? 'Download unavailable for' : 'Download'));
+    const filename = safeClientFilename(attachment.filename);
+    const contentType = attachmentTypeLabel(attachment);
     return `${action} ${filename}, ${contentType}, ${formatAttachmentSize(attachment.size_bytes)}`;
+  }
+
+  function previewAccessibleLabel(attachment, transferKind, isTerminal, transferCapReached) {
+    const filename = safeClientFilename(attachment.filename);
+    const action = transferKind === 'preview'
+      ? 'Loading preview for'
+      : (transferKind === 'download'
+        ? 'Preview unavailable while downloading'
+        : (isTerminal || transferCapReached ? 'Preview unavailable for' : 'Preview'));
+    return `${action} ${filename}, ${attachmentTypeLabel(attachment)}, ${formatAttachmentSize(attachment.size_bytes)}`;
   }
 
   function setAttachmentFeedback(attachmentId, feedback) {
     attachmentFeedback = new Map(attachmentFeedback).set(attachmentId, feedback);
   }
 
-  async function downloadAttachment(attachment) {
-    if (!email || !canStartAttachmentDownload(downloadingAttachmentIds, attachment.id)) return;
+  function previewRequestIsCurrent(requestedEmailId, attachmentId, previewGeneration) {
+    return isCurrentAttachmentPreviewRequest({
+      requestedEmailId,
+      requestedAttachmentId: attachmentId,
+      requestedGeneration: previewGeneration,
+      currentEmailId: email?.id ?? null,
+      currentAttachmentId: attachmentPreview?.attachment?.id,
+      currentGeneration: attachmentPreviewGeneration,
+    });
+  }
+
+  function releaseCurrentAttachmentPreview() {
+    releaseAttachmentPreview(attachmentPreview?.preview);
+  }
+
+  function cancelCurrentPreviewTransfer() {
+    const previewAttachmentId = attachmentPreview?.attachment?.id;
+    if (attachmentTransferKinds.get(previewAttachmentId) !== 'preview') return;
+    const controller = previewAttachmentId
+      ? attachmentAbortControllers.get(previewAttachmentId)
+      : null;
+    controller?.abort();
+    if (previewAttachmentId && controller) {
+      const nextControllers = new Map(attachmentAbortControllers);
+      nextControllers.delete(previewAttachmentId);
+      attachmentAbortControllers = nextControllers;
+      const nextIds = new Set(downloadingAttachmentIds);
+      nextIds.delete(previewAttachmentId);
+      downloadingAttachmentIds = nextIds;
+      const nextKinds = new Map(attachmentTransferKinds);
+      nextKinds.delete(previewAttachmentId);
+      attachmentTransferKinds = nextKinds;
+    }
+  }
+
+  function closeAttachmentPreview() {
+    attachmentPreviewGeneration += 1;
+    cancelCurrentPreviewTransfer();
+    releaseCurrentAttachmentPreview();
+    attachmentPreview = null;
+  }
+
+  function attachmentPreviewState(attachment, mode, extras = {}) {
+    return {
+      attachment,
+      mode,
+      displayName: safeClientFilename(attachment.filename),
+      typeLabel: attachmentTypeLabel(attachment),
+      sizeLabel: formatAttachmentSize(attachment.size_bytes),
+      notice: attachmentSafetyNotice(attachment),
+      preview: null,
+      error: null,
+      downloadMode: null,
+      downloadError: null,
+      ...extras,
+    };
+  }
+
+  async function openAttachmentPreview(attachment, returnFocusTarget = null) {
+    if (!email) return;
+    if (returnFocusTarget instanceof HTMLElement) {
+      attachmentPreviewReturnFocus = returnFocusTarget;
+    }
+    commandPaletteOpen.set(false);
+    helpModalOpen.set(false);
+    cancelCurrentPreviewTransfer();
+    releaseCurrentAttachmentPreview();
     const requestedEmailId = email.id;
-    const requestGeneration = attachmentRequestGeneration;
-    const filename = attachment.filename || 'attachment';
+    const previewGeneration = ++attachmentPreviewGeneration;
+    const hint = attachmentPreviewHint(attachment);
+    if (!hint) {
+      attachmentPreview = attachmentPreviewState(attachment, 'unsupported');
+      return;
+    }
+    if (!canStartAttachmentDownload(downloadingAttachmentIds, attachment.id)) {
+      attachmentPreview = attachmentPreviewState(attachment, 'error', {
+        error: {
+          retryable: true,
+          message: downloadingAttachmentIds.has(attachment.id)
+            ? 'This attachment is already being transferred.'
+            : 'Three other attachment transfers are active. Try again when one finishes.',
+        },
+      });
+      return;
+    }
+
     const abortController = new AbortController();
     attachmentAbortControllers = new Map(attachmentAbortControllers).set(
       attachment.id,
       abortController,
     );
     downloadingAttachmentIds = new Set(downloadingAttachmentIds).add(attachment.id);
-    setAttachmentFeedback(attachment.id, {
-      emailId: requestedEmailId,
-      type: 'status',
-      message: `Downloading ${filename}…`,
-    });
-    const requestIsCurrent = () => isCurrentAttachmentRequest({
-      requestedEmailId,
-      requestGeneration,
-      currentEmailId: email?.id ?? null,
-      currentGeneration: attachmentRequestGeneration,
-    });
+    attachmentTransferKinds = new Map(attachmentTransferKinds).set(attachment.id, 'preview');
+    attachmentPreview = attachmentPreviewState(attachment, 'loading');
     try {
-      const content = await api.downloadAttachment(
+      const result = await api.previewAttachment(
         requestedEmailId,
         attachment.id,
         { signal: abortController.signal },
       );
-      if (!requestIsCurrent()) return;
-      saveAttachmentBlob(content, attachment.filename);
-      setAttachmentFeedback(attachment.id, {
-        emailId: requestedEmailId,
-        type: 'status',
-        message: `Download started for ${filename}`,
-      });
+      const preview = await materializeAttachmentPreview(result, { expectedKind: hint });
+      if (!previewRequestIsCurrent(requestedEmailId, attachment.id, previewGeneration)) {
+        releaseAttachmentPreview(preview);
+        return;
+      }
+      if (preview.kind === 'pdf') {
+        releaseAttachmentPreview(preview);
+        preview.blob = null;
+        preview.objectUrl = null;
+        preview.sourceUrl = api.attachmentPreviewUrl(requestedEmailId, attachment.id);
+      }
+      attachmentPreview = attachmentPreviewState(attachment, 'ready', { preview });
     } catch (err) {
-      if (err?.name !== 'AbortError' && requestIsCurrent()) {
-        setAttachmentFeedback(attachment.id, {
-          emailId: requestedEmailId,
-          type: 'error',
-          retryable: isRetryableAttachmentError(err?.status),
-          message: `Couldn’t download ${filename}. ${err.message || 'Try again.'}`,
+      if (err?.name !== 'AbortError'
+        && previewRequestIsCurrent(requestedEmailId, attachment.id, previewGeneration)) {
+        attachmentPreview = attachmentPreviewState(attachment, 'error', {
+          notice: err?.status === 415
+            ? {
+              tone: 'danger',
+              label: 'File contents could not be verified',
+              detail: 'The attachment bytes did not match the expected preview type. Download only if you expected this file.',
+              requiresConfirmation: true,
+            }
+            : attachmentSafetyNotice(attachment),
+          error: {
+            retryable: isRetryableAttachmentError(err?.status),
+            message: err?.message || 'The preview could not be prepared.',
+          },
         });
       }
     } finally {
@@ -126,13 +245,124 @@
         const nextControllers = new Map(attachmentAbortControllers);
         nextControllers.delete(attachment.id);
         attachmentAbortControllers = nextControllers;
-      }
-      if (requestIsCurrent()) {
         const nextIds = new Set(downloadingAttachmentIds);
         nextIds.delete(attachment.id);
         downloadingAttachmentIds = nextIds;
+        const nextKinds = new Map(attachmentTransferKinds);
+        nextKinds.delete(attachment.id);
+        attachmentTransferKinds = nextKinds;
       }
     }
+  }
+
+  async function downloadAttachment(
+    attachment,
+    confirmed = false,
+    returnFocusTarget = null,
+  ) {
+    if (!email) return;
+    const previewNotice = attachmentPreview?.attachment?.id === attachment.id
+      ? attachmentPreview.notice
+      : null;
+    const safetyNotice = attachmentSafetyNotice(attachment) || previewNotice;
+    if (safetyNotice?.requiresConfirmation && !confirmed) {
+      if (returnFocusTarget instanceof HTMLElement) {
+        attachmentPreviewReturnFocus = returnFocusTarget;
+      }
+      commandPaletteOpen.set(false);
+      helpModalOpen.set(false);
+      releaseCurrentAttachmentPreview();
+      attachmentPreview = attachmentPreviewState(attachment, 'confirm', {
+        notice: safetyNotice,
+      });
+      return;
+    }
+    const downloadDialogGeneration = attachmentPreviewGeneration;
+    const downloadDialogIsCurrent = () => (
+      attachmentPreview?.attachment?.id === attachment.id
+      && attachmentPreviewGeneration === downloadDialogGeneration
+    );
+    if (!canStartAttachmentDownload(downloadingAttachmentIds, attachment.id)) {
+      const message = downloadingAttachmentIds.has(attachment.id)
+        ? 'This attachment is already being transferred.'
+        : `Wait for one of the ${MAX_ACTIVE_ATTACHMENT_REQUESTS} active attachment transfers to finish.`;
+      if (downloadDialogIsCurrent()) {
+        attachmentPreview = { ...attachmentPreview, downloadMode: 'error', downloadError: message };
+      }
+      return;
+    }
+    const requestedEmailId = email.id;
+    const requestGeneration = attachmentRequestGeneration;
+    const filename = safeClientFilename(attachment.filename);
+    const abortController = new AbortController();
+    attachmentAbortControllers = new Map(attachmentAbortControllers).set(
+      attachment.id,
+      abortController,
+    );
+    downloadingAttachmentIds = new Set(downloadingAttachmentIds).add(attachment.id);
+    attachmentTransferKinds = new Map(attachmentTransferKinds).set(attachment.id, 'download');
+    if (downloadDialogIsCurrent()) {
+      attachmentPreview = { ...attachmentPreview, downloadMode: 'loading', downloadError: null };
+    }
+    setAttachmentFeedback(attachment.id, {
+      emailId: requestedEmailId,
+      type: 'status',
+      message: `Downloading ${filename}…`,
+    });
+    const requestIsCurrent = () => (
+      attachmentAbortControllers.get(attachment.id) === abortController
+      && isCurrentAttachmentRequest({
+        requestedEmailId,
+        requestGeneration,
+        currentEmailId: email?.id ?? null,
+        currentGeneration: attachmentRequestGeneration,
+      })
+    );
+    let downloadSucceeded = false;
+    try {
+      const content = await api.downloadAttachment(
+        requestedEmailId,
+        attachment.id,
+        { signal: abortController.signal },
+      );
+      if (!requestIsCurrent()) return;
+      saveAttachmentBlob(content, filename);
+      downloadSucceeded = true;
+      setAttachmentFeedback(attachment.id, {
+        emailId: requestedEmailId,
+        type: 'status',
+        message: `Download started for ${filename}`,
+      });
+      if (downloadDialogIsCurrent()) {
+        attachmentPreview = { ...attachmentPreview, downloadMode: 'success', downloadError: null };
+      }
+    } catch (err) {
+      if (err?.name !== 'AbortError' && requestIsCurrent()) {
+        const message = `Couldn’t download ${filename}. ${err.message || 'Try again.'}`;
+        setAttachmentFeedback(attachment.id, {
+          emailId: requestedEmailId,
+          type: 'error',
+          retryable: isRetryableAttachmentError(err?.status),
+          message,
+        });
+        if (downloadDialogIsCurrent()) {
+          attachmentPreview = { ...attachmentPreview, downloadMode: 'error', downloadError: message };
+        }
+      }
+    } finally {
+      if (attachmentAbortControllers.get(attachment.id) === abortController) {
+        const nextControllers = new Map(attachmentAbortControllers);
+        nextControllers.delete(attachment.id);
+        attachmentAbortControllers = nextControllers;
+        const nextIds = new Set(downloadingAttachmentIds);
+        nextIds.delete(attachment.id);
+        downloadingAttachmentIds = nextIds;
+        const nextKinds = new Map(attachmentTransferKinds);
+        nextKinds.delete(attachment.id);
+        attachmentTransferKinds = nextKinds;
+      }
+    }
+    if (confirmed && downloadSucceeded && downloadDialogIsCurrent()) closeAttachmentPreview();
   }
 
   async function handleUnignore() {
@@ -784,40 +1014,95 @@
           <div class="text-xs font-semibold mb-2" style="color: var(--text-secondary)">
             {email.attachments.length} attachment{email.attachments.length !== 1 ? 's' : ''}
           </div>
-          <div class="flex flex-wrap gap-2">
+          <div class="grid grid-cols-1 gap-2 2xl:grid-cols-2">
             {#each email.attachments as att (att.id)}
               {@const feedback = attachmentFeedback.get(att.id)}
-              {@const isDownloading = downloadingAttachmentIds.has(att.id)}
+              {@const transferKind = attachmentTransferKinds.get(att.id)}
+              {@const isDownloading = transferKind === 'download'}
+              {@const isPreviewing = transferKind === 'preview'}
+              {@const isBusy = Boolean(transferKind)}
+              {@const transferCapReached = !isBusy && downloadingAttachmentIds.size >= MAX_ACTIVE_ATTACHMENT_REQUESTS}
               {@const isTerminal = feedback?.type === 'error' && !feedback.retryable}
-              <div class="min-w-0 max-w-full">
-                <button
-                  type="button"
-                  onclick={() => downloadAttachment(att)}
-                  disabled={isDownloading || isTerminal}
-                  class="group min-h-11 max-w-full flex items-center gap-2 px-3 py-2 rounded-lg border text-sm text-left transition-fast disabled:opacity-70"
-                  class:cursor-wait={isDownloading}
-                  class:cursor-not-allowed={isTerminal}
-                  style="border-color: var(--border-color); background: var(--bg-tertiary)"
-                  aria-label={attachmentAccessibleLabel(att, isDownloading, isTerminal)}
-                  aria-busy={isDownloading}
-                >
-                  <span class="shrink-0" style="color: var(--text-tertiary)">
-                    <span class:animate-spin={isDownloading}>
-                      <Icon name={isDownloading ? 'loader' : 'paperclip'} size={16} />
+              {@const previewHint = attachmentPreviewHint(att)}
+              {@const safetyNotice = attachmentSafetyNotice(att)}
+              {@const displayName = safeClientFilename(att.filename)}
+              <div
+                class="min-w-0 max-w-full rounded-xl border p-3"
+                style="border-color: var(--border-color); background: var(--bg-tertiary)"
+                role="group"
+                aria-label="Attachment {displayName}"
+              >
+                <div class="flex min-w-0 items-start gap-3">
+                  <span
+                    class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
+                    style="color: var(--color-accent-600); background: var(--bg-primary)"
+                    aria-hidden="true"
+                  >
+                    <Icon name={previewHint === 'image' ? 'image' : (previewHint === 'pdf' ? 'file-text' : 'paperclip')} size={17} />
+                  </span>
+                  <div class="min-w-0 flex-1">
+                    <div class="truncate text-sm font-medium" style="color: var(--text-primary)" title={displayName}>
+                      {displayName}
+                    </div>
+                    <div class="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs" style="color: var(--text-tertiary)">
+                      <span>{attachmentTypeLabel(att)}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{formatAttachmentSize(att.size_bytes)}</span>
+                      {#if att.is_inline}
+                        <span aria-hidden="true">·</span>
+                        <span>Inline</span>
+                      {/if}
+                    </div>
+                  </div>
+                  <div class="flex shrink-0 gap-1">
+                    {#if previewHint}
+                      <button
+                        type="button"
+                        class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border transition-fast disabled:opacity-50"
+                        style="border-color: var(--border-color); color: var(--text-secondary); background: var(--bg-primary)"
+                        aria-label={previewAccessibleLabel(att, transferKind, isTerminal, transferCapReached)}
+                        title={transferCapReached ? 'Wait for another attachment transfer to finish' : 'Preview'}
+                        disabled={isBusy || isTerminal || transferCapReached}
+                        onclick={(event) => openAttachmentPreview(att, event.currentTarget)}
+                      >
+                        <span class:animate-spin={isPreviewing}>
+                          <Icon name={isPreviewing ? 'loader' : 'eye'} size={17} />
+                        </span>
+                      </button>
+                    {/if}
+                    <button
+                      type="button"
+                      class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border transition-fast disabled:opacity-50"
+                      style="border-color: var(--border-color); color: var(--text-secondary); background: var(--bg-primary)"
+                      aria-label={attachmentAccessibleLabel(att, transferKind, isTerminal, transferCapReached)}
+                      title={transferCapReached ? 'Wait for another attachment transfer to finish' : 'Download'}
+                      disabled={isBusy || isTerminal || transferCapReached}
+                      aria-busy={isDownloading}
+                      onclick={(event) => downloadAttachment(att, false, event.currentTarget)}
+                    >
+                      <span class:animate-spin={isDownloading}>
+                        <Icon name={isDownloading ? 'loader' : 'download'} size={17} />
+                      </span>
+                    </button>
+                  </div>
+                </div>
+                {#if safetyNotice}
+                  <div
+                    class="mt-2 flex min-w-0 items-start gap-1.5 rounded-md px-2 py-1.5 text-xs"
+                    style={safetyNotice.tone === 'danger'
+                      ? 'color: var(--status-error); background: var(--bg-primary)'
+                      : (safetyNotice.tone === 'caution'
+                        ? 'color: var(--status-warning-text); background: var(--status-warning-bg); border: 1px solid var(--status-warning-border)'
+                        : 'color: var(--text-tertiary); background: var(--bg-primary)')}
+                  >
+                    <span class="mt-0.5 shrink-0" aria-hidden="true">
+                      <Icon name={safetyNotice.tone === 'danger' ? 'alert-triangle' : 'info'} size={13} />
                     </span>
-                  </span>
-                  <span class="truncate max-w-[200px] group-hover:underline" style="color: var(--text-primary)">
-                    {isDownloading ? 'Downloading…' : (att.filename || 'Attachment')}
-                  </span>
-                  {#if att.size_bytes}
-                    <span class="text-xs" style="color: var(--text-tertiary)">
-                      {formatAttachmentSize(att.size_bytes)}
+                    <span class="min-w-0 break-words">
+                      <strong>{safetyNotice.label}.</strong> {safetyNotice.detail}
                     </span>
-                  {/if}
-                  <span class="shrink-0 opacity-60 group-hover:opacity-100" aria-hidden="true">
-                    <Icon name="download" size={14} />
-                  </span>
-                </button>
+                  </div>
+                {/if}
                 {#if feedback?.emailId === email.id}
                   <div
                     class="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-1 text-xs"
@@ -837,7 +1122,7 @@
                         type="button"
                         class="min-h-11 shrink-0 rounded-md border px-3 font-medium"
                         style="border-color: currentColor"
-                        aria-label="Retry download {att.filename || 'attachment'}"
+                        aria-label="Retry download {displayName}"
                         onclick={() => downloadAttachment(att)}
                       >Retry</button>
                     {/if}
@@ -950,3 +1235,15 @@
     </div>
   {/if}
 </div>
+
+{#if attachmentPreview && email}
+  <AttachmentPreview
+    viewerState={attachmentPreview}
+    attachments={email.attachments || []}
+    returnFocusTarget={attachmentPreviewReturnFocus}
+    onclose={closeAttachmentPreview}
+    onselect={openAttachmentPreview}
+    onretry={openAttachmentPreview}
+    ondownload={downloadAttachment}
+  />
+{/if}

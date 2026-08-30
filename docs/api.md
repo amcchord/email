@@ -35,7 +35,7 @@ free-form questions about your inbox without touching the web UI.
   - [Ask Claude from a script](#ask-claude-from-a-script)
 - [Security notes](#security-notes)
 - [Web session-only structured email search](#web-session-only-structured-email-search)
-- [Web session-only attachment download](#web-session-only-attachment-download)
+- [Web session-only attachment preview and download](#web-session-only-attachment-preview-and-download)
 - [Web session-only durable mail actions](#web-session-only-durable-mail-actions)
 
 ## Authentication
@@ -657,19 +657,35 @@ fields let mixed-folder search results render recipients and expose safe
 Restore/Not Spam actions per message instead of inferring state from the outer
 mailbox parameter.
 
-## Web session-only attachment download
+## Web session-only attachment preview and download
 
 The authenticated web application, not the `/api/v1` token surface, exposes:
 
 ```text
 GET /api/emails/{email_id}/attachments/{attachment_id}/download
+GET /api/emails/{email_id}/attachments/{attachment_id}/preview
 ```
 
-The route requires the normal browser session cookie and verifies the user,
-owning account, email, and attachment in one lookup. Missing, foreign, and
-wrong-message attachment IDs all return the same 404 response. Successful
-responses always use attachment disposition, validated content type, private
-no-store caching, `nosniff`, and same-origin resource policy headers.
+Both routes require the normal browser session cookie and verify the user,
+owning account, email, and attachment with the same membership lookup. Missing,
+foreign, and wrong-message attachment IDs all return the same 404 response.
+
+Downloads always use attachment disposition, validated sender metadata,
+private no-store caching, `nosniff`, and same-origin resource policy headers.
+The browser treats active formats, archives, and filename/type mismatches as
+confirmation-required downloads.
+
+Previews do not trust sender-declared MIME data for rendering. The server
+classifies the bytes into one of three bounded contracts: strict UTF-8 plain
+text, metadata-stripped and dimension-bounded JPEG/PNG raster data, or a PDF
+with a valid outer signature whose obvious active-feature markers are rejected. The response
+uses inline disposition plus `X-Attachment-Preview-Kind` and
+`X-Attachment-Preview-Truncated`; the client rejects any kind/content-type
+mismatch. Text is rendered only as text, images use a revocable object URL, and
+PDFs remain untrusted and open only in a separate browser-native viewer; the
+marker check is not a malware scan or structural proof. Unsupported,
+active, malformed, or corrupt content fails closed instead of falling back to
+sender metadata.
 
 Stable error responses are:
 
@@ -678,10 +694,11 @@ Stable error responses are:
 | 404 | attachment is missing or not owned by the current user |
 | 409 | metadata exists but no retrievable content is available |
 | 413 | attachment exceeds the interactive download size limit |
+| 415 | attachment bytes are not supported by the safe preview contract |
 | 502 | cached or upstream attachment data is invalid |
 | 503 | Gmail retrieval failed or exceeded the interactive wait bound |
 
-Public API tokens cannot call this route. Attachment bytes are cached only at
+Public API tokens cannot call these routes. Attachment bytes are cached only at
 private, canonical ID-derived paths; filenames and Gmail/cache identifiers are
 not accepted as lookup keys.
 

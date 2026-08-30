@@ -1,14 +1,28 @@
+export const MAX_ACTIVE_ATTACHMENT_REQUESTS = 3;
+
 export function safeClientFilename(filename) {
   const leafName = String(filename || 'attachment').replaceAll('\\', '/').split('/').pop();
   const cleaned = [...leafName]
     .filter((character) => !/\p{C}/u.test(character))
     .join('')
     .trim();
-  return cleaned && cleaned !== '.' && cleaned !== '..' ? cleaned : 'attachment';
+  if (!cleaned || cleaned === '.' || cleaned === '..') return 'attachment';
+  const characters = [...cleaned];
+  if (characters.length <= 180) return cleaned;
+
+  const dotIndex = cleaned.lastIndexOf('.');
+  const rawSuffix = dotIndex > 0 ? cleaned.slice(dotIndex) : '';
+  const suffix = [...rawSuffix].slice(0, 24).join('');
+  const stemLength = Math.max(1, 180 - [...suffix].length);
+  return `${characters.slice(0, stemLength).join('')}${suffix}`;
 }
 
-export function canStartAttachmentDownload(activeIds, attachmentId) {
-  return !activeIds.has(attachmentId);
+export function canStartAttachmentDownload(
+  activeIds,
+  attachmentId,
+  maxActive = MAX_ACTIVE_ATTACHMENT_REQUESTS,
+) {
+  return !activeIds.has(attachmentId) && activeIds.size < maxActive;
 }
 
 export function isCurrentAttachmentRequest({

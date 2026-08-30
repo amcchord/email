@@ -35,6 +35,39 @@ function deepFreeze(value) {
   return Object.freeze(value);
 }
 
+const generatedPreviewText = Buffer.from(
+  'Generated attachment preview\n\nThis text is escaped and uses no real mailbox data.\n',
+);
+const generatedPreviewPng = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAoAAAAFoCAIAAABIUN0GAAAFn0lEQVR42u3cMU5CQRSGUXy5FVpSU1pQswc2QWNix3rsiDRuwj1QU1BSW6K1tY0xQeXN/OeswLlj8uW+Md68P99OAID/NRgBAAgwAAgwACDAACDAAIAAA4AAAwACDAACDAAIMAAIMAAIMAAgwAAgwACAAAOAAAMAAgwAAgwACDAACDAACDAAIMAAIMAAgAADgAADAAIMAAIMAAgwAAgwAAgwACDAACDAAIAAA4AAAwACDAACDAAIMAAIMAAIMADw96rpn376cHaFAMk+dncCLLoAXDMKbcW4pBeAnmLcSoZLegGQYQGWXgAiMjyoLwAJL8QCrL4AqMkoP0FLLwDdf44e1BcAq3B6gNUXgJDK+FeUAJAdYOsvADmtGUwEAA0ODbD6ApDWHW/AABAZYOsvAIH1sQEDQF6Arb8AZDbIBgwAYQG2/gIQuwTbgAFAgAFAgAGA3gLsARiASfAzsA0YAAQYAAQYABBgABBgAECAAUCAAQABBgABBgAEGAAEGAAEGAAQYAAQYABAgAFAgAEAAQYAAQYABBgABBgABBgAEGAAEGAAQIABQIABAAEGgLGqtAPfP765dYBxOm5nNmAAQIABQIABAAEGAAEGAAQYAAQYABBgABBgABBgAECAAUCAAQABBgABBgAEGAAEGAAQYAAQYAAQYABAgAFAgAEAAQYAAQYABBgABBgA+KLSDnzcztw6ADZgABBgAECAAUCAAQABBgABBgAEGAAEGAAQYAAQYAAQYABAgAFAgAEAAQYAAQYABBgABBgAEGAAEGAAEGAAQIABQIABAAEGAAEGAAQYAAQYABBgABBgAIhWaQd+enl168B4bNYrQ7ABAwACDAACDAAIMAAIMAAgwAAgwACAAAOAAAOAAAMAAgwAAgwACDAACDAAIMAAIMAAgAADgAADgAADAAIMAL2rtANv1iu3DoANGAAEGAAQYAAQYABAgAFAgAEAAQYAAQYABBgABBgABBgAEGAAEGAAQIABQIABAAEGAAEGAAQYAAQYAAQYABBgABBgAECAAaB9lXbg/eHk1gG+t1zMDcEGDAACDAAIMAAIMAAgwAAgwACAAAOAAAOAAAMAAgwAAgwACDAACDAAIMAAIMAAgAADgAADgAADAAIMAA2uX8A1Ukh8R/ZwwpAAAAAElFTkSuQmCC',
+  'base64',
+);
+
+function buildGeneratedPdf() {
+  const stream = 'BT /F1 18 Tf 72 720 Td (Generated attachment preview) Tj ET';
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,
+  ];
+  let document = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(Buffer.byteLength(document));
+    document += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xrefOffset = Buffer.byteLength(document);
+  document += `xref\n0 ${objects.length + 1}\n`;
+  document += '0000000000 65535 f \n';
+  document += offsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('');
+  document += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(document);
+}
+
+const generatedPreviewPdf = buildGeneratedPdf();
+
 function generatedEmail(overrides) {
   const accountId = overrides.account_id || 1;
   const accountEmail = accountId === 1
@@ -90,6 +123,28 @@ function generatedEmail(overrides) {
 }
 
 const generatedEmails = deepFreeze([
+  generatedEmail({
+    id: 313,
+    from_name: 'Generated Preview Lab',
+    from_address: 'preview-lab@example.test',
+    subject: 'Attachment preview gallery',
+    snippet: 'Generated text, image, PDF, caution, mismatch, error, and cancellation fixtures.',
+    date: '2026-08-30T13:45:00Z',
+    labels: ['INBOX'],
+    is_read: true,
+    has_attachments: true,
+    attachments: [
+      { id: 8411, filename: 'generated-preview-notes.txt', content_type: 'text/plain', size_bytes: generatedPreviewText.length },
+      { id: 8412, filename: 'generated-preview-image.png', content_type: 'image/png', size_bytes: generatedPreviewPng.length },
+      { id: 8413, filename: 'generated-preview-document.pdf', content_type: 'application/pdf', size_bytes: generatedPreviewPdf.length },
+      { id: 8414, filename: 'generated-preview-archive.zip', content_type: 'application/zip', size_bytes: 4096 },
+      { id: 8415, filename: 'generated-preview-script.js', content_type: 'text/javascript', size_bytes: 512 },
+      { id: 8416, filename: 'generated-mismatch.png', content_type: 'application/pdf', size_bytes: 1024 },
+      { id: 8417, filename: 'generated-corrupt-image.png', content_type: 'image/png', size_bytes: 64 },
+      { id: 8418, filename: 'generated-delayed-preview.txt', content_type: 'text/plain', size_bytes: 96 },
+      { id: 8419, filename: 'generated-retry-preview.txt', content_type: 'text/plain', size_bytes: 88 },
+    ],
+  }),
   generatedEmail({
     id: 301,
     from_name: 'Renée Launch',
@@ -286,7 +341,7 @@ const emailsById = new Map(generatedEmails.map(email => [email.id, email]));
 
 const scenarios = deepFreeze({
   // Baseline order is newest first; the equal-timestamp pair remains stable.
-  '': { result_ids: [303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 302, 301] },
+  '': { result_ids: [313, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 302, 301] },
   [compoundQuery]: { result_ids: [301] },
   [removalQuery]: { result_ids: [301, 304] },
   'no-match': { result_ids: [] },
@@ -355,10 +410,12 @@ const audit = {
   queries: [],
   action_status_reads: [],
   attachment_reads: [],
+  attachment_preview_reads: [],
   mutation_attempts: [],
   unknown_routes: [],
 };
 const attachmentAttempts = new Map();
+const attachmentPreviewAttempts = new Map();
 let receivedSequence = 0;
 let respondedSequence = 0;
 
@@ -576,6 +633,110 @@ function mobileAttachmentQaFrame(response) {
   return writeHtml(response, body);
 }
 
+function mobileAttachmentPreviewQaFrame(
+  response,
+  {
+    frameHeight = 812,
+    actionPrefix = 'Preview generated-preview-image.png',
+  } = {},
+) {
+  const body = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Generated mobile attachment preview QA</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #111827; }
+    body { display: grid; min-height: 100vh; place-items: start center; padding: 12px; }
+    iframe { width: 375px; height: ${frameHeight}px; max-width: 100%; border: 0; border-radius: 14px; background: white; box-shadow: 0 22px 70px rgb(0 0 0 / .4); }
+  </style>
+</head>
+<body data-qa-ready="false">
+  <iframe id="mobile-preview-app" src="/" title="Generated attachment preview at 375 by ${frameHeight} pixels"></iframe>
+  <script>
+    const frame = document.getElementById('mobile-preview-app');
+    const actionPrefix = ${JSON.stringify(actionPrefix)};
+    const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+    frame.addEventListener('load', async () => {
+      const doc = frame.contentDocument;
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        const emailTab = doc.querySelector('[aria-label="Email tab"]');
+        if (emailTab) {
+          emailTab.click();
+          break;
+        }
+        await delay(25);
+      }
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        const emailButton = doc.querySelector('[aria-label="Open email: Attachment preview gallery"]');
+        if (emailButton) {
+          emailButton.click();
+          break;
+        }
+        await delay(25);
+      }
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        const previewButton = [...doc.querySelectorAll('button')].find(element =>
+          element.getAttribute('aria-label')?.startsWith(actionPrefix)
+        );
+        if (previewButton) {
+          previewButton.click();
+          await delay(220);
+          const dialog = doc.querySelector('[data-attachment-preview] [role="dialog"]');
+          const image = dialog?.querySelector('img');
+          const previewBody = dialog?.querySelector('.attachment-preview-body');
+          const confirmButton = [...(dialog?.querySelectorAll('button') || [])].find(element =>
+            element.textContent?.includes('Download anyway')
+          );
+          const controls = [...(dialog?.querySelectorAll('button, a[href]') || [])];
+          const dialogRect = dialog?.getBoundingClientRect();
+          const imageRect = image?.getBoundingClientRect();
+          document.body.dataset.qaMetrics = JSON.stringify({
+            innerWidth: frame.contentWindow.innerWidth,
+            innerHeight: frame.contentWindow.innerHeight,
+            clientWidth: doc.documentElement.clientWidth,
+            scrollWidth: doc.documentElement.scrollWidth,
+            dialog: dialogRect ? {
+              left: dialogRect.left,
+              right: dialogRect.right,
+              top: dialogRect.top,
+              bottom: dialogRect.bottom,
+            } : null,
+            image: imageRect ? {
+              left: imageRect.left,
+              right: imageRect.right,
+              top: imageRect.top,
+              bottom: imageRect.bottom,
+            } : null,
+            minControlHeight: controls.length
+              ? Math.min(...controls.map(element => element.getBoundingClientRect().height))
+              : null,
+            controlCount: controls.length,
+            appInert: doc.getElementById('app')?.hasAttribute('inert') || false,
+            title: dialog?.querySelector('h2')?.textContent?.trim() || null,
+            bodyClientHeight: previewBody?.clientHeight || null,
+            bodyScrollHeight: previewBody?.scrollHeight || null,
+            confirmButton: confirmButton ? {
+              top: confirmButton.getBoundingClientRect().top,
+              bottom: confirmButton.getBoundingClientRect().bottom,
+              visible: confirmButton.getBoundingClientRect().top < frame.contentWindow.innerHeight
+                && confirmButton.getBoundingClientRect().bottom > 0,
+            } : null,
+          });
+          document.body.dataset.qaReady = 'true';
+          break;
+        }
+        await delay(25);
+      }
+    });
+  </script>
+</body>
+</html>`;
+  return writeHtml(response, body);
+}
+
 function positiveInteger(value, fallback) {
   const parsed = Number.parseInt(value || '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -739,6 +900,15 @@ async function handleGet(request, response, url) {
 
   if (pathname === '/__qa/mobile') return mobileQaFrame(response, url);
   if (pathname === '/__qa/attachment-mobile') return mobileAttachmentQaFrame(response);
+  if (pathname === '/__qa/attachment-preview-mobile') {
+    const shortViewport = url.searchParams.get('short') === '1';
+    return mobileAttachmentPreviewQaFrame(response, shortViewport
+      ? {
+        frameHeight: 390,
+        actionPrefix: 'Download generated-preview-script.js',
+      }
+      : undefined);
+  }
   if (pathname === '/api/test/audit') {
     return writeJson(response, {
       fixture: 'generated-structured-search',
@@ -749,6 +919,7 @@ async function handleGet(request, response, url) {
       queries: audit.queries,
       action_status_reads: audit.action_status_reads,
       attachment_reads: audit.attachment_reads,
+      attachment_preview_reads: audit.attachment_preview_reads,
       mutation_attempts: audit.mutation_attempts,
       unknown_routes: audit.unknown_routes,
     });
@@ -824,6 +995,91 @@ async function handleGet(request, response, url) {
     return writeJson(response, email || { detail: 'Generated email not found' }, email ? 200 : 404);
   }
 
+  const attachmentPreviewMatch = pathname.match(/^\/api\/emails\/(\d+)\/attachments\/(\d+)\/preview$/);
+  if (attachmentPreviewMatch) {
+    const emailId = Number(attachmentPreviewMatch[1]);
+    const attachmentId = Number(attachmentPreviewMatch[2]);
+    const email = emailsById.get(emailId);
+    const attachment = email?.attachments?.find(item => item.id === attachmentId);
+    const attempt = (attachmentPreviewAttempts.get(attachmentId) || 0) + 1;
+    attachmentPreviewAttempts.set(attachmentId, attempt);
+    const entry = beginAudit(request, url, {
+      email_id: emailId,
+      attachment_id: attachmentId,
+      attempt,
+      aborted: false,
+      request_closed: false,
+      response_finished: false,
+      response_closed: false,
+      closed_before_finish: false,
+    });
+    audit.attachment_preview_reads.push(entry);
+    request.once('aborted', () => { entry.aborted = true; });
+    request.once('close', () => { entry.request_closed = true; });
+    response.once('finish', () => { entry.response_finished = true; });
+    response.once('close', () => {
+      entry.response_closed = true;
+      entry.closed_before_finish = !entry.response_finished;
+    });
+
+    if (!attachment) {
+      completeAudit(entry, 404);
+      return writeJson(response, { detail: 'Generated attachment not found' }, 404);
+    }
+    if ([8303, 8418].includes(attachmentId)) await wait(650);
+    if (request.aborted || response.destroyed) {
+      completeAudit(entry, 499);
+      return;
+    }
+    if ([8304, 8419].includes(attachmentId) && attempt % 2 === 1) {
+      completeAudit(entry, 503);
+      return writeJson(response, { detail: 'Generated transient preview failure' }, 503);
+    }
+    if (attachmentId === 8305) {
+      completeAudit(entry, 413);
+      return writeJson(response, { detail: 'This attachment is too large to preview' }, 413);
+    }
+    if (attachmentId === 8306) {
+      completeAudit(entry, 409);
+      return writeJson(response, { detail: 'Attachment content is unavailable' }, 409);
+    }
+    if (attachmentId === 8307) {
+      completeAudit(entry, 422);
+      return writeJson(response, { detail: 'Generated terminal preview validation detail' }, 422);
+    }
+    if ([8414, 8415, 8416, 8417].includes(attachmentId)) {
+      completeAudit(entry, 415);
+      return writeJson(response, { detail: 'Preview is not available for this attachment' }, 415);
+    }
+
+    let body = generatedPreviewText;
+    let kind = 'text';
+    let contentType = 'text/plain; charset=utf-8';
+    if (attachmentId === 8412) {
+      body = generatedPreviewPng;
+      kind = 'image';
+      contentType = 'image/png';
+    } else if (attachmentId === 8413) {
+      body = generatedPreviewPdf;
+      kind = 'pdf';
+      contentType = 'application/pdf';
+    }
+    completeAudit(entry, 200);
+    response.writeHead(200, {
+      'Content-Type': contentType,
+      'Content-Length': body.length,
+      'Content-Disposition': `inline; filename="${attachment.filename}"`,
+      'X-Attachment-Preview-Kind': kind,
+      'X-Attachment-Preview-Truncated': 'false',
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+      'Content-Security-Policy': "sandbox; default-src 'none'; script-src 'none'; object-src 'none'",
+    });
+    response.end(body);
+    return;
+  }
+
   const attachmentMatch = pathname.match(/^\/api\/emails\/(\d+)\/attachments\/(\d+)\/download$/);
   if (attachmentMatch) {
     const emailId = Number(attachmentMatch[1]);
@@ -856,6 +1112,8 @@ async function handleGet(request, response, url) {
       return writeJson(response, { detail: 'Generated attachment not found' }, 404);
     }
     if (attachmentId === 8303) await wait(650);
+    if ([8411, 8412, 8413].includes(attachmentId)) await wait(5000);
+    if (attachmentId === 8415) await wait(400);
     if (request.aborted || response.destroyed) {
       completeAudit(entry, 499);
       return;

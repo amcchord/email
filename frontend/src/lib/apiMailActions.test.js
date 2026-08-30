@@ -95,3 +95,33 @@ test('attachment authorization failures retain terminal HTTP status', async t =>
     error => error.message === 'Unauthorized' && error.status === 401,
   );
 });
+
+test('attachment previews preserve the typed renderer response contract', async t => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push({ url, options });
+    return new Response('generated preview text', {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'X-Attachment-Preview-Kind': 'text',
+        'X-Attachment-Preview-Truncated': 'true',
+      },
+    });
+  };
+  const controller = new AbortController();
+  const result = await api.previewAttachment(41, 83, { signal: controller.signal });
+
+  assert.equal(calls[0].url, '/api/emails/41/attachments/83/preview');
+  assert.equal(calls[0].options.signal, controller.signal);
+  assert.equal(result.kind, 'text');
+  assert.equal(result.truncated, true);
+  assert.equal(result.contentType, 'text/plain; charset=utf-8');
+  assert.equal(await result.blob.text(), 'generated preview text');
+  assert.equal(
+    api.attachmentPreviewUrl(41, 83),
+    '/api/emails/41/attachments/83/preview',
+  );
+});

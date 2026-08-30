@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  MAX_ACTIVE_ATTACHMENT_REQUESTS,
   canStartAttachmentDownload,
   isCurrentAttachmentRequest,
   isRetryableAttachmentError,
@@ -16,6 +17,10 @@ test('client download filenames drop path and control characters', () => {
   );
   assert.equal(safeClientFilename('..'), 'attachment');
   assert.equal(safeClientFilename('safe\u202Etxt.exe'), 'safetxt.exe');
+  const longName = `${'very-long-'.repeat(30)}report.pdf`;
+  const boundedName = safeClientFilename(longName);
+  assert.equal([...boundedName].length, 180);
+  assert.equal(boundedName.endsWith('.pdf'), true);
 });
 
 test('attachment blobs use a temporary keyboard-independent browser download', () => {
@@ -61,6 +66,8 @@ test('duplicate attachment requests are blocked while one is active', () => {
   const activeIds = new Set([83]);
   assert.equal(canStartAttachmentDownload(activeIds, 83), false);
   assert.equal(canStartAttachmentDownload(activeIds, 84), true);
+  assert.equal(canStartAttachmentDownload(new Set([81, 82, 83]), 84), false);
+  assert.equal(MAX_ACTIVE_ATTACHMENT_REQUESTS, 3);
 });
 
 test('attachment results become stale after the email or generation changes', () => {

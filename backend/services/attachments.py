@@ -89,8 +89,14 @@ def safe_content_type(content_type: str | None) -> str:
     return "application/octet-stream"
 
 
-def attachment_content_disposition(filename: str | None) -> str:
-    """Build an attachment header with safe ASCII and RFC 5987 filenames."""
+def attachment_content_disposition(
+    filename: str | None,
+    *,
+    disposition: str = "attachment",
+) -> str:
+    """Build a disposition header with safe ASCII and RFC 5987 filenames."""
+    if disposition not in {"attachment", "inline"}:
+        raise ValueError("Attachment disposition must be attachment or inline")
     safe_name = safe_attachment_filename(filename)
     ascii_name = (
         unicodedata.normalize("NFKD", safe_name)
@@ -102,7 +108,7 @@ def attachment_content_disposition(filename: str | None) -> str:
         ascii_name = "attachment"
     encoded_name = quote(safe_name, safe="")
     return (
-        f'attachment; filename="{ascii_name}"; '
+        f'{disposition}; filename="{ascii_name}"; '
         f"filename*=UTF-8''{encoded_name}"
     )
 

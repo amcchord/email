@@ -94,6 +94,15 @@ async function request(method, path, body = null, options = {}) {
 
   if (response.status === 204) return null;
   if (responseType === 'blob') return response.blob();
+  if (responseType === 'attachmentPreview') {
+    const blob = await response.blob();
+    return {
+      blob,
+      kind: response.headers.get('X-Attachment-Preview-Kind'),
+      truncated: response.headers.get('X-Attachment-Preview-Truncated') === 'true',
+      contentType: response.headers.get('Content-Type') || blob.type,
+    };
+  }
   return response.json();
 }
 
@@ -152,6 +161,15 @@ export const api = {
       null,
       { ...options, responseType: 'blob' },
     ),
+  previewAttachment: (emailId, attachmentId, options = {}) =>
+    request(
+      'GET',
+      `/emails/${emailId}/attachments/${attachmentId}/preview`,
+      null,
+      { ...options, responseType: 'attachmentPreview' },
+    ),
+  attachmentPreviewUrl: (emailId, attachmentId) =>
+    `/api/emails/${encodeURIComponent(emailId)}/attachments/${encodeURIComponent(attachmentId)}/preview`,
   getThread: (threadId, order = null) => {
     const params = order ? `?order=${order}` : '';
     return request('GET', `/emails/thread/${threadId}${params}`);

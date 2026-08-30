@@ -1,5 +1,6 @@
 import base64
 import asyncio
+import io
 import stat
 import threading
 import time
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from PIL import Image
 from sqlalchemy.dialects import postgresql
 
 import backend.routers.emails as email_router
@@ -23,6 +25,12 @@ from backend.services.attachment_cache import (
     AttachmentCachePolicy,
     acquire_entry_lease,
     reserve_cache_capacity,
+)
+from backend.services.attachment_previews import (
+    MAX_ATTACHMENT_PREVIEW_BYTES,
+    MAX_TEXT_PREVIEW_BYTES,
+    AttachmentPreviewError,
+    build_attachment_preview,
 )
 from backend.services.gmail import _decode_attachment_data
 
@@ -100,6 +108,12 @@ def _canonical_cache_path(root, email, attachment, account):
     )
 
 
+def _generated_png_bytes(size=(32, 20), color=(20, 120, 220, 180)):
+    output = io.BytesIO()
+    Image.new("RGBA", size, color).save(output, format="PNG")
+    return output.getvalue()
+
+
 @pytest.mark.asyncio
 async def test_download_attachment_enforces_one_owned_membership_join(monkeypatch):
     email, attachment, account = _generated_records(
@@ -144,6 +158,61 @@ async def test_download_attachment_enforces_one_owned_membership_join(monkeypatc
     assert f"emails.id = {email.id}" in compiled
     assert f"attachments.id = {attachment.id}" in compiled
     assert f"google_accounts.user_id = {account.user_id}" in compiled
+
+
+@pytest.mark.asyncio
+async def test_preview_attachment_rejects_known_oversized_metadata_before_loading(monkeypatch):
+    email, attachment, account = _generated_records(
+        size_bytes=MAX_ATTACHMENT_PREVIEW_BYTES + 1,
+    )
+
+    async def load_should_not_run(*_args):
+        raise AssertionError("Known oversized preview must fail before loading bytes")
+
+    monkeypatch.setattr(email_router, "load_attachment_bytes", load_should_not_run)
+    with pytest.raises(HTTPException) as exc_info:
+        await email_router.preview_attachment(
+            email_id=email.id,
+            attachment_id=attachment.id,
+            db=_RouteDb((email, attachment, account)),
+            user=SimpleNamespace(id=account.user_id),
+        )
+
+    assert exc_info.value.status_code == 413
+    assert exc_info.value.detail == "This attachment is too large to preview"
+
+
+@pytest.mark.asyncio
+async def test_preview_attachment_acquires_pipeline_admission_before_loading(monkeypatch):
+    from backend.services import attachment_previews as preview_service
+
+    email, attachment, account = _generated_records()
+    render_slots = asyncio.BoundedSemaphore(1)
+    await render_slots.acquire()
+    load_called = False
+
+    async def load_should_wait_for_admission(*_args):
+        nonlocal load_called
+        load_called = True
+        return b"generated text"
+
+    monkeypatch.setattr(email_router, "load_attachment_bytes", load_should_wait_for_admission)
+    monkeypatch.setattr(preview_service, "_preview_pipeline_slots", render_slots)
+    monkeypatch.setattr(preview_service, "PREVIEW_PIPELINE_QUEUE_TIMEOUT_SECONDS", 0.01)
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await email_router.preview_attachment(
+                email_id=email.id,
+                attachment_id=attachment.id,
+                db=_RouteDb((email, attachment, account)),
+                user=SimpleNamespace(id=account.user_id),
+            )
+    finally:
+        render_slots.release()
+
+    assert load_called is False
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "Preview service is busy; try again shortly"
 
 
 @pytest.mark.asyncio
@@ -224,6 +293,248 @@ async def test_download_attachment_preserves_safe_public_error_semantics(monkeyp
 
     assert exc_info.value.status_code == 413
     assert exc_info.value.detail == "Attachment is too large to download"
+
+
+@pytest.mark.asyncio
+async def test_preview_attachment_reuses_owned_join_and_emits_typed_headers(monkeypatch):
+    email, attachment, account = _generated_records(
+        filename='../../R\u00e9sum\u00e9\r\n".txt',
+        content_type="text/html",
+    )
+    db = _RouteDb((email, attachment, account))
+
+    async def fake_load_attachment_bytes(*_args):
+        return b"Generated preview text\n"
+
+    monkeypatch.setattr(email_router, "load_attachment_bytes", fake_load_attachment_bytes)
+    response = await email_router.preview_attachment(
+        email_id=email.id,
+        attachment_id=attachment.id,
+        db=db,
+        user=SimpleNamespace(id=account.user_id),
+    )
+
+    assert response.body == b"Generated preview text\n"
+    assert response.headers["content-type"] == "text/plain; charset=utf-8"
+    assert response.headers["x-attachment-preview-kind"] == "text"
+    assert response.headers["x-attachment-preview-truncated"] == "false"
+    assert response.headers["content-disposition"].startswith(
+        'inline; filename="Resume_.txt";'
+    )
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["cross-origin-resource-policy"] == "same-origin"
+    assert response.headers["x-frame-options"] == "SAMEORIGIN"
+    assert "sandbox" in response.headers["content-security-policy"]
+    assert "script-src 'none'" in response.headers["content-security-policy"]
+
+    compiled = str(
+        db.statements[0].compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    )
+    assert "JOIN attachments ON attachments.email_id = emails.id" in compiled
+    assert f"emails.id = {email.id}" in compiled
+    assert f"attachments.id = {attachment.id}" in compiled
+    assert f"google_accounts.user_id = {account.user_id}" in compiled
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unavailable_kind", ["foreign", "wrong-message", "missing"])
+async def test_preview_attachment_hides_all_unavailable_ids(unavailable_kind):
+    db = _RouteDb(None)
+    unavailable_ids = {
+        "foreign": (41, 83, 999),
+        "wrong-message": (42, 83, 501),
+        "missing": (41, 999, 501),
+    }
+    email_id, attachment_id, user_id = unavailable_ids[unavailable_kind]
+
+    with pytest.raises(HTTPException) as exc_info:
+        await email_router.preview_attachment(
+            email_id=email_id,
+            attachment_id=attachment_id,
+            db=db,
+            user=SimpleNamespace(id=user_id),
+        )
+
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Attachment not found"
+
+
+@pytest.mark.asyncio
+async def test_preview_attachment_preserves_preview_error_status(monkeypatch):
+    email, attachment, account = _generated_records()
+    db = _RouteDb((email, attachment, account))
+
+    async def fake_load_attachment_bytes(*_args):
+        return b"\x00\xff generated binary"
+
+    monkeypatch.setattr(email_router, "load_attachment_bytes", fake_load_attachment_bytes)
+    with pytest.raises(HTTPException) as exc_info:
+        await email_router.preview_attachment(
+            email_id=email.id,
+            attachment_id=attachment.id,
+            db=db,
+            user=SimpleNamespace(id=account.user_id),
+        )
+
+    assert exc_info.value.status_code == 415
+    assert exc_info.value.detail == "Preview is not available for this attachment"
+
+
+@pytest.mark.asyncio
+async def test_byte_verified_preview_normalizes_supported_raster_images():
+    preview = await build_attachment_preview(_generated_png_bytes())
+
+    assert preview.kind == "image"
+    assert preview.content_type == "image/png"
+    assert preview.content.startswith(b"\x89PNG\r\n\x1a\n")
+    with Image.open(io.BytesIO(preview.content)) as normalized:
+        assert normalized.size == (32, 20)
+        assert normalized.mode == "RGBA"
+
+
+@pytest.mark.asyncio
+async def test_byte_verified_preview_enforces_image_pixel_bounds(monkeypatch):
+    from backend.services import attachment_previews as preview_service
+
+    monkeypatch.setattr(preview_service, "MAX_IMAGE_PREVIEW_PIXELS", 100)
+    with pytest.raises(AttachmentPreviewError) as exc_info:
+        await build_attachment_preview(_generated_png_bytes(size=(20, 20)))
+
+    assert exc_info.value.status_code == 413
+    assert exc_info.value.public_detail == "This image is too large to preview"
+
+
+@pytest.mark.asyncio
+async def test_byte_verified_preview_maps_pillow_bomb_warning_to_413(monkeypatch):
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 100)
+    with pytest.raises(AttachmentPreviewError) as exc_info:
+        await build_attachment_preview(_generated_png_bytes(size=(11, 10)))
+
+    assert exc_info.value.status_code == 413
+    assert exc_info.value.public_detail == "This image is too large to preview"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"\x89PNG\r\n\x1a\ncorrupt",
+        b"\xff\xd8\xffcorrupt",
+        b"RIFF\x08\x00\x00\x00WEBPcorrupt",
+    ],
+)
+async def test_byte_verified_preview_rejects_corrupt_image_signatures(content):
+    with pytest.raises(AttachmentPreviewError, match="Image data is invalid"):
+        await build_attachment_preview(content)
+
+
+@pytest.mark.asyncio
+async def test_byte_verified_preview_returns_bounded_utf8_text_contract():
+    content = ("Generated Unicode r\u00e9sum\u00e9\n".encode() * 60_000)
+    preview = await build_attachment_preview(content)
+
+    assert preview.kind == "text"
+    assert preview.content_type == "text/plain; charset=utf-8"
+    assert preview.truncated is True
+    assert len(preview.content) <= MAX_TEXT_PREVIEW_BYTES
+
+
+@pytest.mark.asyncio
+async def test_byte_verified_preview_trims_an_incomplete_utf8_boundary():
+    content = (b"a" * (MAX_TEXT_PREVIEW_BYTES - 1)) + "\u00e9".encode() + b"tail"
+    preview = await build_attachment_preview(content)
+
+    assert preview.kind == "text"
+    assert preview.truncated is True
+    assert preview.content == b"a" * (MAX_TEXT_PREVIEW_BYTES - 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"<script>window.generatedPreviewExecuted = true</script>",
+        b'<svg xmlns="http://www.w3.org/2000/svg"><script>fail()</script></svg>',
+    ],
+)
+async def test_active_markup_is_returned_only_as_literal_plain_text(content):
+    preview = await build_attachment_preview(content)
+
+    assert preview.kind == "text"
+    assert preview.content_type == "text/plain; charset=utf-8"
+    assert preview.content == content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"plain\x00binary",
+        "direction\u202eoverride".encode(),
+        b"\xff\xfebinary",
+    ],
+)
+async def test_byte_verified_preview_rejects_binary_and_control_text(content):
+    with pytest.raises(AttachmentPreviewError):
+        await build_attachment_preview(content)
+
+
+@pytest.mark.asyncio
+async def test_byte_verified_preview_accepts_passive_pdf_and_rejects_obvious_active_markers():
+    passive = b"%PDF-1.7\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n"
+    preview = await build_attachment_preview(passive)
+    assert preview.kind == "pdf"
+    assert preview.content_type == "application/pdf"
+    assert preview.content == passive
+
+    active = b"%PDF-1.7\n1 0 obj\n<< /OpenAction 2 0 R >>\nendobj\n%%EOF"
+    with pytest.raises(AttachmentPreviewError, match="active"):
+        await build_attachment_preview(active)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "content",
+    [
+        b"%PDF-1.7\nmissing eof",
+        b"%PDF-9.9\n%%EOF",
+        b"%PDF-1.7\n%%EOF\ntrailing-payload",
+    ],
+)
+async def test_byte_verified_preview_rejects_malformed_pdf(content):
+    with pytest.raises(AttachmentPreviewError):
+        await build_attachment_preview(content)
+
+
+@pytest.mark.asyncio
+async def test_byte_verified_preview_enforces_source_byte_limit():
+    with pytest.raises(AttachmentPreviewError) as exc_info:
+        await build_attachment_preview(b"x" * (MAX_ATTACHMENT_PREVIEW_BYTES + 1))
+
+    assert exc_info.value.status_code == 413
+    assert exc_info.value.public_detail == "This attachment is too large to preview"
+
+
+@pytest.mark.asyncio
+async def test_byte_verified_preview_bounds_render_queue_wait(monkeypatch):
+    from backend.services import attachment_previews as preview_service
+
+    render_slots = asyncio.BoundedSemaphore(1)
+    await render_slots.acquire()
+    monkeypatch.setattr(preview_service, "_preview_pipeline_slots", render_slots)
+    monkeypatch.setattr(preview_service, "PREVIEW_PIPELINE_QUEUE_TIMEOUT_SECONDS", 0.01)
+    try:
+        with pytest.raises(AttachmentPreviewError) as exc_info:
+            await preview_service.build_attachment_preview(b"generated text")
+    finally:
+        render_slots.release()
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.public_detail == "Preview service is busy; try again shortly"
 
 
 @pytest.mark.asyncio

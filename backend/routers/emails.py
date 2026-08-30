@@ -21,6 +21,11 @@ from backend.services.attachments import (
     load_attachment_bytes,
     safe_content_type,
 )
+from backend.services.attachment_previews import (
+    MAX_ATTACHMENT_PREVIEW_BYTES,
+    AttachmentPreviewError,
+    load_and_build_attachment_preview,
+)
 from backend.services.workflow_context import apply_workflow_routing, delegated_scheduling_sql
 from backend.services.mail_actions import (
     MailActionConflict,
@@ -521,6 +526,30 @@ async def get_email(
     )
 
 
+async def _owned_attachment_row(
+    email_id: int,
+    attachment_id: int,
+    db: AsyncSession,
+    user_id: int,
+) -> tuple[Email, Attachment, GoogleAccount]:
+    """Load one exact attachment without disclosing foreign or mismatched IDs."""
+    result = await db.execute(
+        select(Email, Attachment, GoogleAccount)
+        .join(Attachment, Attachment.email_id == Email.id)
+        .join(GoogleAccount, GoogleAccount.id == Email.account_id)
+        .where(
+            Email.id == email_id,
+            Attachment.id == attachment_id,
+            GoogleAccount.user_id == user_id,
+        )
+    )
+    row = result.one_or_none()
+    if not row:
+        # Missing, foreign, and wrong-message IDs are intentionally indistinguishable.
+        raise HTTPException(status_code=404, detail="Attachment not found")
+    return row
+
+
 @router.get("/{email_id}/attachments/{attachment_id}/download")
 async def download_attachment(
     email_id: int,
@@ -529,22 +558,13 @@ async def download_attachment(
     user: User = Depends(get_current_user),
 ):
     """Download one attachment after strict account and message membership checks."""
-    result = await db.execute(
-        select(Email, Attachment, GoogleAccount)
-        .join(Attachment, Attachment.email_id == Email.id)
-        .join(GoogleAccount, GoogleAccount.id == Email.account_id)
-        .where(
-            Email.id == email_id,
-            Attachment.id == attachment_id,
-            GoogleAccount.user_id == user.id,
-        )
+    email, attachment, account = await _owned_attachment_row(
+        email_id,
+        attachment_id,
+        db,
+        user.id,
     )
-    row = result.one_or_none()
-    if not row:
-        # Missing, foreign, and wrong-message IDs are intentionally indistinguishable.
-        raise HTTPException(status_code=404, detail="Attachment not found")
 
-    email, attachment, account = row
     try:
         content = await load_attachment_bytes(db, email, attachment, account)
     except AttachmentDownloadError as exc:
@@ -561,6 +581,66 @@ async def download_attachment(
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
             "Cross-Origin-Resource-Policy": "same-origin",
+        },
+    )
+
+
+@router.get("/{email_id}/attachments/{attachment_id}/preview")
+async def preview_attachment(
+    email_id: int,
+    attachment_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return a byte-classified isolated preview after the same ownership check."""
+    email, attachment, account = await _owned_attachment_row(
+        email_id,
+        attachment_id,
+        db,
+        user.id,
+    )
+    if (
+        attachment.size_bytes is not None
+        and attachment.size_bytes > MAX_ATTACHMENT_PREVIEW_BYTES
+    ):
+        raise HTTPException(
+            status_code=413,
+            detail="This attachment is too large to preview",
+    )
+    try:
+        preview = await load_and_build_attachment_preview(
+            lambda: load_attachment_bytes(db, email, attachment, account)
+        )
+    except AttachmentDownloadError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.public_detail,
+        ) from exc
+    except AttachmentPreviewError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.public_detail,
+        ) from exc
+
+    return Response(
+        content=preview.content,
+        headers={
+            "Content-Type": preview.content_type,
+            "Content-Disposition": attachment_content_disposition(
+                attachment.filename,
+                disposition="inline",
+            ),
+            "X-Attachment-Preview-Kind": preview.kind,
+            "X-Attachment-Preview-Truncated": str(preview.truncated).lower(),
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Cross-Origin-Resource-Policy": "same-origin",
+            "Content-Security-Policy": (
+                "sandbox; default-src 'none'; script-src 'none'; "
+                "object-src 'none'; base-uri 'none'; form-action 'none'; "
+                "frame-ancestors 'self'"
+            ),
+            "X-Frame-Options": "SAMEORIGIN",
         },
     )
 
