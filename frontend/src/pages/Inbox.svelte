@@ -68,35 +68,56 @@
     narrowViewportQuery.addEventListener('change', updateNarrowViewport);
 
     // Register keyboard shortcut actions for the inbox
+    const selectedActionEnabled = () => mounted
+      && datasetAuthoritative
+      && Boolean(get(selectedEmailId));
+    const selectedActionUnavailable = () => datasetUpdating
+      ? 'Wait for the current inbox results'
+      : 'Select an email first';
     const cleanupShortcuts = registerActions({
-      'inbox.next': () => navigateEmails(1),
-      'inbox.prev': () => navigateEmails(-1),
-      'inbox.open': () => { /* email opens on selection via the effect */ },
-      'inbox.archive': () => {
-        if ($selectedEmailId) handleAction('archive', [$selectedEmailId]);
+      'inbox.next': {
+        run: () => navigateEmails(1),
+        isEnabled: () => datasetAuthoritative && get(emails).length > 0,
+        disabledReason: 'No email results are available',
       },
-      'inbox.trash': () => {
-        if ($selectedEmailId) handleAction('trash', [$selectedEmailId]);
+      'inbox.prev': {
+        run: () => navigateEmails(-1),
+        isEnabled: () => datasetAuthoritative && get(emails).length > 0,
+        disabledReason: 'No email results are available',
       },
-      'inbox.star': () => {
-        if (!$selectedEmailId) return;
-        const target = get(emails).find(email => email.id === $selectedEmailId) || selectedEmail;
-        handleAction(target?.is_starred ? 'unstar' : 'star', [$selectedEmailId]);
+      'inbox.archive': {
+        run: () => handleAction('archive', [get(selectedEmailId)]),
+        isEnabled: selectedActionEnabled,
+        disabledReason: selectedActionUnavailable,
       },
-      'inbox.read': () => {
-        if ($selectedEmailId) handleAction('mark_read', [$selectedEmailId]);
+      'inbox.trash': {
+        run: () => handleAction('trash', [get(selectedEmailId)]),
+        isEnabled: selectedActionEnabled,
+        disabledReason: selectedActionUnavailable,
       },
-      'inbox.unread': () => {
-        if ($selectedEmailId) handleAction('mark_unread', [$selectedEmailId]);
+      'inbox.star': {
+        run: () => {
+          const emailId = get(selectedEmailId);
+          const target = get(emails).find(email => email.id === emailId) || selectedEmail;
+          return handleAction(target?.is_starred ? 'unstar' : 'star', [emailId]);
+        },
+        isEnabled: selectedActionEnabled,
+        disabledReason: selectedActionUnavailable,
       },
-      'inbox.spam': () => {
-        if ($selectedEmailId) handleAction('spam', [$selectedEmailId]);
+      'inbox.read': {
+        run: () => handleAction('mark_read', [get(selectedEmailId)]),
+        isEnabled: selectedActionEnabled,
+        disabledReason: selectedActionUnavailable,
       },
-      'inbox.reply': () => {
-        // Handled by EmailView internally if open
+      'inbox.unread': {
+        run: () => handleAction('mark_unread', [get(selectedEmailId)]),
+        isEnabled: selectedActionEnabled,
+        disabledReason: selectedActionUnavailable,
       },
-      'inbox.forward': () => {
-        // Handled by EmailView internally if open
+      'inbox.spam': {
+        run: () => handleAction('spam', [get(selectedEmailId)]),
+        isEnabled: selectedActionEnabled,
+        disabledReason: selectedActionUnavailable,
       },
       'inbox.viewMode': () => {
         const current = get(viewMode);
@@ -110,7 +131,11 @@
       'inbox.focused': () => {
         hideIgnored.update(v => !v);
       },
-      'inbox.undo': runLatestUndo,
+      'inbox.undo': {
+        run: runLatestUndo,
+        isEnabled: () => Boolean(latestUndo && latestUndo.expiresAt > Date.now()),
+        disabledReason: 'There is no email action available to undo',
+      },
     });
 
     return () => {

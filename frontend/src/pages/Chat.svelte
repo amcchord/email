@@ -29,9 +29,7 @@
     gfm: true,
   });
 
-  onMount(async () => {
-    await loadConversations();
-
+  onMount(() => {
     const cleanupShortcuts = registerActions({
       'chat.new': () => {
         resetState();
@@ -57,6 +55,7 @@
       },
     });
 
+    void loadConversations();
     return cleanupShortcuts;
   });
 

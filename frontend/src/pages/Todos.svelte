@@ -14,13 +14,11 @@
   let expandedDraftId = $state(null);
   let editingDraftId = $state(null);
   let editDraftBody = $state('');
+  let todoMutationIds = $state([]);
 
   let selectedTodoIndex = $state(-1);
 
-  onMount(async () => {
-    await loadTodos();
-    loading = false;
-
+  onMount(() => {
     const cleanupShortcuts = registerActions({
       'todos.new': () => {
         const input = document.querySelector('[data-shortcut="todos.new"]');
@@ -37,21 +35,43 @@
           selectedTodoIndex = selectedTodoIndex - 1;
         }
       },
-      'todos.toggle': () => {
-        const pending = ($todos || []).filter(t => t.status === 'pending');
-        if (selectedTodoIndex >= 0 && selectedTodoIndex < pending.length) {
-          toggleTodo(pending[selectedTodoIndex]);
-        }
+      'todos.toggle': {
+        run: () => {
+          const todo = selectedPendingTodo();
+          return todo ? toggleTodo(todo) : false;
+        },
+        isEnabled: () => {
+          const todo = selectedPendingTodo();
+          return Boolean(todo) && !todoMutationIds.includes(todo.id);
+        },
+        disabledReason: () => selectedPendingTodo()
+          ? 'Todo update is already in progress'
+          : 'Select a pending todo first',
       },
-      'todos.delete': () => {
-        const pending = ($todos || []).filter(t => t.status === 'pending');
-        if (selectedTodoIndex >= 0 && selectedTodoIndex < pending.length) {
-          deleteTodo(pending[selectedTodoIndex]);
-        }
+      'todos.delete': {
+        run: () => {
+          const todo = selectedPendingTodo();
+          return todo ? deleteTodo(todo) : false;
+        },
+        isEnabled: () => {
+          const todo = selectedPendingTodo();
+          return Boolean(todo) && !todoMutationIds.includes(todo.id);
+        },
+        disabledReason: () => selectedPendingTodo()
+          ? 'Todo deletion is already in progress'
+          : 'Select a pending todo first',
       },
     });
 
-    return cleanupShortcuts;
+    let active = true;
+    void loadTodos().finally(() => {
+      if (active) loading = false;
+    });
+
+    return () => {
+      active = false;
+      cleanupShortcuts();
+    };
   });
 
   async function loadTodos() {
@@ -61,6 +81,23 @@
     } catch (err) {
       showToast(err.message, 'error');
     }
+  }
+
+  function selectedPendingTodo() {
+    const pending = ($todos || []).filter(todo => todo.status === 'pending');
+    return selectedTodoIndex >= 0 && selectedTodoIndex < pending.length
+      ? pending[selectedTodoIndex]
+      : null;
+  }
+
+  function beginTodoMutation(todoId) {
+    if (todoMutationIds.includes(todoId)) return false;
+    todoMutationIds = [...todoMutationIds, todoId];
+    return true;
+  }
+
+  function endTodoMutation(todoId) {
+    todoMutationIds = todoMutationIds.filter(id => id !== todoId);
   }
 
   async function addManualTodo() {
@@ -77,12 +114,17 @@
   }
 
   async function toggleTodo(todo) {
+    if (!beginTodoMutation(todo.id)) return false;
     const newStatus = todo.status === 'done' ? 'pending' : 'done';
     try {
       const updated = await api.updateTodo(todo.id, { status: newStatus });
       todos.update(list => list.map(t => t.id === todo.id ? updated : t));
+      return true;
     } catch (err) {
       showToast(err.message, 'error');
+      return false;
+    } finally {
+      endTodoMutation(todo.id);
     }
   }
 
@@ -96,11 +138,16 @@
   }
 
   async function deleteTodo(todo) {
+    if (!beginTodoMutation(todo.id)) return false;
     try {
       await api.deleteTodo(todo.id);
       todos.update(list => list.filter(t => t.id !== todo.id));
+      return true;
     } catch (err) {
       showToast(err.message, 'error');
+      return false;
+    } finally {
+      endTodoMutation(todo.id);
     }
   }
 

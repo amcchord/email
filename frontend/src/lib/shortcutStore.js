@@ -61,8 +61,27 @@ export const shortcutsByCategory = derived(activeShortcuts, ($shortcuts) => {
 });
 
 // ── Action handler registry ────────────────────────────────────────
-// Map of actionId -> handler function
-const actionHandlers = {};
+// Map of actionId -> registration stack. Components may temporarily override
+// an action (for example, an open email supplies Reply) without destroying the
+// handler owned by the page underneath it.
+const actionHandlers = new Map();
+let actionRegistrationId = 0;
+export const actionRegistryVersion = writable(0);
+
+function normalizeActionDescriptor(value) {
+  if (typeof value === 'function') return { run: value };
+  if (value && typeof value.run === 'function') return value;
+  throw new TypeError('Action handlers must be functions or descriptors with run()');
+}
+
+function bumpActionRegistry() {
+  actionRegistryVersion.update(version => version + 1);
+}
+
+function activeActionRegistration(actionId) {
+  const stack = actionHandlers.get(actionId);
+  return stack?.[stack.length - 1] || null;
+}
 
 /**
  * Register action handlers for the current page/component.
@@ -72,10 +91,31 @@ const actionHandlers = {};
  * @returns {Function} cleanup function
  */
 export function registerActions(handlers) {
-  for (const [actionId, fn] of Object.entries(handlers)) {
-    actionHandlers[actionId] = fn;
+  const ownedRegistrations = [];
+  for (const [actionId, value] of Object.entries(handlers)) {
+    const registration = {
+      id: ++actionRegistrationId,
+      descriptor: normalizeActionDescriptor(value),
+    };
+    const stack = actionHandlers.get(actionId) || [];
+    stack.push(registration);
+    actionHandlers.set(actionId, stack);
+    ownedRegistrations.push([actionId, registration.id]);
   }
-  return () => unregisterActions(Object.keys(handlers));
+  bumpActionRegistry();
+
+  let cleaned = false;
+  return () => {
+    if (cleaned) return;
+    cleaned = true;
+    for (const [actionId, registrationId] of ownedRegistrations) {
+      const stack = actionHandlers.get(actionId) || [];
+      const remaining = stack.filter(item => item.id !== registrationId);
+      if (remaining.length > 0) actionHandlers.set(actionId, remaining);
+      else actionHandlers.delete(actionId);
+    }
+    bumpActionRegistry();
+  };
 }
 
 /**
@@ -84,7 +124,71 @@ export function registerActions(handlers) {
  */
 export function unregisterActions(actionIds) {
   for (const id of actionIds) {
-    delete actionHandlers[id];
+    actionHandlers.delete(id);
+  }
+  bumpActionRegistry();
+}
+
+export function getActionState(actionId) {
+  const registration = activeActionRegistration(actionId);
+  if (!registration) {
+    return {
+      registered: false,
+      enabled: false,
+      disabledReason: 'Command is not available here',
+      run: null,
+    };
+  }
+
+  const { descriptor } = registration;
+  let enabled = true;
+  try {
+    enabled = descriptor.isEnabled ? Boolean(descriptor.isEnabled()) : true;
+  } catch {
+    enabled = false;
+  }
+  let disabledReason = '';
+  if (!enabled) {
+    try {
+      disabledReason = typeof descriptor.disabledReason === 'function'
+        ? descriptor.disabledReason()
+        : descriptor.disabledReason;
+    } catch {
+      disabledReason = '';
+    }
+  }
+  return {
+    registered: true,
+    enabled,
+    disabledReason: disabledReason || (enabled ? '' : 'Command is not available right now'),
+    run: descriptor.run,
+  };
+}
+
+export function invokeAction(actionId) {
+  const action = getActionState(actionId);
+  if (!action.registered || !action.enabled) {
+    return {
+      started: false,
+      disabledReason: action.disabledReason,
+      result: undefined,
+      error: null,
+    };
+  }
+  try {
+    return {
+      started: true,
+      disabledReason: '',
+      result: action.run(),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      started: true,
+      disabledReason: '',
+      result: undefined,
+      error,
+    };
   }
 }
 
@@ -94,12 +198,7 @@ export function unregisterActions(actionIds) {
  * @returns {boolean}
  */
 export function dispatchAction(actionId) {
-  const handler = actionHandlers[actionId];
-  if (handler) {
-    handler();
-    return true;
-  }
-  return false;
+  return invokeAction(actionId).started;
 }
 
 /**
@@ -108,7 +207,7 @@ export function dispatchAction(actionId) {
  * @returns {boolean}
  */
 export function hasHandler(actionId) {
-  return !!actionHandlers[actionId];
+  return Boolean(activeActionRegistration(actionId));
 }
 
 // ── Key combo parsing ──────────────────────────────────────────────
@@ -135,7 +234,7 @@ export function normalizeCombo(combo) {
     // Single key
     const key = parts[0].trim();
     if (key === 'Space') return ' ';
-    return key.length === 1 ? key : key;
+    return key.length === 1 ? key.toLowerCase() : key;
   }
 
   // Modifier combo
@@ -153,7 +252,7 @@ export function normalizeCombo(combo) {
     } else if (lower === 'meta' || lower === 'cmd' || lower === 'command') {
       modifiers.push('Meta');
     } else {
-      mainKey = trimmed;
+      mainKey = trimmed.length === 1 ? trimmed.toLowerCase() : trimmed;
     }
   }
 
@@ -169,12 +268,15 @@ export function normalizeCombo(combo) {
  */
 export function eventToCombo(e) {
   const modifiers = [];
+  let key = e.key;
+
   // Map Ctrl on Mac to Ctrl (we use "Ctrl" universally — on Mac it means Cmd)
   if (IS_MAC ? e.metaKey : e.ctrlKey) modifiers.push('Ctrl');
-  if (e.shiftKey) modifiers.push('Shift');
+  // Printable punctuation already encodes Shift in KeyboardEvent.key (`?`,
+  // `!`, `#`). Keep Shift for letters, digits, and named keys.
+  const shiftedPunctuation = e.shiftKey && key.length === 1 && /[^a-zA-Z0-9]/.test(key);
+  if (e.shiftKey && !shiftedPunctuation) modifiers.push('Shift');
   if (e.altKey) modifiers.push('Alt');
-
-  let key = e.key;
 
   // Normalize common keys
   if (key === ' ') key = 'Space';
@@ -186,11 +288,11 @@ export function eventToCombo(e) {
   }
 
   if (modifiers.length === 0) {
-    return key;
+    return normalizeCombo(key);
   }
 
   modifiers.sort();
-  return [...modifiers, key].join('+');
+  return normalizeCombo([...modifiers, key].join('+'));
 }
 
 /**
@@ -395,3 +497,22 @@ export const overlayVisible = writable(false);
 
 /** Whether the help modal is showing */
 export const helpModalOpen = writable(false);
+
+/** Whether the executable command palette is showing */
+export const commandPaletteOpen = writable(false);
+
+/** Open one command-surface modal at a time so inert/focus ownership cannot overlap. */
+export function openCommandPalette() {
+  helpModalOpen.set(false);
+  commandPaletteOpen.set(true);
+}
+
+export function openShortcutHelp() {
+  commandPaletteOpen.set(false);
+  helpModalOpen.set(true);
+}
+
+export function toggleShortcutHelp() {
+  if (get(helpModalOpen)) helpModalOpen.set(false);
+  else openShortcutHelp();
+}

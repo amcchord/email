@@ -10,6 +10,7 @@
   import { theme } from '../lib/theme.js';
   import Icon from '../components/common/Icon.svelte';
   import DaySummaryStrip from '../lib/flow/DaySummaryStrip.svelte';
+  import { addPendingReplyId, capturedReplyStillActive, reconcileNeedsReplyRemoval, removePendingReplyId } from '../lib/flow/replyActionState.js';
   import RichEditor from '../components/email/RichEditor.svelte';
   import { cleanEmailText } from '../lib/emailText.js';
 
@@ -58,6 +59,7 @@
   let threadLoading = $state(false);
   let replyBodyHtml = $state('');
   let inlineReplySending = $state(false);
+  let ignoringReplyEmailIds = $state([]);
   let replyIntent = $state(null);
   let collapsedMessages = $state({});
   let archiveAfterSend = $state(true);
@@ -268,14 +270,7 @@
     localStorage.setItem('flowChatCollapsed', String(chatCollapsed));
   });
 
-  onMount(async () => {
-    await Promise.all([
-      loadDaySummary(),
-      loadConversations(),
-      loadAwaitingResponse(),
-      loadActiveThreads(),
-    ]);
-
+  onMount(() => {
     // Register keyboard shortcut actions for the Flow page
     const cleanupShortcuts = registerActions({
       'flow.next': () => {
@@ -309,15 +304,24 @@
       'flow.skip': () => {
         if (replyViewOpen) skipEmail();
       },
-      'flow.ignore': () => {
-        if (replyViewOpen) ignoreCurrentEmail();
+      'flow.ignore': {
+        run: () => ignoreCurrentEmail(),
+        isEnabled: () => Boolean(replyViewOpen && selectedReplyEmail)
+          && !ignoringReplyEmailIds.includes(selectedReplyEmail.id),
+        disabledReason: () => selectedReplyEmail && ignoringReplyEmailIds.includes(selectedReplyEmail.id)
+          ? 'Ignore is already in progress'
+          : 'Open a needs-reply email first',
       },
       'flow.snooze': () => {
         if (replyViewOpen && selectedReplyEmail) openSnoozePopover(selectedReplyEmail.id);
       },
       'flow.newChat': () => startNewChat(),
-      'flow.send': () => {
-        if (replyViewOpen) sendReply();
+      'flow.send': {
+        run: () => sendReply(),
+        isEnabled: () => canSendReply(),
+        disabledReason: () => inlineReplySending
+          ? 'Reply is already sending'
+          : 'Open a reply and enter a message first',
       },
       'flow.back': () => {
         if (replyViewOpen) {
@@ -353,9 +357,14 @@
       },
     });
 
-    return () => {
-      cleanupShortcuts();
-    };
+    void Promise.all([
+      loadDaySummary(),
+      loadConversations(),
+      loadAwaitingResponse(),
+      loadActiveThreads(),
+    ]);
+
+    return cleanupShortcuts;
   });
 
   $effect(() => {
@@ -1027,10 +1036,11 @@
 
   async function archiveCurrentEmail() {
     if (!selectedReplyEmail) return;
+    const emailId = selectedReplyEmail.id;
     try {
-      await api.emailActions([selectedReplyEmail.id], 'archive');
+      await api.emailActions([emailId], 'archive');
       showToast('Email archived', 'success');
-      removeCurrentAndAdvance();
+      removeEmailAndAdvance(emailId);
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -1038,29 +1048,39 @@
 
   async function trashCurrentEmail() {
     if (!selectedReplyEmail) return;
+    const emailId = selectedReplyEmail.id;
     try {
-      await api.emailActions([selectedReplyEmail.id], 'trash');
+      await api.emailActions([emailId], 'trash');
       showToast('Moved to trash', 'success');
-      removeCurrentAndAdvance();
+      removeEmailAndAdvance(emailId);
     } catch (err) {
       showToast(err.message, 'error');
     }
   }
 
   async function ignoreCurrentEmail() {
-    if (!selectedReplyEmail) return;
+    if (!selectedReplyEmail) return false;
+    const emailId = selectedReplyEmail.id;
+    const sourceAtStart = viewSource;
+    const nextPending = addPendingReplyId(ignoringReplyEmailIds, emailId);
+    if (nextPending === ignoringReplyEmailIds) return false;
+    ignoringReplyEmailIds = nextPending;
     try {
-      await api.ignoreNeedsReply(selectedReplyEmail.id);
+      await api.ignoreNeedsReply(emailId);
       showToast('Ignored — won\'t appear in needs reply', 'success');
-      if (viewSource === 'needs_reply') {
-        removeCurrentAndAdvance();
+      if (sourceAtStart === 'needs_reply') {
+        removeEmailAndAdvance(emailId);
       } else {
-        needsReplyEmails = needsReplyEmails.filter(e => e.id !== selectedReplyEmail.id);
+        needsReplyEmails = needsReplyEmails.filter(e => e.id !== emailId);
         if (needsReplyTotal > 0) needsReplyTotal -= 1;
-        closeReplyView();
+        if (capturedReplyStillActive(emailId, selectedReplyEmail?.id)) closeReplyView();
       }
+      return true;
     } catch (err) {
       showToast(err.message, 'error');
+      return false;
+    } finally {
+      ignoringReplyEmailIds = removePendingReplyId(ignoringReplyEmailIds, emailId);
     }
   }
 
@@ -1096,7 +1116,7 @@
       snoozePopoverEmailId = null;
       showToast(`Snoozed until ${labels[duration]}`, 'success');
       if (fromReplyView && viewSource === 'needs_reply') {
-        removeCurrentAndAdvance();
+        removeEmailAndAdvance(emailId);
       } else if (fromReplyView) {
         needsReplyEmails = needsReplyEmails.filter(e => e.id !== emailId);
         if (needsReplyTotal > 0) needsReplyTotal -= 1;
@@ -1110,18 +1130,27 @@
     }
   }
 
-  function removeCurrentAndAdvance() {
-    const removedId = selectedReplyEmail.id;
-    needsReplyEmails = needsReplyEmails.filter(e => e.id !== removedId);
-    if (needsReplyTotal > 0) needsReplyTotal -= 1;
+  function removeEmailAndAdvance(removedId) {
+    const result = reconcileNeedsReplyRemoval({
+      emails: needsReplyEmails,
+      total: needsReplyTotal,
+      removedId,
+      activeEmailId: selectedReplyEmail?.id,
+      activeIndex: activeReplyIndex,
+    });
+    if (!result.removed) return;
+    needsReplyEmails = result.emails;
+    needsReplyTotal = result.total;
 
-    if (needsReplyEmails.length === 0) {
+    if (selectedReplyEmail && selectedReplyEmail.id !== removedId) {
+      if (result.activeIndex >= 0) activeReplyIndex = result.activeIndex;
+      return;
+    }
+    if (result.activeEmailId == null) {
       closeReplyView();
       return;
     }
-
-    const newIdx = Math.min(activeReplyIndex, needsReplyEmails.length - 1);
-    openReplyView(needsReplyEmails[newIdx], newIdx);
+    openReplyView(needsReplyEmails[result.activeIndex], result.activeIndex);
   }
 
   function openInCompose() {
@@ -1161,10 +1190,15 @@
     currentPage.set('compose');
   }
 
-  async function sendReply() {
-    if (!selectedReplyEmail) return;
+  function canSendReply() {
     const plainText = replyBodyHtml ? replyBodyHtml.replace(/<[^>]*>/g, '').trim() : '';
-    if (!plainText) return;
+    return replyViewOpen && Boolean(selectedReplyEmail) && Boolean(plainText) && !inlineReplySending;
+  }
+
+  async function sendReply() {
+    if (inlineReplySending || !selectedReplyEmail) return false;
+    const plainText = replyBodyHtml ? replyBodyHtml.replace(/<[^>]*>/g, '').trim() : '';
+    if (!plainText) return false;
 
     inlineReplySending = true;
     try {
@@ -1185,8 +1219,7 @@
 
       if (!accountId) {
         showToast('No account found to send from', 'error');
-        inlineReplySending = false;
-        return;
+        return false;
       }
 
       const email = selectedReplyEmail;
@@ -1221,14 +1254,17 @@
             // silent fail on archive
           }
         }
-        removeCurrentAndAdvance();
+        removeEmailAndAdvance(email.id);
       } else {
         closeReplyView();
       }
+      return true;
     } catch (err) {
       showToast(err.message, 'error');
+      return false;
+    } finally {
+      inlineReplySending = false;
     }
-    inlineReplySending = false;
   }
 
   function formatEmailDate(dateStr) {
@@ -2123,6 +2159,7 @@
                 </button>
                 <button
                   onclick={ignoreCurrentEmail}
+                  disabled={ignoringReplyEmailIds.includes(selectedReplyEmail?.id)}
                   class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
                   style="color: var(--text-secondary)"
                   title="Ignore — remove from needs reply"
@@ -2197,6 +2234,7 @@
 
                 <button
                   onclick={ignoreCurrentEmail}
+                  disabled={ignoringReplyEmailIds.includes(selectedReplyEmail?.id)}
                   class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
                   style="color: var(--text-secondary)"
                   title="Ignore — remove from needs reply"

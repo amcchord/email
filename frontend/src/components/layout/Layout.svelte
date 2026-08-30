@@ -5,8 +5,9 @@
   import KeyboardShortcutHandler from '../common/KeyboardShortcutHandler.svelte';
   import ShortcutOverlay from '../common/ShortcutOverlay.svelte';
   import ShortcutHelpModal from '../common/ShortcutHelpModal.svelte';
-  import { sidebarCollapsed, currentPage, composeOpen, searchQuery } from '../../lib/stores.js';
-  import { registerActions, helpModalOpen, loadUserShortcuts } from '../../lib/shortcutStore.js';
+  import CommandPalette from '../common/CommandPalette.svelte';
+  import { sidebarCollapsed, currentPage } from '../../lib/stores.js';
+  import { openCommandPalette, registerActions, toggleShortcutHelp, loadUserShortcuts } from '../../lib/shortcutStore.js';
   import { theme } from '../../lib/theme.js';
 
   let { children } = $props();
@@ -26,13 +27,21 @@
       'nav.stats':    () => currentPage.set('stats'),
       'nav.insights': () => currentPage.set('ai-insights'),
       'nav.chat':     () => currentPage.set('chat'),
+      'nav.subscriptions': () => currentPage.set('subscriptions'),
       'nav.settings': () => currentPage.set('admin'),
-      'nav.compose':  () => composeOpen.set(true),
+      'nav.compose':  () => currentPage.set('compose'),
       'nav.search':   () => {
-        const searchInput = document.querySelector('[data-shortcut="nav.search"]');
-        if (searchInput) searchInput.focus();
+        currentPage.set('inbox');
+        window.setTimeout(() => {
+          const searchInput = document.querySelector('[data-shortcut="nav.search"]');
+          if (searchInput) {
+            searchInput.focus();
+            searchInput.select();
+          }
+        }, 0);
       },
-      'nav.help':     () => helpModalOpen.update(v => !v),
+      'nav.commands': openCommandPalette,
+      'nav.help':     toggleShortcutHelp,
       'nav.theme':    () => theme.toggle(),
     });
 
@@ -43,8 +52,9 @@
 <KeyboardShortcutHandler />
 <ShortcutOverlay />
 <ShortcutHelpModal />
+<CommandPalette />
 
-<div class="h-screen flex flex-col overflow-hidden" style="background: var(--bg-primary)">
+<div data-app-shell class="h-screen flex flex-col overflow-hidden" style="background: var(--bg-primary)">
   <!-- TopBar always full-width so tabs stay in the same position -->
   <TopBar />
   <div class="flex-1 flex overflow-hidden">

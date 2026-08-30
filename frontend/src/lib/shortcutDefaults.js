@@ -31,17 +31,17 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'nav.stats',    key: 'g s', label: 'Go to Stats',             context: 'global', category: 'Navigation' },
   { id: 'nav.insights', key: 'g a', label: 'Go to AI Insights',       context: 'global', category: 'Navigation' },
   { id: 'nav.chat',     key: 'g h', label: 'Go to Chat',              context: 'global', category: 'Navigation' },
+  { id: 'nav.subscriptions', key: 'g u', label: 'Go to Subscriptions', context: 'global', category: 'Navigation' },
   { id: 'nav.settings', key: 'g ,', label: 'Go to Settings',          context: 'global', category: 'Navigation' },
   { id: 'nav.compose',  key: 'c',   label: 'Compose new email',       context: 'global', category: 'Navigation' },
   { id: 'nav.search',   key: '/',   label: 'Focus search bar',        context: 'global', category: 'Navigation' },
+  { id: 'nav.commands', key: 'Ctrl+k', label: 'Open command palette', context: 'global', category: 'Navigation', keywords: ['commands', 'actions', 'jump'] },
   { id: 'nav.help',     key: '?',   label: 'Show keyboard shortcuts', context: 'global', category: 'Navigation' },
   { id: 'nav.theme',    key: '.',   label: 'Toggle dark/light theme', context: 'global', category: 'Navigation' },
 
   // ── Inbox / Email List ───────────────────────────────────────────
   { id: 'inbox.next',     key: 'j',       label: 'Next email',            context: 'inbox', category: 'Inbox' },
   { id: 'inbox.prev',     key: 'k',       label: 'Previous email',        context: 'inbox', category: 'Inbox' },
-  { id: 'inbox.open',     key: 'o',       label: 'Open selected email',   context: 'inbox', category: 'Inbox' },
-  { id: 'inbox.select',   key: 'x',       label: 'Toggle select',         context: 'inbox', category: 'Inbox' },
   { id: 'inbox.archive',  key: 'e',       label: 'Archive',               context: 'inbox', category: 'Inbox' },
   { id: 'inbox.trash',    key: '#',       label: 'Trash',                 context: 'inbox', category: 'Inbox' },
   { id: 'inbox.star',     key: 's',       label: 'Toggle star',           context: 'inbox', category: 'Inbox' },
@@ -55,15 +55,6 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'inbox.focused',  key: 'Shift+f', label: 'Toggle focused filter', context: 'inbox', category: 'Inbox' },
   { id: 'inbox.undo',     key: 'z',       label: 'Undo last email action', context: 'inbox', category: 'Inbox' },
 
-  // ── Email View ───────────────────────────────────────────────────
-  { id: 'email.reply',   key: 'r',       label: 'Reply',             context: 'email-view', category: 'Email View' },
-  { id: 'email.forward', key: 'f',       label: 'Forward',           context: 'email-view', category: 'Email View' },
-  { id: 'email.archive', key: 'e',       label: 'Archive',           context: 'email-view', category: 'Email View' },
-  { id: 'email.trash',   key: '#',       label: 'Trash',             context: 'email-view', category: 'Email View' },
-  { id: 'email.star',    key: 's',       label: 'Toggle star',       context: 'email-view', category: 'Email View' },
-  { id: 'email.close',   key: 'Escape',  label: 'Close email view',  context: 'email-view', category: 'Email View' },
-  { id: 'email.popout',  key: 'Shift+p', label: 'Pop out to window', context: 'email-view', category: 'Email View' },
-
   // ── Flow ─────────────────────────────────────────────────────────
   { id: 'flow.next',       key: 'j',          label: 'Next item',               context: 'flow', category: 'Flow' },
   { id: 'flow.prev',       key: 'k',          label: 'Previous item',            context: 'flow', category: 'Flow' },
@@ -74,7 +65,9 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'flow.ignore',     key: 'i',          label: 'Ignore needs-reply email', context: 'flow', category: 'Flow' },
   { id: 'flow.snooze',     key: 'z',          label: 'Snooze needs-reply email', context: 'flow', category: 'Flow' },
   { id: 'flow.newChat',    key: 'n',          label: 'New chat',                 context: 'flow', category: 'Flow' },
-  { id: 'flow.send',       key: 'Ctrl+Enter', label: 'Send reply',               context: 'flow', category: 'Flow' },
+  // Sending remains keyboard-accessible, but stays out of the palette until
+  // compose/send has a durable idempotency contract for lost responses.
+  { id: 'flow.send',       key: 'Ctrl+Enter', label: 'Send reply',               context: 'flow', category: 'Flow', palette: false },
   { id: 'flow.back',       key: 'Escape',     label: 'Back to list / deselect',  context: 'flow', category: 'Flow' },
   { id: 'flow.replyOption1', key: '1',       label: 'Select reply option 1',    context: 'flow', category: 'Flow' },
   { id: 'flow.replyOption2', key: '2',       label: 'Select reply option 2',    context: 'flow', category: 'Flow' },
@@ -91,7 +84,7 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'cal.day',   key: 'd', label: 'Day view',        context: 'calendar', category: 'Calendar' },
 
   // ── Compose ──────────────────────────────────────────────────────
-  { id: 'compose.send',    key: 'Ctrl+Enter',   label: 'Send email',  context: 'compose', category: 'Compose' },
+  { id: 'compose.send',    key: 'Ctrl+Enter',   label: 'Send email',  context: 'compose', category: 'Compose', palette: false },
   { id: 'compose.draft',   key: 'Ctrl+s',       label: 'Save draft',  context: 'compose', category: 'Compose' },
   { id: 'compose.discard', key: 'Escape',        label: 'Discard / close', context: 'compose', category: 'Compose' },
   { id: 'compose.cc',      key: 'Ctrl+Shift+c', label: 'Toggle Cc',   context: 'compose', category: 'Compose' },

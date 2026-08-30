@@ -6,11 +6,25 @@
   Shows user-customized bindings where applicable.
 -->
 <script>
-  import { helpModalOpen, shortcutsByCategory, formatComboForDisplay } from '../../lib/shortcutStore.js';
+  import { onMount, tick } from 'svelte';
+  import {
+    activeShortcuts,
+    eventToCombo,
+    formatComboForDisplay,
+    helpModalOpen,
+    normalizeCombo,
+    openCommandPalette,
+    shortcutsByCategory,
+  } from '../../lib/shortcutStore.js';
   import { getCategories } from '../../lib/shortcutDefaults.js';
   import { currentPage } from '../../lib/stores.js';
 
   let searchFilter = $state('');
+  let inputEl = $state(null);
+  let dialogEl = $state(null);
+  let returnFocusEl = null;
+  let wasOpen = false;
+  let savedBodyOverflow = '';
 
   const categories = getCategories();
 
@@ -36,9 +50,89 @@
     return result;
   });
 
-  function handleKeydown(e) {
-    if (e.key === 'Escape') {
+  function setBackgroundInert(inert) {
+    const shell = document.querySelector('[data-app-shell]');
+    if (!shell) return;
+    if (inert) {
+      shell.setAttribute('inert', '');
+      shell.setAttribute('aria-hidden', 'true');
+    } else {
+      shell.removeAttribute('inert');
+      shell.removeAttribute('aria-hidden');
+    }
+  }
+
+  async function opened() {
+    returnFocusEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    searchFilter = '';
+    savedBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    setBackgroundInert(true);
+    await tick();
+    if ($helpModalOpen) inputEl?.focus();
+  }
+
+  function closed() {
+    setBackgroundInert(false);
+    document.body.style.overflow = savedBodyOverflow;
+    const target = returnFocusEl;
+    returnFocusEl = null;
+    if (target?.isConnected) target.focus();
+  }
+
+  onMount(() => {
+    const unsubscribe = helpModalOpen.subscribe(open => {
+      if (open && !wasOpen) void opened();
+      if (!open && wasOpen) closed();
+      wasOpen = open;
+    });
+    return () => {
+      unsubscribe();
+      if (wasOpen) closed();
+    };
+  });
+
+  function focusableElements() {
+    if (!dialogEl) return [];
+    return [...dialogEl.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )].filter(element => !element.hasAttribute('hidden'));
+  }
+
+  function handleKeydown(event) {
+    if (!$helpModalOpen || event.isComposing) return;
+
+    const combo = normalizeCombo(eventToCombo(event));
+    const helpShortcut = $activeShortcuts['nav.help']?.key;
+    if (event.key === 'Escape' || event.key === '?' || (helpShortcut && combo === normalizeCombo(helpShortcut))) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
       helpModalOpen.set(false);
+      return;
+    }
+
+    const paletteShortcut = $activeShortcuts['nav.commands']?.key;
+    if (paletteShortcut && combo === normalizeCombo(paletteShortcut)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      openCommandPalette();
+      return;
+    }
+
+    if (event.key === 'Tab') {
+      const focusable = focusableElements();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        return;
+      }
+      const current = focusable.indexOf(document.activeElement);
+      const next = event.shiftKey
+        ? (current <= 0 ? focusable.length - 1 : current - 1)
+        : (current === focusable.length - 1 ? 0 : current + 1);
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      focusable[next].focus();
     }
   }
 
@@ -60,19 +154,24 @@
   }
 </script>
 
+<svelte:window onkeydown={handleKeydown} />
+
 {#if $helpModalOpen}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <!-- svelte-ignore a11y_interactive_supports_focus -->
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
     class="modal-backdrop"
-    role="dialog"
-    aria-label="Keyboard Shortcuts"
-    onkeydown={handleKeydown}
     onclick={handleBackdropClick}
   >
-    <div class="modal-content">
+    <div
+      class="modal-content"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="shortcut-help-title"
+      bind:this={dialogEl}
+    >
       <div class="modal-header">
-        <h2>Keyboard Shortcuts</h2>
+        <h2 id="shortcut-help-title">Keyboard Shortcuts</h2>
         <div class="modal-header-actions">
           <button class="customize-btn" onclick={goToSettings}>
             Customize
@@ -88,8 +187,10 @@
       <div class="search-bar">
         <input
           type="text"
+          aria-label="Search keyboard shortcuts"
           placeholder="Search shortcuts..."
           bind:value={searchFilter}
+          bind:this={inputEl}
           class="search-input"
         />
       </div>
@@ -192,6 +293,7 @@
   }
 
   .customize-btn {
+    min-height: 44px;
     padding: 5px 12px;
     border-radius: 6px;
     border: 1px solid var(--border-color);
@@ -211,8 +313,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
+    width: 44px;
+    height: 44px;
     border: none;
     border-radius: 6px;
     background: none;
@@ -233,6 +335,7 @@
 
   .search-input {
     width: 100%;
+    min-height: 44px;
     padding: 8px 12px;
     border-radius: 6px;
     border: 1px solid var(--border-color);

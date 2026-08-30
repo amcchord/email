@@ -87,7 +87,11 @@
 
     // Register keyboard shortcut actions for the Compose page
     const cleanupShortcuts = registerActions({
-      'compose.send': () => handleSend(),
+      'compose.send': {
+        run: () => handleSend(),
+        isEnabled: () => !sending,
+        disabledReason: 'Email is already sending',
+      },
       'compose.draft': () => handleSaveDraft(),
       'compose.discard': () => discardDraft(),
       'compose.cc': () => { showCcBcc = !showCcBcc; },
@@ -172,13 +176,14 @@
   }
 
   async function handleSend() {
+    if (sending) return false;
     if (!to.trim()) {
       showToast('Please add recipients', 'error');
-      return;
+      return false;
     }
     if (!selectedAccountId) {
       showToast('Please select an account', 'error');
-      return;
+      return false;
     }
 
     sending = true;
@@ -207,10 +212,13 @@
       showToast('Email sent', 'success');
       currentPage.set('inbox');
       composeData.set(null);
+      return true;
     } catch (err) {
       showToast(err.message, 'error');
+      return false;
+    } finally {
+      sending = false;
     }
-    sending = false;
   }
 
   async function handleSaveDraft() {

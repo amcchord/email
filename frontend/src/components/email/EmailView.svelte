@@ -1,5 +1,7 @@
 <script>
+  import { onMount } from 'svelte';
   import { currentPage, composeData, showToast, pendingReplyDraft, accounts, todos, accountColorMap } from '../../lib/stores.js';
+  import { registerActions } from '../../lib/shortcutStore.js';
   import { theme } from '../../lib/theme.js';
   import { api } from '../../lib/api.js';
   import {
@@ -23,6 +25,19 @@
   let attachmentError = $state(null);
   let attachmentRequestGeneration = 0;
   let attachmentEmailId = null;
+
+  onMount(() => registerActions({
+    'inbox.reply': {
+      run: handleReply,
+      isEnabled: () => Boolean(email) && !loading,
+      disabledReason: 'Wait for the selected email to load',
+    },
+    'inbox.forward': {
+      run: handleForward,
+      isEnabled: () => Boolean(email) && !loading,
+      disabledReason: 'Wait for the selected email to load',
+    },
+  }));
 
   $effect(() => {
     const nextEmailId = email?.id ?? null;

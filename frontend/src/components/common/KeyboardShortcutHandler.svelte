@@ -18,8 +18,10 @@
     getActionForCombo,
     isSequencePrefix,
     dispatchAction,
+    getActionState,
     overlayVisible,
     helpModalOpen,
+    commandPaletteOpen,
   } from '../../lib/shortcutStore.js';
 
   // Map page names to shortcut contexts
@@ -32,6 +34,7 @@
       todos: 'todos',
       chat: 'chat',
       'ai-insights': 'ai-insights',
+      subscriptions: 'subscriptions',
       admin: 'admin',
       stats: 'stats',
     };
@@ -71,6 +74,11 @@
   let altHoldTimer = $state(null);
 
   function handleKeydown(e) {
+    if (e.isComposing) return;
+    // The top-most dialog owns all keyboard input. Its component handles
+    // Escape, focus movement, and execution without leaking Inbox shortcuts.
+    if ($commandPaletteOpen || $helpModalOpen) return;
+
     // Track Alt/Option key for overlay
     if (e.key === 'Alt' || e.key === 'Option') {
       if (!altPressedAt) {
@@ -104,9 +112,10 @@
       if (editing && !hasModifier(fullCombo)) return;
 
       const actionId = getActionForCombo(fullCombo, context);
-      if (actionId) {
+      const action = actionId ? getActionState(actionId) : null;
+      if (action?.registered && action.enabled) {
         e.preventDefault();
-        e.stopPropagation();
+        e.stopImmediatePropagation();
         dispatchAction(actionId);
         return;
       }
@@ -128,9 +137,10 @@
     if (editing && !hasModifier(combo)) return;
 
     const actionId = getActionForCombo(combo, context);
-    if (actionId) {
+    const action = actionId ? getActionState(actionId) : null;
+    if (action?.registered && action.enabled) {
       e.preventDefault();
-      e.stopPropagation();
+      e.stopImmediatePropagation();
       dispatchAction(actionId);
     }
   }

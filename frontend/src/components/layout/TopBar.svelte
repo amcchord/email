@@ -2,12 +2,16 @@
   import { onMount } from 'svelte';
   import { theme, getEffectiveMode } from '../../lib/theme.js';
   import Icon from '../common/Icon.svelte';
+  import { activeShortcuts, formatComboForDisplay, openCommandPalette } from '../../lib/shortcutStore.js';
   import { api } from '../../lib/api.js';
   import { user, sidebarCollapsed, searchQuery, currentPage, currentMailbox, viewMode, overallSyncState, syncStatus, showToast, forceSyncPoll, selectedAccountId, accounts, accountColorMap, hideIgnored } from '../../lib/stores.js';
 
   let searchValue = $state('');
   let syncDropdownOpen = $state(false);
   let moreMenuOpen = $state(false);
+  let commandShortcut = $derived(
+    formatComboForDisplay($activeShortcuts['nav.commands']?.key || 'Ctrl+k')
+  );
 
   let selectedAccount = $derived(
     $selectedAccountId ? $accounts.find(a => a.id === $selectedAccountId) : null
@@ -369,6 +373,19 @@
 
   <!-- Right section: sync, theme, settings gear, user -->
   <div class="topbar-utilities flex items-center gap-1.5 shrink-0">
+    <button
+      onclick={openCommandPalette}
+      class="command-trigger min-w-11 min-h-11 inline-flex items-center justify-center gap-2 px-2.5 rounded-lg border"
+      style="color: var(--text-secondary); border-color: var(--border-color); background: var(--bg-primary)"
+      aria-label="Open command palette"
+      title="Open command palette"
+      data-shortcut="nav.commands"
+    >
+      <Icon name="command" size={16} />
+      <span class="command-trigger-label text-xs font-medium">Commands</span>
+      <kbd class="command-trigger-key">{commandShortcut}</kbd>
+    </button>
+
     <!-- Active account filter chip (non-email tabs) -->
     {#if selectedAccount && $currentPage !== 'inbox'}
       <div
@@ -576,6 +593,10 @@
   .mobile-menu-utilities {
     display: none;
   }
+  .command-trigger-label,
+  .command-trigger-key {
+    display: none;
+  }
 
   @media (max-width: 767px) {
     .app-topbar {
@@ -597,6 +618,10 @@
     .focused-label {
       display: none;
     }
+    .command-trigger-label,
+    .command-trigger-key {
+      display: none;
+    }
     .mobile-menu-utilities {
       display: block;
     }
@@ -616,6 +641,22 @@
     }
     .app-topbar:has(.inbox-tools) {
       min-height: 6.25rem;
+    }
+  }
+
+  .command-trigger-key {
+    padding: 0.15rem 0.35rem;
+    border: 1px solid var(--border-color);
+    border-radius: 0.3rem;
+    background: var(--bg-secondary);
+    color: var(--text-tertiary);
+    font: 600 0.625rem/1 system-ui, sans-serif;
+  }
+
+  @media (min-width: 1100px) {
+    .command-trigger-label,
+    .command-trigger-key {
+      display: inline-flex;
     }
   }
 </style>
