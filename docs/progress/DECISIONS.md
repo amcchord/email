@@ -247,3 +247,25 @@ add a new entry that explicitly supersedes the old one.
   and pass generated hostile/benign browser fixtures. Remote image, CSS, and
   link tracking remain a separate product policy requiring visible controls;
   this display-only decision does not claim to block all network tracking.
+
+## D-016 — Remote message content is blocked until a scoped user decision
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Block every sender-controlled auto-loading resource by default in
+  all message readers and in quoted Compose content. A message may expose a
+  message-scoped, in-memory direct-load action only with explicit disclosure
+  that it can reveal IP address, device details, and view timing. Its display
+  state is reversible, but requests already made are not. External CSS,
+  fonts, tracking pings, active content, and external SVG references remain
+  blocked even after that action.
+- Reason: A sandbox isolates script and style effects but does not stop network
+  requests. Persistent sender trust or claims of private loading would be
+  misleading without an owned resource manifest, hardened proxy, bounded
+  cache, redirect/DNS/private-network validation, and truthful timing model.
+- Consequence: Inbox, standalone/subscription, and Flow must use the shared
+  email-frame boundary and its restrictive CSP; Forward/Compose must use the
+  separate style-free sanitizer. Future preferences stay fail-closed on error,
+  Spam never inherits a trust exception, and persistent exact-sender/global
+  modes may be added only through the owned proxy. CID images require an owned
+  inline-resource mapping rather than a direct exception.

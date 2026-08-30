@@ -2,7 +2,6 @@
   import { onDestroy, onMount } from 'svelte';
   import { currentPage, composeData, showToast, pendingReplyDraft, accounts, todos, accountColorMap } from '../../lib/stores.js';
   import { commandPaletteOpen, helpModalOpen, registerActions } from '../../lib/shortcutStore.js';
-  import { theme } from '../../lib/theme.js';
   import { api } from '../../lib/api.js';
   import {
     MAX_ACTIVE_ATTACHMENT_REQUESTS,
@@ -20,15 +19,15 @@
     materializeAttachmentPreview,
     releaseAttachmentPreview,
   } from '../../lib/attachmentPreview.js';
-  import { sanitizeHtml } from '../../lib/sanitize.js';
+  import { sanitizeComposeHtml } from '../../lib/sanitize.js';
   import { get } from 'svelte/store';
   import Button from '../common/Button.svelte';
   import Icon from '../common/Icon.svelte';
   import AttachmentPreview from './AttachmentPreview.svelte';
+  import EmailHtmlFrame from './EmailHtmlFrame.svelte';
 
   let { email = null, loading = false, onAction = null, onClose = null, standalone = false } = $props();
 
-  let iframeEl = $state(null);
   let unsubscribing = $state(false);
   let addingTodos = $state(false);
   let showTodoPrompt = $state(false);
@@ -512,57 +511,6 @@
     inlineReplySending = false;
   }
 
-  // Write email HTML into a sandboxed iframe so its <style> tags can't leak
-  $effect(() => {
-    if (iframeEl && email && email.body_html) {
-      const isDark = $theme === 'dark';
-      const doc = iframeEl.contentDocument;
-      if (doc) {
-        doc.open();
-        doc.write(`<!DOCTYPE html><html><head><style>
-          body {
-            margin: 0; padding: 0;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            font-size: 14px; line-height: 1.6;
-            color: ${isDark ? '#e4e4e7' : '#1a1a1a'};
-            background: ${isDark ? '#18181b' : '#ffffff'};
-            word-break: break-word;
-          }
-          img { max-width: 100%; height: auto; }
-          a { color: ${isDark ? '#f59e0b' : '#b45309'}; }
-          blockquote { border-left: 3px solid ${isDark ? '#3f3f46' : '#d4d4d8'}; padding-left: 12px; margin-left: 0; opacity: 0.8; }
-          table { max-width: 100%; }
-          pre { overflow-x: auto; }
-        </style></head><body>${sanitizeHtml(email.body_html)}</body></html>`);
-        doc.close();
-
-        // Auto-resize iframe to content height
-        function resize() {
-          if (iframeEl && doc.body) {
-            iframeEl.style.height = doc.body.scrollHeight + 'px';
-          }
-        }
-        // Resize after images load
-        const imgs = doc.querySelectorAll('img');
-        if (imgs.length > 0) {
-          let loaded = 0;
-          imgs.forEach(img => {
-            if (img.complete) {
-              loaded++;
-            } else {
-              img.addEventListener('load', () => { loaded++; if (loaded >= imgs.length) resize(); });
-              img.addEventListener('error', () => { loaded++; if (loaded >= imgs.length) resize(); });
-            }
-          });
-          if (loaded >= imgs.length) resize();
-        }
-        // Initial resize with a small delay for rendering
-        setTimeout(resize, 50);
-        setTimeout(resize, 300);
-      }
-    }
-  });
-
   function formatFullDate(dateStr) {
     if (!dateStr) return '';
     const d = new Date(dateStr);
@@ -658,13 +606,26 @@
 
   function handleForward() {
     if (!email) return;
+    const forwardedBody = email.body_html
+      ? sanitizeComposeHtml(email.body_html)
+      : String(email.body_text || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('\n', '<br>');
+    const forwardedFromName = String(email.from_name || '')
+      .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    const forwardedFromAddress = String(email.from_address || '')
+      .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    const forwardedSubject = String(email.subject || '')
+      .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     composeData.set({
       draft_key: `forward:${email.account_id || 'account'}:${email.id}`,
       account_id: resolveAccountId(),
       to: [],
       cc: [],
       subject: email.subject?.startsWith('Fwd:') ? email.subject : `Fwd: ${email.subject || ''}`,
-      body_html: `<br><br>---------- Forwarded message ----------<br>From: ${email.from_name || ''} &lt;${email.from_address || ''}&gt;<br>Date: ${formatFullDate(email.date)}<br>Subject: ${email.subject || ''}<br><br>${email.body_html || email.body_text || ''}`,
+      body_html: `<br><br>---------- Forwarded message ----------<br>From: ${forwardedFromName} &lt;${forwardedFromAddress}&gt;<br>Date: ${formatFullDate(email.date)}<br>Subject: ${forwardedSubject}<br><br>${forwardedBody}`,
     });
     currentPage.set('compose');
   }
@@ -997,13 +958,12 @@
     <!-- Body -->
     <div class="flex-1 overflow-y-auto px-6 py-4">
       {#if email.body_html}
-        <iframe
-          bind:this={iframeEl}
-          title="Email content"
-          sandbox="allow-same-origin allow-popups"
-          class="w-full border-0"
-          style="min-height: 100px; height: 300px"
-        ></iframe>
+        <EmailHtmlFrame
+          html={email.body_html}
+          contentKey={email.id}
+          title="Message from {email.from_name || email.from_address || 'unknown sender'}"
+          minHeight="100px"
+        />
       {:else if email.body_text}
         <pre class="text-sm whitespace-pre-wrap font-sans" style="color: var(--text-primary)">{email.body_text}</pre>
       {:else}

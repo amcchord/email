@@ -1,0 +1,24 @@
+{
+  "fixture": "generated-remote-content-qa",
+  "captured_at": "2026-08-30T12:23:31Z",
+  "resource_attempts": [
+    { "sequence": 1, "method": "GET", "pathname": "/__qa/remote/img-2x.png", "referer": null, "destination": "image" },
+    { "sequence": 2, "method": "GET", "pathname": "/__qa/remote/picture.webp", "referer": null, "destination": "image" },
+    { "sequence": 3, "method": "GET", "pathname": "/__qa/remote/poster.png", "referer": null, "destination": "image" },
+    { "sequence": 4, "method": "GET", "pathname": "/__qa/remote/svg-image.png", "referer": null, "destination": "image" },
+    { "sequence": 5, "method": "GET", "pathname": "/__qa/remote/table-background.png", "referer": null, "destination": "image" },
+    { "sequence": 6, "method": "GET", "pathname": "/__qa/remote/cell-background.png", "referer": null, "destination": "image" },
+    { "sequence": 7, "method": "GET", "pathname": "/__qa/remote/video.mp4", "referer": null, "destination": "video" }
+  ],
+  "mutation_attempts": [],
+  "unknown_routes": [],
+  "assertions": {
+    "blocked_before_permission": "zero requests",
+    "theme_change_after_permission": "no repeated requests",
+    "message_a_to_b_to_a": "permission cleared and no new requests",
+    "permanently_blocked_only_message": "no action and no requests",
+    "embedded_raster_message": "no notice and no requests",
+    "relative_and_same_host_resources": "remained blocked after permission",
+    "all_direct_requests_had_null_referrer": true
+  }
+}

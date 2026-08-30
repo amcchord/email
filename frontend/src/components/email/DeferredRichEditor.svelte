@@ -1,6 +1,6 @@
 <script>
   import { onDestroy, onMount, untrack } from 'svelte';
-  import { sanitizeHtml } from '../../lib/sanitize.js';
+  import { sanitizeComposeHtml } from '../../lib/sanitize.js';
   import { getCachedRichEditor, loadRichEditor } from '../../lib/lazyEditor.js';
 
   let {
@@ -19,7 +19,7 @@
   let status = $state(cachedEditor ? 'ready' : 'loading');
   let fallbackElement = $state(null);
   let fallbackDirty = $state(false);
-  let latestContent = $state(untrack(() => content || ''));
+  let latestContent = $state(untrack(() => sanitizeComposeHtml(content || '')));
   let observedContent = $state(untrack(() => content || ''));
   let mounted = false;
   let generation = 0;
@@ -45,7 +45,7 @@
 
   function initializeFallback(node) {
     fallbackElement = node;
-    node.innerHTML = sanitizeHtml(latestContent);
+    node.innerHTML = sanitizeComposeHtml(latestContent);
     if (autofocus && focusIsLost()) {
       node.focus({ preventScroll: true });
       moveCaretToEnd(node);
@@ -61,7 +61,7 @@
 
   function handleFallbackInput(event) {
     const node = event.currentTarget;
-    const sanitized = sanitizeHtml(node.innerHTML);
+    const sanitized = sanitizeComposeHtml(node.innerHTML);
     if (sanitized !== node.innerHTML) {
       node.innerHTML = sanitized;
       moveCaretToEnd(node);
@@ -72,8 +72,9 @@
   }
 
   function handleRichUpdate(html) {
-    latestContent = html;
-    onUpdate?.(html);
+    const sanitized = sanitizeComposeHtml(html);
+    latestContent = sanitized;
+    onUpdate?.(sanitized);
   }
 
   function handleRichReady() {
@@ -115,12 +116,12 @@
   });
 
   $effect(() => {
-    const nextContent = content || '';
+    const nextContent = sanitizeComposeHtml(content || '');
     if (nextContent === observedContent) return;
     observedContent = nextContent;
     if (fallbackDirty) return;
     latestContent = nextContent;
-    if (fallbackElement) fallbackElement.innerHTML = sanitizeHtml(nextContent);
+    if (fallbackElement) fallbackElement.innerHTML = sanitizeComposeHtml(nextContent);
   });
 </script>
 

@@ -6,6 +6,18 @@
   import Image from '@tiptap/extension-image';
   import Placeholder from '@tiptap/extension-placeholder';
   import Underline from '@tiptap/extension-underline';
+  import { isSafeEmbeddedResourceUrl } from '../../lib/remoteContent.js';
+
+  const EmbeddedImage = Image.extend({
+    parseHTML() {
+      return [{
+        tag: 'img[src]',
+        getAttrs: node => (
+          isSafeEmbeddedResourceUrl(node.getAttribute('src')) ? {} : false
+        ),
+      }];
+    },
+  });
 
   let {
     content = '',
@@ -40,7 +52,7 @@
             class: 'text-accent-600 underline',
           },
         }),
-        Image.configure({
+        EmbeddedImage.configure({
           inline: true,
         }),
         Placeholder.configure({

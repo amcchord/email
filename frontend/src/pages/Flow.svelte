@@ -2,17 +2,17 @@
   import { onMount } from 'svelte';
   import { marked } from 'marked';
   import { api } from '../lib/api.js';
-  import { sanitizeHtml, sanitizeMarkdown } from '../lib/sanitize.js';
+  import { sanitizeMarkdown } from '../lib/sanitize.js';
   import { chatConversations, currentConversationId, showToast, currentPage, currentMailbox, selectedEmailId, pendingReplyDraft, accounts, composeData, threadOrder, accountColorMap } from '../lib/stores.js';
   import { get } from 'svelte/store';
   import { registerActions } from '../lib/shortcutStore.js';
   import { lastEvent } from '../lib/realtime.js';
-  import { theme } from '../lib/theme.js';
   import Icon from '../components/common/Icon.svelte';
   import DaySummaryStrip from '../lib/flow/DaySummaryStrip.svelte';
   import { addPendingReplyId, capturedReplyStillActive, isCurrentFlowThreadRequest, newestThreadMessage, reconcileNeedsReplyRemoval, removePendingReplyId } from '../lib/flow/replyActionState.js';
   import DeferredRichEditor from '../components/email/DeferredRichEditor.svelte';
   import { cleanEmailText } from '../lib/emailText.js';
+  import EmailHtmlFrame from '../components/email/EmailHtmlFrame.svelte';
 
   // --- Day Summary State ---
   let summaryLoading = $state(true);
@@ -1405,55 +1405,6 @@
     return tmp.textContent || tmp.innerText || '';
   }
 
-  function renderHtmlEmail(iframeEl, html) {
-    function write() {
-      const isDark = get(theme) === 'dark';
-      const doc = iframeEl.contentDocument;
-      if (!doc) return;
-      doc.open();
-      doc.write(`<!DOCTYPE html><html><head><style>
-        body {
-          margin: 0; padding: 8px;
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-          font-size: 14px; line-height: 1.6;
-          color: ${isDark ? '#e4e4e7' : '#1a1a1a'};
-          background: ${isDark ? '#18181b' : '#ffffff'};
-          word-break: break-word;
-        }
-        img { max-width: 100%; height: auto; }
-        a { color: ${isDark ? '#f59e0b' : '#b45309'}; }
-        blockquote { border-left: 3px solid ${isDark ? '#3f3f46' : '#d4d4d8'}; padding-left: 12px; margin-left: 0; opacity: 0.8; }
-        table { max-width: 100%; }
-        pre { overflow-x: auto; }
-      </style></head><body>${sanitizeHtml(html)}</body></html>`);
-      doc.close();
-
-      function resize() {
-        if (iframeEl && doc.body) {
-          iframeEl.style.height = doc.body.scrollHeight + 'px';
-        }
-      }
-
-      const imgs = doc.querySelectorAll('img');
-      if (imgs.length > 0) {
-        let loaded = 0;
-        imgs.forEach(img => {
-          if (img.complete) {
-            loaded++;
-          } else {
-            img.addEventListener('load', () => { loaded++; if (loaded >= imgs.length) resize(); });
-            img.addEventListener('error', () => { loaded++; if (loaded >= imgs.length) resize(); });
-          }
-        });
-        if (loaded >= imgs.length) resize();
-      }
-      setTimeout(resize, 50);
-      setTimeout(resize, 300);
-    }
-
-    write();
-  }
-
   function formatAddresses(addresses) {
     if (!addresses || addresses.length === 0) return '';
     return addresses.map(a => {
@@ -1994,13 +1945,13 @@
                   {#if !isCollapsed}
                     <div class="px-4 py-3 text-sm" style="background: var(--bg-secondary)">
                       {#if msg.body_html}
-                        <iframe
-                          use:renderHtmlEmail={msg.body_html}
-                          title="Message content"
-                          sandbox="allow-same-origin allow-popups"
-                          class="w-full border-0"
-                          style="min-height: 60px"
-                        ></iframe>
+                        <EmailHtmlFrame
+                          html={msg.body_html}
+                          contentKey={msg.id}
+                          title="Message from {msg.from_name || msg.from_address || 'unknown sender'}"
+                          padding="8px"
+                          minHeight="60px"
+                        />
                       {:else if msg.body_text}
                         <pre class="whitespace-pre-wrap font-sans text-sm" style="color: var(--text-primary)">{msg.body_text}</pre>
                       {:else}
