@@ -5,9 +5,23 @@ import {
   addPendingReplyId,
   capturedReplyStillActive,
   isCurrentFlowThreadRequest,
+  newestThreadMessage,
   reconcileNeedsReplyRemoval,
   removePendingReplyId,
 } from './flow/replyActionState.js';
+
+test('newest thread message follows the configured thread order', () => {
+  const messages = [
+    { id: 'newest', message_id_header: '<newest@example.test>' },
+    { id: 'middle', message_id_header: '<middle@example.test>' },
+    { id: 'oldest', message_id_header: '<oldest@example.test>' },
+  ];
+
+  assert.equal(newestThreadMessage(messages, 'newest_first')?.id, 'newest');
+  assert.equal(newestThreadMessage([...messages].reverse(), 'oldest_first')?.id, 'newest');
+  assert.equal(newestThreadMessage([], 'newest_first'), null);
+  assert.equal(newestThreadMessage(null, 'oldest_first'), null);
+});
 
 test('Flow accepts thread data only for the newest matching reply identity', () => {
   const current = {

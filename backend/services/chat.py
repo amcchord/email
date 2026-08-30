@@ -21,7 +21,12 @@ from backend.database import async_session as make_session
 from backend.models.email import Email, Attachment
 from backend.models.account import GoogleAccount
 from backend.models.user import User
-from backend.schemas.auth import DEFAULT_AI_PREFERENCES
+from backend.services.ai_models import (
+    DEFAULT_AI_PREFERENCES,
+    is_model_allowed_for_preference,
+    provider_for_model,
+    resolve_effort,
+)
 from backend.services.workflow_context import WORKFLOW_CONTEXT
 
 logger = logging.getLogger(__name__)
@@ -241,28 +246,38 @@ READ_CALENDAR_EVENT_TOOL = {
 }
 
 # ---------------------------------------------------------------------------
-# Extended thinking helpers
+# Reasoning effort helpers
 # ---------------------------------------------------------------------------
 
-# Models that support extended thinking and the budget (in tokens) we ask for
-# during the Plan and Verify phases. Haiku does not benefit meaningfully and
-# the `-fast` beta is incompatible with thinking, so both are disabled.
-_THINKING_BUDGET_PLAN = 3000
-_THINKING_BUDGET_VERIFY = 6000
+def _anthropic_effort_kwargs(model: str, effort: str) -> dict:
+    if provider_for_model(model) != "anthropic":
+        return {}
+    return {"output_config": {"effort": resolve_effort(model, effort)}}
 
 
-def _thinking_kwargs(model: str, budget_tokens: int) -> dict:
-    """Return `{"thinking": {...}}` kwargs if the model supports extended
-    thinking, otherwise an empty dict. Caller can `**`-unpack into
-    `client.messages.create(...)`.
-    """
-    if not model or model.endswith("-fast"):
-        return {}
-    if "haiku" in model:
-        return {}
+def _system_text(system: str | list[dict]) -> str:
+    if isinstance(system, str):
+        return system
+    return "\n\n".join(
+        block.get("text", "")
+        for block in system
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
+def _openai_tool(tool: dict) -> dict:
     return {
-        "thinking": {"type": "enabled", "budget_tokens": budget_tokens},
+        "type": "function",
+        "name": tool["name"],
+        "description": tool.get("description", ""),
+        "parameters": tool.get("input_schema", {"type": "object"}),
+        "strict": False,
     }
+
+
+def _openai_tokens(response) -> int:
+    usage = getattr(response, "usage", None)
+    return int(getattr(usage, "total_tokens", 0) or 0)
 
 
 # ---------------------------------------------------------------------------
@@ -1241,6 +1256,139 @@ async def _validate_markdown_images(markdown: str) -> str:
 # Single-task executor (runs in its own DB session)
 # ---------------------------------------------------------------------------
 
+async def _run_single_task_openai(
+    task: dict,
+    user_query: str,
+    all_tasks: list[dict],
+    prior_results: dict,
+    account_ids: list[int],
+    execute_model: str,
+    execute_effort: str,
+    tools: list[dict],
+    event_queue: asyncio.Queue,
+):
+    """Execute one research task through the OpenAI Responses API."""
+    from openai import AsyncOpenAI
+
+    if not settings.openai_api_key:
+        raise ValueError("OpenAI API key not configured")
+
+    task_id = task["id"]
+    task_desc = task.get("description", "")
+    tokens_used = 0
+    await event_queue.put(
+        _sse_event("task_start", {"task_id": task_id, "description": task_desc})
+    )
+
+    prior_context = ""
+    for dep_id in task.get("depends_on", []):
+        if dep_id in prior_results:
+            prior_context += f"\n--- Results from Task {dep_id} ---\n{prior_results[dep_id]}\n"
+
+    task_user_message = (
+        f"Original question: {user_query}\n\n"
+        f"Full plan:\n{json.dumps(all_tasks, indent=2)}\n\n"
+    )
+    if prior_context:
+        task_user_message += f"Results from prior tasks:{prior_context}\n\n"
+    task_user_message += (
+        f"Your current task (Task {task_id}): {task_desc}\n"
+        f"Strategy: {task.get('search_strategy', '')}\n\n"
+        "Complete this task using the tools available. When done, summarize your findings."
+    )
+
+    input_items: list = [{"role": "user", "content": task_user_message}]
+    openai_tools = [_openai_tool(tool) for tool in tools]
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
+
+    try:
+        async with make_session() as db:
+            for _round in range(MAX_TOOL_ROUNDS_PER_TASK):
+                try:
+                    response = await client.responses.create(
+                        model=execute_model,
+                        max_output_tokens=8192,
+                        instructions=EXECUTE_SYSTEM_PROMPT,
+                        input=input_items,
+                        tools=openai_tools,
+                        reasoning={"effort": resolve_effort(execute_model, execute_effort)},
+                        store=False,
+                    )
+                    tokens_used += _openai_tokens(response)
+                except Exception as e:
+                    logger.error(f"OpenAI execute phase error for task {task_id}: {e}")
+                    await event_queue.put(
+                        _sse_event("task_failed", {"task_id": task_id, "error": str(e)})
+                    )
+                    return task_id, f"Task failed: {str(e)}", tokens_used
+
+                input_items.extend(response.output)
+                calls = [
+                    item for item in response.output
+                    if getattr(item, "type", None) == "function_call"
+                ]
+                if not calls:
+                    summary = response.output_text or "No findings."
+                    await event_queue.put(
+                        _sse_event(
+                            "task_complete",
+                            {"task_id": task_id, "summary": summary[:500]},
+                        )
+                    )
+                    return task_id, summary, tokens_used
+
+                for call in calls:
+                    try:
+                        tool_input = json.loads(call.arguments)
+                    except (TypeError, json.JSONDecodeError):
+                        tool_input = {}
+                    detail = _tool_progress_detail(call.name, tool_input)
+                    await event_queue.put(
+                        _sse_event("task_progress", {"task_id": task_id, "detail": detail})
+                    )
+                    tool_result = await _execute_tool(call.name, tool_input, account_ids, db)
+                    if not isinstance(tool_result, str):
+                        tool_result = json.dumps(tool_result, default=str)
+                    input_items.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": call.call_id,
+                            "output": tool_result,
+                        }
+                    )
+
+            input_items.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "You have reached the tool call limit. Stop making tool calls and "
+                        "summarize the findings so far, including relevant email IDs, names, "
+                        "dates, and other concrete details."
+                    ),
+                }
+            )
+            try:
+                response = await client.responses.create(
+                    model=execute_model,
+                    max_output_tokens=4096,
+                    instructions=EXECUTE_SYSTEM_PROMPT,
+                    input=input_items,
+                    reasoning={"effort": resolve_effort(execute_model, execute_effort)},
+                    store=False,
+                )
+                tokens_used += _openai_tokens(response)
+                summary = response.output_text or "Task reached max iterations."
+            except Exception:
+                summary = "Task reached maximum tool call rounds without completing."
+
+            await event_queue.put(
+                _sse_event("task_complete", {"task_id": task_id, "summary": summary[:500]})
+            )
+            return task_id, summary, tokens_used
+    finally:
+        await client.close()
+
+
 async def _run_single_task(
     task: dict,
     user_query: str,
@@ -1248,6 +1396,36 @@ async def _run_single_task(
     prior_results: dict,
     account_ids: list[int],
     execute_model: str,
+    execute_effort: str,
+    tools: list[dict],
+    event_queue: asyncio.Queue,
+):
+    runner = (
+        _run_single_task_openai
+        if provider_for_model(execute_model) == "openai"
+        else _run_single_task_anthropic
+    )
+    return await runner(
+        task,
+        user_query,
+        all_tasks,
+        prior_results,
+        account_ids,
+        execute_model,
+        execute_effort,
+        tools,
+        event_queue,
+    )
+
+
+async def _run_single_task_anthropic(
+    task: dict,
+    user_query: str,
+    all_tasks: list[dict],
+    prior_results: dict,
+    account_ids: list[int],
+    execute_model: str,
+    execute_effort: str,
     tools: list[dict],
     event_queue: asyncio.Queue,
 ):
@@ -1297,6 +1475,7 @@ async def _run_single_task(
                     system=_cached_system(EXECUTE_SYSTEM_PROMPT),
                     tools=tools,
                     messages=task_messages,
+                    **_anthropic_effort_kwargs(execute_model, execute_effort),
                 )
                 tokens_used += response.usage.input_tokens + response.usage.output_tokens
             except Exception as e:
@@ -1343,6 +1522,11 @@ async def _run_single_task(
                         "tool_use_id": block.id,
                         "content": tool_result,
                     })
+                elif hasattr(block, "model_dump"):
+                    # Claude 5 may interleave adaptive-thinking blocks with
+                    # tool calls. Preserve them verbatim in the next turn so
+                    # the model retains its reasoning context.
+                    assistant_content.append(block.model_dump(exclude_none=True))
 
             task_messages.append({"role": "assistant", "content": assistant_content})
             task_messages.append({"role": "user", "content": tool_results})
@@ -1368,6 +1552,7 @@ async def _run_single_task(
                     max_tokens=4096,
                     system=_cached_system(EXECUTE_SYSTEM_PROMPT),
                     messages=task_messages,
+                    **_anthropic_effort_kwargs(execute_model, execute_effort),
                 )
                 tokens_used += wrap_response.usage.input_tokens + wrap_response.usage.output_tokens
                 text_parts = [b.text for b in wrap_response.content if hasattr(b, "text")]
@@ -1388,23 +1573,47 @@ async def _run_single_task(
 
 class ChatService:
     def __init__(self):
-        self._async_client = None
+        self._anthropic_client = None
+        self._openai_client = None
 
-    def _get_async_client(self):
-        if self._async_client is None:
+    def _get_anthropic_client(self):
+        if self._anthropic_client is None:
             import anthropic
             api_key = settings.claude_api_key
             if not api_key:
                 raise ValueError("Claude API key not configured")
-            self._async_client = anthropic.AsyncAnthropic(api_key=api_key)
-        return self._async_client
+            self._anthropic_client = anthropic.AsyncAnthropic(api_key=api_key)
+        return self._anthropic_client
 
-    def _get_models(self, user: User) -> tuple[str, str, str]:
+    def _get_openai_client(self):
+        if self._openai_client is None:
+            from openai import AsyncOpenAI
+            if not settings.openai_api_key:
+                raise ValueError("OpenAI API key not configured")
+            self._openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
+        return self._openai_client
+
+    def _get_models(self, user: User) -> tuple[tuple[str, str], tuple[str, str], tuple[str, str]]:
         prefs = user.ai_preferences or {}
-        plan_model = prefs.get("chat_plan_model", DEFAULT_AI_PREFERENCES["chat_plan_model"])
-        execute_model = prefs.get("chat_execute_model", DEFAULT_AI_PREFERENCES["chat_execute_model"])
-        verify_model = prefs.get("chat_verify_model", DEFAULT_AI_PREFERENCES["chat_verify_model"])
-        return plan_model, execute_model, verify_model
+        resolved = []
+        for model_key in ("chat_plan_model", "chat_execute_model", "chat_verify_model"):
+            requested = prefs.get(model_key)
+            requested_is_valid = bool(
+                requested and is_model_allowed_for_preference(requested, model_key)
+            )
+            model = requested if requested_is_valid else DEFAULT_AI_PREFERENCES[model_key]
+            effort_key = model_key.removesuffix("_model") + "_effort"
+            requested_effort = (
+                prefs.get(effort_key)
+                if requested_is_valid or not requested
+                else DEFAULT_AI_PREFERENCES[effort_key]
+            )
+            effort = resolve_effort(
+                model,
+                requested_effort or DEFAULT_AI_PREFERENCES[effort_key],
+            )
+            resolved.append((model, effort))
+        return tuple(resolved)
 
     def _build_tools(self) -> list[dict]:
         tools = [
@@ -1433,8 +1642,22 @@ class ChatService:
 
         account_contexts: list of {"email": ..., "description": ...} for each connected account.
         """
-        client = self._get_async_client()
-        plan_model, execute_model, verify_model = self._get_models(user)
+        (plan_model, plan_effort), (execute_model, execute_effort), (
+            verify_model,
+            verify_effort,
+        ) = self._get_models(user)
+        yield _sse_event(
+            "model",
+            {
+                "model": verify_model,
+                "plan_model": plan_model,
+                "plan_effort": plan_effort,
+                "execute_model": execute_model,
+                "execute_effort": execute_effort,
+                "verify_model": verify_model,
+                "verify_effort": verify_effort,
+            },
+        )
         tools = self._build_tools()
         total_tokens = 0
 
@@ -1475,33 +1698,49 @@ class ChatService:
         plan_messages.append({"role": "user", "content": user_query})
 
         try:
-            plan_thinking = _thinking_kwargs(plan_model, _THINKING_BUDGET_PLAN)
-            # Extended thinking is incompatible with forced `tool_choice`, so
-            # when thinking is enabled we let the planner choose any tool. It
-            # only has one tool available, so this is effectively the same.
-            plan_tool_choice = (
-                {"type": "any"} if plan_thinking
-                else {"type": "tool", "name": SUBMIT_PLAN_TOOL["name"]}
-            )
-            plan_max_tokens = 4096 + (
-                plan_thinking["thinking"]["budget_tokens"] if plan_thinking else 0
-            )
-            plan_response = await client.messages.create(
-                model=plan_model,
-                max_tokens=plan_max_tokens,
-                system=plan_system,
-                messages=plan_messages,
-                tools=[SUBMIT_PLAN_TOOL],
-                tool_choice=plan_tool_choice,
-                **plan_thinking,
-            )
-            total_tokens += plan_response.usage.input_tokens + plan_response.usage.output_tokens
-
             plan_data = None
-            for block in plan_response.content:
-                if getattr(block, "type", None) == "tool_use" and block.name == SUBMIT_PLAN_TOOL["name"]:
-                    plan_data = block.input
-                    break
+            if provider_for_model(plan_model) == "openai":
+                client = self._get_openai_client()
+                plan_response = await client.responses.create(
+                    model=plan_model,
+                    max_output_tokens=8192,
+                    instructions=_system_text(plan_system),
+                    input=plan_messages,
+                    tools=[_openai_tool(SUBMIT_PLAN_TOOL)],
+                    tool_choice={"type": "function", "name": SUBMIT_PLAN_TOOL["name"]},
+                    parallel_tool_calls=False,
+                    reasoning={"effort": plan_effort},
+                    store=False,
+                )
+                total_tokens += _openai_tokens(plan_response)
+                for item in plan_response.output:
+                    if (
+                        getattr(item, "type", None) == "function_call"
+                        and item.name == SUBMIT_PLAN_TOOL["name"]
+                    ):
+                        plan_data = json.loads(item.arguments)
+                        break
+            else:
+                client = self._get_anthropic_client()
+                plan_response = await client.messages.create(
+                    model=plan_model,
+                    max_tokens=8192,
+                    system=plan_system,
+                    messages=plan_messages,
+                    tools=[SUBMIT_PLAN_TOOL],
+                    tool_choice={"type": "tool", "name": SUBMIT_PLAN_TOOL["name"]},
+                    **_anthropic_effort_kwargs(plan_model, plan_effort),
+                )
+                total_tokens += (
+                    plan_response.usage.input_tokens + plan_response.usage.output_tokens
+                )
+                for block in plan_response.content:
+                    if (
+                        getattr(block, "type", None) == "tool_use"
+                        and block.name == SUBMIT_PLAN_TOOL["name"]
+                    ):
+                        plan_data = block.input
+                        break
             if plan_data is None:
                 plan_data = {}
 
@@ -1551,7 +1790,7 @@ class ChatService:
                 # Run the task
                 coro = _run_single_task(
                     task, user_query, tasks, all_results,
-                    account_ids, execute_model, cached_tools, event_queue,
+                    account_ids, execute_model, execute_effort, cached_tools, event_queue,
                 )
                 result = await coro
                 # Yield all queued events
@@ -1570,7 +1809,7 @@ class ChatService:
                 coros = [
                     _run_single_task(
                         t, user_query, tasks, all_results,
-                        account_ids, execute_model, cached_tools, event_queue,
+                        account_ids, execute_model, execute_effort, cached_tools, event_queue,
                     )
                     for t in wave
                 ]
@@ -1619,23 +1858,35 @@ class ChatService:
         )
 
         try:
-            verify_thinking = _thinking_kwargs(verify_model, _THINKING_BUDGET_VERIFY)
-            verify_max_tokens = 16000 + (
-                verify_thinking["thinking"]["budget_tokens"] if verify_thinking else 0
-            )
-            verify_response = await client.messages.create(
-                model=verify_model,
-                max_tokens=verify_max_tokens,
-                system=verify_system,
-                messages=[{"role": "user", "content": verify_prompt}],
-                **verify_thinking,
-            )
-            total_tokens += verify_response.usage.input_tokens + verify_response.usage.output_tokens
+            if provider_for_model(verify_model) == "openai":
+                client = self._get_openai_client()
+                verify_response = await client.responses.create(
+                    model=verify_model,
+                    max_output_tokens=22000,
+                    instructions=_system_text(verify_system),
+                    input=[{"role": "user", "content": verify_prompt}],
+                    reasoning={"effort": verify_effort},
+                    store=False,
+                )
+                total_tokens += _openai_tokens(verify_response)
+                final_markdown = verify_response.output_text or ""
+            else:
+                client = self._get_anthropic_client()
+                verify_response = await client.messages.create(
+                    model=verify_model,
+                    max_tokens=22000,
+                    system=verify_system,
+                    messages=[{"role": "user", "content": verify_prompt}],
+                    **_anthropic_effort_kwargs(verify_model, verify_effort),
+                )
+                total_tokens += (
+                    verify_response.usage.input_tokens + verify_response.usage.output_tokens
+                )
 
-            final_markdown = ""
-            for block in verify_response.content:
-                if hasattr(block, "text"):
-                    final_markdown += block.text
+                final_markdown = ""
+                for block in verify_response.content:
+                    if hasattr(block, "text"):
+                        final_markdown += block.text
 
         except Exception as e:
             logger.error(f"Verify phase failed: {e}")

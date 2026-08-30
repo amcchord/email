@@ -19,7 +19,11 @@ from backend.schemas.auth import (
     KeyboardShortcutsResponse, KeyboardShortcutsUpdate,
     UIPreferencesResponse, UIPreferencesUpdate,
     DEFAULT_AI_PREFERENCES, DEFAULT_UI_PREFERENCES,
-    ALLOWED_MODELS,
+)
+from backend.services.ai_models import (
+    is_model_allowed_for_preference,
+    is_valid_effort,
+    resolve_effort,
 )
 from backend.utils.security import (
     verify_password, hash_password, create_access_token,
@@ -368,27 +372,44 @@ async def get_me(user: User = Depends(get_current_user)):
 
 # ── AI Preferences ──────────────────────────────────────────────────
 
-def _resolve_pref(prefs: dict, key: str) -> str:
+def _resolve_model_pref(prefs: dict, key: str) -> str:
     """Return the user's preference for *key*, falling back to the default
     if the stored value is missing or refers to a retired model."""
     val = prefs.get(key)
-    if val and val in ALLOWED_MODELS:
+    if val and is_model_allowed_for_preference(val, key):
         return val
     return DEFAULT_AI_PREFERENCES[key]
+
+
+def _resolve_effort_pref(prefs: dict, model_key: str, model: str) -> str:
+    effort_key = model_key.removesuffix("_model") + "_effort"
+    stored_model = prefs.get(model_key)
+    if stored_model and not is_model_allowed_for_preference(stored_model, model_key):
+        return DEFAULT_AI_PREFERENCES[effort_key]
+    return resolve_effort(model, prefs.get(effort_key) or DEFAULT_AI_PREFERENCES[effort_key])
+
+
+def _build_ai_preferences_response(prefs: dict) -> AIPreferencesResponse:
+    values: dict[str, str] = {}
+    for model_key in (
+        "chat_plan_model",
+        "chat_execute_model",
+        "chat_verify_model",
+        "agentic_model",
+        "custom_prompt_model",
+        "unsubscribe_model",
+    ):
+        model = _resolve_model_pref(prefs, model_key)
+        effort_key = model_key.removesuffix("_model") + "_effort"
+        values[model_key] = model
+        values[effort_key] = _resolve_effort_pref(prefs, model_key, model)
+    return AIPreferencesResponse(**values)
 
 
 @router.get("/ai-preferences", response_model=AIPreferencesResponse)
 async def get_ai_preferences(user: User = Depends(get_current_user)):
     """Return the current user's AI model preferences with defaults filled in."""
-    prefs = user.ai_preferences or {}
-    return AIPreferencesResponse(
-        chat_plan_model=_resolve_pref(prefs, "chat_plan_model"),
-        chat_execute_model=_resolve_pref(prefs, "chat_execute_model"),
-        chat_verify_model=_resolve_pref(prefs, "chat_verify_model"),
-        agentic_model=_resolve_pref(prefs, "agentic_model"),
-        custom_prompt_model=_resolve_pref(prefs, "custom_prompt_model"),
-        unsubscribe_model=_resolve_pref(prefs, "unsubscribe_model"),
-    )
+    return _build_ai_preferences_response(user.ai_preferences or {})
 
 
 @router.put("/ai-preferences", response_model=AIPreferencesResponse)
@@ -398,19 +419,32 @@ async def update_ai_preferences(
     user: User = Depends(get_current_user),
 ):
     """Update the current user's AI model preferences."""
-    current = user.ai_preferences or {}
-    if body.chat_plan_model is not None:
-        current["chat_plan_model"] = body.chat_plan_model
-    if body.chat_execute_model is not None:
-        current["chat_execute_model"] = body.chat_execute_model
-    if body.chat_verify_model is not None:
-        current["chat_verify_model"] = body.chat_verify_model
-    if body.agentic_model is not None:
-        current["agentic_model"] = body.agentic_model
-    if body.custom_prompt_model is not None:
-        current["custom_prompt_model"] = body.custom_prompt_model
-    if body.unsubscribe_model is not None:
-        current["unsubscribe_model"] = body.unsubscribe_model
+    current = dict(user.ai_preferences or {})
+    updates = body.model_dump(exclude_none=True)
+    for key, value in updates.items():
+        current[key] = value
+
+    # Validate partial updates against the effective model/effort pair too.
+    # The Pydantic model can only validate fields submitted together; this
+    # catches an effort-only update that conflicts with the stored model.
+    for model_key in (
+        "chat_plan_model",
+        "chat_execute_model",
+        "chat_verify_model",
+        "agentic_model",
+        "custom_prompt_model",
+        "unsubscribe_model",
+    ):
+        model = _resolve_model_pref(current, model_key)
+        effort_key = model_key.removesuffix("_model") + "_effort"
+        if model_key in updates and effort_key not in updates:
+            current[effort_key] = resolve_effort(model, current.get(effort_key))
+        effort = current.get(effort_key)
+        if effort and not is_valid_effort(model, effort):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{effort} effort is not supported by {model}",
+            )
     user.ai_preferences = current
     # Force SQLAlchemy to detect JSONB mutation
     from sqlalchemy.orm.attributes import flag_modified
@@ -418,15 +452,7 @@ async def update_ai_preferences(
     await db.commit()
     await db.refresh(user)
 
-    prefs = user.ai_preferences or {}
-    return AIPreferencesResponse(
-        chat_plan_model=_resolve_pref(prefs, "chat_plan_model"),
-        chat_execute_model=_resolve_pref(prefs, "chat_execute_model"),
-        chat_verify_model=_resolve_pref(prefs, "chat_verify_model"),
-        agentic_model=_resolve_pref(prefs, "agentic_model"),
-        custom_prompt_model=_resolve_pref(prefs, "custom_prompt_model"),
-        unsubscribe_model=_resolve_pref(prefs, "unsubscribe_model"),
-    )
+    return _build_ai_preferences_response(user.ai_preferences or {})
 
 
 # ── About Me ────────────────────────────────────────────────────────

@@ -3,6 +3,61 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Consolidated product release candidate
+
+### Scope
+
+Freeze the product-polish work, preserve the separately completed AI-provider
+baseline through a normal Git merge, close final editor/reply review blockers,
+create a complete change record, and prepare the explicitly authorized
+production deployment without reading or mutating real mail.
+
+### Completed
+
+- Merged `origin/main` at `41d2898` into the product branch without rebasing or
+  editing the clean AI worktree; code merged automatically and both progress
+  histories were preserved through documentation-only conflict resolution.
+- Fixed Tiptap content feedback so user edits no longer trigger external
+  `setContent` caret resets, while true external changes use the Tiptap v3
+  no-update contract.
+- Scoped Flow thread, custom-reply, Full Compose, and delayed send behavior to
+  captured message/thread/source identity; restored reply drafts; selected the
+  newest thread message by display order; and prevented delayed completion
+  from clearing or navigating away from newer work.
+- Kept editor-load failures in a fully usable, focused basic editor rather than
+  reloading and stranding reply context.
+- Preserved reply `In-Reply-To`, `References`, and Gmail `threadId` through
+  saved Gmail drafts with route and decoded-MIME tests.
+- Created `PRODUCT_POLISH_RELEASE_2026-08-30.md` as the complete release,
+  safety, validation, deployment, and rollback record.
+
+### Verification
+
+- `make check`: 303 backend tests passed, 4 opt-in PostgreSQL tests skipped,
+  108 frontend tests passed, and the 498-module production build completed.
+- The final entry is 258.42 kB / 78.51 kB gzip; DeferredRichEditor is 4.83 kB /
+  2.23 kB gzip; RichEditor/Tiptap remains a separate 371.52 kB / 117.42 kB
+  gzip dynamic asset.
+- Generated in-app browser QA verified zero editor requests while reading Flow,
+  exact editor JS/CSS loading after writing intent, focused draft continuity,
+  typing during a slow enhancement, fully editable fail-once fallback, and a
+  375px composer with no horizontal overflow and ten 44x44 toolbar controls.
+- Final generated audits recorded zero mutation attempts and zero unknown
+  routes. All fixtures used `.example.test` data; no real message was opened or
+  changed. `git diff --check` and harness syntax passed.
+
+### Production Actions
+
+- None at this checkpoint. Read-only preflight had production clean at
+  `41d2898`, all application services active, and public health `ok`.
+- The authorized database backup, exact Git fast-forward, migration, build,
+  restart, and post-deploy verification remain the next gated actions.
+
+### Next
+
+Commit and push the exact candidate, revalidate `origin/main` and production,
+take the protected database backup, deploy, and append exact release evidence.
+
 ## 2026-08-30 — Resilient route-level frontend splitting
 
 ### Scope
@@ -538,6 +593,71 @@ AI-model task or mutating real mail.
 
 Implement authenticated received-attachment download with generated fixtures
 and browser verification, continuing to isolate all AI-model work.
+## 2026-08-29 — OpenAI GPT-5.6 and Anthropic Claude 5 support
+
+### Scope
+
+Add provider-neutral model selection and reasoning-effort controls using the
+project credentials available through AustinLand, with workload-specific
+defaults for quality, speed, and cost.
+
+### Completed
+
+- Registered GPT-5.6 Sol, Terra, and Luna plus Claude Fable 5, Opus 5, and
+  Sonnet 5 with provider, effort, label, and workload-compatibility metadata.
+- Set balanced defaults: Terra/medium planning, Luna/low parallel execution and
+  email processing, Sol/high final verification, Terra/medium custom replies,
+  and Sonnet 5/medium Computer Use unsubscribe.
+- Added OpenAI Responses API support for text, structured tools, and the
+  plan/execute/verify loop; upgraded Claude 5 calls to adaptive
+  `output_config.effort` and retained Claude-only Computer Use routing.
+- Carried model and effort through routers, worker jobs, bundles, briefings,
+  dashboard snippets, and user preferences, including retired-model fallback
+  and model/effort validation.
+- Added model and effort controls to Settings, OpenAI setup/configuration,
+  provider-neutral documentation, the OpenAI SDK dependency, and a regenerated
+  Python 3.13 lockfile.
+- Added focused provider-registry, validation, fallback, OpenAI request-shape,
+  and Anthropic request-shape tests.
+
+### Verification
+
+- `make check`: 136 tests passed and the frontend production build completed;
+  the existing large JavaScript chunk advisory remains.
+- Python bytecode compilation and `git diff --check`: passed.
+- AustinLand created the idempotent `Email-openai` project-scoped entry and
+  recorded the shared `Email-anthropic` assignment. No secret value was
+  printed, persisted in this checkout, or recorded in the workbook.
+- Live provider catalog retrieval found all six requested model IDs. Minimal
+  smoke calls returned the requested response from GPT-5.6 Luna with `none`
+  effort and Claude Sonnet 5 with `low` effort. Both provider adapters passed a
+  forced structured-tool call, and the OpenAI stateless tool-result
+  continuation used by the chat executor also passed.
+
+### Production Actions
+
+- Committed and pushed application release `40bbc48`, then fast-forwarded the
+  clean production checkout from `0500d1a` to that exact commit as `mailapp`.
+- Provisioned the scoped AustinLand entries into `/opt/mail/.env` through an
+  in-memory transfer, after creating protected backup
+  `/opt/mail/.env.pre-ai-models-20260830T025842Z`; the resulting file remained
+  mode `0600`. No key value appeared in Git, command output, logs, or docs.
+- Installed `requirements.lock` (adding OpenAI 2.54.0), ran `npm ci`, rebuilt
+  the frontend, and restarted only `mailapp`, `mailworker`, and
+  `mailworker-cron`. The API restart spent about one minute draining the prior
+  long-lived connection and then completed successfully.
+- No Alembic revision, database backup or migration, Caddy/systemd change,
+  TUI restart, or mailbox-data mutation was required.
+- Verified the production application adapter directly against GPT-5.6
+  Terra/medium, Luna/low, and Sol/high; all three returned the expected
+  response. Public health was `ok`, all seven services were active, the new
+  frontend model controls were present, and the post-restart API/worker
+  error-level journal count was zero.
+
+### Next
+
+The requested provider expansion is complete in production. Resume the
+separately scoped Google OAuth publishing-status work when authorized.
 
 ## 2026-08-29 — Scheduling delegation and trusted-colleague context
 

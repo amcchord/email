@@ -76,6 +76,8 @@ async def save_draft(
             subject=request.subject,
             body_html=request.body_html,
             body_text=request.body_text,
+            in_reply_to=request.in_reply_to,
+            references=request.references,
             thread_id=request.thread_id,
             attachments=request.attachments,
         )

@@ -7,7 +7,6 @@
     content = '',
     onUpdate = null,
     onReady = null,
-    onBeforeReload = null,
     placeholder = 'Write your message...',
     externalScroll = false,
     autofocus = false,
@@ -98,11 +97,6 @@
   }
 
   function recoverRichEditor() {
-    if (onBeforeReload) {
-      onBeforeReload();
-      window.location.reload();
-      return;
-    }
     fallbackElement?.focus({ preventScroll: true });
   }
 
@@ -149,7 +143,7 @@
         Your draft is still here and basic editing remains available.
       </span>
       <button type="button" onclick={recoverRichEditor}>
-        {onBeforeReload ? 'Reload rich editor' : 'Continue in basic editor'}
+        Continue in basic editor
       </button>
     </div>
   {:else}

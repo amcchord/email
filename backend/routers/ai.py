@@ -16,7 +16,7 @@ from backend.models.email import Email
 from backend.models.account import GoogleAccount
 from backend.models.ai import AIAnalysis
 from backend.routers.auth import get_current_user
-from backend.services.ai import AIService, get_model_for_user, get_custom_prompt_model_for_user
+from backend.services.ai import AIService, get_model_config_for_user
 from backend.services.credentials import get_google_credentials
 from backend.services.mail_queues import fetch_awaiting_response, fetch_needs_reply
 from backend.schemas.auth import DEFAULT_AI_PREFERENCES
@@ -205,8 +205,8 @@ async def analyze_email(
     acct_desc = acct_row[0] if acct_row else None
     acct_email = acct_row[1] if acct_row else None
 
-    model = await get_model_for_user(user.id)
-    ai = AIService(model=model)
+    model, effort = await get_model_config_for_user(user.id)
+    ai = AIService(model=model, effort=effort)
     analysis = await ai.analyze_email(
         email_id, db,
         user_context=user.about_me,
@@ -254,8 +254,8 @@ async def analyze_thread(
     )
     acct_desc = acct_result.scalar_one_or_none()
 
-    model = await get_model_for_user(user.id)
-    ai = AIService(model=model)
+    model, effort = await get_model_config_for_user(user.id)
+    ai = AIService(model=model, effort=effort)
     analysis = await ai.analyze_thread(
         thread_id,
         user_context=user.about_me,
@@ -482,7 +482,7 @@ async def auto_categorize(
 
     # Store progress in Redis
     if total_to_process > 0:
-        model = await get_model_for_user(user.id)
+        model, _effort = await get_model_config_for_user(user.id)
         await set_ai_progress(user.id, "categorize", total_to_process, model)
 
     from backend.workers.tasks import queue_auto_categorize

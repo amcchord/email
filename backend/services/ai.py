@@ -4,6 +4,7 @@ import json
 import re
 from datetime import datetime, timezone
 from typing import Optional
+from types import SimpleNamespace
 from urllib.parse import urlparse, parse_qs, unquote
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
@@ -14,12 +15,14 @@ from backend.models.user import User
 from backend.config import get_settings
 from backend.database import async_session
 from backend.services.ai_models import (
-    ALLOWED_MODELS,
     CHEAP_MODEL,
+    CHEAP_MODEL_EFFORT,
     DEFAULT_AI_PREFERENCES,
     base_model_id,
+    is_model_allowed_for_preference,
     is_fast_variant,
-    is_valid_model,
+    provider_for_model,
+    resolve_effort,
 )
 from backend.services.workflow_context import (
     WORKFLOW_CONTEXT,
@@ -299,46 +302,74 @@ def _parse_list_unsubscribe(raw_headers: dict) -> Optional[dict]:
     return result
 
 
-async def get_model_for_user(user_id: int) -> str:
-    """Read the agentic_model preference for a user, falling back to the default."""
+async def get_ai_preference_for_user(user_id: int, model_key: str) -> tuple[str, str]:
+    """Return the effective ``(model, effort)`` pair for one user workload."""
+    effort_key = model_key.removesuffix("_model") + "_effort"
+    model = DEFAULT_AI_PREFERENCES[model_key]
+    effort = DEFAULT_AI_PREFERENCES[effort_key]
     async with async_session() as db:
         result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
         if user and user.ai_preferences:
-            model = user.ai_preferences.get("agentic_model")
-            if is_valid_model(model):
-                return model
-    return DEFAULT_AI_PREFERENCES["agentic_model"]
+            requested_model = user.ai_preferences.get(model_key)
+            if requested_model and is_model_allowed_for_preference(requested_model, model_key):
+                model = requested_model
+                effort = user.ai_preferences.get(effort_key, effort)
+            elif not requested_model:
+                effort = user.ai_preferences.get(effort_key, effort)
+    return model, resolve_effort(model, effort)
+
+
+async def get_model_for_user(user_id: int) -> str:
+    """Backwards-compatible agentic model resolver."""
+    model, _ = await get_ai_preference_for_user(user_id, "agentic_model")
+    return model
+
+
+async def get_model_config_for_user(user_id: int) -> tuple[str, str]:
+    return await get_ai_preference_for_user(user_id, "agentic_model")
 
 
 async def get_unsubscribe_model_for_user(user_id: int) -> str:
-    """Read the unsubscribe_model preference for a user, falling back to the default."""
-    async with async_session() as db:
-        result = await db.execute(select(User).where(User.id == user_id))
-        user = result.scalar_one_or_none()
-        if user and user.ai_preferences:
-            model = user.ai_preferences.get("unsubscribe_model")
-            if is_valid_model(model):
-                return model
-    return DEFAULT_AI_PREFERENCES["unsubscribe_model"]
+    model, _ = await get_ai_preference_for_user(user_id, "unsubscribe_model")
+    return model
+
+
+async def get_unsubscribe_model_config_for_user(user_id: int) -> tuple[str, str]:
+    return await get_ai_preference_for_user(user_id, "unsubscribe_model")
 
 
 async def get_custom_prompt_model_for_user(user_id: int) -> str:
-    """Read the custom_prompt_model preference for a user.
+    """Read the custom-prompt model preference for a user."""
+    model, _ = await get_custom_prompt_model_config_for_user(user_id)
+    return model
 
-    Falls back to agentic_model, then to the default.
-    """
+
+async def get_custom_prompt_model_config_for_user(user_id: int) -> tuple[str, str]:
+    """Resolve custom-prompt settings, preserving the legacy agentic fallback."""
     async with async_session() as db:
         result = await db.execute(select(User).where(User.id == user_id))
         user = result.scalar_one_or_none()
-        if user and user.ai_preferences:
-            custom = user.ai_preferences.get("custom_prompt_model")
-            if is_valid_model(custom):
-                return custom
-            agentic = user.ai_preferences.get("agentic_model")
-            if is_valid_model(agentic):
-                return agentic
-    return DEFAULT_AI_PREFERENCES["custom_prompt_model"]
+        prefs = user.ai_preferences if user and user.ai_preferences else {}
+
+    custom_model = prefs.get("custom_prompt_model")
+    if custom_model and is_model_allowed_for_preference(custom_model, "custom_prompt_model"):
+        return custom_model, resolve_effort(
+            custom_model,
+            prefs.get("custom_prompt_effort"),
+        )
+
+    agentic_model = prefs.get("agentic_model")
+    if agentic_model and is_model_allowed_for_preference(agentic_model, "agentic_model"):
+        return agentic_model, resolve_effort(
+            agentic_model,
+            prefs.get("agentic_effort"),
+        )
+
+    return (
+        DEFAULT_AI_PREFERENCES["custom_prompt_model"],
+        DEFAULT_AI_PREFERENCES["custom_prompt_effort"],
+    )
 
 
 def _strip_quoted_text(body: str) -> str:
@@ -359,11 +390,13 @@ def _strip_quoted_text(body: str) -> str:
 
 
 class AIService:
-    def __init__(self, model: Optional[str] = None):
-        self.client = None
+    def __init__(self, model: Optional[str] = None, effort: Optional[str] = None):
         self.model = model or DEFAULT_AI_PREFERENCES["agentic_model"]
+        self.effort = resolve_effort(self.model, effort)
+        self.client = None
+        self.openai_client = None
 
-    def _get_client(self):
+    def _get_anthropic_client(self):
         if self.client is None:
             import anthropic
             api_key = settings.claude_api_key
@@ -371,6 +404,104 @@ class AIService:
                 raise ValueError("Claude API key not configured")
             self.client = anthropic.Anthropic(api_key=api_key)
         return self.client
+
+    def _get_openai_client(self):
+        if self.openai_client is None:
+            from openai import OpenAI
+            api_key = settings.openai_api_key
+            if not api_key:
+                raise ValueError("OpenAI API key not configured")
+            self.openai_client = OpenAI(api_key=api_key)
+        return self.openai_client
+
+    def _get_client(self):
+        """Backwards-compatible Anthropic client accessor for batch callers."""
+        return self._get_anthropic_client()
+
+    @staticmethod
+    def _system_text(system: Optional[str | list]) -> Optional[str]:
+        if system is None or isinstance(system, str):
+            return system
+        return "\n\n".join(
+            block.get("text", "")
+            for block in system
+            if isinstance(block, dict) and block.get("type") == "text"
+        )
+
+    @staticmethod
+    def _openai_tool(tool: dict) -> dict:
+        return {
+            "type": "function",
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "parameters": tool.get("input_schema", {"type": "object"}),
+            "strict": False,
+        }
+
+    @staticmethod
+    def _openai_tokens(response) -> int:
+        usage = getattr(response, "usage", None)
+        return int(getattr(usage, "total_tokens", 0) or 0)
+
+    def _effort_for_call(self, model: str) -> str:
+        if model == self.model:
+            return resolve_effort(model, self.effort)
+        if model == CHEAP_MODEL:
+            return resolve_effort(model, CHEAP_MODEL_EFFORT)
+        return resolve_effort(model, None)
+
+    async def _call_openai_tool(
+        self,
+        model: str,
+        max_tokens: int,
+        messages: list,
+        tool: dict,
+        system: Optional[str | list] = None,
+    ) -> tuple[Optional[dict], int]:
+        client = self._get_openai_client()
+        response = await asyncio.to_thread(
+            client.responses.create,
+            model=model,
+            max_output_tokens=max_tokens,
+            instructions=self._system_text(system),
+            input=messages,
+            tools=[self._openai_tool(tool)],
+            tool_choice={"type": "function", "name": tool["name"]},
+            parallel_tool_calls=False,
+            reasoning={"effort": self._effort_for_call(model)},
+            store=False,
+        )
+        for item in response.output:
+            if getattr(item, "type", None) == "function_call" and item.name == tool["name"]:
+                return json.loads(item.arguments), self._openai_tokens(response)
+        return None, self._openai_tokens(response)
+
+    async def _call_openai(
+        self,
+        model: str,
+        max_tokens: int,
+        messages: list,
+        system: Optional[str | list] = None,
+    ) -> object:
+        client = self._get_openai_client()
+        response = await asyncio.to_thread(
+            client.responses.create,
+            model=model,
+            max_output_tokens=max_tokens,
+            instructions=self._system_text(system),
+            input=messages,
+            reasoning={"effort": self._effort_for_call(model)},
+            store=False,
+        )
+        usage = SimpleNamespace(
+            input_tokens=getattr(response.usage, "input_tokens", 0) if response.usage else 0,
+            output_tokens=getattr(response.usage, "output_tokens", 0) if response.usage else 0,
+        )
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text=response.output_text or "")],
+            usage=usage,
+            stop_reason="end_turn",
+        )
 
     async def _call_claude_tool(
         self,
@@ -387,7 +518,10 @@ class AIService:
         somehow doesn't call the tool (defensive — should not happen with
         tool_choice).
         """
-        client = self._get_client()
+        if provider_for_model(model) == "openai":
+            return await self._call_openai_tool(model, max_tokens, messages, tool, system)
+
+        client = self._get_anthropic_client()
         use_fast = is_fast_variant(model)
         api_model = base_model_id(model)
 
@@ -397,6 +531,7 @@ class AIService:
             "messages": messages,
             "tools": [tool],
             "tool_choice": {"type": "tool", "name": tool["name"]},
+            "output_config": {"effort": self._effort_for_call(model)},
         }
         if system is not None:
             if isinstance(system, str):
@@ -442,7 +577,10 @@ class AIService:
         same system prompt hit Anthropic's prompt cache (~90% discount on
         the cached input tokens).
         """
-        client = self._get_client()
+        if provider_for_model(model) == "openai":
+            return await self._call_openai(model, max_tokens, messages, system)
+
+        client = self._get_anthropic_client()
         use_fast = is_fast_variant(model)
         api_model = base_model_id(model)
 
@@ -450,6 +588,7 @@ class AIService:
             "model": api_model,
             "max_tokens": max_tokens,
             "messages": messages,
+            "output_config": {"effort": self._effort_for_call(model)},
         }
         if system is not None:
             if isinstance(system, str) and cache_system:
@@ -787,7 +926,7 @@ Body:
     ) -> Optional[AIAnalysis]:
         """Lightweight classification for sent emails: does this email expect a reply?
 
-        Uses Haiku for minimal cost.  Creates or updates an AIAnalysis row
+        Uses the configured efficient model for minimal cost. Creates or updates an AIAnalysis row
         with only the expects_reply field populated.
         """
         close_session = False
@@ -1363,6 +1502,18 @@ User's instruction: {user_prompt}"""
         if not email_ids:
             return 0
 
+        # Anthropic and OpenAI use different batch request formats. Preserve
+        # correctness for GPT selections by using the existing bounded realtime
+        # fan-out; an OpenAI Batch optimization can be added independently.
+        if provider_for_model(self.model) == "openai":
+            return await self.batch_categorize(
+                email_ids,
+                on_progress=on_progress,
+                user_context=user_context,
+                account_descriptions=account_descriptions,
+                account_emails=account_emails,
+            )
+
         client = self._get_client()
         api_model = base_model_id(self.model)
 
@@ -1413,6 +1564,7 @@ User's instruction: {user_prompt}"""
                         }],
                         "tools": [ANALYZE_EMAIL_TOOL],
                         "tool_choice": {"type": "tool", "name": ANALYZE_EMAIL_TOOL["name"]},
+                        "output_config": {"effort": self._effort_for_call(self.model)},
                         "messages": [{"role": "user", "content": prompt}],
                     },
                 })

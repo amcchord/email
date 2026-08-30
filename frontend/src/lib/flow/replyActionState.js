@@ -14,6 +14,17 @@ export function capturedReplyStillActive(mutatedEmailId, activeEmailId) {
 }
 
 /**
+ * Thread responses follow the user's display order. Centralize selection of
+ * the newest message so reply headers never accidentally target the oldest
+ * message when threads are displayed newest-first.
+ */
+export function newestThreadMessage(messages, order = 'newest_first') {
+  const list = Array.isArray(messages) ? messages : [];
+  if (list.length === 0) return null;
+  return order === 'newest_first' ? list[0] : list[list.length - 1];
+}
+
+/**
  * Keep a delayed thread response scoped to the exact Flow reply that opened
  * it. Generation prevents same-id reopen races while identity/source checks
  * prevent cross-message reply headers from being mixed.

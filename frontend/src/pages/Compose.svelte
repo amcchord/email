@@ -245,11 +245,6 @@
     currentPage.set('inbox');
   }
 
-  function prepareEditorReload() {
-    suppressLocalPersistence = false;
-    persistLocalDraft();
-  }
-
   async function handleSend() {
     if (sending || !writingSurfaceReady) return false;
     if (!to.trim()) {
@@ -488,7 +483,6 @@
       content={initialContent}
       onUpdate={handleEditorUpdate}
       onReady={() => { writingSurfaceReady = true; }}
-      onBeforeReload={prepareEditorReload}
       placeholder="Write your message..."
       autofocus={true}
       ariaLabel="Message body"

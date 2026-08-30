@@ -55,3 +55,22 @@ async def get_claude_api_key(db: AsyncSession) -> str:
             pass
 
     return key
+
+
+async def get_openai_api_key(db: AsyncSession) -> str:
+    """Return the OpenAI API key from the database or environment."""
+    key = _settings.openai_api_key
+
+    result = await db.execute(
+        select(Setting).where(Setting.key == "openai_api_key")
+    )
+    row = result.scalar_one_or_none()
+    if row and row.value:
+        try:
+            val = decrypt_value(row.value) if row.is_secret else row.value
+            if val:
+                key = val
+        except Exception:
+            pass
+
+    return key

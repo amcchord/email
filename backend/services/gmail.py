@@ -615,6 +615,8 @@ class GmailService:
         body_text: str = "",
         thread_id: Optional[str] = None,
         attachments: list = None,
+        in_reply_to: Optional[str] = None,
+        references: Optional[str] = None,
     ) -> str:
         """Create a draft."""
         service = self._get_service()
@@ -622,6 +624,7 @@ class GmailService:
         msg = self._build_compose_message(
             to=to, cc=cc, bcc=bcc, subject=subject,
             body_html=body_html, body_text=body_text,
+            in_reply_to=in_reply_to, references=references,
             attachments=attachments,
         )
 

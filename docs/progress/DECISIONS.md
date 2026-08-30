@@ -198,3 +198,35 @@ add a new entry that explicitly supersedes the old one.
   but must remain useful while chunks load. Route changes focus the named main
   region only when the previous focus was removed; Chromium module-load errors
   recover by preserving the canonical URL and reloading the document.
+
+## D-013 — Select AI model and effort by workload
+
+- Date: 2026-08-29
+- Status: accepted
+- Decision: Keep provider, model capability, compatible effort levels, and
+  per-workload defaults in one registry. Use GPT-5.6 Terra/medium for planning,
+  Luna/low for parallel and bulk work, Sol/high for final verification,
+  Terra/medium for custom replies, and Claude Sonnet 5/medium for unsubscribe.
+- Reason: Planning, parallel retrieval, final synthesis, bulk triage, and
+  browser automation have different quality, latency, cost, and protocol needs.
+- Consequence: New model families must declare their provider, effort support,
+  and workload compatibility in the registry. Unsubscribe remains Claude-only
+  until its Computer Use loop has an explicitly implemented provider adapter;
+  retired or incompatible stored preferences fall back to the full default
+  model/effort pair.
+
+## D-014 — Load the rich editor only after writing intent
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Keep an immediately usable, accessible basic editor in the writing
+  surface and import Tiptap only after Compose, Reply, or Forward is actually
+  opened. Cache successful imports, share concurrent requests, evict failures,
+  and keep the basic editor usable when enhancement cannot load.
+- Reason: Reading mail should not transfer or execute the 117 kB gzip editor
+  runtime, while writing must remain responsive on cold, slow, failed, and
+  narrow-screen paths.
+- Consequence: Read routes must not reference the RichEditor chunk directly;
+  editor recovery preserves the current draft instead of reloading the page;
+  and generated browser QA must cover asset closure, slow enhancement,
+  recoverable failure, draft continuity, focus, and mobile controls.

@@ -337,9 +337,9 @@ async def _build_mail(db, account_ids: list[int], now: datetime) -> tuple[dict, 
 # deterministic merge of imminent meetings + recent needs-reply email when
 # there's no API key or the call fails.
 
-# Most-capable model from backend/services/ai_models.py MODEL_REGISTRY -- the
-# Day Ahead priorities are worth the good model, not CHEAP_MODEL.
-_PRIORITIES_MODEL = "claude-opus-4-7"
+# Opus is the quality-first agentic choice for the hourly priorities pass;
+# Fable is reserved for harder long-horizon work and Luna for bulk processing.
+_PRIORITIES_MODEL = "claude-opus-5"
 _PRIORITIES_SHOW = 5
 _PRIORITIES_WINDOW_MIN = 4 * 60
 _PRIORITIES_KINDS = {"prep", "reply", "review", "decision", "personal", "travel"}

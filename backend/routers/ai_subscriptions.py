@@ -19,7 +19,10 @@ from backend.models.email import Email
 from backend.models.user import User
 from backend.routers.ai import router, _get_user_account_ids
 from backend.routers.auth import get_current_user
-from backend.services.ai import _parse_list_unsubscribe, get_unsubscribe_model_for_user
+from backend.services.ai import (
+    _parse_list_unsubscribe,
+    get_unsubscribe_model_config_for_user,
+)
 from backend.services.credentials import get_google_credentials
 from backend.services.gmail import GmailService
 from backend.services.unsubscribe import UnsubscribeService
@@ -227,8 +230,8 @@ async def unsubscribe_email(
     client_id, client_secret = await get_google_credentials(db)
     gmail = GmailService(account, client_id=client_id, client_secret=client_secret)
 
-    unsub_model = await get_unsubscribe_model_for_user(user.id)
-    unsub_service = UnsubscribeService(model=unsub_model)
+    unsub_model, unsub_effort = await get_unsubscribe_model_config_for_user(user.id)
+    unsub_service = UnsubscribeService(model=unsub_model, effort=unsub_effort)
 
     response_data = {
         "method": unsub_info.get("method"),
@@ -299,12 +302,12 @@ async def unsubscribe_stream(
     gmail_message_id = str(email.gmail_message_id) if email.gmail_message_id else None
     account_id = int(account.id)
 
-    unsub_model = await get_unsubscribe_model_for_user(user.id)
+    unsub_model, unsub_effort = await get_unsubscribe_model_config_for_user(user.id)
 
     await db.close()
 
     async def event_generator():
-        unsub_service = UnsubscribeService(model=unsub_model)
+        unsub_service = UnsubscribeService(model=unsub_model, effort=unsub_effort)
         screenshots = []
         llm_log = []
         final_status = "failed"
@@ -396,8 +399,8 @@ async def bulk_unsubscribe(
     returns URL-method ones as needing the streaming endpoint."""
     account_ids = await _get_user_account_ids(db, user)
 
-    unsub_model = await get_unsubscribe_model_for_user(user.id)
-    unsub_service = UnsubscribeService(model=unsub_model)
+    unsub_model, unsub_effort = await get_unsubscribe_model_config_for_user(user.id)
+    unsub_service = UnsubscribeService(model=unsub_model, effort=unsub_effort)
     results = []
 
     for eid in email_ids:

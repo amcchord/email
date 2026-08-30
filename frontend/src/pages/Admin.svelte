@@ -316,6 +316,7 @@
   }
 
   // API key form values
+  let openaiKey = $state('');
   let claudeKey = $state('');
   let googleClientId = $state('');
   let googleClientSecret = $state('');
@@ -327,14 +328,22 @@
   // AI model preferences (defaults overwritten by /ai-preferences response)
   let aiPrefs = $state({
     chat_plan_model: '',
+    chat_plan_effort: '',
     chat_execute_model: '',
+    chat_execute_effort: '',
     chat_verify_model: '',
+    chat_verify_effort: '',
     agentic_model: '',
+    agentic_effort: '',
     custom_prompt_model: '',
+    custom_prompt_effort: '',
     unsubscribe_model: '',
+    unsubscribe_effort: '',
   });
   let aiPrefsAllowedModels = $state([]);
   let aiPrefsLabels = $state({});
+  let aiPrefsEffortLevels = $state({});
+  let aiPrefsModelsByPreference = $state({});
   let aiPrefsLoaded = $state(false);
   let aiPrefsSaving = $state(false);
   let reprocessing = $state(false);
@@ -408,14 +417,22 @@
       const data = await api.getAIPreferences();
       aiPrefs = {
         chat_plan_model: data.chat_plan_model,
+        chat_plan_effort: data.chat_plan_effort,
         chat_execute_model: data.chat_execute_model,
+        chat_execute_effort: data.chat_execute_effort,
         chat_verify_model: data.chat_verify_model,
+        chat_verify_effort: data.chat_verify_effort,
         agentic_model: data.agentic_model,
+        agentic_effort: data.agentic_effort,
         custom_prompt_model: data.custom_prompt_model,
+        custom_prompt_effort: data.custom_prompt_effort,
         unsubscribe_model: data.unsubscribe_model,
+        unsubscribe_effort: data.unsubscribe_effort,
       };
       aiPrefsAllowedModels = data.allowed_models || [];
       aiPrefsLabels = data.labels || {};
+      aiPrefsEffortLevels = data.effort_levels || {};
+      aiPrefsModelsByPreference = data.models_by_preference || {};
       aiPrefsLoaded = true;
     } catch (err) {
       showToast('Failed to load AI preferences', 'error');
@@ -428,11 +445,17 @@
       const data = await api.updateAIPreferences(aiPrefs);
       aiPrefs = {
         chat_plan_model: data.chat_plan_model,
+        chat_plan_effort: data.chat_plan_effort,
         chat_execute_model: data.chat_execute_model,
+        chat_execute_effort: data.chat_execute_effort,
         chat_verify_model: data.chat_verify_model,
+        chat_verify_effort: data.chat_verify_effort,
         agentic_model: data.agentic_model,
+        agentic_effort: data.agentic_effort,
         custom_prompt_model: data.custom_prompt_model,
+        custom_prompt_effort: data.custom_prompt_effort,
         unsubscribe_model: data.unsubscribe_model,
+        unsubscribe_effort: data.unsubscribe_effort,
       };
       aiPrefsLabels = data.labels || aiPrefsLabels;
       showToast('AI model preferences saved', 'success');
@@ -1815,6 +1838,25 @@
       <!-- API Keys -->
       <div class="space-y-6">
         <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <h3 class="text-sm font-semibold mb-4" style="color: var(--text-primary)">OpenAI API Key</h3>
+          <div class="flex gap-3">
+            <div class="flex-1">
+              <input
+                type="password"
+                bind:value={openaiKey}
+                placeholder="sk-..."
+                class="w-full h-9 px-3 rounded-lg text-sm outline-none border"
+                style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+              />
+            </div>
+            <Button variant="primary" size="sm" onclick={() => saveApiKey('openai_api_key', openaiKey, 'OpenAI API key for GPT features')}>
+              Save
+            </Button>
+          </div>
+          <p class="text-xs mt-2" style="color: var(--text-tertiary)">Used whenever a GPT model is selected for chat, processing, or reply generation.</p>
+        </div>
+
+        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
           <h3 class="text-sm font-semibold mb-4" style="color: var(--text-primary)">Claude API Key</h3>
           <div class="flex gap-3">
             <div class="flex-1">
@@ -1897,6 +1939,8 @@
         bind:aiPrefs
         allowedModels={aiPrefsAllowedModels}
         labels={aiPrefsLabels}
+        effortLevels={aiPrefsEffortLevels}
+        modelsByPreference={aiPrefsModelsByPreference}
         saving={aiPrefsSaving}
         {reprocessing}
         onSave={saveAIPreferences}

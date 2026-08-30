@@ -229,11 +229,14 @@ def run_config(state) -> str | None:
         validate=lambda val: len(val) >= 8 or "Password must be at least 8 characters",
     )
 
-    # Claude API key (optional)
+    # AI provider API keys (optional)
     ui.console.print()
     ui.info("[bold]AI Configuration (optional)[/bold]")
-    ui.info("The Claude API key enables AI features like email categorization and summarization.")
+    ui.info("OpenAI and Claude keys enable the provider models selected for each AI task.")
     ui.info("You can also set this later in the admin panel.")
+    set_openai = ui.ask_confirm("Set OpenAI API key now?", default=False)
+    if set_openai:
+        state.openai_api_key = ui.ask_text("OpenAI API key:", password=True)
     set_claude = ui.ask_confirm("Set Claude API key now?", default=False)
     if set_claude:
         state.claude_api_key = ui.ask_text("Anthropic Claude API key:", password=True)
@@ -258,6 +261,7 @@ def run_config(state) -> str | None:
         "ENCRYPTION_KEY": state.encryption_key,
         "ADMIN_USERNAME": state.admin_username,
         "ADMIN_PASSWORD": state.admin_password,
+        "OPENAI_API_KEY": state.openai_api_key,
         "CLAUDE_API_KEY": state.claude_api_key,
         "GOOGLE_CLIENT_ID": state.google_client_id,
         "GOOGLE_CLIENT_SECRET": state.google_client_secret,
@@ -269,7 +273,7 @@ def run_config(state) -> str | None:
     ui.config_review(
         "Environment Configuration",
         config,
-        mask_keys={"SECRET_KEY", "ENCRYPTION_KEY", "ADMIN_PASSWORD", "CLAUDE_API_KEY", "GOOGLE_CLIENT_SECRET", "DATABASE_URL"},
+        mask_keys={"SECRET_KEY", "ENCRYPTION_KEY", "ADMIN_PASSWORD", "OPENAI_API_KEY", "CLAUDE_API_KEY", "GOOGLE_CLIENT_SECRET", "DATABASE_URL"},
     )
 
     write_env = True

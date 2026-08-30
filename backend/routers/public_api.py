@@ -1028,15 +1028,21 @@ async def _generate_briefing_summary(
     *,
     char_target: int,
 ) -> tuple[str, str, int]:
-    """Call Claude once to write the briefing prose. Returns (summary, model, tokens)."""
-    from backend.config import get_settings as _gs
-    from backend.services.ai import get_custom_prompt_model_for_user
+    """Call the selected provider once. Returns (summary, model, tokens)."""
+    from backend.services.ai import (
+        AIService,
+        get_custom_prompt_model_config_for_user,
+    )
+    from backend.services.ai_models import provider_for_model
+    from backend.config import get_settings as _get_settings
 
-    settings_local = _gs()
-    if not settings_local.claude_api_key:
+    model, effort = await get_custom_prompt_model_config_for_user(user.id)
+    provider = provider_for_model(model)
+    provider_settings = _get_settings()
+    if provider == "openai" and not provider_settings.openai_api_key:
+        raise HTTPException(status_code=503, detail="OpenAI API key not configured")
+    if provider == "anthropic" and not provider_settings.claude_api_key:
         raise HTTPException(status_code=503, detail="Claude API key not configured")
-
-    model = await get_custom_prompt_model_for_user(user.id)
     payload = _briefing_to_prompt_payload(briefing)
 
     user_prompt = (
@@ -1050,15 +1056,13 @@ async def _generate_briefing_summary(
         length_guidance=_length_guidance(char_target),
     )
 
-    # ~4 chars per token, plus generous headroom so Claude can finish a sentence
+    # ~4 chars per token, plus generous headroom so the model can finish a sentence
     # past the soft target without getting cut off; clamp to a sane ceiling.
     max_tokens = max(120, min(int(char_target / 4 * 1.6) + 80, 2400))
 
     try:
-        import anthropic
-
-        client = anthropic.AsyncAnthropic(api_key=settings_local.claude_api_key)
-        resp = await client.messages.create(
+        service = AIService(model=model, effort=effort)
+        resp = await service._call_claude(
             model=model,
             max_tokens=max_tokens,
             system=system_prompt,
@@ -1067,7 +1071,7 @@ async def _generate_briefing_summary(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("Claude briefing summary failed")
+        logger.exception("AI briefing summary failed")
         raise HTTPException(status_code=502, detail=f"Upstream AI error: {exc}")
 
     text_parts = [
@@ -1179,7 +1183,7 @@ async def briefing(
     request: Request,
     tz: Optional[str] = Query(None, description="IANA timezone for day bucketing."),
     days: int = Query(7, ge=1, le=14, description="How many days to include in week_ahead."),
-    summary: bool = Query(False, description="If true, also generates a Claude-written prose briefing."),
+    summary: bool = Query(False, description="If true, also generates an AI-written prose briefing."),
     summary_chars: int = Query(
         600,
         ge=100,
@@ -1247,7 +1251,7 @@ async def briefing_summary(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_api_user),
 ):
-    """Just the Claude-written prose briefing. Useful when you poll /briefing separately."""
+    """Just the AI-written prose briefing. Useful when you poll /briefing separately."""
     zone = _resolve_tz(tz)
     briefing = await _build_briefing(
         db,
@@ -1301,13 +1305,13 @@ async def ask(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_api_user),
 ):
-    """Ask Claude a free-form question about your emails and calendar.
+    """Ask the configured AI a free-form question about your emails and calendar.
 
     Uses the same plan->execute->verify agent as the web chat, but returns one JSON
     response instead of an SSE stream. Does not persist a chat conversation.
     """
     from backend.services.chat import ChatService
-    from backend.services.ai_models import CHEAP_MODEL
+    from backend.services.ai_models import CHEAP_MODEL, CHEAP_MODEL_EFFORT
 
     if not body.prompt or not body.prompt.strip():
         raise HTTPException(status_code=400, detail="prompt is required")
@@ -1342,8 +1346,11 @@ async def ask(
             pass
         prefs = dict(user.ai_preferences or {})
         prefs["chat_plan_model"] = CHEAP_MODEL
+        prefs["chat_plan_effort"] = CHEAP_MODEL_EFFORT
         prefs["chat_execute_model"] = CHEAP_MODEL
+        prefs["chat_execute_effort"] = CHEAP_MODEL_EFFORT
         prefs["chat_verify_model"] = CHEAP_MODEL
+        prefs["chat_verify_effort"] = CHEAP_MODEL_EFFORT
         user.ai_preferences = prefs
 
     chat_service = ChatService()
@@ -1387,7 +1394,7 @@ async def ask(
     except asyncio.TimeoutError:
         raise HTTPException(
             status_code=504,
-            detail=f"Claude did not respond within {timeout} seconds",
+            detail=f"AI provider did not respond within {timeout} seconds",
         )
     except HTTPException:
         raise
@@ -1396,14 +1403,8 @@ async def ask(
         raise HTTPException(status_code=502, detail=f"Upstream AI error: {exc}")
 
     if not model_used:
-        # Fall back to the user's verify-phase model preference for transparency.
-        prefs = user.ai_preferences or {}
-        from backend.services.ai_models import DEFAULT_AI_PREFERENCES
-        model_used = (
-            prefs.get("chat_verify_model")
-            or prefs.get("chat_plan_model")
-            or DEFAULT_AI_PREFERENCES.get("chat_verify_model", "")
-        )
+        # Defensive fallback; ChatService normally emits the resolved verify model.
+        model_used = chat_service._get_models(user)[2][0]
 
     return PublicAskResponse(
         answer=final_content if not clarification else None,

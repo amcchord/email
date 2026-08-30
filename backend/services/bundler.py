@@ -20,7 +20,7 @@ from backend.models.email import Email
 from backend.models.ai import AIAnalysis, EmailBundle
 from backend.models.account import GoogleAccount
 from backend.models.user import User
-from backend.schemas.auth import DEFAULT_AI_PREFERENCES
+from backend.services.ai_models import DEFAULT_AI_PREFERENCES, resolve_effort
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -103,6 +103,7 @@ def _cluster_topics(topic_to_emails: dict[str, list[dict]]) -> list[dict]:
 async def bundle_by_topics(
     user_id: int,
     model: Optional[str] = None,
+    effort: Optional[str] = None,
 ) -> int:
     """Build or update topic bundles for a user across all their accounts.
 
@@ -110,6 +111,10 @@ async def bundle_by_topics(
     """
     if not model:
         model = DEFAULT_AI_PREFERENCES["agentic_model"]
+    effort = resolve_effort(
+        model,
+        effort or DEFAULT_AI_PREFERENCES["agentic_effort"],
+    )
 
     async with async_session() as db:
         # 1. Look up all account IDs for this user
@@ -204,7 +209,7 @@ async def bundle_by_topics(
 
         # 6. For each cluster, generate a title/summary via Claude and upsert
         from backend.services.ai import AIService
-        ai = AIService(model=model)
+        ai = AIService(model=model, effort=effort)
 
         sem = asyncio.Semaphore(BUNDLE_CONCURRENCY)
         bundles_created = 0

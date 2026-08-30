@@ -321,13 +321,13 @@ async def _refresh_digests_for_replied_threads(new_email_ids: list[int]):
 
     # Resolve model/context from the first account
     first_account_id = threads_needing_refresh[0][0]
-    model = await _resolve_model_for_account(first_account_id)
+    model, effort = await _resolve_model_config_for_account(first_account_id)
     user_id = await _resolve_user_id_for_account(first_account_id)
     user_context = await _resolve_user_context(user_id)
     acct_ids = list(set(aid for aid, _ in threads_needing_refresh))
     acct_descs = await _resolve_account_descriptions(acct_ids)
 
-    ai_service = AIService(model=model)
+    ai_service = AIService(model=model, effort=effort)
     for account_id, thread_id in threads_needing_refresh:
         try:
             acct_desc = acct_descs.get(account_id)
@@ -855,6 +855,21 @@ async def _resolve_model_for_account(account_id: int) -> str:
     return DEFAULT_AI_PREFERENCES["agentic_model"]
 
 
+async def _resolve_model_config_for_account(account_id: int) -> tuple[str, str]:
+    """Look up the agentic model and effort for an account owner."""
+    from backend.services.ai import get_model_config_for_user
+
+    user_id = await _resolve_user_id_for_account(account_id)
+    if user_id:
+        return await get_model_config_for_user(user_id)
+
+    from backend.schemas.auth import DEFAULT_AI_PREFERENCES
+    return (
+        DEFAULT_AI_PREFERENCES["agentic_model"],
+        DEFAULT_AI_PREFERENCES["agentic_effort"],
+    )
+
+
 async def _resolve_model_for_emails(email_ids: list[int]) -> str:
     """Look up the agentic model from the owner of the first email's account."""
     from backend.services.ai import get_model_for_user
@@ -865,6 +880,21 @@ async def _resolve_model_for_emails(email_ids: list[int]) -> str:
 
     from backend.schemas.auth import DEFAULT_AI_PREFERENCES
     return DEFAULT_AI_PREFERENCES["agentic_model"]
+
+
+async def _resolve_model_config_for_emails(email_ids: list[int]) -> tuple[str, str]:
+    """Look up the agentic model and effort for the first email owner."""
+    from backend.services.ai import get_model_config_for_user
+
+    user_id = await _resolve_user_id_for_emails(email_ids)
+    if user_id:
+        return await get_model_config_for_user(user_id)
+
+    from backend.schemas.auth import DEFAULT_AI_PREFERENCES
+    return (
+        DEFAULT_AI_PREFERENCES["agentic_model"],
+        DEFAULT_AI_PREFERENCES["agentic_effort"],
+    )
 
 
 async def _resolve_user_context(user_id: int | None) -> str | None:
@@ -907,8 +937,8 @@ async def _resolve_account_emails(account_ids: list[int]) -> dict[int, str]:
 
 async def analyze_emails_batch(ctx, email_ids: list[int]):
     """Batch AI analysis of emails."""
-    model = await _resolve_model_for_emails(email_ids)
-    ai_service = AIService(model=model)
+    model, effort = await _resolve_model_config_for_emails(email_ids)
+    ai_service = AIService(model=model, effort=effort)
 
     # Build progress callback if a user can be resolved
     on_progress = None
@@ -976,7 +1006,9 @@ async def analyze_emails_batch(ctx, email_ids: list[int]):
 
     # After analysis, generate thread digests for multi-message threads
     try:
-        await _generate_digests_for_emails(email_ids, model, user_context, acct_descs)
+        await _generate_digests_for_emails(
+            email_ids, model, effort, user_context, acct_descs
+        )
     except Exception as e:
         logger.warning(f"Failed to generate thread digests after batch analysis: {e}")
 
@@ -991,7 +1023,8 @@ async def analyze_emails_batch(ctx, email_ids: list[int]):
                     "generate_bundles_for_user",
                     user_id,
                     model,
-                    _job_id=f"bundles:{user_id}:{model}",
+                    effort,
+                    _job_id=f"bundles:{user_id}:{model}:{effort}",
                 )
             finally:
                 await redis.close()
@@ -1029,8 +1062,8 @@ async def analyze_recent_unanalyzed(ctx, account_id: int, limit: int = 50):
         email_ids = [r[0] for r in result.all()]
 
     if email_ids:
-        model = await _resolve_model_for_account(account_id)
-        ai_service = AIService(model=model)
+        model, effort = await _resolve_model_config_for_account(account_id)
+        ai_service = AIService(model=model, effort=effort)
 
         # Load user context, account description, and account email
         user_id = await _resolve_user_id_for_account(account_id)
@@ -1061,9 +1094,9 @@ async def auto_categorize_account(ctx, account_id: int, days: int = None):
     If days is provided, only process emails from the last N days.
     Otherwise, process all unanalyzed emails.
     """
-    model = await _resolve_model_for_account(account_id)
+    model, effort = await _resolve_model_config_for_account(account_id)
     logger.info(f"Starting auto-categorization for account {account_id} (days={days}, model={model})")
-    ai_service = AIService(model=model)
+    ai_service = AIService(model=model, effort=effort)
 
     # Build progress callback if a user can be resolved
     on_progress = None
@@ -1112,7 +1145,8 @@ async def auto_categorize_account(ctx, account_id: int, days: int = None):
                         "generate_bundles_for_user",
                         user_id,
                         model,
-                        _job_id=f"bundles:{user_id}:{model}",
+                        effort,
+                        _job_id=f"bundles:{user_id}:{model}:{effort}",
                     )
             finally:
                 await redis.close()
@@ -1123,6 +1157,7 @@ async def auto_categorize_account(ctx, account_id: int, days: int = None):
 async def _generate_digests_for_emails(
     email_ids: list[int],
     model: str,
+    effort: str,
     user_context: str | None,
     acct_descs: dict[int, str],
 ):
@@ -1162,7 +1197,7 @@ async def _generate_digests_for_emails(
         return
 
     logger.info(f"Generating thread digests for {len(qualifying)} threads")
-    ai_service = AIService(model=model)
+    ai_service = AIService(model=model, effort=effort)
 
     for account_id, thread_id in qualifying:
         try:
@@ -1190,7 +1225,7 @@ async def generate_digests_for_account(ctx, account_id: int, max_digests: int = 
     from sqlalchemy import func as sqla_func
     from backend.models.ai import AIAnalysis, ThreadDigest
 
-    model = await _resolve_model_for_account(account_id)
+    model, effort = await _resolve_model_config_for_account(account_id)
     user_id = await _resolve_user_id_for_account(account_id)
     user_context = await _resolve_user_context(user_id)
     acct_descs = await _resolve_account_descriptions([account_id])
@@ -1239,7 +1274,7 @@ async def generate_digests_for_account(ctx, account_id: int, max_digests: int = 
         return
 
     logger.info(f"Generating thread digests for {len(thread_ids)} threads in account {account_id}")
-    ai_service = AIService(model=model)
+    ai_service = AIService(model=model, effort=effort)
 
     for thread_id in thread_ids:
         try:
@@ -1277,13 +1312,13 @@ async def generate_digests_for_threads(
         by_account[account_id].append(thread_id)
 
     for account_id, thread_ids in by_account.items():
-        model = await _resolve_model_for_account(account_id)
+        model, effort = await _resolve_model_config_for_account(account_id)
         user_id = await _resolve_user_id_for_account(account_id)
         user_context = await _resolve_user_context(user_id)
         acct_descs = await _resolve_account_descriptions([account_id])
         acct_desc = acct_descs.get(account_id)
 
-        ai_service = AIService(model=model)
+        ai_service = AIService(model=model, effort=effort)
         for thread_id in thread_ids:
             try:
                 await ai_service.generate_thread_digest(
@@ -1302,12 +1337,14 @@ async def generate_digests_for_threads(
     )
 
 
-async def generate_bundles_for_user(ctx, user_id: int, model: str = None):
+async def generate_bundles_for_user(
+    ctx, user_id: int, model: str = None, effort: str = None
+):
     """Generate topic bundles for a user across all their accounts."""
     from backend.services.bundler import bundle_by_topics
 
     logger.info(f"Generating topic bundles for user {user_id}")
-    count = await bundle_by_topics(user_id, model=model)
+    count = await bundle_by_topics(user_id, model=model, effort=effort)
     logger.info(f"Generated/updated {count} topic bundles for user {user_id}")
 
 

@@ -276,19 +276,23 @@ def _season(dt: datetime) -> str:
 async def _maybe_call_claude(
     kind: str, now_local: datetime, ha_shape: Optional[dict[str, Any]],
 ) -> Optional[dict[str, str]]:
-    """Invoke Claude Haiku via the existing AIService.
+    """Invoke the configured low-cost model via the existing AIService.
 
     Returns ``None`` if no API key is set or if any failure occurs. The
     cron task swallows None silently so a transient AI outage just
     means "no fresh row this hour"; the renderer's fallback kicks in.
     """
+    from backend.services.ai import AIService
+    from backend.services.ai_models import CHEAP_MODEL, provider_for_model
+
     settings = get_settings()
-    if not settings.claude_api_key:
+    provider = provider_for_model(CHEAP_MODEL)
+    if provider == "openai" and not settings.openai_api_key:
+        logger.info("dashboard_snippet: openai_api_key not configured, skipping")
+        return None
+    if provider == "anthropic" and not settings.claude_api_key:
         logger.info("dashboard_snippet: claude_api_key not configured, skipping")
         return None
-
-    from backend.services.ai import AIService
-    from backend.services.ai_models import CHEAP_MODEL
 
     context = _context_summary(now_local, ha_shape)
     seed = now_local.strftime("%Y-%m-%dT%H")

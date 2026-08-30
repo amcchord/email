@@ -1,5 +1,5 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import { Editor } from '@tiptap/core';
   import StarterKit from '@tiptap/starter-kit';
   import Link from '@tiptap/extension-link';
@@ -20,6 +20,7 @@
 
   let editorElement = $state(null);
   let editor = $state(null);
+  let lastSetContent = $state(untrack(() => content || ''));
 
   onMount(() => {
     editor = new Editor({
@@ -52,9 +53,12 @@
         },
       },
       onUpdate: ({ editor: ed }) => {
-        if (onUpdate) {
-          onUpdate(ed.getHTML());
-        }
+        const html = ed.getHTML();
+        // Parent editors mirror this value back through `content`. Remembering
+        // the user-authored HTML prevents that feedback from being mistaken
+        // for an external replacement, which would reset the caret.
+        lastSetContent = html;
+        onUpdate?.(html);
       },
     });
 
@@ -70,12 +74,13 @@
   });
 
   // Sync content prop changes into TipTap after mount
-  let lastSetContent = $state('');
   $effect(() => {
-    if (editor && content !== lastSetContent) {
-      lastSetContent = content;
-      editor.commands.setContent(content, false);
-    }
+    if (!editor) return;
+    const nextContent = content || '';
+    const currentContent = editor.getHTML();
+    if (nextContent === untrack(() => lastSetContent) || nextContent === currentContent) return;
+    lastSetContent = nextContent;
+    editor.commands.setContent(nextContent, { emitUpdate: false });
   });
 
   onDestroy(() => {

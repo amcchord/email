@@ -177,7 +177,7 @@ class PublicBriefing(BaseModel):
     recent_digests: list[PublicThreadDigest]
     volume: PublicVolumeResponse
     unread: PublicUnreadCountResponse
-    summary: Optional[str] = None  # Claude-written prose, only when ?summary=true
+    summary: Optional[str] = None  # AI-written prose, only when ?summary=true
 
 
 class PublicBriefingSummaryResponse(BaseModel):

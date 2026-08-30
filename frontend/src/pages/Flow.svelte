@@ -10,7 +10,7 @@
   import { theme } from '../lib/theme.js';
   import Icon from '../components/common/Icon.svelte';
   import DaySummaryStrip from '../lib/flow/DaySummaryStrip.svelte';
-  import { addPendingReplyId, capturedReplyStillActive, isCurrentFlowThreadRequest, reconcileNeedsReplyRemoval, removePendingReplyId } from '../lib/flow/replyActionState.js';
+  import { addPendingReplyId, capturedReplyStillActive, isCurrentFlowThreadRequest, newestThreadMessage, reconcileNeedsReplyRemoval, removePendingReplyId } from '../lib/flow/replyActionState.js';
   import DeferredRichEditor from '../components/email/DeferredRichEditor.svelte';
   import { cleanEmailText } from '../lib/emailText.js';
 
@@ -913,9 +913,11 @@
     selectedOptionIndex = -1;
     initialReplyContent = '';
     activeReplyIndex = 0;
+    customPromptOpen = false;
+    customPromptText = '';
+    customPromptLoading = false;
     lastCustomPrompt = '';
     editingCustomPrompt = false;
-    remountReplyEditor();
 
     // Build a minimal email-like object for the reply view header
     selectedReplyEmail = {
@@ -932,6 +934,9 @@
       suggested_reply: null,
       category: null,
     };
+    initialReplyContent = replyDrafts[replyDraftKey(selectedReplyEmail)] || '';
+    replyBodyHtml = initialReplyContent;
+    remountReplyEditor();
 
     if (threadId) {
       try {
@@ -985,6 +990,9 @@
     collapsedMessages = {};
     selectedOptionIndex = -1;
     initialReplyContent = '';
+    customPromptOpen = false;
+    customPromptText = '';
+    customPromptLoading = false;
     lastCustomPrompt = '';
     editingCustomPrompt = false;
     writingSurfaceReady = false;
@@ -1014,10 +1022,19 @@
 
   async function generateCustomReply(promptOverride) {
     const promptToUse = (promptOverride || customPromptText).trim();
-    if (!promptToUse || !selectedReplyEmail) return;
+    if (!promptToUse || !selectedReplyEmail || customPromptLoading) return;
+    const email = selectedReplyEmail;
+    const requestGeneration = threadLoadGeneration;
+    const sourceAtStart = viewSource;
+    const requestIsCurrent = () => threadRequestIsCurrent(requestGeneration, {
+      emailId: email.id ?? null,
+      threadId: email.gmail_thread_id ?? null,
+      source: sourceAtStart,
+    });
     customPromptLoading = true;
     try {
-      const result = await api.generateReply(selectedReplyEmail.id, promptToUse);
+      const result = await api.generateReply(email.id, promptToUse);
+      if (!requestIsCurrent()) return;
       if (result && result.body) {
         lastCustomPrompt = promptToUse;
         editingCustomPrompt = false;
@@ -1027,8 +1044,8 @@
           let acctId = null;
           if (acctList.length === 1) {
             acctId = acctList[0].id;
-          } else if (acctList.length > 1 && selectedReplyEmail.account_email) {
-            const matched = acctList.find(a => a.email === selectedReplyEmail.account_email);
+          } else if (acctList.length > 1 && email.account_email) {
+            const matched = acctList.find(a => a.email === email.account_email);
             if (matched) {
               acctId = matched.id;
             } else {
@@ -1061,7 +1078,7 @@
     } catch (err) {
       console.error('Failed to generate custom reply:', err);
     } finally {
-      customPromptLoading = false;
+      if (requestIsCurrent()) customPromptLoading = false;
     }
   }
 
@@ -1215,6 +1232,10 @@
     needsReplyEmails = result.emails;
     needsReplyTotal = result.total;
 
+    // A delayed completion after the reply view closes should update the
+    // dashboard count without unexpectedly reopening another message.
+    if (!replyViewOpen || !selectedReplyEmail) return;
+
     if (selectedReplyEmail && selectedReplyEmail.id !== removedId) {
       if (result.activeIndex >= 0) activeReplyIndex = result.activeIndex;
       return;
@@ -1227,14 +1248,14 @@
   }
 
   function openInCompose() {
-    if (!selectedReplyEmail) return;
+    if (!selectedReplyEmail || threadLoading) return;
     const email = selectedReplyEmail;
     const subject = email.subject && email.subject.startsWith('Re:') ? email.subject : 'Re: ' + (email.subject || '');
 
     let messageIdHeader = null;
     if (threadData && threadData.emails && threadData.emails.length > 0) {
-      const lastMsg = threadData.emails[threadData.emails.length - 1];
-      messageIdHeader = lastMsg.message_id_header;
+      const newestMessage = newestThreadMessage(threadData.emails, get(threadOrder));
+      messageIdHeader = newestMessage?.message_id_header || null;
     }
 
     const accountList = get(accounts);
@@ -1258,6 +1279,7 @@
       subject: subject,
       body_html: replyBodyHtml || '',
       in_reply_to: messageIdHeader || null,
+      references: messageIdHeader || null,
       thread_id: email.gmail_thread_id || null,
     });
     currentPage.set('compose');
@@ -1275,8 +1297,14 @@
 
   async function sendReply() {
     if (!canSendReply()) return false;
-    const plainText = replyBodyHtml ? replyBodyHtml.replace(/<[^>]*>/g, '').trim() : '';
+    const email = selectedReplyEmail;
+    const bodyHtmlAtStart = replyBodyHtml;
+    const plainText = bodyHtmlAtStart ? bodyHtmlAtStart.replace(/<[^>]*>/g, '').trim() : '';
     if (!plainText) return false;
+    const requestGeneration = threadLoadGeneration;
+    const sourceAtStart = viewSource;
+    const archiveAtStart = archiveAfterSend;
+    const threadAtStart = threadData;
 
     inlineReplySending = true;
     try {
@@ -1284,8 +1312,8 @@
       let accountId = null;
       if (accountList.length === 1) {
         accountId = accountList[0].id;
-      } else if (accountList.length > 1 && selectedReplyEmail.account_email) {
-        const matched = accountList.find(a => a.email === selectedReplyEmail.account_email);
+      } else if (accountList.length > 1 && email.account_email) {
+        const matched = accountList.find(a => a.email === email.account_email);
         if (matched) {
           accountId = matched.id;
         } else {
@@ -1300,13 +1328,12 @@
         return false;
       }
 
-      const email = selectedReplyEmail;
       const subject = email.subject && email.subject.startsWith('Re:') ? email.subject : 'Re: ' + (email.subject || '');
 
       let messageIdHeader = null;
-      if (threadData && threadData.emails && threadData.emails.length > 0) {
-        const lastMsg = threadData.emails[threadData.emails.length - 1];
-        messageIdHeader = lastMsg.message_id_header;
+      if (threadAtStart && threadAtStart.emails && threadAtStart.emails.length > 0) {
+        const newestMessage = newestThreadMessage(threadAtStart.emails, get(threadOrder));
+        messageIdHeader = newestMessage?.message_id_header || null;
       }
 
       await api.sendEmail({
@@ -1316,26 +1343,38 @@
         bcc: [],
         subject: subject,
         body_text: plainText,
-        body_html: replyBodyHtml,
+        body_html: bodyHtmlAtStart,
         in_reply_to: messageIdHeader || null,
         references: messageIdHeader || null,
         thread_id: email.gmail_thread_id || null,
       });
       showToast('Reply sent!', 'success');
-      forgetReplyDraft(email);
-      replyBodyHtml = '';
 
-      if (viewSource === 'needs_reply') {
+      if (sourceAtStart === 'needs_reply') {
         // Archive if toggled
-        if (archiveAfterSend && email.id) {
+        if (archiveAtStart && email.id) {
           try {
             await api.emailActions([email.id], 'archive');
           } catch {
             // silent fail on archive
           }
         }
-        removeEmailAndAdvance(email.id);
-      } else {
+      }
+
+      // Recheck after every delayed operation. Navigation or additional typing
+      // since Send must never be cleared by completion of the captured draft.
+      const replyStillActive = threadRequestIsCurrent(requestGeneration, {
+        emailId: email.id ?? null,
+        threadId: email.gmail_thread_id ?? null,
+        source: sourceAtStart,
+      });
+      const sentDraftStillActive = replyStillActive && replyBodyHtml === bodyHtmlAtStart;
+      if (!replyStillActive || sentDraftStillActive) forgetReplyDraft(email);
+      if (sentDraftStillActive) replyBodyHtml = '';
+
+      if (sourceAtStart === 'needs_reply') {
+        if (!replyStillActive || sentDraftStillActive) removeEmailAndAdvance(email.id);
+      } else if (sentDraftStillActive) {
         closeReplyView();
       }
       return true;
@@ -2367,8 +2406,10 @@
             <div class="flex items-center gap-2">
               <button
                 onclick={openInCompose}
+                disabled={threadLoading}
                 class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-fast border"
-                style="border-color: var(--border-color); color: var(--text-secondary)"
+                style="border-color: var(--border-color); color: var(--text-secondary); opacity: {threadLoading ? 0.5 : 1}"
+                title={threadLoading ? 'Wait for the thread to finish loading' : 'Open in full composer'}
               >
                 <Icon name="external-link" size={12} />
                 Full Compose
