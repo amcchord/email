@@ -42,7 +42,6 @@ class FakeSession:
     async def flush(self):
         return None
 
-
 class BoundAccountSession(FakeSession):
     """Return the target only when the query is bound to its id and owner."""
 
@@ -182,6 +181,231 @@ async def test_cancelled_google_login_redirects_instead_of_returning_422():
 
 
 @pytest.mark.asyncio
+async def test_google_login_setup_failure_rolls_back_without_logging_oauth_values(
+    monkeypatch,
+    caplog,
+):
+    state = "generated-login-state"
+    verifier = "generated-login-verifier"
+    session = FakeSession()
+
+    async def failed_credentials(_db):
+        raise RuntimeError("generated login setup detail")
+
+    monkeypatch.setattr(
+        "backend.services.credentials.get_google_credentials",
+        failed_credentials,
+    )
+    caplog.set_level("ERROR", logger=auth.__name__)
+
+    response = await auth.google_login_callback(
+        code="generated-login-code",
+        state=state,
+        request=SimpleNamespace(
+            cookies={
+                auth.GOOGLE_LOGIN_STATE_COOKIE: state,
+                auth.GOOGLE_LOGIN_VERIFIER_COOKIE: encrypt_value(verifier),
+            }
+        ),
+        db=session,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?login_error=configuration_error"
+    assert session.rolled_back is True
+    assert "RuntimeError" in caplog.text
+    for sensitive in (state, verifier, "generated-login-code", "login setup detail"):
+        assert sensitive not in response.headers["location"]
+        assert sensitive not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_google_login_malformed_profile_redirects_instead_of_raw_500(monkeypatch):
+    state = "generated-login-state"
+    session = FakeSession()
+    credentials = SimpleNamespace(token="generated-access", refresh_token=None)
+
+    async def fake_credentials(_db):
+        return "generated-client", "generated-secret"
+
+    class Flow:
+        def __init__(self):
+            self.credentials = credentials
+
+        def fetch_token(self, **_kwargs):
+            return None
+
+    request = SimpleNamespace(execute=lambda: ["not", "an", "object"])
+    service = SimpleNamespace(userinfo=lambda: SimpleNamespace(get=lambda: request))
+    monkeypatch.setattr(
+        "backend.services.credentials.get_google_credentials",
+        fake_credentials,
+    )
+    monkeypatch.setattr(auth, "build_google_flow", lambda *_args, **_kwargs: Flow())
+    monkeypatch.setattr("googleapiclient.discovery.build", lambda *_args, **_kwargs: service)
+
+    response = await auth.google_login_callback(
+        code="generated-login-code",
+        state=state,
+        request=SimpleNamespace(
+            cookies={
+                auth.GOOGLE_LOGIN_STATE_COOKIE: state,
+                auth.GOOGLE_LOGIN_VERIFIER_COOKIE: encrypt_value("generated-verifier"),
+            }
+        ),
+        db=session,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?login_error=profile_lookup_failed"
+    assert session.rolled_back is True
+
+
+@pytest.mark.asyncio
+async def test_google_login_persistence_failure_rolls_back_and_redacts_logs(
+    monkeypatch,
+    caplog,
+):
+    state = "generated-login-state"
+    verifier = "generated-login-verifier"
+    user = SimpleNamespace(
+        id=23,
+        display_name="Old Name",
+        avatar_url=None,
+    )
+
+    class CommitFailureSession(FakeSession):
+        async def commit(self):
+            raise RuntimeError("generated persistence email@example.test detail")
+
+    session = CommitFailureSession(user)
+    credentials = SimpleNamespace(token="generated-access", refresh_token=None)
+
+    async def fake_credentials(_db):
+        return "generated-client", "generated-secret"
+
+    async def allow_generated_user(_email, _db):
+        return True
+
+    class Flow:
+        def __init__(self):
+            self.credentials = credentials
+
+        def fetch_token(self, **_kwargs):
+            return None
+
+    request = SimpleNamespace(
+        execute=lambda: {
+            "email": "generated-user@example.test",
+            "name": "Generated User",
+            "picture": "https://images.example.test/generated",
+        }
+    )
+    service = SimpleNamespace(userinfo=lambda: SimpleNamespace(get=lambda: request))
+    monkeypatch.setattr(
+        "backend.services.credentials.get_google_credentials",
+        fake_credentials,
+    )
+    monkeypatch.setattr(auth, "_check_allowed", allow_generated_user)
+    monkeypatch.setattr(auth, "build_google_flow", lambda *_args, **_kwargs: Flow())
+    monkeypatch.setattr("googleapiclient.discovery.build", lambda *_args, **_kwargs: service)
+    caplog.set_level("ERROR", logger=auth.__name__)
+
+    response = await auth.google_login_callback(
+        code="generated-login-code",
+        state=state,
+        request=SimpleNamespace(
+            cookies={
+                auth.GOOGLE_LOGIN_STATE_COOKIE: state,
+                auth.GOOGLE_LOGIN_VERIFIER_COOKIE: encrypt_value(verifier),
+            }
+        ),
+        db=session,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?login_error=account_update_failed"
+    assert session.rolled_back is True
+    assert session.committed is False
+    assert "RuntimeError" in caplog.text
+    for sensitive in (
+        state,
+        verifier,
+        "generated-login-code",
+        "generated-user@example.test",
+        "persistence email@example.test detail",
+    ):
+        assert sensitive not in response.headers["location"]
+        assert sensitive not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_google_login_cookie_failure_rolls_back_before_commit(monkeypatch, caplog):
+    state = "generated-login-state"
+    user = SimpleNamespace(id=23, display_name="Old Name", avatar_url=None)
+    session = FakeSession(user)
+    credentials = SimpleNamespace(token="generated-access", refresh_token=None)
+
+    async def fake_credentials(_db):
+        return "generated-client", "generated-secret"
+
+    async def allow_generated_user(_email, _db):
+        return True
+
+    class Flow:
+        def __init__(self):
+            self.credentials = credentials
+
+        def fetch_token(self, **_kwargs):
+            return None
+
+    request = SimpleNamespace(execute=lambda: {
+        "email": "generated-user@example.test",
+        "name": "Generated User",
+    })
+    service = SimpleNamespace(userinfo=lambda: SimpleNamespace(get=lambda: request))
+
+    def fail_cookie_write(*_args, **_kwargs):
+        raise RuntimeError("generated cookie detail")
+
+    monkeypatch.setattr(
+        "backend.services.credentials.get_google_credentials",
+        fake_credentials,
+    )
+    monkeypatch.setattr(auth, "_check_allowed", allow_generated_user)
+    monkeypatch.setattr(auth, "build_google_flow", lambda *_args, **_kwargs: Flow())
+    monkeypatch.setattr("googleapiclient.discovery.build", lambda *_args, **_kwargs: service)
+    monkeypatch.setattr(auth, "_set_auth_cookies", fail_cookie_write)
+    caplog.set_level("ERROR", logger=auth.__name__)
+
+    response = await auth.google_login_callback(
+        code="generated-login-code",
+        state=state,
+        request=SimpleNamespace(
+            cookies={
+                auth.GOOGLE_LOGIN_STATE_COOKIE: state,
+                auth.GOOGLE_LOGIN_VERIFIER_COOKIE: encrypt_value("generated-verifier"),
+            }
+        ),
+        db=session,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?login_error=authorization_failed"
+    assert session.rolled_back is True
+    assert session.committed is False
+    assert "RuntimeError" in caplog.text
+    for sensitive in (
+        state,
+        "generated-login-code",
+        "generated-user@example.test",
+        "generated cookie detail",
+    ):
+        assert sensitive not in response.headers["location"]
+        assert sensitive not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_cancelled_account_oauth_returns_safe_calendar_redirect(monkeypatch):
     state, _, nonce = generated_state()
     session = FakeSession(SimpleNamespace(id=7, is_active=True))
@@ -254,6 +478,144 @@ async def test_account_oauth_rejects_mismatched_nonce_before_any_database_read()
     assert redirect_query(response)["oauth_error"] == ["invalid_state"]
     assert session.results == []
     assert session.committed is False
+
+
+@pytest.mark.asyncio
+async def test_legacy_account_oauth_state_redirects_safely_without_provider_calls():
+    """An authorization started before the PKCE rollout must never raw-500."""
+    legacy_state = accounts.sign_oauth_state({"user_id": 7})
+    session = FakeSession()
+
+    response = await accounts.oauth_callback(
+        code="generated-legacy-oauth-code",
+        state=legacy_state,
+        request=SimpleNamespace(cookies={}),
+        db=session,
+    )
+
+    assert response.status_code == 303
+    assert redirect_query(response) == {
+        "page": ["admin"],
+        "tab": ["profile"],
+        "oauth_error": ["invalid_state"],
+    }
+    assert "generated-legacy-oauth-code" not in response.headers["location"]
+    assert session.results == []
+    assert session.committed is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state_data",
+    [
+        [],
+        {
+            "user_id": "7",
+            "account_id": 41,
+            "nonce": "generated-nonce",
+            "pkce": "generated-encrypted-verifier",
+            "return_page": "calendar",
+        },
+        {
+            "user_id": 7,
+            "account_id": "41",
+            "nonce": "generated-nonce",
+            "pkce": "generated-encrypted-verifier",
+            "return_page": "calendar",
+        },
+        {
+            "user_id": 7,
+            "account_id": 41,
+            "nonce": 123,
+            "pkce": "generated-encrypted-verifier",
+            "return_page": "calendar",
+        },
+    ],
+)
+async def test_account_callback_rejects_mistyped_signed_state_before_database_read(
+    monkeypatch,
+    state_data,
+):
+    session = FakeSession()
+    monkeypatch.setattr(accounts, "verify_oauth_state", lambda _state: state_data)
+
+    response = await accounts.oauth_callback(
+        code="generated-oauth-code",
+        state="generated-signed-state",
+        request=request_with_nonce("generated-nonce"),
+        db=session,
+    )
+
+    assert response.status_code == 303
+    assert redirect_query(response)["oauth_error"] == ["invalid_state"]
+    assert session.results == []
+    assert session.committed is False
+
+
+@pytest.mark.asyncio
+async def test_account_callback_database_failure_rolls_back_and_redirects_safely(caplog):
+    state, verifier, nonce = generated_state()
+
+    class ReadFailureSession(FakeSession):
+        async def execute(self, _statement):
+            raise RuntimeError("generated database detail")
+
+    session = ReadFailureSession()
+    caplog.set_level("ERROR", logger=accounts.__name__)
+
+    response = await accounts.oauth_callback(
+        code="generated-oauth-code",
+        state=state,
+        request=request_with_nonce(nonce),
+        db=session,
+    )
+
+    assert response.status_code == 303
+    assert redirect_query(response)["oauth_error"] == ["account_update_failed"]
+    assert session.rolled_back is True
+    assert "user_id=7" in caplog.text
+    assert "RuntimeError" in caplog.text
+    for sensitive in (
+        "generated-oauth-code",
+        state,
+        verifier,
+        "generated database detail",
+    ):
+        assert sensitive not in response.headers["location"]
+        assert sensitive not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_account_callback_setup_failure_uses_configuration_redirect(monkeypatch, caplog):
+    state, verifier, nonce = generated_state()
+    session = FakeSession(SimpleNamespace(id=7, is_active=True))
+
+    async def failed_credentials(_db):
+        raise RuntimeError("generated setup provider detail")
+
+    monkeypatch.setattr(
+        "backend.services.credentials.get_google_credentials",
+        failed_credentials,
+    )
+    caplog.set_level("ERROR", logger=accounts.__name__)
+
+    response = await accounts.oauth_callback(
+        code="generated-oauth-code",
+        state=state,
+        request=request_with_nonce(nonce),
+        db=session,
+    )
+
+    assert redirect_query(response)["oauth_error"] == ["configuration_error"]
+    assert session.rolled_back is True
+    for sensitive in (
+        "generated-oauth-code",
+        state,
+        verifier,
+        "setup provider detail",
+    ):
+        assert sensitive not in response.headers["location"]
+        assert sensitive not in caplog.text
 
 
 @pytest.mark.asyncio

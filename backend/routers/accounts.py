@@ -114,6 +114,54 @@ def _credential_scopes(credentials) -> list[str]:
     return sorted(set(scopes or []))
 
 
+def _valid_account_oauth_state(state_data: object) -> dict | None:
+    """Return a callback state only when every security-sensitive field is typed."""
+    if not isinstance(state_data, dict):
+        return None
+    user_id = state_data.get("user_id")
+    account_id = state_data.get("account_id")
+    if isinstance(user_id, bool) or not isinstance(user_id, int) or user_id <= 0:
+        return None
+    if account_id is not None and (
+        isinstance(account_id, bool) or not isinstance(account_id, int) or account_id <= 0
+    ):
+        return None
+    if not isinstance(state_data.get("nonce"), str) or not state_data["nonce"]:
+        return None
+    if not isinstance(state_data.get("pkce"), str) or not state_data["pkce"]:
+        return None
+    if state_data.get("return_page") not in {"admin", "calendar"}:
+        return None
+    return state_data
+
+
+async def _rollback_account_oauth(db: AsyncSession, user_id: int) -> None:
+    try:
+        await db.rollback()
+    except Exception as exc:
+        logger.error(
+            "Google account OAuth rollback failed user_id=%s error_type=%s",
+            user_id,
+            type(exc).__name__,
+        )
+
+
+async def _account_oauth_failure(
+    db: AsyncSession,
+    state_data: dict,
+    user_id: int,
+    exc: Exception,
+    error: str,
+) -> RedirectResponse:
+    await _rollback_account_oauth(db, user_id)
+    logger.error(
+        "Google account OAuth callback failed user_id=%s error_type=%s",
+        user_id,
+        type(exc).__name__,
+    )
+    return _account_oauth_redirect(state_data, error=error)
+
+
 # ── Allowed accounts ────────────────────────────────────────────────
 
 @router.get("/allowed")
@@ -315,27 +363,19 @@ async def oauth_callback(
     db: AsyncSession = Depends(get_db),
 ):
     """Handle OAuth callback for connecting a Gmail account."""
-    state_data = verify_oauth_state(state)
+    state_data = _valid_account_oauth_state(verify_oauth_state(state))
     if not state_data:
         return _account_oauth_redirect(None, error="invalid_state")
 
-    user_id = state_data.get("user_id")
+    user_id = state_data["user_id"]
     cookie_nonce = request.cookies.get(ACCOUNT_OAUTH_NONCE_COOKIE, "") if request else ""
-    state_nonce = state_data.get("nonce", "")
+    state_nonce = state_data["nonce"]
     if (
-        not user_id
+        not isinstance(cookie_nonce, str)
         or not cookie_nonce
-        or not state_nonce
         or not secrets.compare_digest(cookie_nonce, state_nonce)
     ):
         return _account_oauth_redirect(state_data, error="invalid_state")
-
-    user_result = await db.execute(
-        select(User).where(User.id == user_id, User.is_active == True)
-    )
-    user = user_result.scalar_one_or_none()
-    if not user:
-        return _account_oauth_redirect(state_data, error="session_expired")
 
     if error or not code:
         return _account_oauth_redirect(
@@ -347,34 +387,48 @@ async def oauth_callback(
     if not code_verifier:
         return _account_oauth_redirect(state_data, error="invalid_state")
 
-    from backend.services.credentials import get_google_credentials
-    client_id, client_secret = await get_google_credentials(db)
-    if not client_id or not client_secret:
-        return _account_oauth_redirect(state_data, error="configuration_error")
+    try:
+        user_result = await db.execute(
+            select(User).where(User.id == user_id, User.is_active == True)
+        )
+        user = user_result.scalar_one_or_none()
+    except Exception as exc:
+        return await _account_oauth_failure(
+            db, state_data, user_id, exc, "account_update_failed"
+        )
+    if not user:
+        return _account_oauth_redirect(state_data, error="session_expired")
 
-    from googleapiclient.discovery import build
+    try:
+        from backend.services.credentials import get_google_credentials
+        from googleapiclient.discovery import build
 
-    redirect_uri = _get_connect_redirect_uri()
-    flow = build_google_flow(
-        client_id,
-        client_secret,
-        redirect_uri,
-        GMAIL_SCOPES,
-        code_verifier=code_verifier,
-    )
-    import asyncio
-    loop = asyncio.get_running_loop()
+        client_id, client_secret = await get_google_credentials(db)
+        if not client_id or not client_secret:
+            return _account_oauth_redirect(state_data, error="configuration_error")
+
+        redirect_uri = _get_connect_redirect_uri()
+        flow = build_google_flow(
+            client_id,
+            client_secret,
+            redirect_uri,
+            GMAIL_SCOPES,
+            code_verifier=code_verifier,
+        )
+        import asyncio
+        loop = asyncio.get_running_loop()
+    except Exception as exc:
+        return await _account_oauth_failure(
+            db, state_data, user_id, exc, "configuration_error"
+        )
 
     try:
         await loop.run_in_executor(None, lambda: flow.fetch_token(code=code))
+        credentials = flow.credentials
     except Exception as exc:
-        logger.warning(
-            "Google account OAuth token exchange failed for user_id=%s: %s",
-            user.id,
-            type(exc).__name__,
+        return await _account_oauth_failure(
+            db, state_data, user_id, exc, "token_exchange_failed"
         )
-        return _account_oauth_redirect(state_data, error="token_exchange_failed")
-    credentials = flow.credentials
 
     # Get account info (synchronous Google API, run in thread)
     def _get_user_info():
@@ -383,48 +437,52 @@ async def oauth_callback(
 
     try:
         user_info = await loop.run_in_executor(None, _get_user_info)
+        if not isinstance(user_info, dict):
+            raise TypeError("OAuth profile response must be an object")
+        email = user_info.get("email")
+        name = user_info.get("name", email)
     except Exception as exc:
-        logger.warning(
-            "Google account OAuth profile lookup failed for user_id=%s: %s",
-            user.id,
-            type(exc).__name__,
+        return await _account_oauth_failure(
+            db, state_data, user_id, exc, "profile_lookup_failed"
         )
-        return _account_oauth_redirect(state_data, error="profile_lookup_failed")
-    email = user_info.get("email")
-    name = user_info.get("name", email)
 
-    if not email:
+    if not isinstance(email, str) or not email:
         return _account_oauth_redirect(state_data, error="no_email")
 
-    if not await _check_allowed(email, db):
-        return _account_oauth_redirect(state_data, error="not_allowed")
+    try:
+        if not await _check_allowed(email, db):
+            return _account_oauth_redirect(state_data, error="not_allowed")
 
-    actual_scopes = _credential_scopes(credentials)
-    calendar_scope = "https://www.googleapis.com/auth/calendar.readonly"
-    if calendar_scope not in actual_scopes:
-        return _account_oauth_redirect(state_data, error="calendar_scope_missing")
-    if not REQUIRED_GMAIL_SCOPES.issubset(actual_scopes):
-        return _account_oauth_redirect(state_data, error="required_scopes_missing")
+        actual_scopes = _credential_scopes(credentials)
+        calendar_scope = "https://www.googleapis.com/auth/calendar.readonly"
+        if calendar_scope not in actual_scopes:
+            return _account_oauth_redirect(state_data, error="calendar_scope_missing")
+        if not REQUIRED_GMAIL_SCOPES.issubset(actual_scopes):
+            return _account_oauth_redirect(state_data, error="required_scopes_missing")
 
-    expected_account_id = state_data.get("account_id")
-    if expected_account_id is not None:
-        result = await db.execute(
-            select(GoogleAccount).where(
-                GoogleAccount.id == expected_account_id,
-                GoogleAccount.user_id == user_id,
+        expected_account_id = state_data.get("account_id")
+        if expected_account_id is not None:
+            result = await db.execute(
+                select(GoogleAccount).where(
+                    GoogleAccount.id == expected_account_id,
+                    GoogleAccount.user_id == user_id,
+                )
             )
+            account = result.scalar_one_or_none()
+            if not account:
+                return _account_oauth_redirect(state_data, error="account_not_found")
+            if not isinstance(account.email, str) or account.email.casefold() != email.casefold():
+                return _account_oauth_redirect(state_data, error="account_mismatch")
+        else:
+            # Check if this Gmail account is already connected to ANY user.
+            result = await db.execute(
+                select(GoogleAccount).where(GoogleAccount.email == email)
+            )
+            account = result.scalar_one_or_none()
+    except Exception as exc:
+        return await _account_oauth_failure(
+            db, state_data, user_id, exc, "account_update_failed"
         )
-        account = result.scalar_one_or_none()
-        if not account:
-            return _account_oauth_redirect(state_data, error="account_not_found")
-        if account.email.casefold() != email.casefold():
-            return _account_oauth_redirect(state_data, error="account_mismatch")
-    else:
-        # Check if this Gmail account is already connected to ANY user.
-        result = await db.execute(
-            select(GoogleAccount).where(GoogleAccount.email == email)
-        )
-        account = result.scalar_one_or_none()
 
     try:
         if account:
@@ -484,20 +542,9 @@ async def oauth_callback(
 
         await db.commit()
     except Exception as exc:
-        try:
-            await db.rollback()
-        except Exception as rollback_exc:
-            logger.error(
-                "Google account OAuth rollback failed for user_id=%s error_type=%s",
-                user.id,
-                type(rollback_exc).__name__,
-            )
-        logger.error(
-            "Google account OAuth persistence failed for user_id=%s error_type=%s",
-            user.id,
-            type(exc).__name__,
+        return await _account_oauth_failure(
+            db, state_data, user_id, exc, "account_update_failed"
         )
-        return _account_oauth_redirect(state_data, error="account_update_failed")
 
     oauth_result = "reauthorized" if expected_account_id is not None else "connected"
     return _account_oauth_redirect(state_data, result=oauth_result)

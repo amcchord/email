@@ -8,6 +8,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import time
 
 settings = get_settings()
@@ -84,6 +85,9 @@ def sign_oauth_state(data: dict, ttl_seconds: int = 600) -> str:
 
 def verify_oauth_state(token: str) -> Optional[dict]:
     """Verify an HMAC-signed OAuth state token. Returns payload or None."""
+    if not isinstance(token, str):
+        return None
+
     parts = token.split(".", 1)
     if len(parts) != 2:
         return None
@@ -101,6 +105,14 @@ def verify_oauth_state(token: str) -> Optional[dict]:
         data = json.loads(base64.urlsafe_b64decode(payload_b64).decode())
     except Exception:
         return None
-    if data.get("exp", 0) < time.time():
+    if not isinstance(data, dict):
+        return None
+    expires_at = data.get("exp")
+    if (
+        isinstance(expires_at, bool)
+        or not isinstance(expires_at, (int, float))
+        or (isinstance(expires_at, float) and not math.isfinite(expires_at))
+        or expires_at < time.time()
+    ):
         return None
     return data

@@ -1,4 +1,5 @@
 import os
+import logging
 import secrets
 import time
 import threading
@@ -37,6 +38,7 @@ from slowapi.util import get_remote_address
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 settings = get_settings()
 limiter = Limiter(key_func=get_remote_address)
+logger = logging.getLogger(__name__)
 
 LOGIN_SCOPES = [
     "openid",
@@ -54,6 +56,29 @@ def _google_login_redirect(error: str) -> RedirectResponse:
     response.delete_cookie(GOOGLE_LOGIN_STATE_COOKIE)
     response.delete_cookie(GOOGLE_LOGIN_VERIFIER_COOKIE)
     return response
+
+
+async def _rollback_google_login(db: AsyncSession) -> None:
+    try:
+        await db.rollback()
+    except Exception as exc:
+        logger.error(
+            "Google login OAuth rollback failed error_type=%s",
+            type(exc).__name__,
+        )
+
+
+async def _google_login_failure(
+    db: AsyncSession,
+    exc: Exception,
+    error: str,
+) -> RedirectResponse:
+    await _rollback_google_login(db)
+    logger.error(
+        "Google login OAuth callback failed error_type=%s",
+        type(exc).__name__,
+    )
+    return _google_login_redirect(error)
 
 
 def _set_auth_cookies(response: Response, access_token: str, refresh_token: str):
@@ -256,7 +281,13 @@ async def google_login_callback(
 ):
     """Handle Google OAuth login callback. Creates or finds user, issues JWT."""
     cookie_state = request.cookies.get(GOOGLE_LOGIN_STATE_COOKIE, "") if request else ""
-    if not state or not cookie_state or not secrets.compare_digest(state, cookie_state):
+    if (
+        not isinstance(state, str)
+        or not isinstance(cookie_state, str)
+        or not state
+        or not cookie_state
+        or not secrets.compare_digest(state, cookie_state)
+    ):
         return _google_login_redirect("invalid_state")
 
     if error or not code:
@@ -272,29 +303,33 @@ async def google_login_callback(
     if not code_verifier:
         return _google_login_redirect("invalid_state")
 
-    from backend.services.credentials import get_google_credentials
-    client_id, client_secret = await get_google_credentials(db)
+    try:
+        from backend.services.credentials import get_google_credentials
+        from googleapiclient.discovery import build
 
-    if not client_id or not client_secret:
-        return _google_login_redirect("configuration_error")
+        client_id, client_secret = await get_google_credentials(db)
+        if not client_id or not client_secret:
+            return _google_login_redirect("configuration_error")
 
-    import asyncio
-    from googleapiclient.discovery import build
+        import asyncio
 
-    loop = asyncio.get_running_loop()
-    redirect_uri = settings.google_redirect_uri
-    flow = build_google_flow(
-        client_id,
-        client_secret,
-        redirect_uri,
-        LOGIN_SCOPES,
-        code_verifier=code_verifier,
-    )
+        loop = asyncio.get_running_loop()
+        redirect_uri = settings.google_redirect_uri
+        flow = build_google_flow(
+            client_id,
+            client_secret,
+            redirect_uri,
+            LOGIN_SCOPES,
+            code_verifier=code_verifier,
+        )
+    except Exception as exc:
+        return await _google_login_failure(db, exc, "configuration_error")
+
     try:
         await loop.run_in_executor(None, lambda: flow.fetch_token(code=code))
-    except Exception:
-        return _google_login_redirect("token_exchange_failed")
-    credentials = flow.credentials
+        credentials = flow.credentials
+    except Exception as exc:
+        return await _google_login_failure(db, exc, "token_exchange_failed")
 
     # Get user info from Google (synchronous API, run in thread)
     def _get_user_info():
@@ -303,51 +338,64 @@ async def google_login_callback(
 
     try:
         user_info = await loop.run_in_executor(None, _get_user_info)
-    except Exception:
-        return _google_login_redirect("profile_lookup_failed")
-    email = user_info.get("email")
-    name = user_info.get("name", email)
-    avatar = user_info.get("picture")
+        if not isinstance(user_info, dict):
+            raise TypeError("OAuth profile response must be an object")
+        email = user_info.get("email")
+        name = user_info.get("name", email)
+        avatar = user_info.get("picture")
+    except Exception as exc:
+        return await _google_login_failure(db, exc, "profile_lookup_failed")
 
-    if not email:
+    if not isinstance(email, str) or not email:
         return _google_login_redirect("no_email")
 
-    # Check allowlist
-    is_allowed = await _check_allowed(email, db)
-    if not is_allowed:
-        return _google_login_redirect("not_allowed")
+    try:
+        # Check allowlist
+        is_allowed = await _check_allowed(email, db)
+        if not is_allowed:
+            return _google_login_redirect("not_allowed")
 
-    # Find or create user by email
-    result = await db.execute(select(User).where(User.email == email))
-    user = result.scalar_one_or_none()
+        # Find or create user by email
+        result = await db.execute(select(User).where(User.email == email))
+        user = result.scalar_one_or_none()
 
-    if user:
-        # Update profile info from Google
-        user.display_name = name
-        user.avatar_url = avatar
-    else:
-        # First time login -- create a new user
-        user = User(
-            email=email,
-            display_name=name,
-            avatar_url=avatar,
-            is_admin=False,
-            is_active=True,
-        )
-        db.add(user)
+        if user:
+            # Update profile info from Google
+            user.display_name = name
+            user.avatar_url = avatar
+        else:
+            # First time login -- create a new user
+            user = User(
+                email=email,
+                display_name=name,
+                avatar_url=avatar,
+                is_admin=False,
+                is_active=True,
+            )
+            db.add(user)
 
-    await db.commit()
-    await db.refresh(user)
+        # Populate a new user's id before issuing credentials, so any token
+        # construction failure can still roll back the pending user mutation.
+        await db.flush()
+        access_token = create_access_token({"sub": str(user.id)})
+        refresh_token = create_refresh_token({"sub": str(user.id)})
+    except Exception as exc:
+        return await _google_login_failure(db, exc, "account_update_failed")
 
-    # Issue tokens
-    access_token = create_access_token({"sub": str(user.id)})
-    refresh_token = create_refresh_token({"sub": str(user.id)})
+    # Build the response before committing so a cookie-construction failure can
+    # still roll back every profile or new-user mutation from this callback.
+    try:
+        redirect = RedirectResponse(url="/", status_code=303)
+        _set_auth_cookies(redirect, access_token, refresh_token)
+        redirect.delete_cookie(GOOGLE_LOGIN_STATE_COOKIE)
+        redirect.delete_cookie(GOOGLE_LOGIN_VERIFIER_COOKIE)
+    except Exception as exc:
+        return await _google_login_failure(db, exc, "authorization_failed")
 
-    # Set cookies and redirect to app
-    redirect = RedirectResponse(url="/", status_code=303)
-    _set_auth_cookies(redirect, access_token, refresh_token)
-    redirect.delete_cookie(GOOGLE_LOGIN_STATE_COOKIE)
-    redirect.delete_cookie(GOOGLE_LOGIN_VERIFIER_COOKIE)
+    try:
+        await db.commit()
+    except Exception as exc:
+        return await _google_login_failure(db, exc, "account_update_failed")
     return redirect
 
 
