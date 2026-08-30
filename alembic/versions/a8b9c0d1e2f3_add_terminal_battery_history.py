@@ -55,4 +55,3 @@ def downgrade() -> None:
         table_name="terminal_battery_samples",
     )
     op.drop_table("terminal_battery_samples")
-

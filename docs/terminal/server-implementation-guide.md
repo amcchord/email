@@ -19,6 +19,10 @@ restate the byte-level wire spec — that lives in two sibling documents:
 - [`firmware-variants.md`](firmware-variants.md) — wire-level spec for
   the BW (E1001), Gray, and 13.3" Spectra-6 (E1004) BMP layouts, plus
   the `?variant=` schedule-URL conventions.
+- [`firmware-management.md`](firmware-management.md) — current firmware
+  limitations and the safety contract for browser flashing, provisioning,
+  signed A/B OTA, rollout, and recovery. These are roadmap capabilities unless
+  explicitly marked as implemented there.
 
 If you only have time for one document and you're reading bytes off the
 wire, jump straight to `server-protocol.md`. If you're trying to decide
