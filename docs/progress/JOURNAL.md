@@ -3,6 +3,59 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Product safety cycle 2
+
+### Scope
+
+Complete received-attachment download and make Gmail synchronization lossless
+without overlapping the concurrent AI-model task or mutating real mail.
+
+### Completed
+
+- Added a session-authenticated attachment route with a single ownership join,
+  bounded Gmail retrieval, size/length validation, per-user canonical caching,
+  atomic private writes, and safe response headers.
+- Added accessible attachment loading, success, error, and retry behavior with
+  stale/duplicate request suppression and safe client filenames.
+- Replaced partial-success Gmail sync semantics with strict requested-ID
+  completeness and fail-fast parse/upsert behavior.
+- Serialized full and incremental sync per account with a PostgreSQL
+  transaction advisory lock while retaining compare-and-swap as the final
+  checkpoint guard.
+- Added versioned full-sync checkpoints carrying a pinned Gmail baseline plus
+  scan/replay phase. Full scans now refresh existing rows, replay all changes
+  since the baseline, and atomically commit replayed mail, the authoritative
+  high-water, completion state, and checkpoint removal.
+- Added safe recovery for legacy/invalid checkpoints and expired history
+  baselines without surrendering checkpoint ownership.
+
+### Verification
+
+- `make check`: 172 backend tests and 10 frontend tests passed; the production
+  frontend build passed with only the existing large-chunk advisory.
+- Twenty-three generated sync tests passed across partial/malformed batches,
+  processing rollback/retry, monotonic high-waters, advisory-lock contention,
+  stale CAS owners, legacy recovery, existing-message refresh, replay
+  update/delete, expired baselines, and atomic completion.
+- Generated browser QA passed for attachment table/mobile layouts, accessible
+  loading and full filename labels, failure with retry, and successful download.
+- Independent final sync review reported no blocking findings.
+- Python compilation and `git diff --check`: passed.
+
+### Production Actions
+
+- None. No deploy, restart, migration, production write, or real mailbox action
+  was performed.
+- Pushed `ba903b5` and `ae36211` to
+  `origin/codex/product-polish-cycle-1`; did not push or merge `main`.
+- The original checkout and all concurrent AI-model work remained untouched.
+
+### Next
+
+Implement a durable mutation reconciliation/undo outbox, then add disposable
+PostgreSQL interleaving tests and account-scoped Gmail message uniqueness as
+separate focused changes.
+
 ## 2026-08-30 — Product safety cycle 1
 
 ### Scope

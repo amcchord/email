@@ -62,3 +62,19 @@ add a new entry that explicitly supersedes the old one.
   surface, direct questions from Andrea remain Austin's responsibility, and
   future relationship changes should be made in the centralized workflow
   context rather than scattered prompt text.
+
+## D-006 — Synchronization checkpoints represent complete work
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Serialize Gmail sync per account and advance a history or page
+  checkpoint only after every item in its unit is resolved. Full sync owns a
+  versioned baseline through scan and history replay; incremental and full
+  completion use compare-and-swap as the final ownership guard.
+- Reason: Partial batch results, swallowed message failures, or overlapping
+  workers can otherwise move a checkpoint beyond mail that was never stored.
+- Consequence: Missing batch results and poison messages fail the unit and pin
+  its checkpoint for retry. Full sync refreshes existing messages and replays
+  changes since its captured baseline before publishing completion. Future
+  sync changes must preserve these invariants and add real-database
+  interleaving coverage when they alter ownership or transaction boundaries.
