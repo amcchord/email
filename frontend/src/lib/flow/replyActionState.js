@@ -14,6 +14,29 @@ export function capturedReplyStillActive(mutatedEmailId, activeEmailId) {
 }
 
 /**
+ * Keep a delayed thread response scoped to the exact Flow reply that opened
+ * it. Generation prevents same-id reopen races while identity/source checks
+ * prevent cross-message reply headers from being mixed.
+ */
+export function isCurrentFlowThreadRequest({
+  requestedGeneration,
+  currentGeneration,
+  replyViewOpen,
+  requestedEmailId = null,
+  activeEmailId = null,
+  requestedThreadId = null,
+  activeThreadId = null,
+  requestedSource = null,
+  activeSource = null,
+}) {
+  if (requestedGeneration !== currentGeneration || !replyViewOpen) return false;
+  if (requestedEmailId !== null && requestedEmailId !== activeEmailId) return false;
+  if (requestedThreadId !== null && requestedThreadId !== activeThreadId) return false;
+  if (requestedSource !== null && requestedSource !== activeSource) return false;
+  return true;
+}
+
+/**
  * Remove the captured message from needs-reply state without changing a newer
  * selection. This is intentionally pure so delayed mutation completion can be
  * proven independently of the Flow component.

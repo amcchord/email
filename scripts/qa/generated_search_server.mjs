@@ -21,6 +21,11 @@ const forcedRouteCase = ['slow', 'fail-once'].includes(process.env.QA_ROUTE_CASE
   : null;
 const forcedRouteTarget = process.env.QA_ROUTE_TARGET || null;
 const forcedRouteRun = process.env.QA_ROUTE_RUN || null;
+const editorFixtureEnabled = process.env.QA_EDITOR_FIXTURE === '1';
+const forcedEditorCase = ['slow', 'fail-once'].includes(process.env.QA_EDITOR_CASE)
+  ? process.env.QA_EDITOR_CASE
+  : null;
+const forcedEditorRun = process.env.QA_EDITOR_RUN || null;
 
 const compoundQuery = 'from:renee+launch@example.test subject:"Quarterly & Planning" has:attachment -is:read in:inbox';
 const removalQuery = 'from:renee+launch@example.test subject:"Quarterly & Planning" -is:read in:inbox';
@@ -343,6 +348,85 @@ const generatedEmails = deepFreeze([
   }),
 ]);
 
+function generatedEditorEmail(overrides) {
+  return {
+    ...generatedEmail(overrides),
+    needs_reply: overrides.needs_reply ?? true,
+    summary: overrides.summary || '',
+    category: overrides.category || null,
+    action_items: overrides.action_items || [],
+    ai_action_items: overrides.action_items || [],
+    reply_options: overrides.reply_options || null,
+    suggested_reply: overrides.suggested_reply || null,
+  };
+}
+
+const generatedEditorNeedsReply = deepFreeze([
+  generatedEditorEmail({
+    id: 314,
+    from_name: 'Generated Editor QA',
+    from_address: 'editor-qa@example.test',
+    reply_to: 'editor-reply@example.test',
+    subject: 'Generated cold editor reply',
+    snippet: 'Open this immutable generated thread to exercise the lazy reply editor.',
+    date: '2026-08-30T13:55:00Z',
+    labels: ['INBOX', 'UNREAD'],
+    is_read: false,
+    needs_reply: true,
+    category: 'urgent',
+    summary: 'A generated-only message for cold Flow reply editor loading.',
+    action_items: ['Reply using only the generated QA fixture.'],
+    suggested_reply: 'Thanks for the generated note. I can confirm this QA-only reply.',
+    reply_options: [
+      {
+        label: 'Confirm fixture',
+        body: 'Thanks for the generated note. I can confirm this QA-only reply.',
+        intent: 'accept',
+      },
+      {
+        label: 'Defer fixture',
+        body: 'Thanks for the generated note. I will revisit this QA-only fixture tomorrow.',
+        intent: 'defer',
+      },
+    ],
+  }),
+  generatedEditorEmail({
+    id: 315,
+    from_name: 'Generated Editor Race QA',
+    from_address: 'editor-race@example.test',
+    reply_to: 'editor-race-reply@example.test',
+    subject: 'Generated concurrent editor reply',
+    snippet: 'A second immutable message for open, close, and A-to-B editor races.',
+    date: '2026-08-30T13:50:00Z',
+    labels: ['INBOX', 'UNREAD'],
+    is_read: false,
+    needs_reply: true,
+    category: 'awaiting_reply',
+    summary: 'A second generated-only thread keeps concurrent editor tests deterministic.',
+    action_items: ['Switch between the two generated QA threads without sending.'],
+    suggested_reply: 'This is the second generated QA reply fixture.',
+    reply_options: [{
+      label: 'Acknowledge fixture',
+      body: 'This is the second generated QA reply fixture.',
+      intent: 'custom',
+    }],
+  }),
+]);
+
+const generatedEditorEmailsById = new Map(
+  generatedEditorNeedsReply.map(email => [email.id, email]),
+);
+const generatedEditorThreads = deepFreeze(Object.fromEntries(
+  generatedEditorNeedsReply.map(email => [
+    email.gmail_thread_id,
+    {
+      thread_id: email.gmail_thread_id,
+      subject: email.subject,
+      emails: [email],
+    },
+  ]),
+));
+
 const generatedTodos = deepFreeze([{
   id: 9101,
   title: 'Review the generated attachment preview message',
@@ -433,6 +517,9 @@ const audit = {
 const routeAssetReads = [];
 const routeAssetAttempts = new Map();
 let routeAssetsPromise = null;
+const editorAssetReads = [];
+const editorAssetAttempts = new Map();
+let editorAssetsPromise = null;
 const attachmentAttempts = new Map();
 const attachmentPreviewAttempts = new Map();
 let receivedSequence = 0;
@@ -546,6 +633,108 @@ function mobileRouteQaFrame(response, url) {
               ? Math.min(...topbarControls.map(element => element.getBoundingClientRect().height))
               : null,
             calendarCurrent: calendarTab.getAttribute('aria-current'),
+          });
+          document.body.dataset.qaReady = 'true';
+          break;
+        }
+        await delay(25);
+      }
+    });
+  </script>
+</body>
+</html>`;
+  return writeHtml(response, body);
+}
+
+function mobileEditorQaFrame(response, url) {
+  const surface = url.searchParams.get('surface') === 'flow-reply' ? 'flow-reply' : 'compose';
+  const editorCase = ['slow', 'fail-once'].includes(url.searchParams.get('case'))
+    ? url.searchParams.get('case')
+    : 'slow';
+  const frameHeight = url.searchParams.get('short') === '1' ? 390 : 812;
+  const run = url.searchParams.get('run') || `generated-mobile-${surface}-${editorCase}`;
+  const frameQuery = new URLSearchParams({
+    page: surface === 'flow-reply' ? 'flow' : 'inbox',
+    qa_editor_surface: surface,
+    qa_editor_case: editorCase,
+    qa_editor_run: run,
+  });
+  const expectedState = editorCase === 'slow' ? 'loading' : 'error';
+  const body = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Generated mobile lazy-editor QA</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #111827; }
+    body { display: grid; min-height: 100vh; place-items: start center; padding: 12px; }
+    iframe { width: 375px; height: ${frameHeight}px; max-width: 100%; border: 0; border-radius: 14px; background: white; box-shadow: 0 22px 70px rgb(0 0 0 / .4); }
+  </style>
+</head>
+<body data-qa-ready="false">
+  <iframe id="mobile-editor-app" src="/?${frameQuery.toString()}" title="Generated ${surface} lazy-editor mail at 375 by ${frameHeight} pixels"></iframe>
+  <script>
+    const frame = document.getElementById('mobile-editor-app');
+    const surface = ${JSON.stringify(surface)};
+    const editorCase = ${JSON.stringify(editorCase)};
+    const expectedState = ${JSON.stringify(expectedState)};
+    const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+    frame.addEventListener('load', async () => {
+      const doc = frame.contentDocument;
+      let opener = null;
+      for (let attempt = 0; attempt < 160; attempt += 1) {
+        opener = surface === 'flow-reply'
+          ? doc.querySelector('[aria-label^="Open Generated cold editor reply"]')
+          : doc.querySelector('[data-shortcut="nav.compose"]');
+        if (opener) {
+          opener.click();
+          break;
+        }
+        await delay(25);
+      }
+
+      for (let attempt = 0; attempt < 160; attempt += 1) {
+        const editorState = doc.querySelector('[data-editor-state="' + expectedState + '"]');
+        if (editorState) {
+          await delay(editorCase === 'slow' ? 220 : 80);
+          const controls = [...editorState.querySelectorAll('button, a[href]')];
+          const fallback = editorState.querySelector('textarea, [contenteditable="true"]');
+          const active = doc.activeElement;
+          const stateRect = editorState.getBoundingClientRect();
+          document.body.dataset.qaMetrics = JSON.stringify({
+            innerWidth: frame.contentWindow.innerWidth,
+            innerHeight: frame.contentWindow.innerHeight,
+            clientWidth: doc.documentElement.clientWidth,
+            scrollWidth: doc.documentElement.scrollWidth,
+            clientHeight: doc.documentElement.clientHeight,
+            scrollHeight: doc.documentElement.scrollHeight,
+            editorState: editorState.dataset.editorState,
+            editorSurface: editorState.dataset.editorSurface || surface,
+            stateRect: {
+              left: stateRect.left,
+              right: stateRect.right,
+              top: stateRect.top,
+              bottom: stateRect.bottom,
+              width: stateRect.width,
+              height: stateRect.height,
+            },
+            statusText: editorState.querySelector('[role="status"]')?.textContent?.trim() || null,
+            alertText: (editorState.matches('[role="alert"]')
+              ? editorState
+              : editorState.querySelector('[role="alert"]'))?.textContent?.trim() || null,
+            minEditorControlHeight: controls.length
+              ? Math.min(...controls.map(element => element.getBoundingClientRect().height))
+              : null,
+            fallbackPresent: Boolean(fallback),
+            fallbackLabel: fallback?.getAttribute('aria-label') || fallback?.getAttribute('placeholder') || null,
+            activeElement: active ? {
+              tag: active.tagName,
+              label: active.getAttribute('aria-label') || active.getAttribute('placeholder') || null,
+              shortcut: active.getAttribute('data-shortcut') || null,
+            } : null,
+            openerFound: Boolean(opener),
           });
           document.body.dataset.qaReady = 'true';
           break;
@@ -957,6 +1146,159 @@ const routeSourceByPage = Object.freeze({
   admin: 'src/pages/Admin.svelte',
 });
 
+function assetPath(file) {
+  if (!file) return null;
+  return file.startsWith('/') ? file : `/${file}`;
+}
+
+function sortedAssetClosure(mode, rootPaths, assetsByPath) {
+  const assets = [...assetsByPath.values()].sort((left, right) => (
+    left.path.localeCompare(right.path)
+  ));
+  return {
+    mode,
+    root_paths: [...new Set(rootPaths)].sort(),
+    paths: assets.map(asset => asset.path),
+    assets,
+  };
+}
+
+function editorAssetsFromManifest(manifest) {
+  const rootKeys = Object.entries(manifest)
+    .filter(([key, record]) => (
+      key.startsWith('src/components/email/RichEditor.svelte')
+      || record?.name === 'RichEditor'
+    ))
+    .map(([key]) => key);
+  const rootKeySet = new Set(rootKeys);
+  const rootPaths = [];
+  const visited = new Set();
+  const assetsByPath = new Map();
+
+  function addAsset(path, kind, source) {
+    if (!path) return;
+    const existing = assetsByPath.get(path);
+    if (!existing || kind === 'root') assetsByPath.set(path, { path, kind, source });
+  }
+
+  function visit(key, kind) {
+    if (visited.has(key)) return;
+    const record = manifest[key];
+    if (!record || (record.isEntry && !rootKeySet.has(key))) return;
+    visited.add(key);
+
+    const filePath = assetPath(record.file);
+    if (filePath) {
+      addAsset(filePath, kind, key);
+      if (kind === 'root') rootPaths.push(filePath);
+    }
+    for (const cssFile of record.css || []) {
+      addAsset(assetPath(cssFile), 'css', key);
+    }
+    for (const importedKey of record.imports || []) {
+      const importedRecord = manifest[importedKey];
+      if (importedRecord?.isEntry) continue;
+      visit(importedKey, 'dependency');
+    }
+  }
+
+  for (const rootKey of rootKeys) visit(rootKey, 'root');
+  return sortedAssetClosure('manifest', rootPaths, assetsByPath);
+}
+
+function staticImportSpecifiers(contents) {
+  const specifiers = new Set();
+  const fromPattern = /\b(?:import|export)\s*[^\"'();]*?\bfrom\s*[\"']([^\"']+)[\"']/g;
+  const sideEffectPattern = /\bimport\s*[\"']([^\"']+)[\"']/g;
+  for (const pattern of [fromPattern, sideEffectPattern]) {
+    for (const match of contents.matchAll(pattern)) specifiers.add(match[1]);
+  }
+  return [...specifiers];
+}
+
+async function editorAssetsFromAssetScan() {
+  const [assetNames, indexContents] = await Promise.all([
+    readdir(resolve(frontendDist, 'assets')),
+    readFile(resolve(frontendDist, 'index.html'), 'utf8'),
+  ]);
+  const knownAssetPaths = new Set(assetNames.map(name => `/assets/${name}`));
+  const eagerPaths = new Set(
+    [...indexContents.matchAll(/\b(?:src|href)=[\"']([^\"']+)[\"']/g)]
+      .map(match => {
+        try {
+          return new URL(match[1], 'http://generated.invalid/').pathname;
+        } catch {
+          return null;
+        }
+      })
+      .filter(path => path?.startsWith('/assets/')),
+  );
+  const rootPaths = assetNames
+    .filter(name => /^RichEditor-.+\.js$/.test(name))
+    .map(name => `/assets/${name}`)
+    .sort();
+  const rootCssPaths = assetNames
+    .filter(name => /^RichEditor-.+\.css$/.test(name))
+    .map(name => `/assets/${name}`)
+    .sort();
+  const assetsByPath = new Map();
+  for (const path of rootPaths) {
+    assetsByPath.set(path, { path, kind: 'root', source: 'asset-scan' });
+  }
+  for (const path of rootCssPaths) {
+    assetsByPath.set(path, { path, kind: 'css', source: 'asset-scan' });
+  }
+
+  const pending = [...rootPaths];
+  const scanned = new Set();
+  while (pending.length > 0) {
+    const currentPath = pending.shift();
+    if (scanned.has(currentPath)) continue;
+    scanned.add(currentPath);
+    const contents = await readFile(resolve(frontendDist, currentPath.replace(/^\/+/, '')), 'utf8');
+    for (const specifier of staticImportSpecifiers(contents)) {
+      let dependencyPath;
+      try {
+        dependencyPath = new URL(specifier, `http://generated.invalid${currentPath}`).pathname;
+      } catch {
+        continue;
+      }
+      if (
+        !dependencyPath.startsWith('/assets/')
+        || !knownAssetPaths.has(dependencyPath)
+        || eagerPaths.has(dependencyPath)
+      ) continue;
+      if (!assetsByPath.has(dependencyPath)) {
+        assetsByPath.set(dependencyPath, {
+          path: dependencyPath,
+          kind: dependencyPath.endsWith('.css') ? 'css' : 'dependency',
+          source: currentPath,
+        });
+      }
+      if (dependencyPath.endsWith('.js') && !scanned.has(dependencyPath)) {
+        pending.push(dependencyPath);
+      }
+    }
+  }
+
+  return sortedAssetClosure('asset-scan', rootPaths, assetsByPath);
+}
+
+async function loadEditorAssets() {
+  if (!editorAssetsPromise) {
+    editorAssetsPromise = readFile(frontendManifest, 'utf8')
+      .then(async contents => {
+        const closure = editorAssetsFromManifest(JSON.parse(contents));
+        return closure.root_paths.length > 0 ? closure : editorAssetsFromAssetScan();
+      })
+      .catch(error => {
+        if (error?.code !== 'ENOENT') throw error;
+        return editorAssetsFromAssetScan();
+      });
+  }
+  return editorAssetsPromise;
+}
+
 async function loadRouteAssets() {
   if (!routeAssetsPromise) {
     routeAssetsPromise = readFile(frontendManifest, 'utf8')
@@ -978,6 +1320,62 @@ async function loadRouteAssets() {
       });
   }
   return routeAssetsPromise;
+}
+
+async function applyEditorAssetScenario(request, response, url) {
+  const editorAssets = await loadEditorAssets();
+  const requestedAsset = editorAssets.assets.find(asset => asset.path === url.pathname);
+  if (!requestedAsset) return false;
+
+  const canForceScenario = (
+    editorFixtureEnabled
+    && forcedEditorCase
+    && forcedEditorRun
+    && /^[a-zA-Z0-9._-]{1,100}$/.test(forcedEditorRun)
+    && requestedAsset.kind === 'root'
+  );
+  const editorCase = canForceScenario ? forcedEditorCase : 'normal';
+  const run = canForceScenario ? forcedEditorRun : null;
+  const attemptKey = `${run || 'normal'}:${url.pathname}`;
+  const attempt = (editorAssetAttempts.get(attemptKey) || 0) + 1;
+  editorAssetAttempts.set(attemptKey, attempt);
+  const startedAt = Date.now();
+  const entry = {
+    sequence: editorAssetReads.length + 1,
+    asset_kind: requestedAsset.kind,
+    case: editorCase,
+    run,
+    path: url.pathname,
+    attempt,
+    status: null,
+    duration_ms: null,
+    aborted: false,
+  };
+  editorAssetReads.push(entry);
+  request.once('aborted', () => { entry.aborted = true; });
+
+  if (editorCase === 'slow') await wait(1200);
+  if (request.aborted || response.destroyed) {
+    entry.status = 499;
+    entry.duration_ms = Date.now() - startedAt;
+    return true;
+  }
+  if (editorCase === 'fail-once' && attempt === 1) {
+    entry.status = 503;
+    entry.duration_ms = Date.now() - startedAt;
+    const body = 'Generated transient lazy-editor failure';
+    response.writeHead(503, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Length': Buffer.byteLength(body),
+      'Cache-Control': 'no-store',
+    });
+    response.end(body);
+    return true;
+  }
+
+  entry.status = 200;
+  entry.duration_ms = Date.now() - startedAt;
+  return false;
 }
 
 async function routeAssetScenario(request, url) {
@@ -1099,6 +1497,7 @@ async function serveFrontend(request, response, url) {
     return;
   }
 
+  if (await applyEditorAssetScenario(request, response, url)) return;
   if (await applyRouteAssetScenario(request, response, url)) return;
 
   response.writeHead(200, {
@@ -1136,6 +1535,21 @@ async function handleGet(request, response, url) {
       : undefined);
   }
   if (pathname === '/__qa/route-mobile') return mobileRouteQaFrame(response, url);
+  if (pathname === '/__qa/editor-mobile') return mobileEditorQaFrame(response, url);
+  if (pathname === '/api/test/editor-audit') {
+    return writeJson(response, {
+      fixture: 'generated-lazy-editor',
+      fixture_enabled: editorFixtureEnabled,
+      fixture_domains: ['example.test'],
+      fixture_message_ids: generatedEditorNeedsReply.map(email => email.id),
+      forced_case: forcedEditorCase,
+      forced_run: forcedEditorRun,
+      editor_assets: await loadEditorAssets(),
+      asset_reads: editorAssetReads,
+      mutation_attempts: audit.mutation_attempts,
+      unknown_routes: audit.unknown_routes,
+    });
+  }
   if (pathname === '/api/test/route-audit') {
     return writeJson(response, {
       fixture: 'generated-lazy-routes',
@@ -1150,7 +1564,10 @@ async function handleGet(request, response, url) {
       fixture: 'generated-structured-search',
       fixture_domains: ['example.test'],
       fixture_account_ids: generatedAccounts.map(account => account.id),
-      fixture_message_ids: generatedEmails.map(email => email.id),
+      fixture_message_ids: [
+        ...generatedEmails.map(email => email.id),
+        ...(editorFixtureEnabled ? generatedEditorNeedsReply.map(email => email.id) : []),
+      ],
       scenarios: scenarioQueries,
       queries: audit.queries,
       action_status_reads: audit.action_status_reads,
@@ -1251,7 +1668,8 @@ async function handleGet(request, response, url) {
   if (pathname === '/api/calendar/upcoming') return writeJson(response, { events: [] });
   if (pathname === '/api/todos/') return writeJson(response, { todos: generatedTodos });
   if (pathname === '/api/ai/needs-reply') {
-    return writeJson(response, { emails: [], total: 0 });
+    const emails = editorFixtureEnabled ? generatedEditorNeedsReply : [];
+    return writeJson(response, { emails, total: emails.length });
   }
   if (pathname === '/api/ai/trends') {
     return writeJson(response, { summary: '', needs_attention: [] });
@@ -1275,9 +1693,23 @@ async function handleGet(request, response, url) {
   }
   if (pathname === '/api/chat/conversations') return writeJson(response, []);
 
+  const threadMatch = pathname.match(/^\/api\/emails\/thread\/([^/]+)$/);
+  if (threadMatch) {
+    let threadId;
+    try {
+      threadId = decodeURIComponent(threadMatch[1]);
+    } catch {
+      return writeJson(response, { detail: 'Malformed generated thread ID' }, 400);
+    }
+    const thread = editorFixtureEnabled ? generatedEditorThreads[threadId] : null;
+    return writeJson(response, thread || { detail: 'Generated thread not found' }, thread ? 200 : 404);
+  }
+
   const emailMatch = pathname.match(/^\/api\/emails\/(\d+)$/);
   if (emailMatch) {
-    const email = emailsById.get(Number(emailMatch[1]));
+    const emailId = Number(emailMatch[1]);
+    const email = emailsById.get(emailId)
+      || (editorFixtureEnabled ? generatedEditorEmailsById.get(emailId) : null);
     return writeJson(response, email || { detail: 'Generated email not found' }, email ? 200 : 404);
   }
 

@@ -1,12 +1,13 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { get } from 'svelte/store';
   import { api } from '../lib/api.js';
   import { currentPage, composeData, accounts, selectedAccountId as globalSelectedAccountId, showToast } from '../lib/stores.js';
   import { registerActions } from '../lib/shortcutStore.js';
+  import { composeDraftHasContent, composeDraftStorageKey, composeReplyContext, LEGACY_COMPOSE_DRAFT_KEY } from '../lib/composeDraft.js';
   import Button from '../components/common/Button.svelte';
   import Icon from '../components/common/Icon.svelte';
-  import RichEditor from '../components/email/RichEditor.svelte';
+  import DeferredRichEditor from '../components/email/DeferredRichEditor.svelte';
 
   let to = $state('');
   let cc = $state('');
@@ -22,7 +23,11 @@
   let autosaveStatus = $state('');
   let autosaveReady = $state(false);
   let fileInput = $state(null);
-  const LOCAL_DRAFT_KEY = 'composeLocalDraftV1';
+  let writingSurfaceReady = $state(false);
+  let savingDraft = $state(false);
+  let activeDraftKey = $state('composeLocalDraftV2:new');
+  let replyContext = $state({ in_reply_to: null, references: null, thread_id: null });
+  let suppressLocalPersistence = false;
 
   let senderAccount = $derived(accountList.find(account => account.id === Number(selectedAccountId)) || null);
   let recipientChips = $derived(parseRecipients(to));
@@ -42,24 +47,64 @@
       || list[0].id;
   }
 
-  function restoreLocalDraft() {
-    if (get(composeData)) return;
+  function draftSnapshot() {
+    return {
+      account_id: selectedAccountId,
+      to,
+      cc,
+      bcc,
+      subject,
+      body_html: bodyHtml,
+      in_reply_to: replyContext.in_reply_to,
+      references: replyContext.references,
+      thread_id: replyContext.thread_id,
+      saved_at: new Date().toISOString(),
+    };
+  }
+
+  function persistLocalDraft(draft = draftSnapshot()) {
+    if (suppressLocalPersistence) return;
     try {
-      const draft = JSON.parse(localStorage.getItem(LOCAL_DRAFT_KEY) || 'null');
-      if (!draft || !(draft.to || draft.subject || draft.body_html)) return;
+      if (!composeDraftHasContent(draft)) {
+        localStorage.removeItem(activeDraftKey);
+        autosaveStatus = '';
+        return;
+      }
+      localStorage.setItem(activeDraftKey, JSON.stringify(draft));
+      autosaveStatus = `Saved locally at ${new Date(draft.saved_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+    } catch {
+      autosaveStatus = 'Local autosave unavailable';
+    }
+  }
+
+  function restoreLocalDraft() {
+    try {
+      let storedKey = activeDraftKey;
+      let serialized = localStorage.getItem(storedKey);
+      if (!serialized && activeDraftKey === 'composeLocalDraftV2:new') {
+        serialized = localStorage.getItem(LEGACY_COMPOSE_DRAFT_KEY);
+        storedKey = LEGACY_COMPOSE_DRAFT_KEY;
+      }
+      const draft = JSON.parse(serialized || 'null');
+      if (!composeDraftHasContent(draft)) return;
       to = draft.to || '';
       cc = draft.cc || '';
       bcc = draft.bcc || '';
       subject = draft.subject || '';
       bodyHtml = draft.body_html || '';
       initialContent = bodyHtml;
-      if (accountList.some(account => account.id === Number(draft.account_id))) {
+      if (Number.isSafeInteger(Number(draft.account_id)) && Number(draft.account_id) > 0) {
         selectedAccountId = Number(draft.account_id);
       }
+      replyContext = composeReplyContext(draft);
       showCcBcc = Boolean(cc || bcc);
       autosaveStatus = `Restored local draft from ${new Date(draft.saved_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+      if (storedKey === LEGACY_COMPOSE_DRAFT_KEY) {
+        persistLocalDraft(draft);
+        localStorage.removeItem(LEGACY_COMPOSE_DRAFT_KEY);
+      }
     } catch {
-      localStorage.removeItem(LOCAL_DRAFT_KEY);
+      localStorage.removeItem(activeDraftKey);
     }
   }
 
@@ -74,6 +119,7 @@
     // Pre-fill from composeData (reply/forward)
     const unsub = composeData.subscribe(data => {
       if (data) {
+        activeDraftKey = composeDraftStorageKey(data);
         if (data.to) to = data.to.join(', ');
         if (data.cc) cc = data.cc.join(', ');
         if (data.subject) subject = data.subject;
@@ -82,6 +128,7 @@
           bodyHtml = data.body_html;
         }
         if (data.account_id) selectedAccountId = data.account_id;
+        replyContext = composeReplyContext(data);
       }
     });
 
@@ -89,11 +136,15 @@
     const cleanupShortcuts = registerActions({
       'compose.send': {
         run: () => handleSend(),
-        isEnabled: () => !sending,
-        disabledReason: 'Email is already sending',
+        isEnabled: () => !sending && writingSurfaceReady,
+        disabledReason: () => sending ? 'Email is already sending' : 'Message editor is still opening',
       },
-      'compose.draft': () => handleSaveDraft(),
-      'compose.discard': () => discardDraft(),
+      'compose.draft': {
+        run: () => handleSaveDraft(),
+        isEnabled: () => !savingDraft && writingSurfaceReady,
+        disabledReason: () => savingDraft ? 'Draft is already saving' : 'Message editor is still opening',
+      },
+      'compose.discard': () => returnToInbox(),
       'compose.cc': () => { showCcBcc = !showCcBcc; },
       'compose.bcc': () => { showCcBcc = !showCcBcc; },
     });
@@ -115,22 +166,31 @@
     bodyHtml = html;
   }
 
+  function focusInitialRecipient(node) {
+    const frame = requestAnimationFrame(() => {
+      const active = document.activeElement;
+      const focusIsLost = !active
+        || active === document.body
+        || active.matches?.('main')
+        || !active.isConnected;
+      if (!to.trim() && focusIsLost) node.focus({ preventScroll: true });
+    });
+    return { destroy: () => cancelAnimationFrame(frame) };
+  }
+
   $effect(() => {
     if (!autosaveReady) return;
-    const draft = {
-      account_id: selectedAccountId, to, cc, bcc, subject,
-      body_html: bodyHtml, saved_at: new Date().toISOString(),
-    };
+    const draft = draftSnapshot();
+    suppressLocalPersistence = false;
     autosaveStatus = 'Saving locally…';
     const timer = setTimeout(() => {
-      try {
-        localStorage.setItem(LOCAL_DRAFT_KEY, JSON.stringify(draft));
-        autosaveStatus = `Saved locally at ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
-      } catch {
-        autosaveStatus = 'Local autosave unavailable';
-      }
+      persistLocalDraft(draft);
     }, 650);
     return () => clearTimeout(timer);
+  });
+
+  onDestroy(() => {
+    if (autosaveReady) persistLocalDraft();
   });
 
   $effect(() => {
@@ -170,13 +230,28 @@
   }
 
   function discardDraft() {
-    localStorage.removeItem(LOCAL_DRAFT_KEY);
+    suppressLocalPersistence = true;
+    localStorage.removeItem(activeDraftKey);
     composeData.set(null);
     currentPage.set('inbox');
   }
 
+  function returnToInbox() {
+    persistLocalDraft();
+    if (attachments.length > 0) {
+      showToast('Draft saved locally without attachments; add them again when you return', 'info');
+    }
+    composeData.set(null);
+    currentPage.set('inbox');
+  }
+
+  function prepareEditorReload() {
+    suppressLocalPersistence = false;
+    persistLocalDraft();
+  }
+
   async function handleSend() {
-    if (sending) return false;
+    if (sending || !writingSurfaceReady) return false;
     if (!to.trim()) {
       showToast('Please add recipients', 'error');
       return false;
@@ -199,16 +274,13 @@
         attachments: attachments.map(({ size, ...item }) => item),
       };
 
-      // Include reply metadata if present
-      let cd;
-      composeData.subscribe(v => cd = v)();
-      if (cd) {
-        if (cd.in_reply_to) data.in_reply_to = cd.in_reply_to;
-        if (cd.thread_id) data.thread_id = cd.thread_id;
-      }
+      if (replyContext.in_reply_to) data.in_reply_to = replyContext.in_reply_to;
+      if (replyContext.references) data.references = replyContext.references;
+      if (replyContext.thread_id) data.thread_id = replyContext.thread_id;
 
       await api.sendEmail(data);
-      localStorage.removeItem(LOCAL_DRAFT_KEY);
+      suppressLocalPersistence = true;
+      localStorage.removeItem(activeDraftKey);
       showToast('Email sent', 'success');
       currentPage.set('inbox');
       composeData.set(null);
@@ -222,7 +294,8 @@
   }
 
   async function handleSaveDraft() {
-    if (!selectedAccountId) return;
+    if (!selectedAccountId || savingDraft || !writingSurfaceReady) return false;
+    savingDraft = true;
     try {
       await api.saveDraft({
         account_id: selectedAccountId,
@@ -234,11 +307,19 @@
         body_text: bodyHtml.replace(/<[^>]*>/g, ''),
         is_draft: true,
         attachments: attachments.map(({ size, ...item }) => item),
+        in_reply_to: replyContext.in_reply_to,
+        references: replyContext.references,
+        thread_id: replyContext.thread_id,
       });
-      localStorage.removeItem(LOCAL_DRAFT_KEY);
+      suppressLocalPersistence = true;
+      localStorage.removeItem(activeDraftKey);
       showToast('Draft saved', 'success');
+      return true;
     } catch (err) {
       showToast(err.message, 'error');
+      return false;
+    } finally {
+      savingDraft = false;
     }
   }
 </script>
@@ -248,7 +329,7 @@
   <div class="compose-header min-h-14 flex items-center justify-between px-6 border-b shrink-0" style="border-color: var(--border-color)">
     <div class="flex items-center gap-3">
       <button
-        onclick={() => { currentPage.set('inbox'); composeData.set(null); }}
+        onclick={returnToInbox}
         class="p-1.5 rounded-md transition-fast"
         style="color: var(--text-secondary)"
         aria-label="Back to inbox; keep local draft"
@@ -259,11 +340,14 @@
     </div>
     <div class="flex items-center gap-2">
       {#if autosaveStatus}
-        <span class="autosave-label text-[11px]" style="color: var(--text-tertiary)">{autosaveStatus}</span>
+        <span class="autosave-label text-[11px]" style="color: var(--text-tertiary)" aria-hidden="true">{autosaveStatus}</span>
+        <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">{autosaveStatus}</span>
       {/if}
       <Button size="sm" onclick={discardDraft}>Discard</Button>
-      <Button size="sm" onclick={handleSaveDraft}>Save Draft</Button>
-      <Button variant="primary" size="sm" onclick={handleSend} disabled={sending}>
+      <Button size="sm" onclick={handleSaveDraft} disabled={savingDraft || !writingSurfaceReady}>
+        {savingDraft ? 'Saving…' : 'Save Draft'}
+      </Button>
+      <Button variant="primary" size="sm" onclick={handleSend} disabled={sending || !writingSurfaceReady}>
         {#if sending}
           Sending...
         {:else}
@@ -306,6 +390,7 @@
             type="text"
             id="compose-to"
             bind:value={to}
+            use:focusInitialRecipient
             placeholder="recipient@example.com"
             class="w-full h-8 text-sm outline-none"
             style="background: transparent; color: var(--text-primary)"
@@ -390,16 +475,24 @@
               {/each}
               <span class="text-[10px] self-center" style="color: var(--text-tertiary)">{(totalAttachmentBytes / 1024 / 1024).toFixed(1)} of 18 MB</span>
             </div>
+            <p class="mt-1 text-[10px]" style="color: var(--text-tertiary)">
+              Attachments stay only while this composer is open and are not included in local autosave.
+            </p>
           {/if}
         </div>
       </div>
     </div>
 
     <!-- Rich Editor Body -->
-    <RichEditor
+    <DeferredRichEditor
       content={initialContent}
       onUpdate={handleEditorUpdate}
+      onReady={() => { writingSurfaceReady = true; }}
+      onBeforeReload={prepareEditorReload}
       placeholder="Write your message..."
+      autofocus={true}
+      ariaLabel="Message body"
+      surface="compose"
     />
   </div>
 </div>
@@ -422,6 +515,10 @@
     }
     .compose-field > label {
       width: 3.25rem;
+    }
+
+    :global(.compose-header button) {
+      min-height: 2.75rem;
     }
   }
 </style>

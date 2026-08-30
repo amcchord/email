@@ -4,9 +4,31 @@ import test from 'node:test';
 import {
   addPendingReplyId,
   capturedReplyStillActive,
+  isCurrentFlowThreadRequest,
   reconcileNeedsReplyRemoval,
   removePendingReplyId,
 } from './flow/replyActionState.js';
+
+test('Flow accepts thread data only for the newest matching reply identity', () => {
+  const current = {
+    requestedGeneration: 8,
+    currentGeneration: 8,
+    replyViewOpen: true,
+    requestedEmailId: 202,
+    activeEmailId: 202,
+    requestedThreadId: 'generated-thread-b',
+    activeThreadId: 'generated-thread-b',
+    requestedSource: 'needs_reply',
+    activeSource: 'needs_reply',
+  };
+
+  assert.equal(isCurrentFlowThreadRequest(current), true);
+  assert.equal(isCurrentFlowThreadRequest({ ...current, requestedGeneration: 7 }), false);
+  assert.equal(isCurrentFlowThreadRequest({ ...current, activeEmailId: 201 }), false);
+  assert.equal(isCurrentFlowThreadRequest({ ...current, activeThreadId: 'generated-thread-a' }), false);
+  assert.equal(isCurrentFlowThreadRequest({ ...current, activeSource: 'thread' }), false);
+  assert.equal(isCurrentFlowThreadRequest({ ...current, replyViewOpen: false }), false);
+});
 
 test('pending reply mutation ids reject duplicate submission until completion', () => {
   const first = addPendingReplyId([], 101);

@@ -10,8 +10,8 @@
   import { theme } from '../lib/theme.js';
   import Icon from '../components/common/Icon.svelte';
   import DaySummaryStrip from '../lib/flow/DaySummaryStrip.svelte';
-  import { addPendingReplyId, capturedReplyStillActive, reconcileNeedsReplyRemoval, removePendingReplyId } from '../lib/flow/replyActionState.js';
-  import RichEditor from '../components/email/RichEditor.svelte';
+  import { addPendingReplyId, capturedReplyStillActive, isCurrentFlowThreadRequest, reconcileNeedsReplyRemoval, removePendingReplyId } from '../lib/flow/replyActionState.js';
+  import DeferredRichEditor from '../components/email/DeferredRichEditor.svelte';
   import { cleanEmailText } from '../lib/emailText.js';
 
   // --- Day Summary State ---
@@ -66,8 +66,9 @@
   let initialReplyContent = $state('');
   let selectedOptionIndex = $state(-1);
   let editorKey = $state(0);
-
-  let hasReplyContent = $derived(replyBodyHtml && replyBodyHtml.replace(/<[^>]*>/g, '').trim().length > 0);
+  let writingSurfaceReady = $state(false);
+  let threadLoadGeneration = 0;
+  let replyDrafts = $state({});
 
   // --- Keyboard navigation state for dashboard ---
   // Sections: 'needs_reply', 'awaiting', 'threads'
@@ -321,6 +322,10 @@
         isEnabled: () => canSendReply(),
         disabledReason: () => inlineReplySending
           ? 'Reply is already sending'
+          : threadLoading
+            ? 'Conversation details are still loading'
+            : !writingSurfaceReady
+              ? 'Reply editor is still opening'
           : 'Open a reply and enter a message first',
       },
       'flow.back': () => {
@@ -798,7 +803,48 @@
 
   // ============ Reply View Logic ============
 
+  function replyDraftKey(email) {
+    if (!email) return null;
+    return [email.account_email || '', email.gmail_thread_id || '', email.id || ''].join(':');
+  }
+
+  function rememberCurrentReplyDraft() {
+    const key = replyDraftKey(selectedReplyEmail);
+    if (!key || !replyBodyHtml) return;
+    replyDrafts = { ...replyDrafts, [key]: replyBodyHtml };
+  }
+
+  function forgetReplyDraft(email = selectedReplyEmail) {
+    const key = replyDraftKey(email);
+    if (!key || !Object.hasOwn(replyDrafts, key)) return;
+    const nextDrafts = { ...replyDrafts };
+    delete nextDrafts[key];
+    replyDrafts = nextDrafts;
+  }
+
+  function remountReplyEditor() {
+    writingSurfaceReady = false;
+    editorKey += 1;
+  }
+
+  function threadRequestIsCurrent(requestGeneration, { emailId = null, threadId = null, source = null } = {}) {
+    return isCurrentFlowThreadRequest({
+      requestedGeneration: requestGeneration,
+      currentGeneration: threadLoadGeneration,
+      replyViewOpen: replyViewOpen && Boolean(selectedReplyEmail),
+      requestedEmailId: emailId,
+      activeEmailId: selectedReplyEmail?.id ?? null,
+      requestedThreadId: threadId,
+      activeThreadId: selectedReplyEmail?.gmail_thread_id ?? null,
+      requestedSource: source,
+      activeSource: viewSource,
+    });
+  }
+
   async function openReplyView(email, index, option) {
+    rememberCurrentReplyDraft();
+    const requestGeneration = ++threadLoadGeneration;
+    const emailId = email.id;
     selectedReplyEmail = email;
     activeReplyIndex = index;
     viewSource = 'needs_reply';
@@ -824,14 +870,16 @@
         if (optIdx >= 0) selectedOptionIndex = optIdx;
       }
     } else {
-      initialReplyContent = '';
+      initialReplyContent = replyDrafts[replyDraftKey(email)] || '';
+      replyBodyHtml = initialReplyContent;
     }
-    editorKey++;
+    remountReplyEditor();
 
     if (email.gmail_thread_id) {
       try {
         const orderParam = get(threadOrder) === 'newest_first' ? 'desc' : 'asc';
         const data = await api.getThread(email.gmail_thread_id, orderParam);
+        if (!threadRequestIsCurrent(requestGeneration, { emailId })) return;
         threadData = data;
         if (data.emails && data.emails.length > 1) {
           let collapsed = {};
@@ -844,13 +892,17 @@
           collapsedMessages = collapsed;
         }
       } catch (err) {
-        showToast('Failed to load thread: ' + err.message, 'error');
+        if (threadRequestIsCurrent(requestGeneration, { emailId })) {
+          showToast('Failed to load thread: ' + err.message, 'error');
+        }
       }
     }
-    threadLoading = false;
+    if (threadRequestIsCurrent(requestGeneration, { emailId })) threadLoading = false;
   }
 
   async function openThreadInFlow(threadId, metadata, source) {
+    rememberCurrentReplyDraft();
+    const requestGeneration = ++threadLoadGeneration;
     viewSource = source;
     replyViewOpen = true;
     threadLoading = true;
@@ -863,7 +915,7 @@
     activeReplyIndex = 0;
     lastCustomPrompt = '';
     editingCustomPrompt = false;
-    editorKey++;
+    remountReplyEditor();
 
     // Build a minimal email-like object for the reply view header
     selectedReplyEmail = {
@@ -885,6 +937,7 @@
       try {
         const orderParam = get(threadOrder) === 'newest_first' ? 'desc' : 'asc';
         const data = await api.getThread(threadId, orderParam);
+        if (!threadRequestIsCurrent(requestGeneration, { threadId, source })) return;
         threadData = data;
         if (data.emails && data.emails.length > 1) {
           let collapsed = {};
@@ -912,13 +965,17 @@
           }
         }
       } catch (err) {
-        showToast('Failed to load thread: ' + err.message, 'error');
+        if (threadRequestIsCurrent(requestGeneration, { threadId, source })) {
+          showToast('Failed to load thread: ' + err.message, 'error');
+        }
       }
     }
-    threadLoading = false;
+    if (threadRequestIsCurrent(requestGeneration, { threadId, source })) threadLoading = false;
   }
 
   function closeReplyView() {
+    rememberCurrentReplyDraft();
+    threadLoadGeneration += 1;
     replyViewOpen = false;
     viewSource = 'needs_reply';
     selectedReplyEmail = null;
@@ -930,6 +987,7 @@
     initialReplyContent = '';
     lastCustomPrompt = '';
     editingCustomPrompt = false;
+    writingSurfaceReady = false;
   }
 
   function selectReplyOption(option, optIdx) {
@@ -937,7 +995,8 @@
     replyBodyHtml = initialReplyContent;
     replyIntent = option.intent || null;
     selectedOptionIndex = optIdx;
-    editorKey++;
+    rememberCurrentReplyDraft();
+    remountReplyEditor();
   }
 
   function clearReplyOption() {
@@ -949,7 +1008,8 @@
     customPromptText = '';
     lastCustomPrompt = '';
     editingCustomPrompt = false;
-    editorKey++;
+    forgetReplyDraft();
+    remountReplyEditor();
   }
 
   async function generateCustomReply(promptOverride) {
@@ -994,7 +1054,8 @@
           selectedOptionIndex = -1;
           customPromptOpen = false;
           customPromptText = '';
-          editorKey++;
+          rememberCurrentReplyDraft();
+          remountReplyEditor();
         }
       }
     } catch (err) {
@@ -1010,6 +1071,18 @@
 
   function handleEditorUpdate(html) {
     replyBodyHtml = html;
+    const key = replyDraftKey(selectedReplyEmail);
+    if (key) replyDrafts = { ...replyDrafts, [key]: html };
+  }
+
+  function useSuggestedReply() {
+    if (!selectedReplyEmail?.suggested_reply) return;
+    initialReplyContent = '<p>' + selectedReplyEmail.suggested_reply.replace(/\n/g, '</p><p>') + '</p>';
+    replyBodyHtml = initialReplyContent;
+    replyIntent = 'custom';
+    selectedOptionIndex = -1;
+    rememberCurrentReplyDraft();
+    remountReplyEditor();
   }
 
   async function goToNextReply() {
@@ -1192,11 +1265,16 @@
 
   function canSendReply() {
     const plainText = replyBodyHtml ? replyBodyHtml.replace(/<[^>]*>/g, '').trim() : '';
-    return replyViewOpen && Boolean(selectedReplyEmail) && Boolean(plainText) && !inlineReplySending;
+    return replyViewOpen
+      && Boolean(selectedReplyEmail)
+      && Boolean(plainText)
+      && writingSurfaceReady
+      && !threadLoading
+      && !inlineReplySending;
   }
 
   async function sendReply() {
-    if (inlineReplySending || !selectedReplyEmail) return false;
+    if (!canSendReply()) return false;
     const plainText = replyBodyHtml ? replyBodyHtml.replace(/<[^>]*>/g, '').trim() : '';
     if (!plainText) return false;
 
@@ -1244,6 +1322,8 @@
         thread_id: email.gmail_thread_id || null,
       });
       showToast('Reply sent!', 'success');
+      forgetReplyDraft(email);
+      replyBodyHtml = '';
 
       if (viewSource === 'needs_reply') {
         // Archive if toggled
@@ -2026,7 +2106,7 @@
               </div>
               <p class="text-xs italic leading-relaxed mb-2" style="color: var(--text-secondary)">"{selectedReplyEmail.suggested_reply}"</p>
               <button
-                onclick={() => { initialReplyContent = '<p>' + selectedReplyEmail.suggested_reply.replace(/\n/g, '</p><p>') + '</p>'; editorKey++; replyIntent = 'custom'; selectedOptionIndex = -1; }}
+                onclick={useSuggestedReply}
                 class="text-[10px] font-medium px-2.5 py-1 rounded-md border transition-fast shrink-0"
                 style="border-color: var(--border-color); color: var(--color-accent-600)"
               >
@@ -2119,11 +2199,15 @@
           <!-- Rich Text Editor -->
           <div class="flex flex-col">
             {#key editorKey}
-              <RichEditor
+              <DeferredRichEditor
                 content={initialReplyContent}
                 onUpdate={handleEditorUpdate}
+                onReady={() => { writingSurfaceReady = true; }}
                 placeholder="Write your reply..."
                 externalScroll={true}
+                autofocus={true}
+                ariaLabel="Reply body"
+                surface="flow-reply"
               />
             {/key}
           </div>
@@ -2291,9 +2375,9 @@
               </button>
               <button
                 onclick={sendReply}
-                disabled={inlineReplySending || !hasReplyContent}
+                disabled={!canSendReply()}
                 class="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-medium transition-fast"
-                style="background: {inlineReplySending || !hasReplyContent ? 'var(--border-color)' : 'var(--color-accent-500)'}; color: white"
+                style="background: {!canSendReply() ? 'var(--border-color)' : 'var(--color-accent-500)'}; color: white"
               >
                 {#if inlineReplySending}
                   <div class="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>

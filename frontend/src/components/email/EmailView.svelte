@@ -643,6 +643,7 @@
   function handleFullCompose() {
     if (!email) return;
     composeData.set({
+      draft_key: `reply:${email.account_id || 'account'}:${email.id}`,
       account_id: resolveAccountId(),
       to: [email.reply_to || email.from_address],
       cc: [],
@@ -658,6 +659,7 @@
   function handleForward() {
     if (!email) return;
     composeData.set({
+      draft_key: `forward:${email.account_id || 'account'}:${email.id}`,
       account_id: resolveAccountId(),
       to: [],
       cc: [],
