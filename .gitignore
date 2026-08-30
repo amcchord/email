@@ -5,6 +5,7 @@ alembic.ini
 
 # Python
 venv/
+.venv/
 .setup_venv/
 __pycache__/
 *.pyc
@@ -42,6 +43,7 @@ tui/
 .pki/
 
 # System / user files
+.DS_Store
 .bash_history
 .bashrc
 .gitconfig
