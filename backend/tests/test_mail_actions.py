@@ -10,14 +10,16 @@ from pydantic import ValidationError
 import backend.services.mail_actions as action_module
 import backend.services.gmail as gmail_module
 import backend.services.sync as sync_module
-from backend.models.email import Email
+import backend.routers.emails as email_router_module
+from backend.models.email import Email, EmailLabel
 from backend.models.mail_action import MailAction
-from backend.schemas.email import EmailActionRequest
+from backend.schemas.email import EmailActionRequest, LabelResponse
 from backend.services.mail_actions import (
     ACTION_LABEL_DELTAS,
     ErrorDisposition,
     MailActionConflict,
     MailActionNotFound,
+    MailActionValidationError,
     _claim_due_actions,
     _record_action_failure,
     _record_action_success,
@@ -27,6 +29,7 @@ from backend.services.mail_actions import (
     classify_mail_action_error,
     drain_due_mail_actions,
     get_mail_action_operation_by_idempotency,
+    label_action_delta,
     recent_mail_action_operations,
     retry_delay,
     retry_mail_action_operation,
@@ -184,6 +187,51 @@ def test_action_request_requires_positive_unique_strict_ids_and_known_action():
         EmailActionRequest(email_ids=[True], action="archive")
     with pytest.raises(ValidationError):
         EmailActionRequest(email_ids=[1], action="move")
+
+
+@pytest.mark.parametrize("action", ["add_label", "remove_label", "move_to_label"])
+def test_label_action_request_requires_one_positive_local_label_id(action):
+    request = EmailActionRequest(email_ids=[1], action=action, label_id=7)
+    assert request.label_id == 7
+
+    with pytest.raises(ValidationError, match="label_id is required"):
+        EmailActionRequest(email_ids=[1], action=action)
+    with pytest.raises(ValidationError):
+        EmailActionRequest(email_ids=[1], action=action, label_id=True)
+
+    with pytest.raises(ValidationError, match="only supported for label actions"):
+        EmailActionRequest(email_ids=[1], action="archive", label_id=7)
+
+
+def test_label_action_deltas_and_payload_hash_cover_local_label_identity():
+    assert label_action_delta("add_label", "Label_work") == (["Label_work"], [])
+    assert label_action_delta("remove_label", "Label_work") == ([], ["Label_work"])
+    assert label_action_delta("move_to_label", "Label_work") == (
+        ["Label_work"],
+        ["INBOX"],
+    )
+    assert action_payload_hash([2, 1], "archive") == action_payload_hash(
+        [1, 2], "archive"
+    )
+    assert action_payload_hash(
+        [2, 1], "add_label", label_id=7
+    ) == action_payload_hash([1, 2], "add_label", label_id=7)
+    assert action_payload_hash(
+        [1, 2], "add_label", label_id=7
+    ) != action_payload_hash([1, 2], "add_label", label_id=8)
+
+
+def test_label_response_exposes_account_boundary():
+    response = LabelResponse.model_validate(EmailLabel(
+        id=7,
+        account_id=3,
+        gmail_label_id="Label_work",
+        name="Work",
+        label_type="user",
+        messages_total=4,
+        messages_unread=2,
+    ))
+    assert response.account_id == 3
 
 
 def test_gmail_service_builds_finite_httplib2_transport_for_mutations(monkeypatch):
@@ -344,6 +392,232 @@ async def test_repeated_idempotency_returns_exact_operation_and_mismatch_conflic
 
 
 @pytest.mark.asyncio
+async def test_label_idempotency_replay_precedes_mutable_label_resolution(monkeypatch):
+    email = _email(10)
+    key = uuid4()
+    existing = _action(email, idempotency_key=key, action="archive")
+    existing.action = "add_label"
+    existing.payload_hash = action_payload_hash(
+        [email.id], "add_label", label_id=7
+    )
+    existing.add_labels = ["Label_work"]
+    existing.remove_labels = []
+    db = _StageSession([])
+
+    async def no_lock(*_args, **_kwargs):
+        return None
+
+    async def existing_actions(*_args, **_kwargs):
+        return [existing]
+
+    async def should_not_resolve(*_args, **_kwargs):
+        raise AssertionError("an accepted replay must not require the mutable label row")
+
+    monkeypatch.setattr(action_module, "_lock_idempotency_key", no_lock)
+    monkeypatch.setattr(action_module, "_actions_for_idempotency", existing_actions)
+    monkeypatch.setattr(action_module, "_label_action_context", should_not_resolve)
+
+    actions, created = await stage_mail_actions(
+        db,
+        user_id=9,
+        email_ids=[10],
+        action="add_label",
+        label_id=7,
+        idempotency_key=key,
+        now=NOW,
+    )
+    assert actions == [existing]
+    assert created is False
+
+    with pytest.raises(MailActionConflict, match="another payload"):
+        await stage_mail_actions(
+            db,
+            user_id=9,
+            email_ids=[10],
+            action="add_label",
+            label_id=8,
+            idempotency_key=key,
+            now=NOW,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("action", "expected_add", "expected_remove"),
+    [
+        ("add_label", ["Label_work"], []),
+        ("remove_label", [], ["Label_work"]),
+        ("move_to_label", ["Label_work"], ["INBOX"]),
+    ],
+)
+async def test_label_stage_expands_conversation_and_persists_exact_delta(
+    monkeypatch, action, expected_add, expected_remove
+):
+    first = _email(10, labels=["INBOX", "UNREAD"])
+    second = _email(11, labels=["INBOX", "STARRED"], is_read=True, is_starred=True)
+    first.gmail_thread_id = second.gmail_thread_id = "generated-shared-thread"
+    label = EmailLabel(
+        id=7,
+        account_id=1,
+        gmail_label_id="Label_work",
+        name="Work",
+        label_type="user",
+    )
+    db = _StageSession([first, second])
+
+    async def no_lock(*_args, **_kwargs):
+        return None
+
+    async def no_existing(*_args, **_kwargs):
+        return []
+
+    async def context(*_args, **_kwargs):
+        return [first, second], label, [first]
+
+    async def no_publish(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(action_module, "_lock_idempotency_key", no_lock)
+    monkeypatch.setattr(action_module, "_actions_for_idempotency", no_existing)
+    monkeypatch.setattr(action_module, "_label_action_context", context)
+    monkeypatch.setattr(action_module, "_publish_action_event", no_publish)
+
+    actions, created = await stage_mail_actions(
+        db,
+        user_id=9,
+        email_ids=[first.id],
+        action=action,
+        label_id=label.id,
+        idempotency_key=uuid4(),
+        now=NOW,
+    )
+
+    assert created is True
+    assert [item.email_id for item in actions] == [first.id, second.id]
+    assert all(item.action == action for item in actions)
+    assert all(item.add_labels == expected_add for item in actions)
+    assert all(item.remove_labels == expected_remove for item in actions)
+    if action in {"add_label", "move_to_label"}:
+        assert all("Label_work" in email.labels for email in (first, second))
+    if action == "move_to_label":
+        assert all("INBOX" not in email.labels for email in (first, second))
+
+
+@pytest.mark.asyncio
+async def test_move_accepts_non_inbox_sibling_but_rejects_non_inbox_anchor(monkeypatch):
+    inbox_message = _email(10, labels=["INBOX", "UNREAD"])
+    non_inbox_sibling = _email(11, labels=["Label_source"])
+    inbox_message.gmail_thread_id = non_inbox_sibling.gmail_thread_id = (
+        "generated-shared-thread"
+    )
+    label = EmailLabel(
+        id=7,
+        account_id=1,
+        gmail_label_id="Label_work",
+        name="Work",
+        label_type="user",
+    )
+    db = _StageSession([inbox_message, non_inbox_sibling])
+
+    async def no_lock(*_args, **_kwargs):
+        return None
+
+    async def no_existing(*_args, **_kwargs):
+        return []
+
+    async def context(*_args, **_kwargs):
+        return [inbox_message, non_inbox_sibling], label, [inbox_message]
+
+    async def no_publish(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(action_module, "_lock_idempotency_key", no_lock)
+    monkeypatch.setattr(action_module, "_actions_for_idempotency", no_existing)
+    monkeypatch.setattr(action_module, "_label_action_context", context)
+    monkeypatch.setattr(action_module, "_publish_action_event", no_publish)
+
+    actions, created = await stage_mail_actions(
+        db,
+        user_id=9,
+        email_ids=[inbox_message.id],
+        action="move_to_label",
+        label_id=label.id,
+        idempotency_key=uuid4(),
+        now=NOW,
+    )
+
+    assert created is True
+    assert len(actions) == 2
+    assert inbox_message.labels == ["Label_work", "UNREAD"]
+    assert non_inbox_sibling.labels == ["Label_source", "Label_work", "UNREAD"]
+
+    explicit_non_inbox = _email(12, labels=["Label_source"])
+    rejected_db = _StageSession([explicit_non_inbox])
+
+    async def non_inbox_context(*_args, **_kwargs):
+        return [explicit_non_inbox], label, [explicit_non_inbox]
+
+    monkeypatch.setattr(action_module, "_label_action_context", non_inbox_context)
+    with pytest.raises(MailActionValidationError, match="Inbox conversations"):
+        await stage_mail_actions(
+            rejected_db,
+            user_id=9,
+            email_ids=[explicit_non_inbox.id],
+            action="move_to_label",
+            label_id=label.id,
+            idempotency_key=uuid4(),
+            now=NOW,
+        )
+
+    assert rejected_db.added == []
+    assert rejected_db.commit_count == 0
+    assert explicit_non_inbox.labels == ["Label_source"]
+
+
+@pytest.mark.asyncio
+async def test_email_action_route_forwards_owned_local_label_id(monkeypatch):
+    email = _email(10)
+    action = _action(email)
+    action.action = "move_to_label"
+    action.add_labels = ["Label_work"]
+    action.remove_labels = ["INBOX"]
+    captured = {}
+
+    async def stage(_db, **kwargs):
+        captured.update(kwargs)
+        return [action], True
+
+    class Background:
+        def __init__(self):
+            self.calls = []
+
+        def add_task(self, function, *args, **kwargs):
+            self.calls.append((function, args, kwargs))
+
+    monkeypatch.setattr(email_router_module, "stage_mail_actions", stage)
+    background = Background()
+    request = EmailActionRequest(
+        email_ids=[email.id],
+        action="move_to_label",
+        label_id=7,
+    )
+
+    response = await email_router_module.email_actions(
+        request=request,
+        background_tasks=background,
+        db=object(),
+        user=SimpleNamespace(id=9),
+    )
+
+    assert captured["email_ids"] == [email.id]
+    assert captured["action"] == "move_to_label"
+    assert captured["label_id"] == 7
+    assert response.action == "move_to_label"
+    assert response.accepted_count == 1
+    assert len(background.calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_owned_idempotency_lookup_returns_exact_operation_or_404():
     email = _email(10)
     key = uuid4()
@@ -408,6 +682,127 @@ class _SequenceSession:
 
     async def commit(self):
         self.commit_count += 1
+
+
+@pytest.mark.asyncio
+async def test_label_context_requires_owned_user_label_and_expands_locked_thread():
+    first = _email(10, account_id=3)
+    second = _email(11, account_id=3)
+    first.gmail_thread_id = second.gmail_thread_id = "generated-shared-thread"
+    label = EmailLabel(
+        id=7,
+        account_id=3,
+        gmail_label_id="Label_work",
+        name="Work",
+        label_type="user",
+    )
+    db = _SequenceSession([
+        _Result(value=label),
+        _Result(values=[first]),
+        _Result(values=[first, second]),
+    ])
+
+    emails, resolved, anchors = await action_module._label_action_context(
+        db,
+        user_id=9,
+        selected_email_ids=[first.id],
+        label_id=label.id,
+    )
+
+    assert resolved is label
+    assert emails == [first, second]
+    assert anchors == [first]
+    assert "google_accounts.user_id" in str(db.statements[0])
+    assert "FOR UPDATE" in str(db.statements[0])
+    assert "google_accounts.user_id" in str(db.statements[1])
+    assert "FOR UPDATE" not in str(db.statements[1])
+    assert "emails.gmail_thread_id" in str(db.statements[2])
+    assert "ORDER BY emails.id" in str(db.statements[2])
+    assert "LIMIT" in str(db.statements[2])
+    assert "FOR UPDATE" in str(db.statements[2])
+
+
+@pytest.mark.asyncio
+async def test_label_context_rejects_system_stale_and_cross_account_targets():
+    system = EmailLabel(
+        id=7,
+        account_id=1,
+        gmail_label_id="CATEGORY_UPDATES",
+        name="Updates",
+        label_type="system",
+    )
+    with pytest.raises(MailActionValidationError, match="Only user labels"):
+        await action_module._label_action_context(
+            _SequenceSession([_Result(value=system)]),
+            user_id=9,
+            selected_email_ids=[10],
+            label_id=system.id,
+        )
+
+    stale = EmailLabel(
+        id=8,
+        account_id=1,
+        gmail_label_id="",
+        name="Stale",
+        label_type="user",
+    )
+    with pytest.raises(MailActionValidationError, match="stale"):
+        await action_module._label_action_context(
+            _SequenceSession([_Result(value=stale)]),
+            user_id=9,
+            selected_email_ids=[10],
+            label_id=stale.id,
+        )
+
+    user_label = EmailLabel(
+        id=9,
+        account_id=1,
+        gmail_label_id="Label_work",
+        name="Work",
+        label_type="user",
+    )
+    first = _email(10, account_id=1)
+    second = _email(11, account_id=2)
+    with pytest.raises(MailActionValidationError, match="one account"):
+        await action_module._label_action_context(
+            _SequenceSession([
+                _Result(value=user_label),
+                _Result(values=[first, second]),
+            ]),
+            user_id=9,
+            selected_email_ids=[first.id, second.id],
+            label_id=user_label.id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_label_context_bounds_expanded_conversation_before_staging():
+    label = EmailLabel(
+        id=7,
+        account_id=1,
+        gmail_label_id="Label_work",
+        name="Work",
+        label_type="user",
+    )
+    anchor = _email(1)
+    anchor.gmail_thread_id = "generated-large-thread"
+    expanded = []
+    for email_id in range(1, action_module.MAIL_ACTION_MAX_BATCH + 2):
+        email = _email(email_id)
+        email.gmail_thread_id = anchor.gmail_thread_id
+        expanded.append(email)
+
+    with pytest.raises(MailActionValidationError, match="at most 200"):
+        await action_module._label_action_context(
+            _SequenceSession([
+                _Result(value=label),
+                _Result(values=[anchor]),
+                _Result(values=expanded),
+            ]),
+            user_id=9,
+            selected_email_ids=[anchor.id],
+            label_id=label.id,
+        )
 
 
 @pytest.mark.asyncio
@@ -787,6 +1182,127 @@ class _Context(AbstractAsyncContextManager):
 
     async def __aexit__(self, exc_type, exc, traceback):
         return False
+
+
+@pytest.mark.asyncio
+async def test_successful_label_sync_is_authoritative_and_account_scoped(monkeypatch):
+    existing = EmailLabel(
+        id=7,
+        account_id=3,
+        gmail_label_id="Label_keep",
+        name="Old name",
+        label_type="user",
+    )
+
+    class Session:
+        def __init__(self):
+            self.results = [_Result(value=existing), _Result(), _Result()]
+            self.statements = []
+            self.added = []
+            self.commit_count = 0
+
+        async def execute(self, statement):
+            self.statements.append(statement)
+            return self.results.pop(0)
+
+        def add(self, value):
+            self.added.append(value)
+
+        async def commit(self):
+            self.commit_count += 1
+
+    class Gmail:
+        async def list_labels(self):
+            return [
+                {"id": "Label_keep", "name": "Kept", "type": "user"},
+                {"id": "Label_new", "name": "New", "type": "user"},
+            ]
+
+    db = Session()
+    service = EmailSyncService(3)
+
+    async def account(_db):
+        return SimpleNamespace(id=3)
+
+    async def gmail(_db, _account):
+        return Gmail()
+
+    async def no_token(_gmail):
+        return None
+
+    monkeypatch.setattr(sync_module, "async_session", lambda: _Context(db))
+    monkeypatch.setattr(service, "_get_account", account)
+    monkeypatch.setattr(service, "_create_gmail_service", gmail)
+    monkeypatch.setattr(service, "_persist_refreshed_token", no_token)
+
+    await service.sync_labels()
+
+    assert existing.name == "Kept"
+    assert len(db.added) == 1
+    assert db.added[0].gmail_label_id == "Label_new"
+    delete_statement = db.statements[-1]
+    assert delete_statement.is_delete is True
+    compiled = delete_statement.compile()
+    assert "email_labels.account_id" in str(delete_statement)
+    assert "email_labels.gmail_label_id" in str(delete_statement)
+    assert 3 in compiled.params.values()
+    assert db.commit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_malformed_label_sync_never_deletes_catalog_rows(monkeypatch):
+    class Session:
+        def __init__(self):
+            self.statements = []
+            self.commit_count = 0
+
+        async def execute(self, statement):
+            self.statements.append(statement)
+            return _Result()
+
+        async def commit(self):
+            self.commit_count += 1
+
+    class Gmail:
+        async def list_labels(self):
+            return [{"name": "missing provider id"}]
+
+    db = Session()
+    service = EmailSyncService(3)
+
+    async def account(_db):
+        return SimpleNamespace(id=3)
+
+    async def gmail(_db, _account):
+        return Gmail()
+
+    async def no_token(_gmail):
+        return None
+
+    monkeypatch.setattr(sync_module, "async_session", lambda: _Context(db))
+    monkeypatch.setattr(service, "_get_account", account)
+    monkeypatch.setattr(service, "_create_gmail_service", gmail)
+    monkeypatch.setattr(service, "_persist_refreshed_token", no_token)
+
+    with pytest.raises(RuntimeError, match="malformed label"):
+        await service.sync_labels()
+
+    assert db.statements == []
+    assert db.commit_count == 0
+
+    class EmptyGmail:
+        async def list_labels(self):
+            return []
+
+    async def empty_gmail(_db, _account):
+        return EmptyGmail()
+
+    monkeypatch.setattr(service, "_create_gmail_service", empty_gmail)
+    with pytest.raises(RuntimeError, match="malformed"):
+        await service.sync_labels()
+
+    assert db.statements == []
+    assert db.commit_count == 0
 
 
 @pytest.mark.asyncio

@@ -766,6 +766,22 @@ POST /api/emails/actions/{request_id}/retry
 Create accepts 1–200 unique, positive, fully owned email IDs. Mixed owned,
 foreign, or missing targets return a uniform 404 and mutate nothing.
 
+The current synchronized label catalog is available to authenticated browser
+sessions at:
+
+```text
+GET /api/emails/labels/all?account_id=3
+```
+
+`account_id` is optional and, when present, is constrained to the current
+user's connected accounts. Each result includes the local positive `id`,
+`account_id`, `gmail_label_id`, display `name`, `label_type`, optional Gmail
+colors, and synchronized total/unread counts. Interactive mutation surfaces
+offer only `label_type=user`; Gmail system labels are never accepted as custom
+label targets. A successful full label synchronization is authoritative for
+that account, so local catalog rows that Gmail no longer returns are pruned.
+Malformed or failed provider responses never trigger that pruning.
+
 ```json
 {
   "email_ids": [9001, 9002],
@@ -775,9 +791,26 @@ foreign, or missing targets return a uniform 404 and mutate nothing.
 ```
 
 Supported actions are `mark_read`, `mark_unread`, `star`, `unstar`, `archive`,
-`unarchive`, `trash`, `untrash`, `spam`, and `unspam`. `unarchive` is the
-internal ordered Inbox-return primitive used by Snooze and is rejected for
-Trash or Spam. The idempotency key is optional for legacy callers, but
+`unarchive`, `trash`, `untrash`, `spam`, `unspam`, `add_label`, `remove_label`,
+and `move_to_label`. `unarchive` is the internal ordered Inbox-return primitive
+used by Snooze and is rejected for Trash or Spam. The three label actions
+require a positive local `label_id`; every other action rejects `label_id`.
+The chosen label and every explicit email anchor must belong to one owned Gmail
+account, and the label must be a current user label with a non-empty provider
+ID.
+
+Label actions expand each explicit anchor to all locally synchronized messages
+in the same owned Gmail conversation, with the same 200-message operation
+bound. `accepted_count` can therefore exceed the number of submitted IDs.
+`add_label` and `remove_label` apply the exact custom-label delta to those
+existing messages. `move_to_label` is the Inbox-only "label and archive"
+primitive: each explicit anchor must currently be in Inbox; every existing
+conversation message gains the destination label and loses `INBOX` when it has
+it. Sent or previously archived siblings do not invalidate an otherwise valid
+Inbox move. The web client exposes Move only in the literal Inbox view; other
+mailboxes retain the independent Label action.
+
+The idempotency key is optional for legacy callers, but
 retry-capable clients should generate one UUID per logical operation and reuse
 it until a response is known. Reusing a key with the same payload returns the
 original operation; reuse with a different payload returns 409. After a lost or
@@ -786,6 +819,11 @@ timed-out create response, the authenticated
 Because a lost POST can still be waiting on a database lock, that 404 is not a
 definitive rejection: clients keep the projection visibly pending and replay
 the same POST with the same key until POST itself returns a definitive result.
+For label actions, the immutable payload identity includes the original sorted
+email IDs and local `label_id`. Exact accepted replay is resolved before the
+mutable label catalog or current mailbox state, so a lost-response recovery
+still returns the original operation after Gmail synchronization or the
+accepted Move itself changes that state.
 
 Create returns HTTP 202:
 

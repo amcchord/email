@@ -7,6 +7,7 @@
     currentMailbox, selectedEmailId, selectedAccountId,
     searchQuery, showToast, pageSize, viewMode, smartFilter,
     hideIgnored, sidebarCollapsed, createAuthenticatedSessionGuard,
+    accounts, labels as labelsStore,
   } from '../lib/stores.js';
   import { registerActions } from '../lib/shortcutStore.js';
   import { lastEvent } from '../lib/realtime.js';
@@ -30,9 +31,15 @@
     rollbackEmailAction,
     restoreInboxAction,
   } from '../lib/mailActionUX.js';
+  import {
+    expandVisibleLabelTargets,
+    isLabelAction,
+    mergeLabelCatalog,
+  } from '../lib/labelWorkflows.js';
   import EmailList from '../components/email/EmailList.svelte';
   import EmailTable from '../components/email/EmailTable.svelte';
   import EmailView from '../components/email/EmailView.svelte';
+  import LabelPicker from '../components/email/LabelPicker.svelte';
   import MailActionStatus from '../components/email/MailActionStatus.svelte';
   import WorkingDrafts from '../components/email/WorkingDrafts.svelte';
   import EmailSearchSummary from '../components/email/EmailSearchSummary.svelte';
@@ -50,7 +57,7 @@
     runSnoozeMutationWithReconciliation,
     snoozeMatchesEmail,
   } from '../lib/snooze.js';
-  import { focusEmailRow } from '../lib/emailRowFocus.js';
+  import { focusEmailRow, focusEmailRowOrFallback } from '../lib/emailRowFocus.js';
   import { formatSnoozeWake } from '../lib/remindLater.js';
 
   let selectedEmail = $state(null);
@@ -75,6 +82,9 @@
   let resultsMailbox = $derived(
     $smartFilter?.type === 'snoozed' ? 'SNOOZED' : ($searchQuery ? 'ALL' : $currentMailbox)
   );
+  let moveAvailable = $derived(
+    !$searchQuery && !$smartFilter && $currentMailbox === 'INBOX'
+  );
 
   const listRequests = createLatestRequestGuard();
   const emailRequests = createLatestRequestGuard();
@@ -95,6 +105,7 @@
   let emailViewTransitionGuard = null;
   let snoozeTarget = $state(null);
   let snoozeBusyIds = $state(new Set());
+  let labelPicker = $state(null);
 
   function registerEmailViewTransitionGuard(guard) {
     emailViewTransitionGuard = typeof guard === 'function' ? guard : null;
@@ -103,6 +114,18 @@
   async function canLeaveSelectedEmail() {
     if (!emailViewTransitionGuard) return true;
     return (await emailViewTransitionGuard()) !== false;
+  }
+
+  function selectedActionEnabled() {
+    return inboxSessionIsCurrent()
+      && datasetAuthoritative
+      && Boolean(get(selectedEmailId));
+  }
+
+  function selectedActionUnavailable() {
+    return datasetUpdating
+      ? 'Wait for the current inbox results'
+      : 'Select an email first';
   }
 
   function restoreCommittedDatasetControls() {
@@ -135,12 +158,6 @@
     narrowViewportQuery.addEventListener('change', updateNarrowViewport);
 
     // Register keyboard shortcut actions for the inbox
-    const selectedActionEnabled = () => inboxSessionIsCurrent()
-      && datasetAuthoritative
-      && Boolean(get(selectedEmailId));
-    const selectedActionUnavailable = () => datasetUpdating
-      ? 'Wait for the current inbox results'
-      : 'Select an email first';
     const cleanupShortcuts = registerActions({
       'inbox.next': {
         run: () => navigateEmails(1),
@@ -191,6 +208,11 @@
         isEnabled: selectedActionEnabled,
         disabledReason: selectedActionUnavailable,
       },
+      'inbox.label': {
+        run: () => openLabelPicker('apply', [get(selectedEmailId)]),
+        isEnabled: selectedActionEnabled,
+        disabledReason: selectedActionUnavailable,
+      },
       'inbox.viewMode': () => {
         const current = get(viewMode);
         const next = current === 'table' ? 'column' : 'table';
@@ -216,6 +238,17 @@
     };
   });
 
+  $effect(() => {
+    if (!moveAvailable) return undefined;
+    return registerActions({
+      'inbox.move': {
+        run: () => openLabelPicker('move', [get(selectedEmailId)]),
+        isEnabled: selectedActionEnabled,
+        disabledReason: selectedActionUnavailable,
+      },
+    });
+  });
+
   onDestroy(() => {
     // Requests are guarded per component instance. Invalidate them before this
     // instance disappears so a late response cannot write into the shared
@@ -233,6 +266,7 @@
     for (const pending of uncertainActions.values()) pending.releaseQueue();
     uncertainActions = new Map();
     datasetAuthoritative = false;
+    labelPicker = null;
     datasetUpdating = false;
     emailViewTransitionGuard = null;
     snoozeTarget = null;
@@ -592,26 +626,32 @@
       && currentDatasetSnapshot().key === datasetKey;
   }
 
-  function restoreOptimisticAction({ action, snapshot, optimistic, detailBefore, removedCount }) {
-    emails.update(current => restoreInboxAction(current, snapshot, action, optimistic.removed));
+  function restoreOptimisticAction({ action, snapshot, optimistic, detailBefore, removedCount, gmailLabelId }) {
+    emails.update(current => restoreInboxAction(
+      current,
+      snapshot,
+      action,
+      optimistic.removed,
+      { gmailLabelId },
+    ));
     if (removedCount > 0) emailsTotal.update(total => total + removedCount);
     if (get(selectedEmailId) === optimistic.selectedId) {
       selectedEmailId.set(snapshot.selectedId);
     }
     if (detailBefore && selectedEmail?.id === detailBefore.id) {
-      selectedEmail = rollbackEmailAction(selectedEmail, detailBefore, action);
+      selectedEmail = rollbackEmailAction(selectedEmail, detailBefore, action, { gmailLabelId });
     }
   }
 
-  async function submitMailAction(emailIds, action, requestKey) {
+  async function submitMailAction(emailIds, action, requestKey, labelId = null) {
     try {
-      return await api.emailActions(emailIds, action, requestKey);
+      return await api.emailActions(emailIds, action, requestKey, labelId);
     } catch (err) {
       // A lost response is ambiguous. Replaying once with the same key is safe
       // and lets the server return the original accepted operation.
       if (!isMailActionNetworkError(err)) throw err;
       try {
-        return await api.emailActions(emailIds, action, requestKey);
+        return await api.emailActions(emailIds, action, requestKey, labelId);
       } catch (retryError) {
         if (!isMailActionNetworkError(retryError)) throw retryError;
         try {
@@ -626,6 +666,13 @@
     }
   }
 
+  function actionDisplayCount(context, operation = null) {
+    const acceptedCount = Number(operation?.accepted_count);
+    return isLabelAction(context.action) && Number.isFinite(acceptedCount)
+      ? acceptedCount
+      : context.emailIds.length;
+  }
+
   function acceptMailAction(context, operation, announce, offerUndo) {
     // Definitive actions always reconcile their still-current structured
     // search. This is intentionally independent of selectionEpoch: an earlier
@@ -634,6 +681,7 @@
     if (!actionContextIsCurrent(context.actionEpoch, context.datasetKey)) return;
     if (!announce) return;
 
+    const displayCount = actionDisplayCount(context, operation);
     const undoMs = offerUndo && canUndoAction(operation) ? remainingUndoMs(operation.undo_until) : 0;
     if (undoMs > 0) {
       const undoContext = { ...context, operation };
@@ -651,13 +699,13 @@
         expiresAt: Date.parse(operation.undo_until),
         run: runUndo,
       };
-      showToast(actionPastTense(context.action, context.emailIds.length), 'success', undoMs, {
+      showToast(actionPastTense(context.action, displayCount, context.labelName), 'success', undoMs, {
         actionLabel: 'Undo',
         onAction: latestUndo.run,
         dismissLabel: 'Dismiss action confirmation',
       });
     } else {
-      showToast(actionPastTense(context.action, context.emailIds.length), 'success');
+      showToast(actionPastTense(context.action, displayCount, context.labelName), 'success');
     }
   }
 
@@ -694,6 +742,7 @@
             pending.context.emailIds,
             pending.context.action,
             requestKey,
+            pending.context.labelId,
           );
           if (!inboxSessionIsCurrent()) return;
           const next = new Map(uncertainActions);
@@ -723,7 +772,7 @@
       }
       requireActionReconciliation(context.datasetKey);
       if (latestUndo?.requestId === context.operation.request_id) latestUndo = null;
-      showToast(`${actionPastTense(context.action, context.emailIds.length)} — undone`, 'success');
+      showToast(`${actionPastTense(context.action, actionDisplayCount(context, context.operation), context.labelName)} — undone`, 'success');
       return operation;
     } catch (err) {
       if (inboxSessionIsCurrent()) {
@@ -743,9 +792,22 @@
     return latestUndo.run();
   }
 
-  async function handleAction(action, emailIds, { announce = true, offerUndo = true } = {}) {
-    if (!canActOnEmails(emailIds)) return false;
-    const uniqueIds = [...new Set(emailIds)];
+  async function handleAction(action, emailIds, {
+    announce = true,
+    offerUndo = true,
+    labelId = null,
+    gmailLabelId = null,
+    labelName = '',
+  } = {}) {
+    const requestedIds = [...new Set(emailIds)];
+    if (!canActOnEmails(requestedIds)) return false;
+    if (isLabelAction(action) && (!Number.isInteger(Number(labelId)) || Number(labelId) <= 0 || !gmailLabelId)) {
+      showToast('Choose a valid label before applying this action', 'error');
+      return false;
+    }
+    const uniqueIds = isLabelAction(action)
+      ? expandVisibleLabelTargets(requestedIds, get(emails))
+      : requestedIds;
     const actionEpoch = selectionEpoch;
     const datasetSnapshot = currentDatasetSnapshot();
     const datasetKey = datasetSnapshot.key;
@@ -757,6 +819,7 @@
       emailIds: uniqueIds,
       action,
       mailbox: datasetSnapshot.mailbox,
+      gmailLabelId,
     });
     if (optimistic.removed && !(await canLeaveSelectedEmail())) return false;
     const removedCount = optimistic.removed ? snapshot.items.length : 0;
@@ -764,8 +827,11 @@
     emails.set(optimistic.emails);
     if (removedCount > 0) emailsTotal.update(total => Math.max(0, total - removedCount));
     selectedEmailId.set(optimistic.selectedId);
+    if (optimistic.removed && snapshot.selectedId != null && uniqueIds.includes(snapshot.selectedId)) {
+      queueMicrotask(focusInboxSelection);
+    }
     if (!optimistic.removed && selectedEmail && uniqueIds.includes(selectedEmail.id)) {
-      selectedEmail = applyEmailAction(selectedEmail, action);
+      selectedEmail = applyEmailAction(selectedEmail, action, { gmailLabelId });
     }
 
     const context = {
@@ -774,6 +840,9 @@
       datasetKey,
       detailBefore,
       emailIds: uniqueIds,
+      gmailLabelId,
+      labelId: labelId ? Number(labelId) : null,
+      labelName,
       optimistic,
       removedCount,
       snapshot,
@@ -786,7 +855,7 @@
         uniqueIds,
         async queueControl => {
           try {
-            return await submitMailAction(uniqueIds, action, requestKey);
+            return await submitMailAction(uniqueIds, action, requestKey, context.labelId);
           } catch (err) {
             if (err.code === 'mail_action_outcome_unknown') {
               // Keep this original queue entry unsettled for followers even
@@ -828,6 +897,52 @@
       }
       return false;
     }
+  }
+
+  function emailForLabel(target) {
+    if (target && typeof target === 'object') return target;
+    const id = Number(target);
+    return (selectedEmail?.id === id ? selectedEmail : null)
+      || get(emails).find(email => email.id === id)
+      || null;
+  }
+
+  function openLabelPicker(mode, targets, onComplete = null) {
+    if (mode === 'move' && !moveAvailable) {
+      showToast('Move to label is available from Inbox', 'info');
+      return false;
+    }
+    const targetList = Array.isArray(targets) ? targets : [targets];
+    const targetEmails = targetList.map(emailForLabel).filter(Boolean);
+    if (!targetEmails.length || !canActOnEmails(targetEmails.map(email => email.id))) return false;
+    labelPicker = {
+      mode: mode === 'move' ? 'move' : 'apply',
+      emails: targetEmails,
+      onComplete: typeof onComplete === 'function' ? onComplete : null,
+    };
+    return true;
+  }
+
+  function updateLabelCatalog(fetched, accountId) {
+    labelsStore.update(current => mergeLabelCatalog(current, fetched, accountId));
+  }
+
+  async function handleLabelSubmit(labelAction) {
+    const target = labelPicker;
+    if (!target) return false;
+    const accepted = await handleAction(
+      labelAction.action,
+      target.emails.map(email => email.id),
+      labelAction,
+    );
+    if (accepted) target.onComplete?.(true);
+    return accepted;
+  }
+
+  function focusInboxSelection() {
+    if (!inboxSessionIsCurrent()) return;
+    const inboxRoot = document.querySelector('.inbox-page');
+    focusEmailRowOrFallback(inboxRoot, get(selectedEmailId), inboxRoot);
   }
 
   function emailForSnooze(target) {
@@ -1334,6 +1449,8 @@
           {selectionEpoch}
           onSelect={handleSelect}
           onAction={handleAction}
+          onLabel={openLabelPicker}
+          allowMove={moveAvailable}
           onSnooze={openSnoozePicker}
           onLoadMore={handleLoadMore}
         />
@@ -1353,6 +1470,8 @@
             email={selectedEmail}
             loading={emailLoading}
             onAction={handleAction}
+            onLabel={openLabelPicker}
+            allowMove={moveAvailable}
             onSnooze={openSnoozePicker}
             onClose={closeSelectedEmail}
             onGuardChange={registerEmailViewTransitionGuard}
@@ -1381,6 +1500,8 @@
         {selectionEpoch}
         onSelect={handleSelect}
         onAction={handleAction}
+        onLabel={openLabelPicker}
+        allowMove={moveAvailable}
         onSnooze={openSnoozePicker}
         onLoadMore={handleLoadMore}
       />
@@ -1400,6 +1521,8 @@
           email={selectedEmail}
           loading={emailLoading}
           onAction={handleAction}
+          onLabel={openLabelPicker}
+          allowMove={moveAvailable}
           onSnooze={openSnoozePicker}
           onClose={closeSelectedEmail}
           onGuardChange={registerEmailViewTransitionGuard}
@@ -1414,6 +1537,17 @@
     mode={snoozeTarget?.snooze_id ? 'reschedule' : 'create'}
     onclose={() => { snoozeTarget = null; }}
     onsubmit={handleSnoozeSubmit}
+  />
+  <LabelPicker
+    open={Boolean(labelPicker)}
+    mode={labelPicker?.mode || 'apply'}
+    emails={labelPicker?.emails || []}
+    accounts={$accounts}
+    catalog={$labelsStore}
+    onclose={() => { labelPicker = null; }}
+    oncatalog={updateLabelCatalog}
+    onsubmit={handleLabelSubmit}
+    onfocusfallback={focusInboxSelection}
   />
 </div>
 

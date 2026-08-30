@@ -1,6 +1,6 @@
 export const REMOVAL_ACTIONS = new Set(['archive', 'trash', 'untrash', 'spam', 'unspam']);
 
-export function actionPastTense(action, count = 1) {
+export function actionPastTense(action, count = 1, labelName = '') {
   const subject = count === 1 ? 'Email' : `${count} emails`;
   const labels = {
     archive: `${subject} archived`,
@@ -12,11 +12,16 @@ export function actionPastTense(action, count = 1) {
     mark_unread: `${subject} marked as unread`,
     star: `${subject} starred`,
     unstar: `${subject} unstarred`,
+    add_label: `${subject} labeled${labelName ? ` ${labelName}` : ''}`,
+    remove_label: `${labelName || 'Label'} removed from ${subject.toLowerCase()}`,
+    move_to_label: `${subject} moved${labelName ? ` to ${labelName}` : ''}`,
   };
   return labels[action] || `${subject} updated`;
 }
 
-export function actionRemovesFromMailbox(action, mailbox) {
+export function actionRemovesFromMailbox(action, mailbox, gmailLabelId = null) {
+  if (action === 'move_to_label') return mailbox === 'INBOX';
+  if (action === 'remove_label') return Boolean(gmailLabelId) && mailbox === gmailLabelId;
   if (action === 'archive') return mailbox === 'INBOX';
   if (action === 'trash') return mailbox !== 'TRASH';
   if (action === 'untrash') return mailbox === 'TRASH';
@@ -25,7 +30,7 @@ export function actionRemovesFromMailbox(action, mailbox) {
   return false;
 }
 
-export function applyEmailAction(email, action) {
+export function applyEmailAction(email, action, { gmailLabelId = null } = {}) {
   const labels = new Set(Array.isArray(email.labels) ? email.labels : []);
 
   switch (action) {
@@ -44,6 +49,19 @@ export function applyEmailAction(email, action) {
       labels.add('INBOX');
       break;
     case 'archive': labels.delete('INBOX'); break;
+    case 'add_label':
+      if (!gmailLabelId) return email;
+      labels.add(gmailLabelId);
+      break;
+    case 'remove_label':
+      if (!gmailLabelId) return email;
+      labels.delete(gmailLabelId);
+      break;
+    case 'move_to_label':
+      if (!gmailLabelId) return email;
+      labels.add(gmailLabelId);
+      labels.delete('INBOX');
+      break;
     default: return email;
   }
 
@@ -57,13 +75,15 @@ export function applyEmailAction(email, action) {
   };
 }
 
-export function optimisticInboxAction({ emails, selectedId, emailIds, action, mailbox }) {
+export function optimisticInboxAction({ emails, selectedId, emailIds, action, mailbox, gmailLabelId = null }) {
   const targetIds = new Set(emailIds);
   const selectedIndex = emails.findIndex(email => email.id === selectedId);
-  const remove = actionRemovesFromMailbox(action, mailbox);
+  const remove = actionRemovesFromMailbox(action, mailbox, gmailLabelId);
   const nextEmails = remove
     ? emails.filter(email => !targetIds.has(email.id))
-    : emails.map(email => targetIds.has(email.id) ? applyEmailAction(email, action) : email);
+    : emails.map(email => targetIds.has(email.id)
+      ? applyEmailAction(email, action, { gmailLabelId })
+      : email);
 
   let nextSelectedId = selectedId;
   if (remove && selectedId !== null && targetIds.has(selectedId)) {
@@ -94,8 +114,8 @@ function sameLabels(first, second) {
   return a.size === b.size && [...a].every(label => b.has(label));
 }
 
-export function rollbackEmailAction(current, original, action) {
-  const projected = applyEmailAction(original, action);
+export function rollbackEmailAction(current, original, action, { gmailLabelId = null } = {}) {
+  const projected = applyEmailAction(original, action, { gmailLabelId });
   if (sameLabels(current.labels, projected.labels)) return original;
 
   const beforeLabels = new Set(Array.isArray(original.labels) ? original.labels : []);
@@ -132,12 +152,13 @@ export function restoreInboxAction(
   snapshot,
   action = null,
   reinsertMissing = true,
+  actionOptions = {},
 ) {
   const originals = new Map(snapshot.items.map(item => [item.email.id, item]));
   const restored = currentEmails.map(email => {
     const original = originals.get(email.id)?.email;
     if (!original) return email;
-    return action ? rollbackEmailAction(email, original, action) : original;
+    return action ? rollbackEmailAction(email, original, action, actionOptions) : original;
   });
 
   for (const item of [...snapshot.items].sort((a, b) => a.index - b.index)) {

@@ -1,12 +1,13 @@
 <script>
   import { onMount } from 'svelte';
   import { slide } from 'svelte/transition';
-  import { accountColorMap, selectedAccountId } from '../../lib/stores.js';
+  import { accountColorMap, accounts, labels as labelsStore, selectedAccountId } from '../../lib/stores.js';
   import Icon from '../common/Icon.svelte';
   import { cleanEmailText, categoryLabel, typeLabel } from '../../lib/emailText.js';
   import { focusEmailRow, shouldFocusAdjacentRow } from '../../lib/emailRowFocus.js';
   import { selectedBooleanState } from '../../lib/inboxDataset.js';
   import { formatSnoozeWake } from '../../lib/remindLater.js';
+  import { safeLabelColor, visibleUserLabels } from '../../lib/labelWorkflows.js';
 
   let {
     emails = [],
@@ -22,6 +23,8 @@
     selectionEpoch = 0,
     onSelect = null,
     onAction = null,
+    onLabel = null,
+    allowMove = false,
     onSnooze = null,
     onLoadMore = null,
   } = $props();
@@ -150,6 +153,12 @@
     }
   }
 
+  function openBulkLabels(mode) {
+    if (actionsDisabled || bulkActionPending || selectedIds.size === 0 || !onLabel) return;
+    const selected = emails.filter(email => selectedIds.has(email.id));
+    onLabel(mode, selected, () => { selectedIds = new Set(); });
+  }
+
   const categoryColors = {
     urgent: 'bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300',
     can_ignore: 'bg-surface-100 text-surface-500 dark:bg-surface-800 dark:text-surface-500',
@@ -274,6 +283,10 @@
         <button onclick={() => handleBulkAction('mark_read')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Read</button>
         <button onclick={() => handleBulkAction('mark_unread')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Unread</button>
         <button onclick={() => handleBulkAction('archive')} disabled={actionsDisabled || bulkActionPending || selectedInProtectedMailbox} title={selectedInProtectedMailbox ? 'Restore spam or trash results before archiving' : 'Archive selected email'} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Archive</button>
+        <button onclick={() => openBulkLabels('apply')} disabled={actionsDisabled || bulkActionPending || !onLabel} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)" data-shortcut="inbox.label">Label</button>
+        {#if allowMove}
+          <button onclick={() => openBulkLabels('move')} disabled={actionsDisabled || bulkActionPending || !onLabel} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)" data-shortcut="inbox.move">Move</button>
+        {/if}
         <button onclick={() => handleBulkAction('star')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Star</button>
         {#if selectedSpamState === true}
           <button onclick={() => handleBulkAction('unspam')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Not Spam</button>
@@ -438,6 +451,7 @@
           {/if}
         {:else}
           <!-- ========== NORMAL EMAIL ROW ========== -->
+          {@const userLabelState = visibleUserLabels(email, $labelsStore, $accounts, 1)}
           <div
             class="flex items-start gap-1 px-2 py-2 border-b transition-fast"
             class:font-medium={!email.is_read}
@@ -516,6 +530,16 @@
               </span>
               <span class="flex items-center gap-2">
                 <span class="text-xs truncate" style="color: var(--text-tertiary)">{cleanEmailText(email.snippet)}</span>
+                {#each userLabelState.labels as label}
+                  <span
+                    class="max-w-24 shrink-0 truncate rounded-full px-1.5 py-0.5 text-[10px] font-medium"
+                    style="background: {safeLabelColor(label.color_bg, 'var(--bg-tertiary)')}; color: {safeLabelColor(label.color_text, 'var(--text-secondary)')}"
+                    title={label.name}
+                  >{label.name}</span>
+                {/each}
+                {#if userLabelState.overflow > 0}
+                  <span class="shrink-0 text-[10px]" style="color: var(--text-tertiary)" title={`${userLabelState.overflow} more labels`}>+{userLabelState.overflow}</span>
+                {/if}
                 {#if email.gmail_thread_id && seenThreadIds[email.id] && threadCounts[email.gmail_thread_id] > 1}
                   <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0" style="background: var(--bg-tertiary); color: var(--text-secondary)" title="Thread with {threadCounts[email.gmail_thread_id]} messages">
                     {threadCounts[email.gmail_thread_id]}

@@ -369,8 +369,21 @@ class EmailSyncService:
                 gmail_labels = await gmail.list_labels()
                 await self._persist_refreshed_token(gmail)
 
+                if not isinstance(gmail_labels, list) or not gmail_labels:
+                    raise RuntimeError("Gmail label list was malformed")
+                normalized_labels = []
                 for gl in gmail_labels:
-                    label_id = gl.get("id", "")
+                    if not isinstance(gl, dict) or not str(gl.get("id") or "").strip():
+                        raise RuntimeError("Gmail label list contained a malformed label")
+                    normalized_labels.append(gl)
+                remote_label_ids = {
+                    str(gl["id"]).strip() for gl in normalized_labels
+                }
+                if len(remote_label_ids) != len(normalized_labels):
+                    raise RuntimeError("Gmail label list contained duplicate labels")
+
+                for gl in normalized_labels:
+                    label_id = str(gl["id"]).strip()
                     name = gl.get("name", label_id)
                     label_type = gl.get("type", "user")
                     color = gl.get("color", {})
@@ -399,8 +412,17 @@ class EmailSyncService:
                         )
                         db.add(label)
 
+                stale_labels = delete(EmailLabel).where(
+                    EmailLabel.account_id == self.account_id
+                )
+                if remote_label_ids:
+                    stale_labels = stale_labels.where(
+                        EmailLabel.gmail_label_id.notin_(sorted(remote_label_ids))
+                    )
+                await db.execute(stale_labels)
+
                 await db.commit()
-                logger.info(f"Synced {len(gmail_labels)} labels for account {self.account_id}")
+                logger.info(f"Synced {len(normalized_labels)} labels for account {self.account_id}")
 
             except Exception as e:
                 logger.error(f"Error syncing labels: {e}")

@@ -792,6 +792,7 @@ async def email_actions(
             email_ids=request.email_ids,
             action=request.action,
             idempotency_key=request.idempotency_key,
+            label_id=request.label_id,
         )
     except (MailActionNotFound, MailActionConflict, MailActionValidationError) as error:
         _raise_mail_action_http_error(error)

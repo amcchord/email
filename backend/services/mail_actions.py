@@ -25,7 +25,7 @@ from sqlalchemy.orm import aliased
 from backend.config import get_settings
 from backend.database import async_session
 from backend.models.account import GoogleAccount
-from backend.models.email import Email
+from backend.models.email import Email, EmailLabel
 from backend.models.mail_action import (
     ACTIVE_MAIL_ACTION_STATES,
     MAIL_ACTION_TYPES,
@@ -62,6 +62,7 @@ ACTION_LABEL_DELTAS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "spam": (("SPAM",), ("INBOX",)),
     "unspam": (("INBOX",), ("SPAM",)),
 }
+LABEL_ACTION_TYPES = ("add_label", "remove_label", "move_to_label")
 
 
 class MailActionError(RuntimeError):
@@ -196,13 +197,112 @@ def apply_mail_state(email: Email, state: dict) -> None:
     email.is_spam = normalized["is_spam"]
 
 
-def action_payload_hash(email_ids: Iterable[int], action: str) -> str:
+def action_payload_hash(
+    email_ids: Iterable[int],
+    action: str,
+    *,
+    label_id: int | None = None,
+) -> str:
+    payload_data: dict[str, object] = {
+        "action": action,
+        "email_ids": sorted(email_ids),
+    }
+    if action in LABEL_ACTION_TYPES or label_id is not None:
+        payload_data["label_id"] = label_id
     payload = json.dumps(
-        {"action": action, "email_ids": sorted(email_ids)},
+        payload_data,
         separators=(",", ":"),
         sort_keys=True,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def label_action_delta(action: str, gmail_label_id: str) -> tuple[list[str], list[str]]:
+    """Return the exact provider delta for one validated user-label action."""
+    if action == "add_label":
+        return [gmail_label_id], []
+    if action == "remove_label":
+        return [], [gmail_label_id]
+    if action == "move_to_label":
+        return [gmail_label_id], ["INBOX"]
+    raise MailActionValidationError(f"Unsupported label action: {action}")
+
+
+async def _label_action_context(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    selected_email_ids: list[int],
+    label_id: int,
+) -> tuple[list[Email], EmailLabel, list[Email]]:
+    """Resolve and lock one owned label plus every local conversation member.
+
+    Anchor messages are read before the expanded target query so all Email
+    rows are subsequently locked once, in primary-key order. This avoids the
+    lock inversion that would result from locking an arbitrary anchor first
+    and then discovering an older sibling in the same conversation.
+    """
+    label_result = await db.execute(
+        select(EmailLabel)
+        .join(GoogleAccount, GoogleAccount.id == EmailLabel.account_id)
+        .where(
+            EmailLabel.id == label_id,
+            GoogleAccount.user_id == user_id,
+        )
+        .with_for_update(of=EmailLabel)
+    )
+    label = label_result.scalar_one_or_none()
+    if label is None:
+        raise MailActionNotFound("Label not found")
+    if (label.label_type or "").casefold() != "user":
+        raise MailActionValidationError("Only user labels can be changed")
+    gmail_label_id = str(label.gmail_label_id or "").strip()
+    if not gmail_label_id:
+        raise MailActionValidationError("Label is stale and must be synchronized")
+
+    anchor_result = await db.execute(
+        select(Email)
+        .join(GoogleAccount, GoogleAccount.id == Email.account_id)
+        .where(
+            Email.id.in_(selected_email_ids),
+            GoogleAccount.user_id == user_id,
+        )
+        .order_by(Email.id)
+    )
+    anchors = list(anchor_result.scalars().all())
+    if (
+        len(anchors) != len(selected_email_ids)
+        or {email.id for email in anchors} != set(selected_email_ids)
+    ):
+        raise MailActionNotFound("One or more emails were not found")
+    account_ids = {email.account_id for email in anchors}
+    if len(account_ids) != 1 or label.account_id not in account_ids:
+        raise MailActionValidationError(
+            "Label actions require messages and a user label from one account"
+        )
+
+    thread_ids = sorted({email.gmail_thread_id for email in anchors})
+    expanded_result = await db.execute(
+        select(Email)
+        .where(
+            Email.account_id == label.account_id,
+            Email.gmail_thread_id.in_(thread_ids),
+        )
+        .order_by(Email.id)
+        .limit(MAIL_ACTION_MAX_BATCH + 1)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    expanded = list(expanded_result.scalars().all())
+    if len(expanded) > MAIL_ACTION_MAX_BATCH:
+        raise MailActionValidationError(
+            f"Label actions can affect at most {MAIL_ACTION_MAX_BATCH} conversation messages"
+        )
+    expanded_by_id = {email.id: email for email in expanded}
+    if not set(selected_email_ids).issubset(expanded_by_id):
+        raise MailActionNotFound("One or more emails were not found")
+    locked_anchors = [expanded_by_id[email_id] for email_id in selected_email_ids]
+    return expanded, label, locked_anchors
 
 
 def aggregate_action_state(actions: list[MailAction]) -> str:
@@ -255,6 +355,7 @@ async def stage_mail_actions(
     email_ids: list[int],
     action: str,
     idempotency_key: UUID,
+    label_id: int | None = None,
     now: datetime | None = None,
 ) -> tuple[list[MailAction], bool]:
     """Atomically stage a fully-owned operation and its optimistic state."""
@@ -264,9 +365,18 @@ async def stage_mail_actions(
         raise MailActionValidationError("Mail actions require 1 to 200 emails")
     if len(set(email_ids)) != len(email_ids):
         raise MailActionValidationError("Mail action email IDs must be unique")
+    is_label_action = action in LABEL_ACTION_TYPES
+    if is_label_action and label_id is None:
+        raise MailActionValidationError("label_id is required for label actions")
+    if not is_label_action and label_id is not None:
+        raise MailActionValidationError("label_id is only supported for label actions")
 
     ordered_ids = sorted(email_ids)
-    payload_hash = action_payload_hash(ordered_ids, action)
+    payload_hash = action_payload_hash(
+        ordered_ids,
+        action,
+        label_id=label_id if is_label_action else None,
+    )
     await _lock_idempotency_key(
         db,
         user_id=user_id,
@@ -284,19 +394,39 @@ async def stage_mail_actions(
             raise MailActionConflict("Idempotency key was already used for another payload")
         return existing_actions, False
 
-    email_result = await db.execute(
-        select(Email)
-        .join(GoogleAccount, GoogleAccount.id == Email.account_id)
-        .where(
-            Email.id.in_(ordered_ids),
-            GoogleAccount.user_id == user_id,
+    label_add: list[str] | None = None
+    label_remove: list[str] | None = None
+    if is_label_action:
+        emails, resolved_label, anchors = await _label_action_context(
+            db,
+            user_id=user_id,
+            selected_email_ids=ordered_ids,
+            label_id=label_id,
         )
-        .order_by(Email.id)
-        .with_for_update()
-    )
-    emails = list(email_result.scalars().all())
-    if len(emails) != len(ordered_ids) or {email.id for email in emails} != set(ordered_ids):
-        raise MailActionNotFound("One or more emails were not found")
+        if action == "move_to_label" and any(
+            "INBOX" not in snapshot_email_state(email)["labels"]
+            for email in anchors
+        ):
+            raise MailActionValidationError(
+                "Move to a label is only available for Inbox conversations"
+            )
+        label_add, label_remove = label_action_delta(
+            action, str(resolved_label.gmail_label_id)
+        )
+    else:
+        email_result = await db.execute(
+            select(Email)
+            .join(GoogleAccount, GoogleAccount.id == Email.account_id)
+            .where(
+                Email.id.in_(ordered_ids),
+                GoogleAccount.user_id == user_id,
+            )
+            .order_by(Email.id)
+            .with_for_update()
+        )
+        emails = list(email_result.scalars().all())
+        if len(emails) != len(ordered_ids) or {email.id for email in emails} != set(ordered_ids):
+            raise MailActionNotFound("One or more emails were not found")
     if action == "unarchive" and any(email.is_trash or email.is_spam for email in emails):
         raise MailActionValidationError(
             "Trash and spam must be restored with their dedicated actions"
@@ -309,7 +439,14 @@ async def stage_mail_actions(
 
     for email in emails:
         before_state = snapshot_email_state(email)
-        after_state, add_labels, remove_labels = state_after_action(before_state, action)
+        if is_label_action:
+            add_labels = list(label_add or [])
+            remove_labels = list(label_remove or [])
+            after_state = state_after_label_delta(
+                before_state, add_labels, remove_labels
+            )
+        else:
+            after_state, add_labels, remove_labels = state_after_action(before_state, action)
         email.mail_action_version = int(email.mail_action_version or 0) + 1
         base_state, chain_start_sequence = await _mail_action_chain_base(
             db,
@@ -391,7 +528,13 @@ async def get_mail_action_operation(
         .order_by(MailAction.id)
     )
     if for_update:
-        statement = statement.with_for_update()
+        # Undo and retry deliberately read once before locking Email rows,
+        # then re-read the operation under a row lock. Force the locked read
+        # to overwrite identity-map state so a concurrent worker claim cannot
+        # be mistaken for the earlier staged snapshot.
+        statement = statement.with_for_update().execution_options(
+            populate_existing=True
+        )
     result = await db.execute(statement)
     actions = list(result.scalars().all())
     if not actions:

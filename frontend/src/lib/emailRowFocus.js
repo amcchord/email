@@ -27,3 +27,12 @@ export function focusEmailRow(container, emailId) {
   row.focus();
   return true;
 }
+
+export function focusEmailRowOrFallback(container, emailId, fallback = container) {
+  if (focusEmailRow(container, emailId)) return 'row';
+  if (fallback?.focus) {
+    fallback.focus();
+    return 'fallback';
+  }
+  return false;
+}

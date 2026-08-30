@@ -1,6 +1,6 @@
 <script>
   import { onDestroy, onMount, tick } from 'svelte';
-  import { captureAuthenticatedSession, createAuthenticatedSessionGuard, currentPage, composeData, isAuthenticatedSessionCurrent, showToast, pendingReplyDraft, accounts, todos, accountColorMap } from '../../lib/stores.js';
+  import { captureAuthenticatedSession, createAuthenticatedSessionGuard, currentPage, composeData, isAuthenticatedSessionCurrent, showToast, pendingReplyDraft, accounts, labels as labelsStore, todos, accountColorMap } from '../../lib/stores.js';
   import { commandPaletteOpen, helpModalOpen, registerActions } from '../../lib/shortcutStore.js';
   import { api } from '../../lib/api.js';
   import { submitOutboundSend } from '../../lib/outboundSend.js';
@@ -42,11 +42,14 @@
   import DraftStatus from './DraftStatus.svelte';
   import EmailHtmlFrame from './EmailHtmlFrame.svelte';
   import SendSplitButton from '../common/SendSplitButton.svelte';
+  import { safeLabelColor, visibleUserLabels } from '../../lib/labelWorkflows.js';
 
   let {
     email = null,
     loading = false,
     onAction = null,
+    onLabel = null,
+    allowMove = false,
     onSnooze = null,
     onClose = null,
     onGuardChange = null,
@@ -76,6 +79,7 @@
     accounts: $accounts,
     mode: REPLY_ENVELOPE_MODES.REPLY,
   }));
+  let userLabelState = $derived(visibleUserLabels(email, $labelsStore, $accounts, 4));
   let replyAllEnvelopeResult = $derived(buildReplyEnvelope({
     message: email,
     accounts: $accounts,
@@ -1136,7 +1140,7 @@
   {:else}
     <!-- Header -->
     <div class="px-6 py-4 border-b shrink-0" style="border-color: var(--border-color)">
-      <div class="flex items-start justify-between gap-4">
+      <div class="email-reader-header flex items-start justify-between gap-4">
         <div class="flex-1 min-w-0">
           <h2 class="text-lg font-semibold leading-tight" style="color: var(--text-primary)">{email.subject || '(no subject)'}</h2>
           <div class="flex items-center gap-2 mt-1.5 flex-wrap">
@@ -1173,9 +1177,19 @@
                 Subscription
               </span>
             {/if}
+            {#each userLabelState.labels as label}
+              <span
+                class="max-w-36 truncate rounded-full px-2 py-0.5 text-xs font-medium"
+                style="background: {safeLabelColor(label.color_bg, 'var(--bg-tertiary)')}; color: {safeLabelColor(label.color_text, 'var(--text-secondary)')}"
+                title={label.name}
+              >{label.name}</span>
+            {/each}
+            {#if userLabelState.overflow > 0}
+              <span class="text-xs" style="color: var(--text-tertiary)" title={`${userLabelState.overflow} more labels`}>+{userLabelState.overflow}</span>
+            {/if}
           </div>
         </div>
-        <div class="flex items-center gap-1 shrink-0">
+        <div class="email-reader-actions flex max-w-[55%] shrink-0 flex-wrap items-center justify-end gap-1">
           <button
             onclick={() => onAction && onAction(email.is_starred ? 'unstar' : 'star', [email.id])}
             class="min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast"
@@ -1186,6 +1200,26 @@
           >
             <Icon name="star" size={20} />
           </button>
+          {#if onLabel}
+            <button
+              onclick={() => onLabel('apply', [email])}
+              class="min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast"
+              style="color: var(--text-tertiary)"
+              title="Apply or remove label · L"
+              aria-label="Apply or remove label"
+              data-shortcut="inbox.label"
+            ><Icon name="tag" size={20} /></button>
+            {#if allowMove}
+              <button
+                onclick={() => onLabel('move', [email])}
+                class="min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast"
+                style="color: var(--text-tertiary)"
+                title="Move out of Inbox to label · V"
+                aria-label="Move email out of Inbox to label"
+                data-shortcut="inbox.move"
+              ><Icon name="folder" size={20} /></button>
+            {/if}
+          {/if}
           {#if onSnooze && !email.is_draft && !email.is_trash && !email.is_spam}
             <button
               onclick={() => onSnooze(email)}
@@ -1245,7 +1279,7 @@
             </button>
             <button
               onclick={requestEmailClose}
-              class="min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast ml-1"
+              class="reader-close-action min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast ml-1"
               style="color: var(--text-tertiary)"
               title="Close"
               aria-label="Close email"
@@ -1753,3 +1787,29 @@
     ondownload={downloadAttachment}
   />
 {/if}
+
+<style>
+  @media (max-width: 640px) {
+    .email-reader-header {
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .email-reader-actions {
+      width: 100%;
+      max-width: none;
+      flex-wrap: nowrap;
+      justify-content: flex-start;
+      overflow-x: auto;
+      overscroll-behavior-inline: contain;
+      padding-bottom: 0.125rem;
+      scrollbar-width: thin;
+    }
+    .email-reader-actions > :global(button) {
+      flex: 0 0 2.75rem;
+    }
+    .email-reader-actions > :global(.reader-close-action) {
+      order: -1;
+      margin-left: 0;
+    }
+  }
+</style>

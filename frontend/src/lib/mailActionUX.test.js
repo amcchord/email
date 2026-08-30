@@ -187,6 +187,8 @@ test('mailbox removal rules preserve starred and all-mail results', () => {
   assert.equal(actionRemovesFromMailbox('trash', 'STARRED'), true);
   assert.equal(actionRemovesFromMailbox('untrash', 'TRASH'), true);
   assert.equal(actionRemovesFromMailbox('unspam', 'SPAM'), true);
+  assert.equal(actionRemovesFromMailbox('remove_label', 'Label_12', 'Label_12'), true);
+  assert.equal(actionRemovesFromMailbox('remove_label', 'Label_13', 'Label_12'), false);
 });
 
 test('undo eligibility is server-deadline and state driven', () => {

@@ -4,7 +4,7 @@ A self-hosted, AI-augmented email client built on Svelte 5, FastAPI, and Postgre
 
 **Key features:**
 
-- Full Gmail integration -- sync all mail, labels, and categories with real-time actions (read/unread, star, archive, trash, spam, label)
+- Full Gmail integration -- sync all mail, labels, and categories with durable real-time actions (read/unread, star, archive, trash, spam, conversation labels, and Inbox-to-label Move with Undo)
 - AI-powered email categorization, summarization, and action item extraction via OpenAI GPT or Anthropic Claude
 - Rich HTML composition with Tiptap editor, inline images, links, and reply/forward threading
 - Multi-account support -- connect multiple Gmail accounts under one user

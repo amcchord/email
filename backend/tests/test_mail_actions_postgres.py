@@ -16,12 +16,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import backend.services.mail_actions as action_module
 from backend.models.account import GoogleAccount
-from backend.models.email import Email
+from backend.models.email import Email, EmailLabel
 from backend.models.mail_action import MailAction
 from backend.models.user import User
 from backend.services.mail_actions import (
     MailActionConflict,
     MailActionNotFound,
+    MailActionValidationError,
     _claim_due_actions,
     get_mail_action_operation_by_idempotency,
     stage_mail_actions,
@@ -149,6 +150,222 @@ async def test_concurrent_actions_receive_strict_sequences_and_fold_intent():
             assert email.is_starred is True
             assert email.is_read is True
             assert set(email.labels) == {"INBOX", "STARRED"}
+    finally:
+        await engine.dispose()
+
+
+async def test_label_move_expands_conversation_and_replays_exact_operation():
+    engine, sessions = _session_factory()
+    try:
+        await _reset_database(engine)
+        async with sessions() as db:
+            user = User(username="generated-labels", is_admin=False, is_active=True)
+            db.add(user)
+            await db.flush()
+            account = GoogleAccount(
+                user_id=user.id,
+                email="generated-labels@example.test",
+                is_active=True,
+            )
+            db.add(account)
+            await db.flush()
+            label = EmailLabel(
+                account_id=account.id,
+                gmail_label_id="Label_work",
+                name="Work",
+                label_type="user",
+            )
+            db.add(label)
+            messages = []
+            for suffix in ("first", "second"):
+                is_inbox = suffix == "first"
+                email = Email(
+                    account_id=account.id,
+                    gmail_message_id=f"generated-label-{suffix}",
+                    gmail_thread_id="generated-label-thread",
+                    labels=["INBOX", "UNREAD"] if is_inbox else ["SENT"],
+                    is_read=not is_inbox,
+                    is_starred=False,
+                    is_trash=False,
+                    is_spam=False,
+                    is_draft=False,
+                    is_sent=not is_inbox,
+                    mail_action_version=0,
+                    has_attachments=False,
+                )
+                db.add(email)
+                messages.append(email)
+            await db.commit()
+            user_id = user.id
+            label_id = label.id
+            first_id = messages[0].id
+
+        key = uuid4()
+        async with sessions() as db:
+            created_actions, created = await stage_mail_actions(
+                db,
+                user_id=user_id,
+                email_ids=[first_id],
+                action="move_to_label",
+                label_id=label_id,
+                idempotency_key=key,
+                now=NOW,
+            )
+        assert created is True
+        assert len(created_actions) == 2
+        assert all(action.add_labels == ["Label_work"] for action in created_actions)
+        assert all(action.remove_labels == ["INBOX"] for action in created_actions)
+
+        # Exact replay is resolved before mutable catalog and mailbox state.
+        # This models a lost response after the accepted move removed INBOX,
+        # followed by authoritative label-sync deletion.
+        async with sessions() as db:
+            await db.execute(
+                text("DELETE FROM email_labels WHERE id = :label_id"),
+                {"label_id": label_id},
+            )
+            await db.commit()
+        async with sessions() as db:
+            replayed, replay_created = await stage_mail_actions(
+                db,
+                user_id=user_id,
+                email_ids=[first_id],
+                action="move_to_label",
+                label_id=label_id,
+                idempotency_key=key,
+                now=NOW,
+            )
+            assert replay_created is False
+            assert [action.id for action in replayed] == [
+                action.id for action in created_actions
+            ]
+            with pytest.raises(MailActionConflict):
+                await stage_mail_actions(
+                    db,
+                    user_id=user_id,
+                    email_ids=[first_id],
+                    action="move_to_label",
+                    label_id=label_id + 1,
+                    idempotency_key=key,
+                    now=NOW,
+                )
+            await db.rollback()
+
+        async with sessions() as db:
+            stored = list((await db.execute(
+                select(Email)
+                .where(Email.gmail_thread_id == "generated-label-thread")
+                .order_by(Email.id)
+            )).scalars().all())
+            assert len(stored) == 2
+            assert all("Label_work" in email.labels for email in stored)
+            assert all("INBOX" not in email.labels for email in stored)
+            assert "SENT" in stored[1].labels
+    finally:
+        await engine.dispose()
+
+
+async def test_label_action_rejects_system_and_cross_account_targets_atomically():
+    engine, sessions = _session_factory()
+    try:
+        await _reset_database(engine)
+        async with sessions() as db:
+            user = User(username="generated-label-scope", is_admin=False, is_active=True)
+            db.add(user)
+            await db.flush()
+            accounts = []
+            emails = []
+            for suffix in ("first", "second"):
+                account = GoogleAccount(
+                    user_id=user.id,
+                    email=f"generated-label-{suffix}@example.test",
+                    is_active=True,
+                )
+                db.add(account)
+                await db.flush()
+                accounts.append(account)
+                email = Email(
+                    account_id=account.id,
+                    gmail_message_id=f"generated-label-scope-{suffix}",
+                    gmail_thread_id=f"generated-label-scope-thread-{suffix}",
+                    labels=["INBOX"],
+                    is_read=True,
+                    is_starred=False,
+                    is_trash=False,
+                    is_spam=False,
+                    is_draft=False,
+                    is_sent=False,
+                    mail_action_version=0,
+                    has_attachments=False,
+                )
+                db.add(email)
+                emails.append(email)
+            system_label = EmailLabel(
+                account_id=accounts[0].id,
+                gmail_label_id="CATEGORY_UPDATES",
+                name="Updates",
+                label_type="system",
+            )
+            user_label = EmailLabel(
+                account_id=accounts[0].id,
+                gmail_label_id="Label_work",
+                name="Work",
+                label_type="user",
+            )
+            db.add_all([system_label, user_label])
+            await db.commit()
+            user_id = user.id
+            email_ids = [email.id for email in emails]
+            system_label_id = system_label.id
+            user_label_id = user_label.id
+
+        async with sessions() as db:
+            with pytest.raises(MailActionValidationError, match="Only user labels"):
+                await stage_mail_actions(
+                    db,
+                    user_id=user_id,
+                    email_ids=[email_ids[0]],
+                    action="add_label",
+                    label_id=system_label_id,
+                    idempotency_key=uuid4(),
+                    now=NOW,
+                )
+            await db.rollback()
+            with pytest.raises(MailActionValidationError, match="one account"):
+                await stage_mail_actions(
+                    db,
+                    user_id=user_id,
+                    email_ids=email_ids,
+                    action="add_label",
+                    label_id=user_label_id,
+                    idempotency_key=uuid4(),
+                    now=NOW,
+                )
+            await db.rollback()
+
+        async with sessions() as db:
+            non_inbox = await db.get(Email, email_ids[0])
+            non_inbox.labels = ["Label_source"]
+            await db.commit()
+        async with sessions() as db:
+            with pytest.raises(MailActionValidationError, match="Inbox conversations"):
+                await stage_mail_actions(
+                    db,
+                    user_id=user_id,
+                    email_ids=[email_ids[0]],
+                    action="move_to_label",
+                    label_id=user_label_id,
+                    idempotency_key=uuid4(),
+                    now=NOW,
+                )
+            await db.rollback()
+
+        async with sessions() as db:
+            assert await db.scalar(select(func.count()).select_from(MailAction)) == 0
+            stored = list((await db.execute(select(Email).order_by(Email.id))).scalars().all())
+            assert all(email.mail_action_version == 0 for email in stored)
+            assert stored[0].labels == ["Label_source"]
+            assert stored[1].labels == ["INBOX"]
     finally:
         await engine.dispose()
 

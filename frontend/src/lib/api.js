@@ -301,11 +301,12 @@ export const api = {
     const query = params.toString();
     return request('GET', `/emails/thread/${threadId}${query ? `?${query}` : ''}`);
   },
-  emailActions: (emailIds, action, idempotencyKey = null) =>
+  emailActions: (emailIds, action, idempotencyKey = null, labelId = null) =>
     request('POST', '/emails/actions', {
       email_ids: emailIds,
       action,
       ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
+      ...(labelId ? { label_id: labelId } : {}),
     }),
   getMailAction: (requestId) => request('GET', `/emails/actions/${requestId}`),
   getMailActionByIdempotency: (idempotencyKey) =>

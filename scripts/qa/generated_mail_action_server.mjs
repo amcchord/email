@@ -80,14 +80,39 @@ generatedEmails.push({
   is_sent: true,
 });
 
+generatedEmails.push({
+  ...structuredClone(generatedEmails[2]),
+  id: 109,
+  account_id: 2,
+  account_email: 'second.generated@example.test',
+  gmail_message_id: 'generated-message-9',
+  gmail_thread_id: 'generated-thread-9',
+  message_id_header: '<generated-9@example.test>',
+  subject: 'Second account boundary check',
+  snippet: 'This generated message proves that Gmail labels remain account-scoped.',
+  body_text: 'This generated message proves that Gmail labels remain account-scoped.\n\nThis message was generated locally for browser testing.',
+  body_html: '<p>This generated message proves that Gmail labels remain account-scoped.</p><p>This message was generated locally for browser testing.</p>',
+  labels: ['INBOX', 'UNREAD'],
+  is_read: false,
+});
+
+const generatedLabels = [
+  { id: 11, account_id: 1, gmail_label_id: 'Label_Projects', name: 'Projects', label_type: 'user', color_bg: '#dbeafe', color_text: '#1e40af', messages_total: 0, messages_unread: 0 },
+  { id: 12, account_id: 1, gmail_label_id: 'Label_Receipts', name: 'Receipts', label_type: 'user', color_bg: '#dcfce7', color_text: '#166534', messages_total: 0, messages_unread: 0 },
+  { id: 13, account_id: 1, gmail_label_id: 'INBOX', name: 'Inbox', label_type: 'system', color_bg: null, color_text: null, messages_total: 0, messages_unread: 0 },
+  { id: 21, account_id: 2, gmail_label_id: 'Label_Second', name: 'Second account', label_type: 'user', color_bg: '#f3e8ff', color_text: '#6b21a8', messages_total: 0, messages_unread: 0 },
+];
+
 const emails = new Map(generatedEmails.map(email => [email.id, email]));
 const snapshots = new Map();
 const operations = new Map();
+const operationPayloads = new Map();
 const snoozes = new Map();
 const snoozesByIdempotency = new Map();
 const audit = {
   fixture_domains: ['example.test'],
   provider_calls: 0,
+  label_actions: [],
   snooze_creates: [],
   snooze_replays: [],
   snooze_reschedules: [],
@@ -379,7 +404,7 @@ async function handleSnoozeCreate(request, response) {
   return writeJson(response, snoozeResponse(snooze), 202);
 }
 
-function applyAction(email, action) {
+function applyAction(email, action, gmailLabelId = null) {
   const labels = new Set(email.labels);
   if (action === 'mark_read') labels.delete('UNREAD');
   if (action === 'mark_unread') labels.add('UNREAD');
@@ -396,6 +421,12 @@ function applyAction(email, action) {
   if (action === 'unspam') {
     labels.delete('SPAM');
     labels.add('INBOX');
+  }
+  if (action === 'add_label' && gmailLabelId) labels.add(gmailLabelId);
+  if (action === 'remove_label' && gmailLabelId) labels.delete(gmailLabelId);
+  if (action === 'move_to_label' && gmailLabelId) {
+    labels.add(gmailLabelId);
+    labels.delete('INBOX');
   }
   email.labels = [...labels];
   email.is_read = !labels.has('UNREAD');
@@ -420,6 +451,16 @@ async function handleActionCreate(request, response) {
     operation => operation.idempotency_key === payload.idempotency_key,
   );
   if (existing) {
+    const expected = operationPayloads.get(existing.request_id);
+    const received = JSON.stringify({
+      action: payload.action,
+      email_ids: [...(payload.email_ids || [])].map(Number).sort((a, b) => a - b),
+      label_id: payload.label_id == null ? null : Number(payload.label_id),
+    });
+    if (expected && expected !== received) {
+      audit.rejected_mutations.push({ route: '/api/emails/actions', reason: 'Idempotency key payload conflict' });
+      return writeJson(response, { detail: 'Idempotency key payload conflict' }, 409);
+    }
     if (lostActionResponses > 0) {
       lostActionResponses -= 1;
       return writeJson(response, { detail: 'Failed to fetch' }, 503);
@@ -427,10 +468,32 @@ async function handleActionCreate(request, response) {
     return writeJson(response, existing, 202);
   }
 
+  const labelAction = ['add_label', 'remove_label', 'move_to_label'].includes(payload.action);
+  const label = labelAction
+    ? generatedLabels.find(item => item.id === Number(payload.label_id))
+    : null;
+  if (labelAction && (!label || label.label_type !== 'user')) {
+    audit.rejected_mutations.push({ route: '/api/emails/actions', reason: 'Choose an existing generated user label' });
+    return writeJson(response, { detail: 'Choose an existing generated user label' }, 422);
+  }
+  const requested = payload.email_ids.map(id => emails.get(Number(id))).filter(Boolean);
+  if (requested.length !== payload.email_ids.length) {
+    audit.rejected_mutations.push({ route: '/api/emails/actions', reason: 'Choose generated emails only' });
+    return writeJson(response, { detail: 'Choose generated emails only' }, 404);
+  }
+  if (labelAction && requested.some(email => email.account_id !== label.account_id)) {
+    audit.rejected_mutations.push({ route: '/api/emails/actions', reason: 'Labels are account-specific' });
+    return writeJson(response, { detail: 'Labels are account-specific' }, 422);
+  }
+  const expanded = new Map();
+  for (const email of requested) {
+    const targets = labelAction ? conversationEmails(email) : [email];
+    for (const target of targets) expanded.set(target.id, target);
+  }
   const requestId = randomUUID();
-  const selected = payload.email_ids.map(id => emails.get(id)).filter(Boolean);
+  const selected = [...expanded.values()];
   snapshots.set(requestId, selected.map(email => structuredClone(email)));
-  selected.forEach(email => applyAction(email, payload.action));
+  selected.forEach(email => applyAction(email, payload.action, label?.gmail_label_id));
   const createdAt = new Date();
   const operation = {
     request_id: requestId,
@@ -459,6 +522,21 @@ async function handleActionCreate(request, response) {
   };
   operation.items.forEach(item => { item.next_attempt_at = operation.undo_until; });
   operations.set(requestId, operation);
+  operationPayloads.set(requestId, JSON.stringify({
+    action: payload.action,
+    email_ids: [...payload.email_ids].map(Number).sort((a, b) => a - b),
+    label_id: payload.label_id == null ? null : Number(payload.label_id),
+  }));
+  if (labelAction) {
+    audit.label_actions.push({
+      request_id: requestId,
+      action: payload.action,
+      label_id: label.id,
+      gmail_label_id: label.gmail_label_id,
+      requested_email_ids: payload.email_ids.map(Number),
+      expanded_email_ids: selected.map(email => email.id),
+    });
+  }
   if (lostActionResponses > 0) {
     lostActionResponses -= 1;
     return writeJson(response, { detail: 'Failed to fetch' }, 503);
@@ -484,17 +562,31 @@ async function handleRequest(request, response) {
     return writeJson(response, { shortcuts: {} });
   }
   if (request.method === 'GET' && pathname === '/api/accounts/') {
-    return writeJson(response, [{
-      id: 1,
-      email: 'qa.generated@example.test',
-      display_name: 'Generated QA',
-      has_calendar_scope: true,
-      sync_status: { status: 'idle', last_incremental_sync: new Date().toISOString() },
-      calendar_sync_status: { status: 'idle' },
-    }]);
+    return writeJson(response, [
+      {
+        id: 1,
+        email: 'qa.generated@example.test',
+        display_name: 'Generated QA',
+        has_calendar_scope: true,
+        sync_status: { status: 'idle', last_incremental_sync: new Date().toISOString() },
+        calendar_sync_status: { status: 'idle' },
+      },
+      {
+        id: 2,
+        email: 'second.generated@example.test',
+        display_name: 'Second Generated QA',
+        has_calendar_scope: true,
+        sync_status: { status: 'idle', last_incremental_sync: new Date().toISOString() },
+        calendar_sync_status: { status: 'idle' },
+      },
+    ]);
   }
   if (request.method === 'GET' && pathname === '/api/emails/labels/all') {
-    return writeJson(response, []);
+    const accountId = Number(url.searchParams.get('account_id'));
+    const visible = Number.isInteger(accountId) && accountId > 0
+      ? generatedLabels.filter(label => label.account_id === accountId)
+      : generatedLabels;
+    return writeJson(response, visible);
   }
   if (request.method === 'GET' && pathname === '/api/build-version') {
     return writeJson(response, { version: 'generated-qa' });
@@ -510,7 +602,11 @@ async function handleRequest(request, response) {
     return;
   }
   if (request.method === 'GET' && pathname === '/api/emails/') {
-    const visible = visibleEmails(url.searchParams.get('mailbox') || 'INBOX');
+    const accountId = Number(url.searchParams.get('account_id'));
+    let visible = visibleEmails(url.searchParams.get('mailbox') || 'INBOX');
+    if (Number.isInteger(accountId) && accountId > 0) {
+      visible = visible.filter(email => email.account_id === accountId);
+    }
     return writeJson(response, { emails: visible, total: visible.length, page: 1, page_size: 50 });
   }
   if (request.method === 'GET' && pathname === '/api/emails/actions/recent') {
@@ -616,6 +712,13 @@ async function handleRequest(request, response) {
       clock: generatedClock().toISOString(),
       active_snoozes: [...snoozes.values()].filter(isActiveSnooze).map(snoozeResponse),
       all_snoozes: [...snoozes.values()].map(snoozeResponse),
+    });
+  }
+  if (request.method === 'GET' && pathname === '/api/__qa/mail-action-audit') {
+    return writeJson(response, {
+      ...audit,
+      emails: [...emails.values()].map(email => structuredClone(email)),
+      operations: [...operations.values()].map(operation => structuredClone(operation)),
     });
   }
   if (request.method === 'POST' && pathname === '/api/__qa/clock') {

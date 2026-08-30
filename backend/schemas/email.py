@@ -123,8 +123,12 @@ class EmailActionRequest(BaseModel):
         "untrash",
         "spam",
         "unspam",
+        "add_label",
+        "remove_label",
+        "move_to_label",
     ]
     idempotency_key: UUID = Field(default_factory=uuid4)
+    label_id: Optional[StrictInt] = Field(default=None, gt=0)
     label: Optional[str] = None
 
     @field_validator("email_ids")
@@ -135,6 +139,15 @@ class EmailActionRequest(BaseModel):
         if len(set(value)) != len(value):
             raise ValueError("email_ids must be unique")
         return value
+
+    @model_validator(mode="after")
+    def require_label_id_only_for_label_actions(self):
+        label_actions = {"add_label", "remove_label", "move_to_label"}
+        if self.action in label_actions and self.label_id is None:
+            raise ValueError("label_id is required for label actions")
+        if self.action not in label_actions and self.label_id is not None:
+            raise ValueError("label_id is only supported for label actions")
+        return self
 
 
 class MailActionItemResponse(BaseModel):
@@ -425,6 +438,7 @@ class OutboundSendResponse(BaseModel):
 
 class LabelResponse(BaseModel):
     id: int
+    account_id: int
     gmail_label_id: str
     name: str
     label_type: Optional[str] = None

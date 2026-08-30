@@ -44,6 +44,9 @@
     mark_unread: 'mark as unread',
     star: 'star',
     unstar: 'unstar',
+    add_label: 'apply label',
+    remove_label: 'remove label',
+    move_to_label: 'move to label',
   };
 
   async function loadOperations() {

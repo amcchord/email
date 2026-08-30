@@ -31,6 +31,9 @@ MAIL_ACTION_TYPES = (
     "untrash",
     "spam",
     "unspam",
+    "add_label",
+    "remove_label",
+    "move_to_label",
 )
 MAIL_ACTION_STATES = (
     "staged",
@@ -112,7 +115,8 @@ class MailAction(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "action IN ('mark_read','mark_unread','star','unstar','archive','unarchive','trash','untrash','spam','unspam')",
+            "action IN ('mark_read','mark_unread','star','unstar','archive','unarchive',"
+            "'trash','untrash','spam','unspam','add_label','remove_label','move_to_label')",
             name="ck_mail_actions_action",
         ),
         CheckConstraint(
