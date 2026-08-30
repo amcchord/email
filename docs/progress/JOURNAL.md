@@ -42,13 +42,24 @@ special handling when Andrea is included on To or Cc.
 
 ### Production Actions
 
-- None. This work is isolated on `codex/andrea-scheduling-workflow`; it was not
-  pushed or deployed and made no production data or configuration changes.
+- Pushed `ab33499` to `origin/main` and fast-forwarded the clean production
+  checkout from `e849e9f` to that exact commit as `mailapp`.
+- Restarted `mailapp`, `mailworker`, and `mailworker-cron`; no dependency
+  install, frontend rebuild, migration, data mutation, TUI restart, Caddy
+  change, or proxy reload was required.
+- The old Uvicorn process again retained a long-lived connection through its
+  90-second stop timeout, producing a transient 502 until systemd killed the
+  old process and started the replacement. Both API workers completed startup,
+  both ARQ workers restarted cleanly, all application services are active,
+  health is `ok`, and the post-start error count is zero.
+- Ran a production-side pure routing assertion confirming that routine
+  scheduling with Andrea on Cc becomes `fyi`, clears Austin's reply flag, and
+  removes the scheduling action item without reading mailbox data.
 
 ### Next
 
-Review the focused commit, then push/deploy only with explicit production
-authorization and verify health plus representative Flow/Inbox behavior.
+The requested workflow is complete in production. Resume the separately scoped
+Google OAuth publishing-status work when authorized.
 
 ## 2026-08-29 — App-wide UX release implementation
 
