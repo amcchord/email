@@ -58,13 +58,31 @@ work; and exercise mutations only against generated `.example.test` fixtures.
   fast-forwarded clean production, and rebuilt only the frontend. No migration,
   dependency change, service restart, or data mutation was required. All seven
   services and public health remained healthy.
-- The outbound migration and worker candidate are not deployed yet.
+- Pushed the reviewed outbound runtime commit
+  `2a8dbecba7d590198cfe005062700d5e68624851` to the feature branch and GitHub
+  `main`, then fast-forwarded clean production from `9d0d475`.
+- Captured and validated the 1,383,543,906-byte custom-format backup
+  `/var/backups/mailapp/maildb-pre-outbound-20260830T1718Z.dump`, mode `0600`,
+  owner `postgres:postgres`, with 252 readable archive entries.
+- Advanced Alembic from `c0d1e2f3a4b5` to `d1e2f3a4b5c6`, verified the empty
+  outbox and its 12 indexes, and restarted only `mailapp` and
+  `mailworker-cron`. The old API process exceeded its 90-second graceful-stop
+  deadline and was killed by systemd; the replacement and cron worker started
+  successfully.
+- Verified public health, all checked services, unauthenticated `401`
+  boundaries for the new APIs, and a still-empty outbox before publishing the
+  510-module `index-BU6KBgki.js` frontend.
+- Signed-in read-only production browser QA loaded blank Compose with all
+  expected controls and zero console errors. More was exactly left-aligned to
+  its trigger with an 8 px gap. No real send, Undo, retry, archive, calendar,
+  Sync, Todo, or other mailbox mutation ran.
 
 ### Next
 
-Close independent findings, complete full and generated verification, then
-back up PostgreSQL and deploy the exact reviewed outbound release with only the
-required API and cron-worker restarts.
+User-test real Send and Undo deliberately from the production UI. Treat any
+post-acceptance rollback as roll-forward-only, and continue the next product
+cycle with generated fixtures while the terminal task rebases onto the final
+docs-closeout SHA.
 
 ## 2026-08-30 — Session ownership and shell reliability candidate
 

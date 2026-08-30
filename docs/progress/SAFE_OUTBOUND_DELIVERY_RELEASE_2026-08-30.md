@@ -185,8 +185,33 @@ error contract is recorded in `docs/api.md`.
   reported one intentional provider attempt, zero external provider calls,
   zero unexpected mutations, and zero unknown routes.
 - Independent backend and UX reviews found no remaining P0 after their draft
-  lifecycle findings were fixed. Commit SHAs, backup path, migration/restart
-  actions, and production health remain for release closeout.
+  lifecycle findings were fixed.
+- Runtime release commit `2a8dbecba7d590198cfe005062700d5e68624851`
+  was pushed to the feature branch and GitHub `main`, then fast-forwarded onto
+  clean production from `9d0d4754a3c1ba3817f1c20244810231b4f8894d`.
+- Before migration, production created and validated the custom-format backup
+  `/var/backups/mailapp/maildb-pre-outbound-20260830T1718Z.dump`: 1,383,543,906
+  bytes, mode `0600`, owner `postgres:postgres`, with 252 readable archive
+  entries.
+- Production Alembic advanced from `c0d1e2f3a4b5` to `d1e2f3a4b5c6`. The new
+  table began and remained at zero rows throughout automated verification, and
+  all 12 expected indexes were present.
+- Only `mailapp` and `mailworker-cron` were restarted. The old API process
+  retained a long-lived connection past its 90-second graceful-stop deadline,
+  so systemd killed that old process and immediately started the reviewed
+  replacement. Both services, the regular worker, mail TUI, Caddy, PostgreSQL,
+  and Redis were healthy afterward.
+- The new backend returned public health `ok`; both new session-only endpoint
+  families returned `401` without a browser session. The production frontend
+  built 510 modules and published `index-BU6KBgki.js` only after that backend
+  verification passed.
+- Signed-in read-only production browser QA loaded blank Compose with its
+  sender, recipient, subject, rich editor, draft, and Send controls; emitted no
+  browser errors; and performed no send or other mailbox mutation. The More
+  menu was measured with an exact trigger-left match and an 8 px vertical gap.
+  Screenshots were saved as
+  `email-production-compose-outbound-safety-2026-08-30.png` and
+  `email-production-more-menu-anchored-2026-08-30.png` on the testing desktop.
 
 Release order is deliberately migration/API-first and frontend-last: retain the
 old built frontend, back up, migrate, restart and verify `mailapp` plus

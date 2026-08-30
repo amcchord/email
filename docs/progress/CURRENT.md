@@ -4,22 +4,25 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Replace every interactive web send path with one durable, idempotent,
-ten-second Undo Send lifecycle. Prove at-most-once Gmail behavior, reply-source
-ownership, draft recovery, session isolation, and truthful status using only
-generated `.example.test` fixtures before promoting the migration and worker.
+User-test the newly deployed durable Send and Undo lifecycle, then continue the
+next high-value mail-client cycle with generated fixtures and read-only
+production verification.
 
 ## Baseline
 
-- GitHub `main` and production are clean at
-  `9d0d4754a3c1ba3817f1c20244810231b4f8894d`. That small released fix anchors
-  the More dropdown to the More trigger rather than the full navigation row.
-- Signed-in read-only production browser QA measured a 0 px left-edge delta
-  and 8 px vertical gap on both Flow and Calendar. All seven checked services
-  are active, public health is `ok`, and the new 507-module frontend asset is
-  live. No real Sync, send, mail action, calendar write, or Todo action ran.
-- Production Alembic remains `c0d1e2f3a4b5 (head)`. The outbound candidate
-  allocates the next linear revision `d1e2f3a4b5c6`; it is not deployed yet.
+- GitHub `main` and production runtime are clean at
+  `2a8dbecba7d590198cfe005062700d5e68624851`. It contains the previously
+  released More anchor fix plus durable, idempotent outbound delivery and a
+  server-authoritative ten-second Undo window.
+- Production Alembic is `d1e2f3a4b5c6 (head)`. The validated pre-migration
+  backup is `/var/backups/mailapp/maildb-pre-outbound-20260830T1718Z.dump`.
+- `mailapp`, both workers, mail TUI, Caddy, PostgreSQL, and Redis are active;
+  public health is `ok`; unauthenticated requests to the new send/status routes
+  return `401`; and the 510-module `index-BU6KBgki.js` frontend is live.
+- Signed-in read-only production browser QA loaded blank Compose with all
+  expected controls and zero console errors. More matched its trigger's left
+  edge exactly with an 8 px vertical gap. No real Sync, send, mail action,
+  calendar write, or Todo action ran.
 - The firmware repository milestone is independently merged at
   `1b5364e5d4b48666b3ecfd0cf8ba31ab7f4bd5c4`. Its Email browser-installer
   task is avoiding this release's shared API and progress documents.
@@ -29,25 +32,14 @@ live state.
 
 ## Active Work Item
 
-### P0 — Durable outbound delivery and Undo Send
+### P1 — Production user testing and next-cycle selection
 
-- State: release-ready
-- Why: the legacy request sent directly through Gmail, so a lost HTTP response
-  could cause a user retry and duplicate real email; it also reported “sent”
-  before provider truth and had no Undo Send.
-- Scope: PostgreSQL outbound outbox, reply provenance, stable RFC Message-ID,
-  one-attempt Gmail delivery plus lookup-only reconciliation, cron recovery,
-  session-owned API routes, global status, Compose/reader/Flow integration,
-  generated browser QA, API/release/progress documentation.
-- Acceptance: one client UUID maps to one immutable payload; ambiguous provider
-  outcomes are never replayed; Undo works only in the authoritative ten-second
-  window; sent/cancelled payloads are scrubbed; failures restore a distinct
-  draft without overwriting a newer composer; cross-user callbacks are inert;
-  full checks, disposable PostgreSQL rehearsal, and generated browser tests
-  pass before deployment.
-- Next: commit and push the exact reviewed candidate, back up, migrate while
-  the old frontend remains live, restart and verify the API plus cron worker,
-  publish the new frontend, and verify production without sending real email.
+- State: live; awaiting deliberate user testing
+- Scope: verify a real Send, Undo within ten seconds, reload-time Undo, and
+  truthful delivery/recovery status from the user's production session. Do not
+  simulate these against real accounts through automation.
+- Next: record user-testing findings, fix any release regression immediately,
+  then select the next item from the product queue.
 
 ## Near-Term Product Queue
 
