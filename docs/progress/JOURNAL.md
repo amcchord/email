@@ -3,7 +3,7 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
-## 2026-08-30 — Consolidated product release candidate
+## 2026-08-30 — Consolidated product release and deployment
 
 ### Scope
 
@@ -48,15 +48,28 @@ production deployment without reading or mutating real mail.
 
 ### Production Actions
 
-- None at this checkpoint. Read-only preflight had production clean at
-  `41d2898`, all application services active, and public health `ok`.
-- The authorized database backup, exact Git fast-forward, migration, build,
-  restart, and post-deploy verification remain the next gated actions.
+- Pushed candidate `834eade` to the product branch and fast-forwarded GitHub
+  `main` from `41d2898` without rewriting history.
+- Created and validated a 1.38 GB PostgreSQL custom-format backup at
+  `/var/backups/mailapp/maildb-pre-product-polish-20260830T1031Z.dump`, mode
+  `0600`, owned by `postgres`. The dump was moved out of the checkout after
+  verification caught the untracked backup directory; production Git is clean.
+- Fast-forwarded `/opt/mail` as `mailapp`, ran the locked frontend install and
+  498-module production build, upgraded Alembic transactionally to
+  `z7a8b9c0d1e2`, and restarted only `mailapp`, `mailworker`, and
+  `mailworker-cron`. Requirements, Caddy, systemd, and TUI were unchanged.
+- Verified exact local/origin revision, schema objects, public health `ok`, all
+  seven services active, zero service restarts, zero error-level application/
+  worker log lines, and HTTP 200 for the eager, deferred-editor, and rich-editor
+  assets. No production message was opened or mailbox mutation performed.
+- The unchanged npm lockfile reports 11 compatible-fix advisories (4 moderate,
+  6 high, 1 critical); record a separate dependency-update cycle rather than
+  mixing unverified framework and PDF-library upgrades into this release.
 
 ### Next
 
-Commit and push the exact candidate, revalidate `origin/main` and production,
-take the protected database backup, deploy, and append exact release evidence.
+Pause feature work for user testing. Next, clear the npm audit in an isolated
+dependency update with full browser regression, then resume the product queue.
 
 ## 2026-08-30 — Resilient route-level frontend splitting
 

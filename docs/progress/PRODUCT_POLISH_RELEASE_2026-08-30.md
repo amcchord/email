@@ -205,8 +205,8 @@ recorded in the final section after deployment.
 
 ## Deployment and Rollback
 
-- Deployment is authorized for this release but must remain a Git fast-forward
-  from clean production `41d2898` to the exact pushed `origin/main` revision.
+- Deployment was a Git fast-forward from clean production `41d2898` to the
+  exact pushed application revision `834eade`.
 - Before Alembic runs, create a protected PostgreSQL custom-format backup and
   verify that it is non-empty. Do not print database credentials or private
   content.
@@ -221,12 +221,15 @@ recorded in the final section after deployment.
 
 ## Final Release Evidence
 
-- Release branch: local consolidated candidate passed verification; exact
-  commit pending release commit
-- GitHub `main`: pending push
-- Production revision: pending deployment
-- Database backup: pending deployment
-- Alembic revision: pending deployment
+- Application release: `834eade9e1512ab2bd7a4a4c5c62d80eb5469640`
+- Release branch and GitHub `main`: pushed at `834eade`
+- Production application revision: `834eade`; a docs-only closeout commit
+  follows it with no runtime delta
+- Database backup: validated custom-format dump at
+  `/var/backups/mailapp/maildb-pre-product-polish-20260830T1031Z.dump`,
+  1,383,261,148 bytes, mode `0600`, owner `postgres:postgres`
+- Alembic revision: `z7a8b9c0d1e2 (head)`; required table and email version
+  column confirmed
 - Local checks: `make check` passed with 303 backend tests, 4 opt-in PostgreSQL
   skips, 108 frontend tests, and a successful 498-module production build.
 - Bundle evidence: 258.42 kB / 78.51 kB gzip eager entry; 4.83 kB / 2.23 kB
@@ -235,4 +238,13 @@ recorded in the final section after deployment.
   slow enhancement, editable fail-once fallback, and exact 375px composition.
   Reading made zero editor requests; writing requested exactly the identified
   editor JS/CSS; mutation attempts and unknown routes remained empty.
-- Production health and service verification: pending deployment
+- Production health and service verification: public health `ok`; `mailapp`,
+  `mailworker`, `mailworker-cron`, `mailtui`, Caddy, PostgreSQL, and Redis all
+  active; affected services report zero restarts and successful main status;
+  zero error-level application/worker log lines since deployment; eager,
+  deferred-editor, and rich-editor assets each returned HTTP 200.
+- Dependency follow-up: the package manifest and lockfile were unchanged by
+  this release except for the frontend test script, but `npm audit --omit=dev`
+  reports 11 existing compatible-fix advisories (4 moderate, 6 high, 1
+  critical). Update DOMPurify, jsPDF, Svelte, Vite, and affected transitive
+  dependencies in an isolated, fully regression-tested follow-up.
