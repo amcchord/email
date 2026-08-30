@@ -4,20 +4,20 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Deploy and user-test the Google OAuth callback fail-safe follow-up without
+User-test the deployed Google OAuth callback fail-safe follow-up without
 touching the separately owned AI-provider worktree. Two requested Google
-accounts are correctly reaching the allowlist boundary and await a separate
-least-privilege production configuration decision.
+accounts are correctly reaching the allowlist boundary and await confirmation
+of a separate least-privilege production configuration change.
 
 ## Baseline
 
-- Production and GitHub `main` include reply-envelope application release
-  `70c67a3b1cde9266c6d6d87e15695d778c198bca` (including the prior OAuth
-  release). The production frontend was built from that release. Public health
-  is `ok`, all seven checked services are active, the five application-edge
-  services report zero restarts, and the post-deploy mailapp warning-or-higher
-  count is zero. Alembic remains at `z7a8b9c0d1e2 (head)`; this release contains
-  no schema change.
+- Production and GitHub `main` include OAuth callback fail-safe release
+  `2877a28c1e47a635551b3bfd7117d46d8194d33f` with application commit
+  `a499d9d99a2c999a714d832291742a630b291f13`. The production frontend was built
+  from that release. Public health is `ok`, all seven checked services are
+  active, the five application-edge services report zero restarts, and the new
+  mailapp process has zero warning-or-higher entries. Alembic remains at
+  `z7a8b9c0d1e2 (head)`; this release contains no schema change.
 - The original AI worktree remains clean at `41d2898` on
   `codex/openai-anthropic-model-support` and has not been edited by this work.
 - The deployed reply-envelope slice remains isolated in
@@ -29,10 +29,9 @@ least-privilege production configuration decision.
 - A validated 1.38 GB custom-format backup remains protected at
   `/var/backups/mailapp/maildb-pre-product-polish-20260830T1031Z.dump`, mode
   `0600`, owned by `postgres`. This OAuth candidate has no schema work.
-- The OAuth callback fail-safe candidate is isolated in
+- The deployed OAuth callback fail-safe release remains isolated in
   `/Users/austinmcchord/Development/Email-oauth-callback-reliability` on
-  `codex/oauth-callback-reliability`; application commit `a499d9d` passes the
-  complete local gate.
+  `codex/oauth-callback-reliability` at `2877a28`.
 
 This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
@@ -73,6 +72,12 @@ live state.
   recovery notice on Profile & Accounts, cleaned the callback parameter, and
   had no horizontal overflow. The generated audit recorded zero mutation
   attempts, zero accepted mutations, and zero unknown routes.
+- Production is clean and exact at `2877a28`; public health and `/` return 200,
+  an empty generated callback returns the expected sanitized 303 to Profile &
+  Accounts, all seven services are active, and the new mailapp process has no
+  warning-or-higher entries, callback tracebacks, or missing-verifier traces.
+- A read-only in-app browser shell check loaded `Mail` with one main landmark
+  and no horizontal overflow. No real mail content was inspected or captured.
 
 - The deployed reply-envelope release passes `make check`: 325 backend tests passed,
   4 opt-in PostgreSQL tests skipped, 132 frontend tests passed, and the
@@ -141,7 +146,7 @@ live state.
 
 ## Next Safe Action
 
-Push and deploy the tested OAuth fail-safe candidate. If the user confirms the
-least-privilege allowlist change, add only the two exact addresses and have the
-user start fresh Calendar reauthorization flows. Then resume the Calendar
-false-empty/race slice unless user feedback reprioritizes it.
+If the user confirms the least-privilege allowlist change, add only the two
+exact addresses and have the user start fresh Calendar reauthorization flows.
+Then resume the Calendar false-empty/race slice unless user feedback
+reprioritizes it.

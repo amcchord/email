@@ -96,8 +96,24 @@ a fresh reauthorization because Google authorization codes are one-time.
 
 ## Deployment
 
-The release contains no schema, dependency, worker, Caddy, systemd, AI, Google
-Cloud, mailbox, or mail-processing change. Deployment requires a clean
-fast-forward, frontend rebuild, and restart of `mailapp` only. Production
-verification will cover Git alignment, public health, service state, sanitized
-generated callback behavior, and post-restart logs.
+Application commit `a499d9d99a2c999a714d832291742a630b291f13` and release
+record `2877a28c1e47a635551b3bfd7117d46d8194d33f` were pushed to
+GitHub `main` and `codex/oauth-callback-reliability`. The clean production
+checkout fast-forwarded from `bf8062b` to exact `2877a28`; locked frontend
+packages installed with zero reported vulnerabilities, the 504-module frontend
+rebuilt, and only `mailapp` restarted.
+
+The old Uvicorn process again retained a long-lived connection through its
+stop timeout and systemd killed that old process. The replacement started
+immediately and cleanly. Production Git is clean and exact; public health and
+the frontend return HTTP 200; an empty generated callback returns a sanitized
+303 to Profile & Accounts with `oauth_error=invalid_state`; all seven services
+are active; five application-edge services report zero restarts; Alembic
+remains at `z7a8b9c0d1e2 (head)`; and the new mailapp process has zero
+warning-or-higher entries, callback tracebacks, or missing-verifier traces.
+
+A read-only in-app browser shell check loaded `Mail` with one main landmark and
+no horizontal overflow. No real mail content was inspected or captured. No
+schema, dependency lock, worker, TUI, Caddy/systemd configuration, AI, Google
+Cloud, Google grant, production allowlist, mailbox, or mail-processing state
+changed.

@@ -39,14 +39,26 @@ worktree and real-mail read-only boundary.
 
 ### Production Actions
 
-- None yet. Application commit `a499d9d` is ready to push and deploy. No mail,
-  Google grant, allowlist, schema, dependency, worker, Caddy/systemd, or AI
-  state was changed.
+- Pushed application commit `a499d9d` and release record `2877a28` to GitHub
+  `main` and `codex/oauth-callback-reliability`, then fast-forwarded the clean
+  production checkout from `bf8062b` to exact `2877a28`.
+- Reinstalled locked frontend packages with zero reported vulnerabilities,
+  rebuilt the 504-module frontend, and restarted only `mailapp`. The old
+  process retained a long-lived connection through its stop timeout and was
+  killed by systemd; the replacement started immediately and cleanly.
+- Production Git is clean and exact; public health and `/` return 200; an empty
+  generated callback returns the sanitized Profile & Accounts 303; all seven
+  services are active with zero reported restarts; Alembic remains at head;
+  and the new mailapp process has zero warning-or-higher entries, callback
+  tracebacks, or missing-verifier traces. A read-only browser shell check also
+  passed without inspecting mail content.
+- No mail, Google grant, allowlist, schema, dependency lock, worker, TUI,
+  Caddy/systemd configuration, or AI file/service changed.
 
 ### Next
 
-Deploy the tested candidate. Add only the two exact requested allowlist entries
-if confirmed, then use fresh one-time Google authorization flows.
+Add only the two exact requested allowlist entries if confirmed, then use fresh
+one-time Google authorization flows.
 
 ## 2026-08-30 — Reply-envelope integrity candidate
 
