@@ -14,8 +14,7 @@ Baselines verified on 2026-08-30:
   `f3a4b5c6d7e8`;
 - private `reterminal-color` `main` at
   `2e835543dfe7095fe65a4f62b0da9e3c91ca47d1` (`0.2.0-candidate.4`); and
-- GitHub Actions run `33335099281` at that exact candidate commit, which passed
-  the candidate's
+- Exact-main GitHub Actions run `33336177159`, which passed the candidate's
   keyed RET1, cross-language, power-loss, reproducibility, manifest, and bundle
   verification gates.
 

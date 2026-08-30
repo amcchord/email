@@ -8,9 +8,9 @@ OTA remain separate gates in [`firmware-management.md`](firmware-management.md).
 ## Current release posture
 
 - Private firmware `main` is `2e835543dfe7095fe65a4f62b0da9e3c91ca47d1`
-  (`0.2.0-candidate.4`). GitHub Actions run `33335099281` at that exact commit
-  passed its keyed, cross-language, power-loss, reproducibility, manifest, and
-  bundle checks.
+  (`0.2.0-candidate.4`). Exact-main GitHub Actions run `33336177159` passed its
+  keyed, cross-language, power-loss, reproducibility, manifest, and bundle
+  checks.
 - Generic firmware artifacts remain unkeyed and enrollment-disabled. No release
   signing key, enrollment private key, credential, Wi-Fi value, or device image
   is committed to either repository.

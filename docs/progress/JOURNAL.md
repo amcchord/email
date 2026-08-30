@@ -3,6 +3,68 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — At a Glance firmware and battery safety release
+
+### Scope
+
+Advance terminal reliability, battery guidance, trusted firmware verification,
+and OTA architecture without enabling browser Serial, device writes, firmware
+artifact downloads, OTA offers, or a schema change.
+
+### Completed
+
+- Released private firmware `0.2.0-candidate.4` with fresh bounded SNTP,
+  ISRG X1/X2 CA and hostname validation, no plaintext/redirect downgrade,
+  exact E1001/E1002 `ab-v1` partitions, an inactive-slot-only Ed25519 OTA
+  writer, and pending-image valid/rollback primitives. The OTA path remains
+  compile-time disabled and is not invoked by the device loop.
+- Replaced naive battery extrapolation with bounded six-hour medians and a
+  robust discharge slope, 90-day history, direction/error guards, one-year
+  horizon suppression, coarse confidence copy, and honest
+  `possible_charging` behavior without an external-power signal.
+- Added exact browser SHA-256/Ed25519 verification of manifest/signature bytes
+  against pinned toolchain/model/partition contracts. The production key map is
+  empty, and the browser still contains no firmware-artifact or serial write
+  path.
+- Added a fail-closed OTA policy core and authenticated read-only capability
+  endpoint. Independent enablement, exact descriptor/parent evidence, physical
+  HIL allowlist, positive catalog generation, model eligibility, and durable
+  event persistence are all required; no offer, artifact, or event route exists.
+
+### Verification
+
+- Application validation passed 591 backend tests with 35 expected skips. The
+  frontend run passed 320 tests and exposed one stale source-surface assertion;
+  its exact read-only endpoint contract was corrected and re-run green. The
+  local production build transformed 528 modules.
+- Firmware validation passed 22 host tests plus enrollment/TLS/layout checks,
+  PlatformIO builds for E1001/E1002/E1004, exact-commit run `33335099281`, and
+  exact-main run `33336177159`, including keyed RET1, all-model,
+  reproducibility, manifest, and immutable-bundle gates.
+- Diff/secret/write-path review passed. No signing key, credential, device
+  artifact, enabled flag, serial request, migration, dependency, Caddy, or
+  systemd change was introduced.
+
+### Production Actions
+
+- Rebased onto Scheduled Send closeout
+  `584e3e0c52f209c6e93e6a7abdaf93727548fbba`, pushed GitHub `main`, and
+  deployed exact runtime `92d22a54c49ec9b4ba74042ece01a1c6d527ea07`.
+- Restarted only `mailapp` and built a 530-module frontend. The retired API hit
+  its known bounded graceful-stop timeout; the replacement has zero restarts
+  and no post-start warning-or-higher entries. All seven services and public
+  health are healthy, anonymous OTA capability access is 401, production Git
+  is clean, and Alembic remains `f3a4b5c6d7e8 (head)`.
+- Authenticated read-only QA verified honest learning/stale battery copy and the
+  locked OTA/browser installer blockers. No terminal, firmware, display,
+  enrollment, mail, calendar, or database state was mutated.
+
+### Next
+
+Run the physical E1001/E1002 enrollment, TLS, A/B migration, update,
+interruption, rollback, power, and ROM-recovery matrix. Only after that evidence
+exists should Web Serial or a durable device OTA control plane be implemented.
+
 ## 2026-08-30 — Durable Scheduled Send release
 
 ### Scope

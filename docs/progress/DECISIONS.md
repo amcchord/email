@@ -553,3 +553,28 @@ add a new entry that explicitly supersedes the old one.
   cannot drop Archive after send. The UI displays explicit zone/offset choices,
   restores a metadata-only pending list across sessions, and reduces polling
   while the due time is distant.
+
+## D-030 — Terminal firmware writes require independent end-to-end gates
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Ship trusted firmware parsing, browser cryptographic preflight,
+  battery prediction, and OTA policy/status independently from any device-write
+  transport. Browser install requires an exact source-pinned release key,
+  signed generation-pinned catalog, exact model/layout evidence, secure local
+  provisioning, and physical recovery qualification. Device OTA additionally
+  requires an exact signed content-addressed descriptor linked to its parent
+  bundle, explicit HIL qualification, device authentication, direct power
+  safety, a durable idempotent event ledger, and boot validation/rollback. No
+  single flag may enable either write path.
+- Reason: A valid signature does not prove the connected model, recoverability,
+  power safety, operator approval, or durable update state. Browser-observed
+  Serial identity is self-reported, and battery-voltage trends cannot prove
+  external power. Coupling a visible feature or one enablement flag to a flash
+  operation would turn a UI or configuration mistake into a device-bricking
+  boundary.
+- Consequence: Candidate.4 and the application policy modules may ship while
+  every transport remains locked. Battery forecasts are advisory only; E1004
+  remains single-slot and ineligible; the browser production trust map is empty;
+  and future Serial/OTA work must preserve every independent gate plus exact
+  interruption, rollback, and ROM-recovery evidence.
