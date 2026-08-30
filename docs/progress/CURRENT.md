@@ -4,10 +4,10 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-User-test the deployed exact-account Reply and Reply All workflow, then select
-the next product slice without touching the separately owned AI-provider
-worktree. The strongest audited follow-ups are Calendar false-empty/race
-states, saved views, and the subscription favicon privacy leak.
+Deploy and user-test the Google OAuth callback fail-safe follow-up without
+touching the separately owned AI-provider worktree. Two requested Google
+accounts are correctly reaching the allowlist boundary and await a separate
+least-privilege production configuration decision.
 
 ## Baseline
 
@@ -29,6 +29,10 @@ states, saved views, and the subscription favicon privacy leak.
 - A validated 1.38 GB custom-format backup remains protected at
   `/var/backups/mailapp/maildb-pre-product-polish-20260830T1031Z.dump`, mode
   `0600`, owned by `postgres`. This OAuth candidate has no schema work.
+- The OAuth callback fail-safe candidate is isolated in
+  `/Users/austinmcchord/Development/Email-oauth-callback-reliability` on
+  `codex/oauth-callback-reliability`; application commit `a499d9d` passes the
+  complete local gate.
 
 This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
@@ -58,6 +62,17 @@ live state.
   375 px layouts without accessing real mail.
 
 ## Verification State
+
+- OAuth callback fail-safe `make check`: 336 backend tests passed, 4 opt-in
+  PostgreSQL tests skipped, 135 frontend tests passed, and the 504-module
+  production frontend built.
+- Twenty-six generated OAuth regressions and three independent rereviews found
+  no remaining callback reliability, transaction-ordering, log-redaction,
+  security, UX, or accessibility blockers.
+- Exact 375×812 in-app browser QA showed a visible, wrapping legacy-state
+  recovery notice on Profile & Accounts, cleaned the callback parameter, and
+  had no horizontal overflow. The generated audit recorded zero mutation
+  attempts, zero accepted mutations, and zero unknown routes.
 
 - The deployed reply-envelope release passes `make check`: 325 backend tests passed,
   4 opt-in PostgreSQL tests skipped, 132 frontend tests passed, and the
@@ -99,6 +114,10 @@ live state.
 
 ## Known Constraints and Follow-ups
 
+- The two newly reported external accounts are absent from the production
+  allowlist by both exact-address and domain matching. No allowlist change has
+  been made; prefer adding only the exact addresses after user confirmation.
+
 - `Load directly once` permits direct requests. It can disclose IP address,
   device details, and approximate view time; the UI says so. Hiding the content
   later cannot undo those requests. A hardened owned proxy/resource
@@ -122,8 +141,7 @@ live state.
 
 ## Next Safe Action
 
-User-test Reply and Reply All on an explicitly generated test conversation;
-confirm the visible source account and recipient list without clicking Send on
-real mail. Separately, retry Calendar reauthorization with a fresh one-time
-authorization code. Then take the Calendar false-empty/race audit as the next
-isolated product slice unless user feedback reprioritizes it.
+Push and deploy the tested OAuth fail-safe candidate. If the user confirms the
+least-privilege allowlist change, add only the two exact addresses and have the
+user start fresh Calendar reauthorization flows. Then resume the Calendar
+false-empty/race slice unless user feedback reprioritizes it.

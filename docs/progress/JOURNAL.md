@@ -3,6 +3,51 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Google OAuth callback fail-safe candidate
+
+### Scope
+
+Confirm the reported Calendar reauthorization Internal Server Error, protect
+all adjacent Google callback exception paths, and preserve the concurrent AI
+worktree and real-mail read-only boundary.
+
+### Completed
+
+- Correlated the supplied legacy state window with a redacted production
+  `Missing code verifier` traceback that preceded the deployed PKCE release.
+- Added typed signed-state validation, complete account/login callback
+  exception boundaries, best-effort rollback, class-only redacted logging, and
+  cookie-before-commit transaction ordering.
+- Added safe handling for known legacy callback query parameters and more
+  actionable account/login recovery copy.
+- Added an exact legacy-state regression plus generated setup, malformed
+  profile, database read, commit, cookie, rollback, and redaction coverage.
+- Read-only allowlist matching confirmed the two newly reported external
+  addresses are absent; no production configuration changed pending explicit
+  confirmation of the exact-address additions.
+
+### Verification
+
+- `make check`: 336 backend passed, 4 opt-in PostgreSQL tests skipped, 135
+  frontend passed, and the 504-module production build completed.
+- Focused OAuth: 26 passed. `git diff --check`: passed.
+- Independent architecture, competitive UX, and QA reviews found and verified
+  closure of database/setup and cookie-before-commit blockers.
+- Generated exact-375 in-app browser QA passed with an accessible recovery
+  notice, cleaned URL, no overflow, zero mutation attempts, zero accepted
+  mutations, and zero unknown routes.
+
+### Production Actions
+
+- None yet. Application commit `a499d9d` is ready to push and deploy. No mail,
+  Google grant, allowlist, schema, dependency, worker, Caddy/systemd, or AI
+  state was changed.
+
+### Next
+
+Deploy the tested candidate. Add only the two exact requested allowlist entries
+if confirmed, then use fresh one-time Google authorization flows.
+
 ## 2026-08-30 — Reply-envelope integrity candidate
 
 ### Scope
