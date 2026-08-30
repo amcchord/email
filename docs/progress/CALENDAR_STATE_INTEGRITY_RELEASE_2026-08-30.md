@@ -152,9 +152,25 @@ zero unknown routes; generated reauthorization remained on the localhost sink.
 
 ## Deployment
 
-Pending. The production rollback point is `aa91430`. This release requires no
-migration, dependency-lock update, worker restart, terminal/e-ink change,
+Application commit `bbf96b327650b243cf50ae4d6c1707f12b08ad8c` and release
+record `b6cfd9870fb2d3813c52b14ad1005493fbabb1d2` were pushed to GitHub
+`main` and `codex/calendar-state-integrity`. The clean production checkout
+fast-forwarded from rollback point `aa91430` to exact `b6cfd98`.
+
+Locked frontend packages installed with zero reported vulnerabilities, the
+506-module frontend rebuilt as `mailapp`, and only `mailapp` restarted. The
+old process held a long-lived connection during shutdown and the restart
+finished after the initial command window; systemd then reported a clean,
+active replacement process.
+
+Production Git is clean. `/api/health`, `/`, and the exact new Calendar asset
+return 200; an unauthenticated Calendar request returns the expected 401,
+confirming the updated router is loaded without reading private data. All seven
+checked services are active, the five application-edge restart counters are
+zero, Alembic remains `z7a8b9c0d1e2 (head)`, and the new `mailapp` process has
+zero warning-or-higher entries.
+
+No migration, dependency-lock update, worker restart, terminal/e-ink change,
 AI-provider change, Caddy/systemd change, Google grant, allowlist edit, mailbox
-write, or calendar write. The deployment scope is a clean Git fast-forward,
-locked frontend install/build, and restart of only `mailapp`, followed by Git,
-health, service, log, and read-only app-shell verification.
+write, or calendar write occurred. All browser screenshots and interaction
+audits used generated data only.

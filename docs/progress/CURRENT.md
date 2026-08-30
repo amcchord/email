@@ -4,16 +4,18 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Deploy and user-test the Calendar state-integrity release without touching the
-separately owned At a Glance/terminal or AI-provider work. The application
-candidate is `bbf96b327650b243cf50ae4d6c1707f12b08ad8c`; documentation and
-post-deploy evidence are being finalized.
+User-test the deployed Calendar state-integrity release without touching the
+separately owned At a Glance/terminal or AI-provider work. Application commit
+`bbf96b327650b243cf50ae4d6c1707f12b08ad8c` and release record
+`b6cfd9870fb2d3813c52b14ad1005493fbabb1d2` are live and healthy.
 
 ## Baseline
 
-- Production and GitHub `main` are clean and exact at OAuth fail-safe release
-  `aa91430b76c081d6ed0e0de5f1726086a850f8e5`. Public health is `ok` and all
-  seven checked services are active.
+- Production and GitHub `main` include Calendar release
+  `b6cfd9870fb2d3813c52b14ad1005493fbabb1d2` with application commit
+  `bbf96b327650b243cf50ae4d6c1707f12b08ad8c`. The production frontend was
+  rebuilt from the release and only `mailapp` restarted. Public health is `ok`
+  and all seven checked services are active.
 - The Calendar release is isolated in
   `/Users/austinmcchord/Development/Email-calendar-state-integrity` on
   `codex/calendar-state-integrity`.
@@ -21,7 +23,7 @@ post-deploy evidence are being finalized.
   Admin UI, two terminal Alembic revisions, terminal documentation, and an
   overlapping `docs/api.md` addition. Its owner will preserve both API sections
   while rebasing after this release.
-- This Calendar candidate contains no migration, dependency-lock, worker,
+- This Calendar release contains no migration, dependency-lock, worker,
   terminal/e-ink, AI-provider, Caddy/systemd, or production-configuration work.
   The rollback code point is `aa91430`.
 - A validated 1.38 GB custom-format backup remains protected at
@@ -74,6 +76,11 @@ live state.
   lower/upper-boundary fixtures.
 - Independent architecture, competitive UX, and QA release gates report no
   remaining P0/P1 blockers.
+- Production Git is clean; `/api/health`, `/`, and the exact new Calendar asset
+  return 200; the Calendar route is loaded and returns the expected 401 without
+  a session; all seven services are active; the five checked application-edge
+  restart counters are zero; Alembic remains `z7a8b9c0d1e2 (head)`; and the new
+  `mailapp` process has zero warning-or-higher entries.
 
 ## Known Constraints and Follow-ups
 
@@ -90,6 +97,7 @@ live state.
 
 ## Next Safe Action
 
-Push the reviewed Calendar branch and fast-forward `main`, deploy the exact
-release commit with a frontend rebuild and only a `mailapp` restart, then
-record health, service, Git, log, and read-only shell verification.
+User-test Calendar with real accounts using read-only navigation, Reload, and
+event-detail flows. Do not trigger Sync or mutate real calendars unless the
+user explicitly chooses that operation. Then resume the next isolated product
+slice or the exact-address allowlist change if separately confirmed.

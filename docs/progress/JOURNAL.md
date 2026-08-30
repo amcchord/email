@@ -45,14 +45,27 @@ calendars read-only and preserving separately owned terminal/e-ink and AI work.
 
 ### Production Actions
 
-- None yet. Preflight found clean healthy production at `aa91430`; the Calendar
-  application candidate is `bbf96b3` and contains no schema, dependency-lock,
-  worker, terminal/e-ink, AI, configuration, Google grant, or mailbox changes.
+- Pushed application commit `bbf96b3` and release record `b6cfd98` to GitHub
+  `main` and `codex/calendar-state-integrity`, then fast-forwarded the clean
+  production checkout from `aa91430` to exact `b6cfd98`.
+- Reinstalled locked frontend packages with zero reported vulnerabilities,
+  rebuilt the 506-module frontend as `mailapp`, and restarted only `mailapp`.
+  The prior process held a long-lived connection during shutdown and the
+  restart completed after the initial command window; the replacement process
+  is active and clean.
+- Post-deploy verification passed: production Git was clean, public health,
+  `/`, and the exact Calendar asset returned 200, the Calendar route returned
+  the expected unauthenticated 401, all seven services were active, five
+  application-edge restart counters were zero, Alembic remained at head, and
+  the new `mailapp` process had zero warning-or-higher entries.
+- No schema, dependency lock, worker, terminal/e-ink, AI-provider, Caddy/systemd
+  configuration, Google grant, production allowlist, mailbox, or calendar data
+  changed.
 
 ### Next
 
-Push, fast-forward `main`, deploy the exact reviewed release, rebuild the
-frontend, restart only `mailapp`, and record post-deploy evidence.
+User-test read-only Calendar navigation, Reload, and event details with real
+accounts. Keep Sync and real calendar/mail mutations outside automated QA.
 
 ## 2026-08-30 — Google OAuth callback fail-safe candidate
 
