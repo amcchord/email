@@ -8,6 +8,7 @@ from backend.models.draft import DraftAttachment, DraftMutation, DraftSession
 from backend.models.email import Attachment, Email, EmailLabel
 from backend.models.mail_action import MailAction
 from backend.models.outbound_message import OutboundMessage
+from backend.models.snooze import EmailSnooze
 from backend.models.settings import Setting
 from backend.models.terminal import (
     TerminalBatterySample,
@@ -29,6 +30,7 @@ __all__ = [
     "EmailLabel",
     "MailAction",
     "OutboundMessage",
+    "EmailSnooze",
     "AIAnalysis",
     "Setting",
     "TodoItem",

@@ -118,6 +118,7 @@ class EmailActionRequest(BaseModel):
         "star",
         "unstar",
         "archive",
+        "unarchive",
         "trash",
         "untrash",
         "spam",

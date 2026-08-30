@@ -6,6 +6,7 @@
   import { cleanEmailText, categoryLabel, typeLabel } from '../../lib/emailText.js';
   import { focusEmailRow, shouldFocusAdjacentRow } from '../../lib/emailRowFocus.js';
   import { selectedBooleanState } from '../../lib/inboxDataset.js';
+  import { formatSnoozeWake } from '../../lib/remindLater.js';
 
   let {
     emails = [],
@@ -21,6 +22,7 @@
     selectionEpoch = 0,
     onSelect = null,
     onAction = null,
+    onSnooze = null,
     onLoadMore = null,
   } = $props();
 
@@ -324,12 +326,14 @@
         <p class="text-sm font-medium" style="color: var(--text-primary)">
           {#if searchActive}No mail matches this search
           {:else if mailbox === 'SPAM'}No spam
+          {:else if mailbox === 'SNOOZED'}No snoozed emails
           {:else}No emails
           {/if}
         </p>
         <p class="text-xs mt-1" style="color: var(--text-secondary)">
           {#if searchActive}Edit a filter above or clear the search
           {:else if mailbox === 'SPAM'}Your spam folder is clean
+          {:else if mailbox === 'SNOOZED'}Snoozed messages will appear here
           {:else}This mailbox is empty
           {/if}
         </p>
@@ -468,6 +472,20 @@
               <Icon name="star" size={16} />
             </button>
 
+            {#if onSnooze && !email.is_draft && !email.is_trash && !email.is_spam}
+              <button
+                type="button"
+                onclick={(event) => { event.stopPropagation(); onSnooze(email); }}
+                disabled={actionsDisabled}
+                class="min-w-11 min-h-11 rounded-md inline-flex items-center justify-center shrink-0 transition-fast disabled:opacity-50"
+                style="color: {email.snooze_id ? 'var(--color-accent-600)' : 'var(--text-tertiary)'}"
+                aria-label={email.snooze_id ? `Change reminder for ${cleanEmailText(email.subject) || 'email'}` : `Snooze ${cleanEmailText(email.subject) || 'email'}`}
+                title={email.snooze_id ? 'Change reminder' : 'Snooze'}
+              >
+                <Icon name="clock" size={16} />
+              </button>
+            {/if}
+
             <!-- Content -->
             <button
               type="button"
@@ -508,6 +526,11 @@
                 {/if}
                 {#if email.is_subscription}
                   <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300">Subscription</span>
+                {/if}
+                {#if email.snooze_wake_at}
+                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300" title={formatSnoozeWake(email.snooze_wake_at, email.snooze_time_zone || undefined)}>
+                    {formatSnoozeWake(email.snooze_wake_at, email.snooze_time_zone || undefined, { compact: true })}
+                  </span>
                 {/if}
                 {#if email.ai_category}
                   <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 {categoryColors[email.ai_category] || ''}">{categoryLabel(email.ai_category)}</span>

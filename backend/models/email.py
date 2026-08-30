@@ -56,6 +56,7 @@ class Email(Base):
     attachments = relationship("Attachment", back_populates="email", cascade="all, delete-orphan")
     ai_analysis = relationship("AIAnalysis", back_populates="email", uselist=False, cascade="all, delete-orphan")
     mail_actions = relationship("MailAction", back_populates="email", passive_deletes=True)
+    snoozes = relationship("EmailSnooze", back_populates="email", passive_deletes=True)
 
     __table_args__ = (
         Index("ix_emails_account_date", "account_id", "date"),

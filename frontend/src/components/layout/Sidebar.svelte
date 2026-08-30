@@ -42,15 +42,25 @@
     { id: 'STARRED', label: 'Starred', icon: 'star' },
     { id: 'SENT', label: 'Sent', icon: 'send' },
     { id: 'DRAFTS', label: 'Drafts', icon: 'edit' },
+    { id: 'SNOOZED', label: 'Snoozed', icon: 'clock', virtual: true },
     { id: 'SPAM', label: 'Spam', icon: 'alert-triangle' },
     { id: 'TRASH', label: 'Trash', icon: 'trash-2' },
     { id: 'ALL', label: 'All Mail', icon: 'mail' },
   ];
 
   function selectMailbox(id) {
+    if (id === 'SNOOZED') {
+      selectSmartFilter({ type: 'snoozed' });
+      return;
+    }
     smartFilter.set(null);
     currentMailbox.set(id);
     currentPage.set('inbox');
+  }
+
+  function isMailboxActive(mailbox) {
+    if (mailbox.id === 'SNOOZED') return isSmartFilterActive({ type: 'snoozed' });
+    return !$smartFilter && $currentMailbox === mailbox.id;
   }
 
   function selectLabel(labelId) {
@@ -132,10 +142,12 @@
       {#each mailboxes as mb}
         <button
           onclick={() => selectMailbox(mb.id)}
-          aria-current={$currentMailbox === mb.id ? 'page' : undefined}
+          aria-current={isMailboxActive(mb) ? 'page' : undefined}
+          aria-label={mb.label}
+          title={$sidebarCollapsed ? mb.label : undefined}
           class="w-full flex items-center gap-3 px-3 h-8 rounded-md text-sm transition-fast"
-          class:font-medium={$currentMailbox === mb.id}
-          style="color: {$currentMailbox === mb.id ? 'var(--text-primary)' : 'var(--text-secondary)'}; background: {$currentMailbox === mb.id ? 'var(--bg-hover)' : 'transparent'}"
+          class:font-medium={isMailboxActive(mb)}
+          style="color: {isMailboxActive(mb) ? 'var(--text-primary)' : 'var(--text-secondary)'}; background: {isMailboxActive(mb) ? 'var(--bg-hover)' : 'transparent'}"
         >
           <Icon name={mb.icon} size={18} class="shrink-0" />
           {#if !$sidebarCollapsed}

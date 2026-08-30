@@ -319,6 +319,27 @@ export const api = {
     return request('GET', `/emails/labels/all${params}`);
   },
 
+  // Durable thread snooze / remind later
+  createSnooze: (payload) => request('POST', '/snoozes', payload),
+  listSnoozes: ({ state = 'active', limit = 50, offset = 0 } = {}) => {
+    const params = new URLSearchParams({
+      state,
+      limit: String(limit),
+      offset: String(offset),
+    });
+    return request('GET', `/snoozes?${params.toString()}`);
+  },
+  getSnooze: (snoozeId) =>
+    request('GET', `/snoozes/${encodeURIComponent(snoozeId)}`),
+  getSnoozeByIdempotency: (idempotencyKey) =>
+    request('GET', `/snoozes/by-idempotency/${encodeURIComponent(idempotencyKey)}`),
+  rescheduleSnooze: (snoozeId, payload) =>
+    request('PATCH', `/snoozes/${encodeURIComponent(snoozeId)}/reschedule`, payload),
+  cancelSnooze: (snoozeId) =>
+    request('POST', `/snoozes/${encodeURIComponent(snoozeId)}/cancel`, {}),
+  returnSnoozeNow: (snoozeId) =>
+    request('POST', `/snoozes/${encodeURIComponent(snoozeId)}/return-now`, {}),
+
   // Compose
   sendEmail: (data, idempotencyKey = data?.idempotency_key) => {
     if (typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) {

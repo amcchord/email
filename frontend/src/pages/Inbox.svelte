@@ -37,6 +37,9 @@
   import WorkingDrafts from '../components/email/WorkingDrafts.svelte';
   import EmailSearchSummary from '../components/email/EmailSearchSummary.svelte';
   import Icon from '../components/common/Icon.svelte';
+  import SnoozePicker from '../components/common/SnoozePicker.svelte';
+  import { buildSnoozeRequest, createSnoozeWithReconciliation, normalizeSnoozedList } from '../lib/snooze.js';
+  import { formatSnoozeWake } from '../lib/remindLater.js';
 
   let selectedEmail = $state(null);
   let emailLoading = $state(false);
@@ -57,7 +60,9 @@
   let showingPreviousResults = $derived(
     datasetError && !datasetAuthoritative && Boolean(committedDatasetKey) && $emails.length > 0
   );
-  let resultsMailbox = $derived($searchQuery ? 'ALL' : $currentMailbox);
+  let resultsMailbox = $derived(
+    $smartFilter?.type === 'snoozed' ? 'SNOOZED' : ($searchQuery ? 'ALL' : $currentMailbox)
+  );
 
   const listRequests = createLatestRequestGuard();
   const emailRequests = createLatestRequestGuard();
@@ -76,6 +81,8 @@
   let actionReconciliationVersion = 0;
   let committedDatasetSnapshot = null;
   let emailViewTransitionGuard = null;
+  let snoozeTarget = $state(null);
+  let snoozeBusyIds = $state(new Set());
 
   function registerEmailViewTransitionGuard(guard) {
     emailViewTransitionGuard = typeof guard === 'function' ? guard : null;
@@ -167,6 +174,11 @@
         isEnabled: selectedActionEnabled,
         disabledReason: selectedActionUnavailable,
       },
+      'inbox.snooze': {
+        run: () => openSnoozePicker(get(selectedEmailId)),
+        isEnabled: selectedActionEnabled,
+        disabledReason: selectedActionUnavailable,
+      },
       'inbox.viewMode': () => {
         const current = get(viewMode);
         const next = current === 'table' ? 'column' : 'table';
@@ -211,6 +223,8 @@
     datasetAuthoritative = false;
     datasetUpdating = false;
     emailViewTransitionGuard = null;
+    snoozeTarget = null;
+    snoozeBusyIds = new Set();
     selectedEmailId.set(null);
     selectedEmail = null;
     emailLoading = false;
@@ -268,7 +282,7 @@
   $effect(() => {
     const evt = $lastEvent;
     if (!evt || !inboxSessionIsCurrent()) return;
-    if (evt.type === 'new_emails' || evt.type === 'emails_updated') {
+    if (evt.type === 'new_emails' || evt.type === 'emails_updated' || evt.type === 'snooze_updated') {
       untrack(() => { refreshDataset(); });
     }
   });
@@ -354,6 +368,13 @@
       } else if (sf && sf.type === 'needs_reply_snoozed') {
         const paginationParams = { page: snapshot.page, page_size: snapshot.pageSize };
         result = await api.getNeedsReplySnoozed(paginationParams);
+      } else if (sf && sf.type === 'snoozed') {
+        const payload = await api.listSnoozes({
+          state: 'active',
+          limit: snapshot.pageSize,
+          offset: (snapshot.page - 1) * snapshot.pageSize,
+        });
+        result = normalizeSnoozedList(payload);
       } else {
         const params = {
           mailbox: snapshot.mailbox,
@@ -483,7 +504,17 @@
     try {
       const result = await api.getEmail(id);
       if (!isCurrentEmailRequest(requestId, id)) return;
-      selectedEmail = result;
+      const summary = get(emails).find(email => email.id === id);
+      selectedEmail = summary?.snooze_id
+        ? {
+            ...result,
+            snooze_id: summary.snooze_id,
+            snooze_wake_at: summary.snooze_wake_at,
+            snooze_time_zone: summary.snooze_time_zone,
+            snooze_condition: summary.snooze_condition,
+            snooze_state: summary.snooze_state,
+          }
+        : result;
       if (!result.is_read) {
         // Rendering the message must never wait for a mailbox mutation. The
         // durable action path owns retries and exposes any terminal failure.
@@ -775,6 +806,172 @@
     }
   }
 
+  function emailForSnooze(target) {
+    if (target && typeof target === 'object') return target;
+    const id = Number(target);
+    return (selectedEmail?.id === id ? selectedEmail : null)
+      || get(emails).find(email => email.id === id)
+      || null;
+  }
+
+  async function openSnoozePicker(target) {
+    const candidate = emailForSnooze(target);
+    if (!candidate || snoozeBusyIds.has(candidate.id)) return;
+    if (candidate.is_draft || candidate.is_trash || candidate.is_spam) {
+      showToast('Restore or send this email before snoozing it', 'info');
+      return;
+    }
+    if (get(selectedEmailId) === candidate.id && !(await canLeaveSelectedEmail())) return;
+    snoozeTarget = candidate;
+  }
+
+  function markSnoozeBusy(emailId, busy) {
+    const next = new Set(snoozeBusyIds);
+    if (busy) next.add(emailId); else next.delete(emailId);
+    snoozeBusyIds = next;
+  }
+
+  function removeEmailOptimistically(emailId) {
+    const list = get(emails);
+    const index = list.findIndex(email => email.id === emailId);
+    const item = index >= 0 ? list[index] : null;
+    if (index >= 0) {
+      emails.set(list.filter(email => email.id !== emailId));
+      emailsTotal.update(total => Math.max(0, total - 1));
+    }
+    const wasSelected = get(selectedEmailId) === emailId;
+    const detail = wasSelected ? selectedEmail : null;
+    if (wasSelected) {
+      selectedEmailId.set(null);
+      selectedEmail = null;
+    }
+    return { detail, index, item, removed: index >= 0, wasSelected };
+  }
+
+  function restoreOptimisticSnooze(snapshot) {
+    if (!snapshot?.removed || !snapshot.item) return;
+    emails.update(list => {
+      if (list.some(email => email.id === snapshot.item.id)) return list;
+      const next = [...list];
+      next.splice(Math.min(snapshot.index, next.length), 0, snapshot.item);
+      return next;
+    });
+    emailsTotal.update(total => total + 1);
+    if (snapshot.wasSelected) {
+      selectedEmailId.set(snapshot.item.id);
+      selectedEmail = snapshot.detail;
+    }
+  }
+
+  async function handleSnoozeSubmit(schedule) {
+    const target = snoozeTarget;
+    snoozeTarget = null;
+    if (!target || !inboxSessionIsCurrent()) return;
+    const datasetKey = currentDatasetSnapshot().key;
+    markSnoozeBusy(target.id, true);
+
+    if (target.snooze_id) {
+      const previousWake = target.snooze_wake_at;
+      emails.update(list => list.map(email => email.id === target.id
+        ? { ...email, snooze_wake_at: schedule.wakeAt, snooze_time_zone: schedule.timeZone }
+        : email));
+      if (selectedEmail?.id === target.id) {
+        selectedEmail = { ...selectedEmail, snooze_wake_at: schedule.wakeAt, snooze_time_zone: schedule.timeZone };
+      }
+      try {
+        await api.rescheduleSnooze(target.snooze_id, {
+          wake_at: schedule.wakeAt,
+          time_zone: schedule.timeZone,
+        });
+        if (inboxSessionIsCurrent()) {
+          showToast(`Reminder moved to ${formatSnoozeWake(schedule.wakeAt, schedule.timeZone)}`, 'success');
+        }
+      } catch (error) {
+        if (inboxSessionIsCurrent() && currentDatasetSnapshot().key === datasetKey) {
+          emails.update(list => list.map(email => email.id === target.id
+            ? { ...email, snooze_wake_at: previousWake }
+            : email));
+          if (selectedEmail?.id === target.id) selectedEmail = { ...selectedEmail, snooze_wake_at: previousWake };
+          showToast(error.message || 'The reminder could not be changed', 'error');
+        }
+      } finally {
+        if (inboxSessionIsCurrent()) markSnoozeBusy(target.id, false);
+      }
+      return;
+    }
+
+    const snapshot = removeEmailOptimistically(target.id);
+    try {
+      const reminder = await createSnoozeWithReconciliation(
+        api,
+        buildSnoozeRequest(target.id, schedule),
+      );
+      if (!inboxSessionIsCurrent()) return;
+      showToast(
+        `Snoozed until ${formatSnoozeWake(reminder.wake_at || schedule.wakeAt, reminder.time_zone || schedule.timeZone)}`,
+        'success',
+        10_000,
+        {
+          actionLabel: 'Undo',
+          dismissLabel: 'Dismiss snooze confirmation',
+          onAction: async () => {
+            await api.returnSnoozeNow(reminder.id);
+            if (!inboxSessionIsCurrent()) return;
+            if (currentDatasetSnapshot().key === datasetKey) restoreOptimisticSnooze(snapshot);
+            showToast('Snooze undone — returned to inbox', 'success');
+          },
+        },
+      );
+    } catch (error) {
+      if (error.code === 'snooze_outcome_unknown' && inboxSessionIsCurrent()) {
+        showToast('Snooze sent — open Snoozed or refresh to confirm', 'info');
+        return;
+      }
+      if (inboxSessionIsCurrent() && currentDatasetSnapshot().key === datasetKey) {
+        restoreOptimisticSnooze(snapshot);
+        showToast(error.message || 'The email could not be snoozed', 'error');
+      }
+    } finally {
+      if (inboxSessionIsCurrent()) markSnoozeBusy(target.id, false);
+    }
+  }
+
+  async function returnSnoozedNow(target = selectedEmail) {
+    if (!target?.snooze_id || snoozeBusyIds.has(target.id)) return;
+    const datasetKey = currentDatasetSnapshot().key;
+    markSnoozeBusy(target.id, true);
+    const snapshot = removeEmailOptimistically(target.id);
+    try {
+      await api.returnSnoozeNow(target.snooze_id);
+      if (inboxSessionIsCurrent()) showToast('Returned to inbox', 'success');
+    } catch (error) {
+      if (inboxSessionIsCurrent() && currentDatasetSnapshot().key === datasetKey) {
+        restoreOptimisticSnooze(snapshot);
+        showToast(error.message || 'The email could not be returned', 'error');
+      }
+    } finally {
+      if (inboxSessionIsCurrent()) markSnoozeBusy(target.id, false);
+    }
+  }
+
+  async function cancelSnoozed(target = selectedEmail) {
+    if (!target?.snooze_id || snoozeBusyIds.has(target.id)) return;
+    const datasetKey = currentDatasetSnapshot().key;
+    markSnoozeBusy(target.id, true);
+    const snapshot = removeEmailOptimistically(target.id);
+    try {
+      await api.cancelSnooze(target.snooze_id);
+      if (inboxSessionIsCurrent()) showToast('Reminder cancelled and returned to inbox', 'success');
+    } catch (error) {
+      if (inboxSessionIsCurrent() && currentDatasetSnapshot().key === datasetKey) {
+        restoreOptimisticSnooze(snapshot);
+        showToast(error.message || 'The reminder could not be cancelled', 'error');
+      }
+    } finally {
+      if (inboxSessionIsCurrent()) markSnoozeBusy(target.id, false);
+    }
+  }
+
   // --- Horizontal resize (column view: list | preview) ---
   function startHResize(e) {
     e.preventDefault();
@@ -832,6 +1029,38 @@
       showingPrevious={showingPreviousResults}
       onQueryChange={(query) => searchQuery.set(query)}
     />
+  {/if}
+  {#if !$searchQuery && $smartFilter?.type === 'snoozed'}
+    <div class="flex min-h-12 flex-wrap items-center gap-2 border-b px-4 py-2" style="background: var(--bg-tertiary); border-color: var(--border-color)">
+      <Icon name="clock" size={15} />
+      <div class="min-w-0">
+        <p class="text-xs font-semibold" style="color: var(--text-primary)">Snoozed</p>
+        <p class="text-[11px]" style="color: var(--text-tertiary)">Messages return to the inbox at their reminder time</p>
+      </div>
+      {#if selectedEmail?.snooze_id}
+        <div class="ml-auto flex flex-wrap gap-1">
+          <button
+            type="button"
+            class="min-h-10 rounded-lg border px-3 text-xs font-semibold disabled:opacity-50"
+            style="border-color: var(--border-color); color: var(--text-secondary)"
+            disabled={snoozeBusyIds.has(selectedEmail.id)}
+            onclick={() => openSnoozePicker(selectedEmail)}
+          >Change time</button>
+          <button
+            type="button"
+            class="min-h-10 rounded-lg bg-accent-600 px-3 text-xs font-semibold text-white disabled:opacity-50"
+            disabled={snoozeBusyIds.has(selectedEmail.id)}
+            onclick={() => returnSnoozedNow(selectedEmail)}
+          >Return now</button>
+          <button
+            type="button"
+            class="min-h-10 rounded-lg px-3 text-xs font-semibold text-red-600 disabled:opacity-50"
+            disabled={snoozeBusyIds.has(selectedEmail.id)}
+            onclick={() => cancelSnoozed(selectedEmail)}
+          >Cancel reminder</button>
+        </div>
+      {/if}
+    </div>
   {/if}
   {#if !$searchQuery && ($smartFilter?.type === 'needs_reply_ignored' || $smartFilter?.type === 'needs_reply_snoozed')}
     <div class="flex items-center gap-2 px-4 py-2 border-b" style="background: var(--bg-tertiary); border-color: var(--border-color)">
@@ -921,6 +1150,7 @@
           {selectionEpoch}
           onSelect={handleSelect}
           onAction={handleAction}
+          onSnooze={openSnoozePicker}
           onLoadMore={handleLoadMore}
         />
       </div>
@@ -939,6 +1169,7 @@
             email={selectedEmail}
             loading={emailLoading}
             onAction={handleAction}
+            onSnooze={openSnoozePicker}
             onClose={closeSelectedEmail}
             onGuardChange={registerEmailViewTransitionGuard}
           />
@@ -966,6 +1197,7 @@
         {selectionEpoch}
         onSelect={handleSelect}
         onAction={handleAction}
+        onSnooze={openSnoozePicker}
         onLoadMore={handleLoadMore}
       />
     </div>
@@ -984,6 +1216,7 @@
           email={selectedEmail}
           loading={emailLoading}
           onAction={handleAction}
+          onSnooze={openSnoozePicker}
           onClose={closeSelectedEmail}
           onGuardChange={registerEmailViewTransitionGuard}
         />
@@ -991,6 +1224,13 @@
     {/if}
   {/if}
   </div>
+  <SnoozePicker
+    open={Boolean(snoozeTarget)}
+    email={snoozeTarget}
+    mode={snoozeTarget?.snooze_id ? 'reschedule' : 'create'}
+    onclose={() => { snoozeTarget = null; }}
+    onsubmit={handleSnoozeSubmit}
+  />
 </div>
 
 <style>

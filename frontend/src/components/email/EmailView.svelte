@@ -47,6 +47,7 @@
     email = null,
     loading = false,
     onAction = null,
+    onSnooze = null,
     onClose = null,
     onGuardChange = null,
     standalone = false,
@@ -1185,6 +1186,18 @@
           >
             <Icon name="star" size={20} />
           </button>
+          {#if onSnooze && !email.is_draft && !email.is_trash && !email.is_spam}
+            <button
+              onclick={() => onSnooze(email)}
+              class="min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast"
+              style="color: {email.snooze_id ? 'var(--color-accent-600)' : 'var(--text-tertiary)'}"
+              title={email.snooze_id ? 'Change reminder' : 'Snooze · H'}
+              aria-label={email.snooze_id ? 'Change snooze reminder' : 'Snooze email and remind me later'}
+              data-shortcut="inbox.snooze"
+            >
+              <Icon name="clock" size={20} />
+            </button>
+          {/if}
           {#if !email.is_trash && !email.is_spam}
             <button
               onclick={() => onAction && onAction('archive', [email.id])}

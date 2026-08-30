@@ -31,6 +31,7 @@ from backend.models.mail_action import (
     MAIL_ACTION_TYPES,
     MailAction,
 )
+from backend.models.snooze import EmailSnooze
 from backend.services.account_lock import account_advisory_lock
 from backend.services.credentials import get_google_credentials
 from backend.services.gmail import GmailService
@@ -55,6 +56,7 @@ ACTION_LABEL_DELTAS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "star": (("STARRED",), ()),
     "unstar": ((), ("STARRED",)),
     "archive": ((), ("INBOX",)),
+    "unarchive": (("INBOX",), ()),
     "trash": (("TRASH",), ()),
     "untrash": ((), ("TRASH",)),
     "spam": (("SPAM",), ("INBOX",)),
@@ -295,6 +297,10 @@ async def stage_mail_actions(
     emails = list(email_result.scalars().all())
     if len(emails) != len(ordered_ids) or {email.id for email in emails} != set(ordered_ids):
         raise MailActionNotFound("One or more emails were not found")
+    if action == "unarchive" and any(email.is_trash or email.is_spam for email in emails):
+        raise MailActionValidationError(
+            "Trash and spam must be restored with their dedicated actions"
+        )
 
     accepted_at = now or utcnow()
     undo_until = accepted_at + timedelta(seconds=MAIL_ACTION_UNDO_SECONDS)
@@ -532,6 +538,20 @@ async def retry_mail_action_operation(
         raise MailActionConflict("Mail action has no failed items to retry")
     if any(action.email_id is None for action in initial_failed):
         raise MailActionConflict("Failed mail action can no longer be retried")
+    failed_ids = [action.id for action in initial_failed]
+    blocked_result = await db.execute(
+        select(exists().where(
+            EmailSnooze.user_id == user_id,
+            EmailSnooze.state.in_(("returned", "cancelled", "dismissed", "failed")),
+            or_(
+                EmailSnooze.archive_action_id.in_(failed_ids),
+                EmailSnooze.return_action_id.in_(failed_ids),
+            ),
+        ))
+    )
+    blocked_by_terminal_snooze = bool(blocked_result.scalar_one())
+    if blocked_by_terminal_snooze:
+        raise MailActionConflict("This mail action belongs to a completed snooze")
 
     email_ids = sorted(
         action.email_id for action in initial_failed if action.email_id is not None
@@ -554,6 +574,10 @@ async def retry_mail_action_operation(
 
     for action in failed:
         email = emails[action.email_id]
+        if action.action == "unarchive" and (email.is_trash or email.is_spam):
+            raise MailActionConflict(
+                "Trash and spam must be restored with their dedicated actions"
+            )
         if await _later_action_blocks_recovery(db, action):
             raise MailActionConflict("A newer action exists for one or more failed items")
         action.state = "retry_wait"

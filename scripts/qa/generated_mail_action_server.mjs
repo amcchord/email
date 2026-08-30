@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 
 const port = Number.parseInt(process.env.QA_API_PORT || '8000', 10);
 const now = new Date('2026-08-30T14:00:00Z');
+let clockMs = now.getTime();
 let lostActionResponses = Number.parseInt(process.env.QA_LOST_ACTION_RESPONSES || '0', 10);
 let lostLookupResponses = Number.parseInt(process.env.QA_LOST_LOOKUP_RESPONSES || '0', 10);
 
@@ -49,6 +50,20 @@ const generatedEmails = [
 const emails = new Map(generatedEmails.map(email => [email.id, email]));
 const snapshots = new Map();
 const operations = new Map();
+const snoozes = new Map();
+const snoozesByIdempotency = new Map();
+const audit = {
+  fixture_domains: ['example.test'],
+  provider_calls: 0,
+  snooze_creates: [],
+  snooze_replays: [],
+  snooze_reschedules: [],
+  snooze_cancels: [],
+  snooze_returns: [],
+  clock_changes: [],
+  rejected_mutations: [],
+  unknown_routes: [],
+};
 const seededFailure = {
   request_id: '00000000-0000-4000-8000-000000000099',
   idempotency_key: '00000000-0000-4000-8000-000000000098',
@@ -92,6 +107,209 @@ async function readJson(request) {
   return chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
 }
 
+function generatedClock() {
+  return new Date(clockMs);
+}
+
+function isUuid(value) {
+  return typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function isActiveSnooze(snooze) {
+  return ['pending_archive', 'scheduled', 'pending_return'].includes(snooze.state);
+}
+
+function snoozeResponse(snooze) {
+  const email = emails.get(snooze.email_id);
+  return {
+    id: snooze.id,
+    email_id: snooze.email_id,
+    account_id: snooze.account_id,
+    account_email: 'qa.generated@example.test',
+    gmail_thread_id: snooze.gmail_thread_id,
+    wake_at: snooze.wake_at,
+    time_zone: snooze.time_zone,
+    condition: snooze.condition,
+    state: snooze.state,
+    status_detail: snooze.status_detail,
+    archive_required: snooze.archive_required,
+    archive_action_request_id: snooze.archive_action_request_id,
+    archive_undo_until: snooze.archive_undo_until,
+    error_code: snooze.error_code,
+    error_message: snooze.error_message,
+    created_at: snooze.created_at,
+    updated_at: snooze.updated_at,
+    scheduled_at: snooze.scheduled_at,
+    returned_at: snooze.returned_at,
+    cancelled_at: snooze.cancelled_at,
+    dismissed_at: snooze.dismissed_at,
+    failed_at: snooze.failed_at,
+    email: email ? structuredClone(email) : null,
+  };
+}
+
+function processDueSnoozes() {
+  for (const snooze of snoozes.values()) {
+    if (snooze.state === 'pending_archive' && snooze.archive_action_request_id) {
+      const operation = operations.get(snooze.archive_action_request_id);
+      if (operation?.state === 'cancelled') {
+        snooze.state = 'cancelled';
+        snooze.status_detail = 'archive_undone';
+        snooze.cancelled_at = generatedClock().toISOString();
+        snooze.updated_at = snooze.cancelled_at;
+      } else if (Date.parse(snooze.archive_undo_until) <= clockMs) {
+        if (operation) {
+          operation.state = 'applied';
+          operation.items.forEach(item => {
+            item.state = 'applied';
+            item.next_attempt_at = null;
+            item.applied_at = generatedClock().toISOString();
+          });
+        }
+        snooze.state = 'scheduled';
+        snooze.status_detail = 'scheduled';
+        snooze.scheduled_at = generatedClock().toISOString();
+        snooze.updated_at = snooze.scheduled_at;
+      }
+    }
+    if (!isActiveSnooze(snooze) || Date.parse(snooze.wake_at) > clockMs) continue;
+    const email = emails.get(snooze.email_id);
+    snooze.updated_at = generatedClock().toISOString();
+    if (!email) {
+      snooze.state = 'failed';
+      snooze.status_detail = 'failed';
+      snooze.error_code = 'email_missing';
+      snooze.error_message = 'The generated email no longer exists';
+      snooze.failed_at = snooze.updated_at;
+      continue;
+    }
+    if (email.is_trash || email.is_spam) {
+      snooze.state = 'dismissed';
+      snooze.status_detail = 'protected_mailbox';
+      snooze.dismissed_at = snooze.updated_at;
+      continue;
+    }
+    if (snooze.condition === 'if_no_reply' && snooze.generated_reply_received) {
+      snooze.state = 'dismissed';
+      snooze.status_detail = 'reply_received';
+      snooze.dismissed_at = snooze.updated_at;
+      continue;
+    }
+    applyAction(email, 'unarchive');
+    snooze.state = 'returned';
+    snooze.status_detail = 'returned_to_inbox';
+    snooze.returned_at = snooze.updated_at;
+    audit.snooze_returns.push({ id: snooze.id, at: snooze.updated_at, reason: 'due' });
+  }
+}
+
+function validateSnoozePayload(payload) {
+  const email = emails.get(Number(payload?.email_id));
+  if (!email) return 'Choose a generated email';
+  if (email.is_trash || email.is_spam) return 'Trash and spam cannot be snoozed';
+  if (!isUuid(payload?.idempotency_key)) return 'A UUID idempotency_key is required';
+  if (!['always', 'if_no_reply'].includes(payload?.condition || 'always')) {
+    return 'Choose a valid reminder condition';
+  }
+  if (typeof payload?.time_zone !== 'string' || !payload.time_zone.trim()) {
+    return 'A timezone is required';
+  }
+  const wakeAt = Date.parse(payload?.wake_at);
+  if (!Number.isFinite(wakeAt) || wakeAt <= clockMs) return 'wake_at must be in the future';
+  return null;
+}
+
+async function handleSnoozeCreate(request, response) {
+  const payload = await readJson(request);
+  const validationError = validateSnoozePayload(payload);
+  if (validationError) {
+    audit.rejected_mutations.push({ route: '/api/snoozes', reason: validationError });
+    return writeJson(response, { detail: { code: 'snooze_invalid', message: validationError } }, 422);
+  }
+  const existing = snoozesByIdempotency.get(payload.idempotency_key);
+  if (existing) {
+    audit.snooze_replays.push(existing.id);
+    return writeJson(response, snoozeResponse(existing), 202);
+  }
+  const email = emails.get(Number(payload.email_id));
+  const alreadyActive = [...snoozes.values()].find(
+    item => item.email_id === email.id && isActiveSnooze(item),
+  );
+  if (alreadyActive) {
+    return writeJson(response, { detail: { code: 'snooze_conflict', message: 'This email is already snoozed' } }, 409);
+  }
+  const createdAt = generatedClock().toISOString();
+  const archiveRequired = email.labels.includes('INBOX');
+  const archiveRequestId = archiveRequired ? randomUUID() : null;
+  let archiveUndoUntil = null;
+  if (archiveRequired) {
+    const operationPayload = {
+      action: 'archive',
+      email_ids: [email.id],
+      idempotency_key: randomUUID(),
+    };
+    const selected = [email];
+    snapshots.set(archiveRequestId, selected.map(item => structuredClone(item)));
+    selected.forEach(item => applyAction(item, 'archive'));
+    archiveUndoUntil = new Date(clockMs + 10_000).toISOString();
+    operations.set(archiveRequestId, {
+      request_id: archiveRequestId,
+      idempotency_key: operationPayload.idempotency_key,
+      action: 'archive',
+      state: 'staged',
+      accepted_count: 1,
+      undo_until: archiveUndoUntil,
+      created_at: createdAt,
+      items: [{
+        id: 2_000 + operations.size,
+        email_id: email.id,
+        account_id: email.account_id,
+        gmail_message_id: email.gmail_message_id,
+        sequence: 1,
+        action: 'archive',
+        state: 'staged',
+        attempt_count: 0,
+        next_attempt_at: archiveUndoUntil,
+        error_code: null,
+        error_message: null,
+        applied_at: null,
+        failed_at: null,
+        cancelled_at: null,
+      }],
+    });
+  }
+  const snooze = {
+    id: randomUUID(),
+    idempotency_key: payload.idempotency_key,
+    email_id: email.id,
+    account_id: email.account_id,
+    gmail_thread_id: email.gmail_thread_id,
+    wake_at: new Date(payload.wake_at).toISOString(),
+    time_zone: payload.time_zone,
+    condition: payload.condition || 'always',
+    state: archiveRequired ? 'pending_archive' : 'scheduled',
+    status_detail: archiveRequired ? 'archiving' : 'scheduled',
+    archive_required: archiveRequired,
+    archive_action_request_id: archiveRequestId,
+    archive_undo_until: archiveUndoUntil,
+    error_code: null,
+    error_message: null,
+    created_at: createdAt,
+    updated_at: createdAt,
+    scheduled_at: archiveRequired ? null : createdAt,
+    returned_at: null,
+    cancelled_at: null,
+    dismissed_at: null,
+    failed_at: null,
+    generated_reply_received: false,
+  };
+  snoozes.set(snooze.id, snooze);
+  snoozesByIdempotency.set(snooze.idempotency_key, snooze);
+  audit.snooze_creates.push({ id: snooze.id, email_id: email.id, wake_at: snooze.wake_at });
+  return writeJson(response, snoozeResponse(snooze), 202);
+}
+
 function applyAction(email, action) {
   const labels = new Set(email.labels);
   if (action === 'mark_read') labels.delete('UNREAD');
@@ -99,6 +317,7 @@ function applyAction(email, action) {
   if (action === 'star') labels.add('STARRED');
   if (action === 'unstar') labels.delete('STARRED');
   if (action === 'archive') labels.delete('INBOX');
+  if (action === 'unarchive') labels.add('INBOX');
   if (action === 'trash') labels.add('TRASH');
   if (action === 'untrash') labels.delete('TRASH');
   if (action === 'spam') {
@@ -181,9 +400,13 @@ async function handleActionCreate(request, response) {
 async function handleRequest(request, response) {
   const url = new URL(request.url, `http://${request.headers.host}`);
   const { pathname } = url;
+  processDueSnoozes();
 
   if (request.method === 'GET' && pathname === '/api/auth/me') {
     return writeJson(response, { id: 1, username: 'qa-user', is_admin: false });
+  }
+  if (request.method === 'GET' && pathname === '/api/health') {
+    return writeJson(response, { status: 'ok', version: 'generated-snooze-qa' });
   }
   if (request.method === 'GET' && pathname === '/api/auth/ui-preferences') {
     return writeJson(response, { thread_order: 'asc', theme: 'default', color_scheme: 'light' });
@@ -224,6 +447,137 @@ async function handleRequest(request, response) {
   if (request.method === 'GET' && pathname === '/api/emails/actions/recent') {
     return writeJson(response, [...operations.values()].slice(-20).reverse());
   }
+  if (request.method === 'POST' && pathname === '/api/snoozes') {
+    return handleSnoozeCreate(request, response);
+  }
+  if (request.method === 'GET' && pathname === '/api/snoozes') {
+    const state = url.searchParams.get('state') || 'active';
+    const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') || 50)));
+    const offset = Math.max(0, Number(url.searchParams.get('offset') || 0));
+    let items = [...snoozes.values()];
+    if (state === 'active') items = items.filter(isActiveSnooze);
+    else if (state === 'cancelled') items = items.filter(item => ['cancelled', 'dismissed'].includes(item.state));
+    else if (state !== 'all') items = items.filter(item => item.state === state);
+    items.sort((a, b) => Date.parse(a.wake_at) - Date.parse(b.wake_at));
+    return writeJson(response, {
+      items: items.slice(offset, offset + limit).map(snoozeResponse),
+      total: items.length,
+      limit,
+      offset,
+    });
+  }
+
+  const snoozeItemMatch = pathname.match(/^\/api\/snoozes\/([^/]+)$/);
+  if (request.method === 'GET' && snoozeItemMatch) {
+    const snooze = snoozes.get(snoozeItemMatch[1]);
+    return writeJson(response, snooze ? snoozeResponse(snooze) : { detail: 'Not found' }, snooze ? 200 : 404);
+  }
+
+  const snoozeIdempotencyMatch = pathname.match(/^\/api\/snoozes\/by-idempotency\/([^/]+)$/);
+  if (request.method === 'GET' && snoozeIdempotencyMatch) {
+    const snooze = snoozesByIdempotency.get(snoozeIdempotencyMatch[1]);
+    return writeJson(response, snooze ? snoozeResponse(snooze) : { detail: 'Not found' }, snooze ? 200 : 404);
+  }
+
+  const rescheduleMatch = pathname.match(/^\/api\/snoozes\/([^/]+)\/reschedule$/);
+  if (request.method === 'PATCH' && rescheduleMatch) {
+    const snooze = snoozes.get(rescheduleMatch[1]);
+    if (!snooze) return writeJson(response, { detail: 'Not found' }, 404);
+    const payload = await readJson(request);
+    const wakeAt = Date.parse(payload.wake_at);
+    if (!isActiveSnooze(snooze) || !Number.isFinite(wakeAt) || wakeAt <= clockMs) {
+      return writeJson(response, { detail: { code: 'snooze_conflict', message: 'Choose a future time for an active snooze' } }, 409);
+    }
+    snooze.wake_at = new Date(wakeAt).toISOString();
+    snooze.time_zone = String(payload.time_zone || snooze.time_zone);
+    snooze.updated_at = generatedClock().toISOString();
+    audit.snooze_reschedules.push({ id: snooze.id, wake_at: snooze.wake_at });
+    return writeJson(response, snoozeResponse(snooze));
+  }
+
+  const cancelSnoozeMatch = pathname.match(/^\/api\/snoozes\/([^/]+)\/cancel$/);
+  if (request.method === 'POST' && cancelSnoozeMatch) {
+    const snooze = snoozes.get(cancelSnoozeMatch[1]);
+    if (!snooze) return writeJson(response, { detail: 'Not found' }, 404);
+    if (isActiveSnooze(snooze)) {
+      const email = emails.get(snooze.email_id);
+      if (email?.is_trash || email?.is_spam) {
+        snooze.state = 'dismissed';
+        snooze.status_detail = 'protected_mailbox';
+        snooze.dismissed_at = generatedClock().toISOString();
+        snooze.updated_at = snooze.dismissed_at;
+      } else if (email) {
+        applyAction(email, 'unarchive');
+        snooze.state = 'cancelled';
+        snooze.status_detail = 'cancelled';
+        snooze.cancelled_at = generatedClock().toISOString();
+        snooze.updated_at = snooze.cancelled_at;
+      }
+    }
+    audit.snooze_cancels.push({ id: snooze.id, at: generatedClock().toISOString() });
+    return writeJson(response, snoozeResponse(snooze));
+  }
+
+  const returnSnoozeMatch = pathname.match(/^\/api\/snoozes\/([^/]+)\/return-now$/);
+  if (request.method === 'POST' && returnSnoozeMatch) {
+    const snooze = snoozes.get(returnSnoozeMatch[1]);
+    if (!snooze) return writeJson(response, { detail: 'Not found' }, 404);
+    const email = emails.get(snooze.email_id);
+    if (email?.is_trash || email?.is_spam) {
+      snooze.state = 'dismissed';
+      snooze.status_detail = 'protected_mailbox';
+      snooze.dismissed_at = generatedClock().toISOString();
+    } else if (email) {
+      applyAction(email, 'unarchive');
+      snooze.state = 'returned';
+      snooze.status_detail = 'returned_now';
+      snooze.returned_at = generatedClock().toISOString();
+    } else {
+      snooze.state = 'failed';
+      snooze.status_detail = 'failed';
+      snooze.error_code = 'email_missing';
+      snooze.failed_at = generatedClock().toISOString();
+    }
+    snooze.updated_at = generatedClock().toISOString();
+    audit.snooze_returns.push({ id: snooze.id, at: snooze.updated_at, reason: 'return_now' });
+    return writeJson(response, snoozeResponse(snooze));
+  }
+
+  if (request.method === 'GET' && pathname === '/api/__qa/snooze-audit') {
+    return writeJson(response, {
+      ...audit,
+      clock: generatedClock().toISOString(),
+      active_snoozes: [...snoozes.values()].filter(isActiveSnooze).map(snoozeResponse),
+      all_snoozes: [...snoozes.values()].map(snoozeResponse),
+    });
+  }
+  if (request.method === 'POST' && pathname === '/api/__qa/clock') {
+    const payload = await readJson(request);
+    const next = Date.parse(payload.now);
+    if (!Number.isFinite(next) || next < clockMs) {
+      return writeJson(response, { detail: 'Generated clock only moves forward' }, 422);
+    }
+    clockMs = next;
+    audit.clock_changes.push(generatedClock().toISOString());
+    processDueSnoozes();
+    return writeJson(response, { now: generatedClock().toISOString() });
+  }
+  if (request.method === 'POST' && pathname === '/api/__qa/generated-reply') {
+    const payload = await readJson(request);
+    const snooze = snoozes.get(payload.snooze_id);
+    if (!snooze) return writeJson(response, { detail: 'Not found' }, 404);
+    snooze.generated_reply_received = true;
+    return writeJson(response, { ok: true, snooze_id: snooze.id });
+  }
+  if (request.method === 'POST' && pathname === '/api/__qa/protected-mailbox') {
+    const payload = await readJson(request);
+    const email = emails.get(Number(payload.email_id));
+    if (!email || !['trash', 'spam'].includes(payload.mailbox)) {
+      return writeJson(response, { detail: 'Choose a generated email and protected mailbox' }, 422);
+    }
+    applyAction(email, payload.mailbox);
+    return writeJson(response, { ok: true, email });
+  }
   if (request.method === 'POST' && pathname === '/api/emails/actions') {
     return handleActionCreate(request, response);
   }
@@ -244,7 +598,7 @@ async function handleRequest(request, response) {
   if (request.method === 'POST' && undoMatch) {
     const operation = operations.get(undoMatch[1]);
     if (!operation) return writeJson(response, { detail: 'Not found' }, 404);
-    if (operation.state !== 'staged' || Date.now() >= Date.parse(operation.undo_until)) {
+    if (operation.state !== 'staged' || clockMs >= Date.parse(operation.undo_until)) {
       return writeJson(response, { detail: 'The generated undo window has closed' }, 409);
     }
     const before = snapshots.get(undoMatch[1]) || [];
@@ -252,8 +606,15 @@ async function handleRequest(request, response) {
     operation.state = 'cancelled';
     operation.items.forEach(item => {
       item.state = 'cancelled';
-      item.cancelled_at = new Date().toISOString();
+      item.cancelled_at = generatedClock().toISOString();
     });
+    for (const snooze of snoozes.values()) {
+      if (snooze.archive_action_request_id !== operation.request_id || !isActiveSnooze(snooze)) continue;
+      snooze.state = 'cancelled';
+      snooze.status_detail = 'archive_undone';
+      snooze.cancelled_at = generatedClock().toISOString();
+      snooze.updated_at = snooze.cancelled_at;
+    }
     return writeJson(response, operation);
   }
 
@@ -280,6 +641,7 @@ async function handleRequest(request, response) {
     return writeJson(response, email || { detail: 'Not found' }, email ? 200 : 404);
   }
 
+  audit.unknown_routes.push({ method: request.method, pathname });
   return writeJson(response, { detail: `No generated QA route for ${request.method} ${pathname}` }, 404);
 }
 

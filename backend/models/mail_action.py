@@ -26,6 +26,7 @@ MAIL_ACTION_TYPES = (
     "star",
     "unstar",
     "archive",
+    "unarchive",
     "trash",
     "untrash",
     "spam",
@@ -111,7 +112,7 @@ class MailAction(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "action IN ('mark_read','mark_unread','star','unstar','archive','trash','untrash','spam','unspam')",
+            "action IN ('mark_read','mark_unread','star','unstar','archive','unarchive','trash','untrash','spam','unspam')",
             name="ck_mail_actions_action",
         ),
         CheckConstraint(

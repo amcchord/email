@@ -46,6 +46,12 @@ test('realtime events and reconnects from a prior identity are ignored', () => {
 
   sources[0].emit('new_emails', { account_id: 71 });
   assert.deepEqual(get(lastEvent), { type: 'new_emails', account_id: 71 });
+  sources[0].emit('snooze_updated', { snooze_id: 'generated-snooze', state: 'scheduled' });
+  assert.deepEqual(get(lastEvent), {
+    type: 'snooze_updated',
+    snooze_id: 'generated-snooze',
+    state: 'scheduled',
+  });
 
   transitionAuthenticatedSession({ id: 502, username: 'generated-b' });
   assert.equal(get(lastEvent), null);

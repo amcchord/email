@@ -26,6 +26,9 @@
   import { createDurableReplyController } from '../lib/durableReply.js';
   import DraftStatus from '../components/email/DraftStatus.svelte';
   import SendSplitButton from '../components/common/SendSplitButton.svelte';
+  import SnoozePicker from '../components/common/SnoozePicker.svelte';
+  import { buildSnoozeRequest, createSnoozeWithReconciliation } from '../lib/snooze.js';
+  import { formatSnoozeWake } from '../lib/remindLater.js';
 
   // --- Day Summary State ---
   let summaryLoading = $state(true);
@@ -33,6 +36,7 @@
   let pendingTodos = $state([]);
   let needsReplyEmails = $state([]);
   let needsReplyTotal = $state(0);
+  let activeSnoozedEmailIds = $state(new Set());
   let hideFyi = $state(localStorage.getItem('flowHideFyi') !== 'false');
   let urgentCount = $state(0);
   let trendsSummary = $state('');
@@ -372,7 +376,7 @@
           : 'Open a needs-reply email first',
       },
       'flow.snooze': () => {
-        if (replyViewOpen && selectedReplyEmail) openSnoozePopover(selectedReplyEmail.id);
+        if (replyViewOpen && selectedReplyEmail) return openSnoozePopover(selectedReplyEmail.id, true);
       },
       'flow.newChat': () => startNewChat(),
       'flow.send': {
@@ -449,7 +453,7 @@
   $effect(() => {
     const evt = $lastEvent;
     if (!evt || !sessionIsCurrent()) return;
-    if (evt.type === 'new_emails' || evt.type === 'emails_updated') {
+    if (evt.type === 'new_emails' || evt.type === 'emails_updated' || evt.type === 'snooze_updated') {
       loadDaySummary();
       loadAwaitingResponse();
       loadActiveThreads();
@@ -465,6 +469,7 @@
       api.getTodos({ status: 'pending' }),
       api.getNeedsReply({ limit: 20, ...(hideFyi ? { exclude_category: 'fyi' } : {}) }),
       api.getAITrends(),
+      api.listSnoozes({ state: 'active', limit: 200, offset: 0 }),
     ]);
     if (!sessionIsCurrent()) return;
 
@@ -474,13 +479,22 @@
     if (results[1].status === 'fulfilled') {
       pendingTodos = (results[1].value.todos || results[1].value || []).slice(0, 10);
     }
+    if (results[4].status === 'fulfilled') {
+      activeSnoozedEmailIds = new Set(
+        (results[4].value.items || []).map(item => Number(item.email_id)).filter(Number.isSafeInteger)
+      );
+    }
     if (results[2].status === 'fulfilled') {
       const priority = { urgent: 0, awaiting_reply: 1, fyi: 3, can_ignore: 4 };
-      needsReplyEmails = [...(results[2].value.emails || [])].sort((a, b) => {
+      const serverNeedsReply = [...(results[2].value.emails || [])];
+      needsReplyEmails = serverNeedsReply
+        .filter(email => !activeSnoozedEmailIds.has(Number(email.id)))
+        .sort((a, b) => {
         const categoryDelta = (priority[a.category] ?? 2) - (priority[b.category] ?? 2);
         return categoryDelta || new Date(b.date || 0) - new Date(a.date || 0);
       });
-      needsReplyTotal = results[2].value.total || 0;
+      const hiddenVisibleCount = serverNeedsReply.length - needsReplyEmails.length;
+      needsReplyTotal = Math.max(0, (results[2].value.total || 0) - hiddenVisibleCount);
     }
     if (results[3].status === 'fulfilled') {
       trendsSummary = results[3].value.summary || '';
@@ -1491,41 +1505,77 @@
     }
   }
 
-  let snoozePopoverEmailId = $state(null);
+  let snoozeTarget = $state(null);
+  let snoozeFromReplyView = $state(false);
 
-  function openSnoozePopover(emailId) {
-    if (snoozePopoverEmailId === emailId) {
-      snoozePopoverEmailId = null;
-    } else {
-      snoozePopoverEmailId = emailId;
-    }
+  async function openSnoozePopover(emailId, fromReplyView = false) {
+    if (!sessionIsCurrent()) return;
+    const target = selectedReplyEmail?.id === emailId
+      ? selectedReplyEmail
+      : needsReplyEmails.find(email => email.id === emailId);
+    if (!target) return;
+    if (fromReplyView && !(await prepareFlowReplyTransition())) return;
+    snoozeTarget = target;
+    snoozeFromReplyView = fromReplyView;
   }
 
   function closeSnoozePopover() {
-    snoozePopoverEmailId = null;
+    snoozeTarget = null;
+    snoozeFromReplyView = false;
   }
 
-  async function snoozeEmail(emailId, duration, fromReplyView) {
-    if (!sessionIsCurrent()) return;
-    if (fromReplyView && !(await prepareFlowReplyTransition())) return;
-    const labels = { '1h': '1 hour', '3h': '3 hours', 'tomorrow': 'tomorrow morning', 'next_week': 'next week' };
+  async function snoozeEmail(schedule) {
+    const target = snoozeTarget;
+    const fromReplyView = snoozeFromReplyView;
+    closeSnoozePopover();
+    if (!target || !sessionIsCurrent()) return;
+
+    const previousEmails = needsReplyEmails;
+    const previousTotal = needsReplyTotal;
+    activeSnoozedEmailIds = new Set(activeSnoozedEmailIds).add(Number(target.id));
+    if (fromReplyView && viewSource === 'needs_reply') {
+      removeEmailAndAdvance(target.id);
+    } else if (fromReplyView) {
+      needsReplyEmails = needsReplyEmails.filter(email => email.id !== target.id);
+      if (needsReplyTotal > 0) needsReplyTotal -= 1;
+      closeReplyView();
+    } else {
+      needsReplyEmails = needsReplyEmails.filter(email => email.id !== target.id);
+      if (needsReplyTotal > 0) needsReplyTotal -= 1;
+    }
+
     try {
-      await api.snoozeNeedsReply(emailId, duration);
+      const reminder = await createSnoozeWithReconciliation(
+        api,
+        buildSnoozeRequest(target.id, schedule),
+      );
       if (!sessionIsCurrent()) return;
-      snoozePopoverEmailId = null;
-      showToast(`Snoozed until ${labels[duration]}`, 'success');
-      if (fromReplyView && viewSource === 'needs_reply') {
-        removeEmailAndAdvance(emailId);
-      } else if (fromReplyView) {
-        needsReplyEmails = needsReplyEmails.filter(e => e.id !== emailId);
-        if (needsReplyTotal > 0) needsReplyTotal -= 1;
-        closeReplyView();
-      } else {
-        needsReplyEmails = needsReplyEmails.filter(e => e.id !== emailId);
-        if (needsReplyTotal > 0) needsReplyTotal -= 1;
+      showToast(
+        `Snoozed until ${formatSnoozeWake(reminder.wake_at || schedule.wakeAt, reminder.time_zone || schedule.timeZone)}`,
+        'success',
+        10_000,
+        {
+          actionLabel: 'Undo',
+          dismissLabel: 'Dismiss snooze confirmation',
+          onAction: async () => {
+            await api.returnSnoozeNow(reminder.id);
+            if (!sessionIsCurrent()) return;
+            activeSnoozedEmailIds = new Set([...activeSnoozedEmailIds].filter(id => id !== Number(target.id)));
+            await loadDaySummary();
+            showToast('Snooze undone — returned to inbox', 'success');
+          },
+        },
+      );
+    } catch (error) {
+      if (!sessionIsCurrent()) return;
+      if (error.code === 'snooze_outcome_unknown') {
+        showToast('Snooze sent — open Snoozed or refresh to confirm', 'info');
+        return;
       }
-    } catch (err) {
-      if (sessionIsCurrent()) showToast(err.message, 'error');
+      activeSnoozedEmailIds = new Set([...activeSnoozedEmailIds].filter(id => id !== Number(target.id)));
+      needsReplyEmails = previousEmails;
+      needsReplyTotal = previousTotal;
+      showToast(error.message || 'The email could not be snoozed', 'error');
     }
   }
 
@@ -2618,40 +2668,16 @@
                   <Icon name="eye-off" size={12} />
                   Ignore
                 </button>
-                <div class="relative">
-                  <button
-                    onclick={() => openSnoozePopover(selectedReplyEmail?.id)}
-                    class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
-                    style="color: var(--text-secondary)"
-                    title="Snooze — hide temporarily"
-                    data-shortcut="flow.snooze"
-                  >
-                    <Icon name="clock" size={12} />
-                    Snooze
-                  </button>
-                  {#if snoozePopoverEmailId === selectedReplyEmail?.id}
-                    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-                    <div
-                      class="absolute top-full left-0 mt-1 py-1 rounded-lg border shadow-lg z-50 min-w-[160px]"
-                      style="background: var(--bg-secondary); border-color: var(--border-color)"
-                    >
-                      {#each [
-                        { key: '1h', label: '1 hour' },
-                        { key: '3h', label: '3 hours' },
-                        { key: 'tomorrow', label: 'Tomorrow morning' },
-                        { key: 'next_week', label: 'Next week' },
-                      ] as option}
-                        <button
-                          onclick={() => snoozeEmail(selectedReplyEmail.id, option.key, true)}
-                          class="w-full text-left px-3 py-1.5 text-xs transition-fast hover-bg-subtle"
-                          style="color: var(--text-primary)"
-                        >
-                          {option.label}
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
+                <button
+                  onclick={() => openSnoozePopover(selectedReplyEmail?.id, true)}
+                  class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
+                  style="color: var(--text-secondary)"
+                  title="Snooze — hide until later"
+                  data-shortcut="flow.snooze"
+                >
+                  <Icon name="clock" size={12} />
+                  Snooze
+                </button>
                 <button
                   onclick={archiveCurrentEmail}
                   class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
@@ -2693,40 +2719,16 @@
                   <Icon name="eye-off" size={12} />
                   Ignore
                 </button>
-                <div class="relative">
-                  <button
-                    onclick={() => openSnoozePopover(selectedReplyEmail?.id)}
-                    class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
-                    style="color: var(--text-secondary)"
-                    title="Snooze — hide temporarily"
-                    data-shortcut="flow.snooze"
-                  >
-                    <Icon name="clock" size={12} />
-                    Snooze
-                  </button>
-                  {#if snoozePopoverEmailId === selectedReplyEmail?.id}
-                    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-                    <div
-                      class="absolute top-full left-0 mt-1 py-1 rounded-lg border shadow-lg z-50 min-w-[160px]"
-                      style="background: var(--bg-secondary); border-color: var(--border-color)"
-                    >
-                      {#each [
-                        { key: '1h', label: '1 hour' },
-                        { key: '3h', label: '3 hours' },
-                        { key: 'tomorrow', label: 'Tomorrow morning' },
-                        { key: 'next_week', label: 'Next week' },
-                      ] as option}
-                        <button
-                          onclick={() => snoozeEmail(selectedReplyEmail.id, option.key, true)}
-                          class="w-full text-left px-3 py-1.5 text-xs transition-fast hover-bg-subtle"
-                          style="color: var(--text-primary)"
-                        >
-                          {option.label}
-                        </button>
-                      {/each}
-                    </div>
-                  {/if}
-                </div>
+                <button
+                  onclick={() => openSnoozePopover(selectedReplyEmail?.id, true)}
+                  class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
+                  style="color: var(--text-secondary)"
+                  title="Snooze — hide until later"
+                  data-shortcut="flow.snooze"
+                >
+                  <Icon name="clock" size={12} />
+                  Snooze
+                </button>
               {/if}
             </div>
 
@@ -2879,38 +2881,15 @@
                     >
                       <Icon name="eye-off" size={12} />
                     </button>
-                    <div class="relative">
-                      <button
-                        onclick={(event) => { event.stopPropagation(); openSnoozePopover(email.id); }}
-                        class="flex items-center justify-center w-7 h-7 rounded-lg text-[10px] font-medium transition-fast hover-bg-subtle border"
-                        style="border-color: var(--border-color); color: var(--text-tertiary)"
-                        title="Snooze"
-                      >
-                        <Icon name="clock" size={12} />
-                      </button>
-                      {#if snoozePopoverEmailId === email.id}
-                        <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-                        <div
-                          class="absolute top-0 right-full mr-1 py-1 rounded-lg border shadow-lg z-50 min-w-[160px]"
-                          style="background: var(--bg-secondary); border-color: var(--border-color)"
-                        >
-                          {#each [
-                            { key: '1h', label: '1 hour' },
-                            { key: '3h', label: '3 hours' },
-                            { key: 'tomorrow', label: 'Tomorrow morning' },
-                            { key: 'next_week', label: 'Next week' },
-                          ] as option}
-                            <button
-                              onclick={(event) => { event.stopPropagation(); snoozeEmail(email.id, option.key, false); }}
-                              class="w-full text-left px-3 py-1.5 text-xs transition-fast hover-bg-subtle"
-                              style="color: var(--text-primary)"
-                            >
-                              {option.label}
-                            </button>
-                          {/each}
-                        </div>
-                      {/if}
-                    </div>
+                    <button
+                      onclick={(event) => { event.stopPropagation(); openSnoozePopover(email.id, false); }}
+                      class="flex items-center justify-center min-w-10 min-h-10 rounded-lg text-[10px] font-medium transition-fast hover-bg-subtle border"
+                      style="border-color: var(--border-color); color: var(--text-tertiary)"
+                      title="Snooze until later"
+                      aria-label="Snooze {cleanEmailText(email.subject) || 'email'}"
+                    >
+                      <Icon name="clock" size={12} />
+                    </button>
                     <button
                       onclick={(event) => { event.stopPropagation(); goToEmail(email.id); }}
                       class="flex items-center justify-center w-7 h-7 rounded-lg text-[10px] font-medium transition-fast hover-bg-subtle border"
@@ -3047,6 +3026,13 @@
   {/if}
 
 </div>
+
+<SnoozePicker
+  open={Boolean(snoozeTarget)}
+  email={snoozeTarget}
+  onclose={closeSnoozePopover}
+  onsubmit={snoozeEmail}
+/>
 
 <style>
   /* Markdown content styling */

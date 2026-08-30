@@ -242,4 +242,5 @@ def test_enrollment_models_and_migration_form_one_additive_head():
     scripts = ScriptDirectory.from_config(config)
     revision = scripts.get_revision("f3a4b5c6d7e8")
     assert revision.down_revision == "e2f3a4b5c6d7"
-    assert scripts.get_heads() == ["f3a4b5c6d7e8"]
+    assert scripts.get_revision("a4b5c6d7e8f9").down_revision == "f3a4b5c6d7e8"
+    assert scripts.get_heads() == ["a4b5c6d7e8f9"]

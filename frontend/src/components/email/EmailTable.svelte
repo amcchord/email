@@ -6,6 +6,7 @@
   import { cleanEmailText, categoryLabel, typeLabel } from '../../lib/emailText.js';
   import { focusEmailRow, shouldFocusAdjacentRow } from '../../lib/emailRowFocus.js';
   import { selectedBooleanState } from '../../lib/inboxDataset.js';
+  import { formatSnoozeWake } from '../../lib/remindLater.js';
 
   let {
     emails = [],
@@ -21,6 +22,7 @@
     selectionEpoch = 0,
     onSelect = null,
     onAction = null,
+    onSnooze = null,
     onLoadMore = null,
   } = $props();
 
@@ -359,10 +361,14 @@
           {#if searchActive}🔍{:else}📭{/if}
         </div>
         <p class="text-sm font-medium" style="color: var(--text-primary)">
-          {#if searchActive}No mail matches this search{:else}No emails{/if}
+          {#if searchActive}No mail matches this search
+          {:else if mailbox === 'SNOOZED'}No snoozed emails
+          {:else}No emails{/if}
         </p>
         {#if searchActive}
           <p class="text-xs mt-1" style="color: var(--text-secondary)">Edit a filter above or clear the search</p>
+        {:else if mailbox === 'SNOOZED'}
+          <p class="text-xs mt-1" style="color: var(--text-secondary)">Messages you snooze will wait here until their reminder time</p>
         {/if}
       </div>
     {:else}
@@ -385,6 +391,8 @@
             </th>
             <!-- Star col (fixed) -->
             <th class="px-1 py-2" style="width: 32px; min-width: 32px; max-width: 32px"></th>
+            <!-- Snooze col (fixed) -->
+            <th class="px-1 py-2" style="width: 36px; min-width: 36px; max-width: 36px"><span class="sr-only">Snooze</span></th>
             <!-- Account col (only in unified inbox) -->
             {#if showAccountCol}
               <th class="px-2 py-2 text-center text-xs font-semibold uppercase tracking-wider" style="color: var(--text-tertiary); width: 36px; min-width: 36px; max-width: 36px">
@@ -438,6 +446,18 @@
                   </div>
                 </td>
                 <td class="px-1 py-2" style="width: 32px"></td>
+                <td class="px-1 py-2" style="width: 36px">
+                  {#if onSnooze && !email.is_draft && !email.is_trash && !email.is_spam}
+                    <button
+                      type="button"
+                      onclick={(event) => { event.stopPropagation(); onSnooze(email); }}
+                      disabled={actionsDisabled}
+                      class="flex min-h-9 min-w-9 items-center justify-center rounded-md disabled:opacity-50"
+                      style="color: {email.snooze_id ? 'var(--color-accent-600)' : 'var(--text-tertiary)'}"
+                      aria-label={email.snooze_id ? 'Change conversation reminder' : 'Snooze conversation'}
+                    ><Icon name="clock" size={15} /></button>
+                  {/if}
+                </td>
                 {#if showAccountCol}
                   <td class="px-2 py-2 text-center" style="width: 36px">
                     {#if email.account_email && $accountColorMap[email.account_email]}
@@ -487,6 +507,7 @@
                   >
                     <td class="py-2" style="width: 40px"></td>
                     <td class="px-1 py-2" style="width: 32px"></td>
+                    <td class="px-1 py-2" style="width: 36px"></td>
                     {#if showAccountCol}
                       <td class="px-2 py-2" style="width: 36px"></td>
                     {/if}
@@ -543,6 +564,19 @@
                     <Icon name="star" size={16} />
                   </button>
                 </td>
+                <td class="px-1 py-2" style="width: 36px">
+                  {#if onSnooze && !email.is_draft && !email.is_trash && !email.is_spam}
+                    <button
+                      type="button"
+                      onclick={(event) => { event.stopPropagation(); onSnooze(email); }}
+                      disabled={actionsDisabled}
+                      class="flex min-h-9 min-w-9 items-center justify-center rounded-md disabled:opacity-50"
+                      style="color: {email.snooze_id ? 'var(--color-accent-600)' : 'var(--text-tertiary)'}"
+                      aria-label={email.snooze_id ? `Change reminder for ${cleanEmailText(email.subject) || 'email'}` : `Snooze ${cleanEmailText(email.subject) || 'email'}`}
+                      title={email.snooze_id ? 'Change reminder' : 'Snooze'}
+                    ><Icon name="clock" size={15} /></button>
+                  {/if}
+                </td>
                 {#if showAccountCol}
                   <td class="px-2 py-2 text-center" style="width: 36px">
                     {#if email.account_email && $accountColorMap[email.account_email]}
@@ -594,6 +628,11 @@
                     {#if email.is_subscription}
                       <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300">
                         Subscription
+                      </span>
+                    {/if}
+                    {#if email.snooze_wake_at}
+                      <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300" title={formatSnoozeWake(email.snooze_wake_at, email.snooze_time_zone || undefined)}>
+                        {formatSnoozeWake(email.snooze_wake_at, email.snooze_time_zone || undefined, { compact: true })}
                       </span>
                     {/if}
                     {#if email.ai_category}

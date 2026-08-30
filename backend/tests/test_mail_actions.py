@@ -490,6 +490,7 @@ async def test_retry_only_failed_subset_reapplies_intent_and_resets_attempts(mon
     failed.attempt_count = 8
     apply_mail_state(failed_email, failed.before_state)
     db = _SequenceSession([
+        _Result(value=False),
         _Result(values=[failed_email]),
         _Result(value=False),
         _Result(values=[failed]),
@@ -517,8 +518,9 @@ async def test_retry_only_failed_subset_reapplies_intent_and_resets_attempts(mon
     assert failed.next_attempt_at == NOW
     assert failed_email.labels == failed.after_state["labels"]
     assert db.commit_count == 1
-    assert "FROM emails" in str(db.statements[0])
-    assert "FOR UPDATE" in str(db.statements[0])
+    assert "FROM email_snoozes" in str(db.statements[0])
+    assert "FROM emails" in str(db.statements[1])
+    assert "FOR UPDATE" in str(db.statements[1])
 
 
 @pytest.mark.asyncio

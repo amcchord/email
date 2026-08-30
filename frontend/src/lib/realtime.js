@@ -47,6 +47,7 @@ function connect(session) {
   eventSource.addEventListener('new_emails', handleEvent('new_emails', session));
   eventSource.addEventListener('emails_updated', handleEvent('emails_updated', session));
   eventSource.addEventListener('mail_action_updated', handleEvent('mail_action_updated', session));
+  eventSource.addEventListener('snooze_updated', handleEvent('snooze_updated', session));
   eventSource.addEventListener('sync_complete', handleEvent('sync_complete', session));
 
   eventSource.onopen = function () {
