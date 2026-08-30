@@ -179,3 +179,22 @@ add a new entry that explicitly supersedes the old one.
   PDF bytes remain untrusted, and a process admission lease spans retrieval
   through classification. The AI-owned legacy Chat attachment path is outside
   this contract until separately coordinated.
+
+## D-012 — Feature routes load behind a stale-safe shell boundary
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Keep authentication, global navigation, search, toasts, and route
+  recovery in the eager shell while loading every feature screen through a
+  literal allowlisted registry. Deduplicate concurrent imports, cache only the
+  current successful request, discard superseded route results, and use real
+  browser history with canonical per-route query parameters.
+- Reason: A single 1.17 MB entry delays every mailbox visit, while ad hoc
+  dynamic imports can expose stale screens, inert navigation, unrecoverable
+  cached module failures, lost focus, and timing-dependent cross-screen intent.
+- Consequence: New feature routes must register a stable key/label/import,
+  expose accessible loading and error behavior, and pass cold, failed, stale,
+  Back/Forward, focus, and narrow-screen QA. Shell controls may prefetch intent
+  but must remain useful while chunks load. Route changes focus the named main
+  region only when the previous focus was removed; Chromium module-load errors
+  recover by preserving the canonical URL and reloading the document.

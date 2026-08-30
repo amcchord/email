@@ -3,6 +3,71 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Resilient route-level frontend splitting
+
+### Scope
+
+Reduce authenticated startup cost and harden feature navigation without
+touching the separately owned AI checkout or using real mailbox data.
+
+### Completed
+
+- Replaced eager feature imports with a literal lazy registry for all ten
+  authenticated screens and standalone message viewing. Concurrent imports
+  deduplicate, successful routes stay warm, rejected imports can recover, and
+  generation guards prevent late chunks from replacing newer navigation.
+- Added delayed accessible skeletons, assertive failure recovery, runtime
+  boundaries, route-ready announcements, document reload for Chromium-cached
+  module failures, intent prefetch, canonical deep links, and real browser
+  Back/Forward behavior.
+- Hardened keyboard and mobile navigation: named focusable main regions,
+  focus-if-lost routing, immediate eager-shell search focus, exact More focus
+  restoration, current-page semantics including Settings, 44px targets, and a
+  short-height scrollable More menu whose backdrop is outside tab/AT order.
+- Preserved cross-screen message intent through Inbox's first authoritative
+  dataset so a cold Todo/Flow/Insights handoff cannot be erased by selection
+  invalidation. Shortcut customization now targets the durable Preferences
+  tab rather than a timing-only event.
+- Extended the localhost generated harness with route chunk discovery,
+  delay/failure/race cases, mobile wrappers, generated Todo-to-message data,
+  read-only Admin fixtures, and route/mutation auditing.
+
+### Verification
+
+- `make check`: 293 backend tests passed, 4 opt-in PostgreSQL tests skipped,
+  99 frontend tests passed, and the production build completed without the
+  prior bootstrap chunk warning. Harness syntax and `git diff --check` passed.
+- Entry JS fell from 1,171.80 kB / 343.51 kB gzip to 258.40 kB / 78.50 kB;
+  every feature screen and standalone message is a dynamic entry.
+- Generated in-app browser QA verified delayed direct-message opening,
+  immediate search focus while Inbox still loaded, stale-route suppression,
+  503 recovery, direct/invalid URLs, Back/Forward focus, Settings/Preferences,
+  More Escape/selection/tab order, and 375x390 scrolling. The final standard
+  build's manifest-free fallback recorded only expected route GETs; browser
+  logs, mutation attempts, and unknown routes were empty.
+- Three independent architecture, UX, and generated-user agents reviewed the
+  slice. Their cache-race, focus, current-state, direct-open, recovery, and
+  short-height P0/P1 findings were addressed. The concurrent AI checkout
+  remained clean and untouched at `41d2898`.
+- A final generated-contract audit rendered Preferences, E-Ink Terminals, and
+  Data Management with production-shaped payloads and no runtime boundary,
+  console error, unknown route, or mutation attempt.
+
+### Production Actions
+
+- None. No deploy, restart, migration, configuration change, production write,
+  real-mail read, message open, or mailbox mutation occurred.
+- Committed the implementation as `f912410` and pushed it to
+  `origin/codex/product-polish-cycle-1` without rebasing or editing the AI
+  owner's checkout.
+- Committed the generated Admin contract follow-up as `95d13bb` and pushed it
+  to the same branch.
+
+### Next
+
+Profile and defer the 369.83 kB / 116.92 kB gzip RichEditor/Tiptap shared chunk
+behind explicit writing intent, staying outside files owned by the AI task.
+
 ## 2026-08-30 — Safe attachment preview gallery
 
 ### Scope

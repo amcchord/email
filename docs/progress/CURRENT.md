@@ -12,8 +12,8 @@ continue without overlapping files or Git state.
 ## Baseline
 
 - Product worktree: `codex/product-polish-cycle-1`, pushed to
-  `origin/codex/product-polish-cycle-1`; product implementation is complete
-  through the safe attachment-preview gallery at `8fd46a0`.
+  `origin/codex/product-polish-cycle-1`; route-level frontend splitting is at
+  `f912410` with generated Admin contract coverage at `95d13bb`.
 - Repository source baseline: `origin/main` at `41d2898`.
 - Concurrent AI-model work is owned by another process in the original
   checkout; do not edit, stage, or reconcile its files from this worktree.
@@ -68,6 +68,20 @@ live state.
   owner releases the shared authentication contract. Keep search-history and
   saved-query persistence out of URLs until its privacy/retention contract is
   explicit.
+
+### P2 — Defer editor-only code until writing intent
+
+- State: ready
+- Why: route splitting removed feature screens from startup, but the shared
+  RichEditor/Tiptap chunk is still 369.83 kB minified / 116.92 kB gzip.
+- Scope: load the rich editor only when reply, forward, compose, or another
+  writing surface is actually opened; preserve draft state and immediate
+  keyboard response.
+- Acceptance: reading Inbox/Flow/message detail does not request the editor
+  chunk, opening a writing surface remains accessible and race-safe, and
+  generated browser audits cover cold, failed, and cancelled editor loads.
+- Next: profile which reading routes currently pull the shared editor chunk,
+  then isolate the smallest non-AI-owned editor boundary.
 
 ### P2 — Attachment cache lifecycle
 
@@ -152,12 +166,32 @@ live state.
   mismatched-file warnings, original-byte downloads, exact modal focus,
   three-transfer admission, and generated desktop/mobile verification
   (`8fd46a0`).
+- Split all ten authenticated feature screens plus standalone message viewing
+  behind a literal, deduplicated route registry; added stale-result protection,
+  accessible delayed loading/error/reload states, real Back/Forward history,
+  route-aware focus recovery, intent prefetch, mobile navigation hardening,
+  durable Todo/Flow/Insights direct-message opening, and a generated chunk/race
+  audit (`f912410`).
+- Aligned the generated Admin UI-preference, AI-preference/statistics, and
+  terminal-settings payloads with production response contracts so Preferences,
+  Data Management, and E-Ink Terminals remain valid route QA (`95d13bb`).
 
 ## Verification
 
 - Latest `make check`: 293 backend tests passed, 4 disposable-PostgreSQL tests
-  skipped by default, and 91 frontend tests passed; the production build
-  passed with only the existing large-chunk advisory.
+  skipped by default, and 99 frontend tests passed; the production build
+  passed without the former bootstrap large-chunk advisory.
+- Route splitting reduced the entry from 1,171.80 kB minified / 343.51 kB gzip
+  to 258.40 kB / 78.50 kB. Every authenticated page and standalone message is
+  a dynamic entry; the standard no-manifest build also passed the generated
+  asset-discovery audit.
+- Generated route browser QA covered cold and cached navigation, 1.2-second
+  chunk delays, 503-to-reload recovery, stale-route suppression, direct/invalid
+  deep links, Back/Forward, immediate `/` search focus, command-palette search,
+  route and error announcements, Todo-to-generated-message intent, Shortcut
+  Help-to-Preferences, exact focus recovery, Settings current state, and the
+  375x390 scrollable More menu with 44px targets. Final console errors,
+  mutation attempts, and unknown routes were empty.
 - Forty-three generated durable-action tests cover every supported transition,
   strict request validation, cross-account staging, idempotency, exact bulk
   undo, retry, bounded lease recovery, canonical Gmail results, lock ordering,
@@ -261,6 +295,9 @@ live state.
   Direct keyboard sending is preserved, but irreversible Send commands are
   deliberately excluded from the executable palette until that contract and a
   generated lost-response test exist.
+- RichEditor/Tiptap remains a 369.83 kB minified / 116.92 kB gzip shared
+  writing chunk; defer it behind explicit writing intent before treating
+  reading-route transfer cost as fully optimized.
 - Shortcut override reset/reset-all still uses a merge-only persistence API;
   a removed override can reappear after reload. Coordinate the shared
   authentication preference contract with the AI owner before correcting it.
