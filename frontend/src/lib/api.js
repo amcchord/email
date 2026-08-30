@@ -36,16 +36,17 @@ async function attemptTokenRefresh() {
 }
 
 async function request(method, path, body = null, options = {}) {
-  const headers = { ...options.headers };
+  const { responseType = 'json', ...fetchOptions } = options;
+  const headers = { ...fetchOptions.headers };
   if (body && !(body instanceof FormData)) {
     headers['Content-Type'] = 'application/json';
   }
 
   const config = {
     method,
-    headers,
     credentials: 'include',
-    ...options,
+    ...fetchOptions,
+    headers,
   };
 
   if (body) {
@@ -61,9 +62,9 @@ async function request(method, path, body = null, options = {}) {
       // Rebuild config for retry (body may be consumed)
       const retryConfig = {
         method,
-        headers: { ...options.headers },
         credentials: 'include',
-        ...options,
+        ...fetchOptions,
+        headers: { ...fetchOptions.headers },
       };
       if (body && !(body instanceof FormData)) {
         retryConfig.headers['Content-Type'] = 'application/json';
@@ -88,6 +89,7 @@ async function request(method, path, body = null, options = {}) {
   }
 
   if (response.status === 204) return null;
+  if (responseType === 'blob') return response.blob();
   return response.json();
 }
 
@@ -139,6 +141,13 @@ export const api = {
     return request('GET', `/emails/?${searchParams.toString()}`);
   },
   getEmail: (id) => request('GET', `/emails/${id}`),
+  downloadAttachment: (emailId, attachmentId) =>
+    request(
+      'GET',
+      `/emails/${emailId}/attachments/${attachmentId}/download`,
+      null,
+      { responseType: 'blob' },
+    ),
   getThread: (threadId, order = null) => {
     const params = order ? `?order=${order}` : '';
     return request('GET', `/emails/thread/${threadId}${params}`);

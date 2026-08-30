@@ -38,6 +38,30 @@ BATCH_PAUSE = 0.5         # seconds between sub-batches
 PAGE_PAUSE = 0.5          # seconds between list pages
 
 
+def _decode_attachment_data(data: str, max_bytes: int | None = None) -> bytes:
+    """Decode Gmail's base64url payload with an optional pre-decode size cap."""
+    if not isinstance(data, str):
+        raise ValueError("Attachment payload is invalid")
+    if max_bytes is not None:
+        if max_bytes <= 0:
+            raise ValueError("Attachment size limit must be positive")
+        max_encoded_bytes = 4 * ((max_bytes + 2) // 3)
+        if len(data) > max_encoded_bytes:
+            raise ValueError("Attachment exceeds the download size limit")
+    try:
+        padded_data = data + ("=" * (-len(data) % 4))
+        decoded = base64.b64decode(
+            padded_data.encode("ascii"),
+            altchars=b"-_",
+            validate=True,
+        )
+    except (UnicodeEncodeError, ValueError) as exc:
+        raise ValueError("Attachment payload is invalid") from exc
+    if max_bytes is not None and len(decoded) > max_bytes:
+        raise ValueError("Attachment exceeds the download size limit")
+    return decoded
+
+
 def _is_rate_limit_error(error):
     """Check if an HttpError is a rate limit / quota error."""
     if not isinstance(error, HttpError):
@@ -359,9 +383,14 @@ class GmailService:
         )
         return result.get("labels", [])
 
-    async def get_attachment(self, message_id: str, attachment_id: str) -> bytes:
+    async def get_attachment(
+        self,
+        message_id: str,
+        attachment_id: str,
+        *,
+        max_bytes: int | None = None,
+    ) -> bytes:
         """Download an attachment and return its raw bytes."""
-        import base64
         service = self._get_service()
         result = await self._execute_with_retry(
             service.users().messages().attachments().get(
@@ -370,7 +399,7 @@ class GmailService:
             context=f"get_attachment({message_id}, {attachment_id})",
         )
         data = result.get("data", "")
-        return base64.urlsafe_b64decode(data)
+        return _decode_attachment_data(data, max_bytes=max_bytes)
 
     async def modify_labels(self, message_id: str, add_labels: list[str] = None, remove_labels: list[str] = None):
         """Modify labels on a message."""

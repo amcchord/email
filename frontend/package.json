@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node --test src/lib/inboxDataset.test.js",
+    "test": "node --test src/lib/*.test.js",
     "build": "vite build",
     "preview": "vite preview"
   },

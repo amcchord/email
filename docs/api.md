@@ -34,6 +34,7 @@ free-form questions about your inbox without touching the web UI.
   - [Newspaper / week-ahead polling cadence](#newspaper--week-ahead-polling-cadence)
   - [Ask Claude from a script](#ask-claude-from-a-script)
 - [Security notes](#security-notes)
+- [Web session-only attachment download](#web-session-only-attachment-download)
 
 ## Authentication
 
@@ -597,3 +598,31 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 Click **Revoke** next to the token in **Settings → Profile & Accounts →
 API Tokens**. Revocation is immediate; the next request from any client
 using that token returns 401.
+
+## Web session-only attachment download
+
+The authenticated web application, not the `/api/v1` token surface, exposes:
+
+```text
+GET /api/emails/{email_id}/attachments/{attachment_id}/download
+```
+
+The route requires the normal browser session cookie and verifies the user,
+owning account, email, and attachment in one lookup. Missing, foreign, and
+wrong-message attachment IDs all return the same 404 response. Successful
+responses always use attachment disposition, validated content type, private
+no-store caching, `nosniff`, and same-origin resource policy headers.
+
+Stable error responses are:
+
+| status | meaning |
+|--------|---------|
+| 404 | attachment is missing or not owned by the current user |
+| 409 | metadata exists but no retrievable content is available |
+| 413 | attachment exceeds the interactive download size limit |
+| 502 | cached or upstream attachment data is invalid |
+| 503 | Gmail retrieval failed or exceeded the interactive wait bound |
+
+Public API tokens cannot call this route. Attachment bytes are cached only at
+private, canonical ID-derived paths; filenames and Gmail/cache identifiers are
+not accepted as lookup keys.

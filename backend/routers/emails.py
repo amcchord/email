@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy import select, func, desc, asc, or_, text, update, literal_column, literal
@@ -19,6 +19,12 @@ from backend.schemas.email import (
     EmailAddress,
 )
 from backend.routers.auth import get_current_user
+from backend.services.attachments import (
+    AttachmentDownloadError,
+    attachment_content_disposition,
+    load_attachment_bytes,
+    safe_content_type,
+)
 from backend.services.workflow_context import apply_workflow_routing, delegated_scheduling_sql
 
 router = APIRouter(prefix="/api/emails", tags=["emails"])
@@ -440,6 +446,50 @@ async def get_email(
         ai_model_used=ai_model,
         suggested_reply=ai_suggested_reply,
         reply_options=ai_reply_options,
+    )
+
+
+@router.get("/{email_id}/attachments/{attachment_id}/download")
+async def download_attachment(
+    email_id: int,
+    attachment_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Download one attachment after strict account and message membership checks."""
+    result = await db.execute(
+        select(Email, Attachment, GoogleAccount)
+        .join(Attachment, Attachment.email_id == Email.id)
+        .join(GoogleAccount, GoogleAccount.id == Email.account_id)
+        .where(
+            Email.id == email_id,
+            Attachment.id == attachment_id,
+            GoogleAccount.user_id == user.id,
+        )
+    )
+    row = result.one_or_none()
+    if not row:
+        # Missing, foreign, and wrong-message IDs are intentionally indistinguishable.
+        raise HTTPException(status_code=404, detail="Attachment not found")
+
+    email, attachment, account = row
+    try:
+        content = await load_attachment_bytes(db, email, attachment, account)
+    except AttachmentDownloadError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=exc.public_detail,
+        ) from exc
+
+    return Response(
+        content=content,
+        headers={
+            "Content-Type": safe_content_type(attachment.content_type),
+            "Content-Disposition": attachment_content_disposition(attachment.filename),
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Cross-Origin-Resource-Policy": "same-origin",
+        },
     )
 
 
