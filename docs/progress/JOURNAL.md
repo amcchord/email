@@ -3,6 +3,65 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Gmail Labels & Move release
+
+### Scope
+
+Promote existing synchronized Gmail user labels into durable, account-safe,
+conversation-wide Label and literal-Inbox-only Move workflows without mutating
+real mail during QA.
+
+### Completed
+
+- Added direct a4 child revision `b5c6d7e8f9a0`, durable `add_label`,
+  `remove_label`, and `move_to_label` audit names, owned user-label validation,
+  conversation expansion, exact stored provider deltas, replay-stable
+  idempotency, and authoritative validated catalog pruning.
+- Added shared list/table/bulk/reader label controls, `L`/`V`, searchable
+  account-aware picker, safe color chips, active-mailbox projection, accepted
+  counts, Undo/retry/reconciliation, modal keyboard ownership, focus recovery,
+  and responsive reader/bottom-sheet layouts.
+- Constrained Move to the literal Inbox UI and explicit Inbox anchors. Sent or
+  archived conversation siblings remain valid and receive the same exact
+  destination/removal delta.
+- Extended the generated `.example.test` mail-action fixture and exact boundary
+  self-test; no real Gmail or calendar mutation was used.
+
+### Verification
+
+- Final consolidated gate passed 623 backend tests with 49 intentional skips,
+  all 354 frontend tests, and a 539-module production build.
+- Focused backend passed 60 tests; disposable PostgreSQL and exact migration
+  roundtrip/downgrade-delta gates passed. Final focused frontend gate passed 37
+  tests.
+- Generated desktop/mobile browser QA passed conversation apply/remove/Move,
+  active-label row removal, Undo, mixed-account refusal, modal shortcut
+  isolation, focus, responsive UI, zero console warnings/errors, zero provider
+  calls, and zero unknown routes.
+
+### Production Actions
+
+- Pushed and deployed exact application/runtime
+  `a440801c18c8377b50a225af71f3937caa78c7af`.
+- Validated the 1,383,741,356-byte pre-b5 backup
+  `/var/backups/mailapp/maildb-pre-labels-move-20260830T232001Z.dump` with
+  SHA-256
+  `9c5cd5876d242b78aae394c5f563beaa1e35d398f8015f24d1bb770555bd004c`.
+- Upgraded exactly `a4 → b5`, restarted only the API and two workers, and built
+  539 frontend modules. The retired API hit the known graceful-stop timeout;
+  the replacement and both workers have zero restarts and no warning-or-higher
+  entries after their replacement boundary.
+- Production Git is exact/clean, Alembic is b5, all seven services and public
+  health are healthy, anonymous label-catalog access is 401, aggregate label
+  actions remain zero, and authenticated browser QA confirmed the two command
+  entries without opening or mutating real mail.
+
+### Next
+
+Build the smallest conversation-first Inbox row and split/focused placement
+slice on this durable label/account foundation; coordinate before allocating a
+child of b5 or editing terminal-owned files.
+
 ## 2026-08-30 — At a Glance terminal recovery evidence
 
 ### Scope

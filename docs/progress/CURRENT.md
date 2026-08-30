@@ -4,16 +4,20 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Qualify physical E1001/E1002 enrollment, trusted-TLS candidate.5, exact runtime
-identity, A/B recovery, and browser-install recovery before enabling any
-terminal write path. At a Glance is a first-class application destination with
-robust battery guidance; keep its daily experience separate from destructive
-terminal management. Add OTA scheduling, artifact transport, and
-acknowledgements only after physical HIL and a durable idempotent event ledger
-exist.
+Continue two coordinated tracks from the exact production baseline: build the
+next conversation-first Inbox triage milestone on the shipped durable Gmail
+label primitive, while qualifying physical E1001/E1002 enrollment, trusted TLS,
+A/B recovery, and browser-install recovery before enabling any terminal write
+path. Keep real mail/calendar QA read-only except for generated `.example.test`
+fixtures.
 
 ## Baseline
 
+- The deployed Gmail Labels & Move application/runtime commit is
+  `a440801c18c8377b50a225af71f3937caa78c7af`. Existing synchronized user labels
+  are account-safe, conversation-scoped durable actions across list, table,
+  bulk, reader, `L`, and literal-Inbox-only `V`, with exact Undo/retry/replay
+  behavior and responsive accessible UI.
 - Universal Snooze application/runtime is
   `231173b2d18966b603ed2f824f68380f8087de2c`; production deployed it with the
   migration-free terminal candidate.5 integration as combined runtime
@@ -46,11 +50,12 @@ exist.
 - The deployed secure-enrollment application/runtime commit is
   `8ff01848a2be2818dfd9eb88b84be9aab4befb0a`; the following closeout is docs
   only. Production and GitHub were exact and clean at the runtime boundary.
-- Production Alembic is `a4b5c6d7e8f9 (head)`, the Universal Snooze child of
-  the terminal secure-enrollment revision `f3a4b5c6d7e8`. Candidate.5 required
-  no schema change. The additive Snooze table was empty at release; terminal
-  credential and attempt tables remain empty, all four existing terminals
-  remain legacy, and the secure-MAC unique index is present.
+- Production Alembic is `b5c6d7e8f9a0 (head)`, the Labels & Move child of
+  Universal Snooze revision `a4b5c6d7e8f9`. The release widened only the
+  durable mail-action audit constraint; aggregate label-action rows remained
+  zero at release. Terminal credential and attempt tables remain empty, all
+  four existing terminals remain legacy, and the secure-MAC unique index is
+  present.
 - All seven checked production services are active, public health is `ok`, and
   the replacement API process has zero automatic restarts and no post-start
   warning-or-higher entries. Production has no secure-enrollment or OTA
@@ -66,6 +71,19 @@ This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
 
 ## Active Work Items
+
+### P1 — Conversation-first Inbox triage
+
+- State: ready; Labels & Move is the durable account/conversation foundation.
+- Scope: one trustworthy conversation row, split/focused Inbox rules,
+  conversation-wide selection and counts, and keyboard-first navigation that
+  does not duplicate message-level action truth.
+- Acceptance: a conversation never appears as contradictory duplicate rows;
+  split placement is deterministic and explainable; all actions preserve the
+  established account ownership, idempotency, Undo, and generated-only QA
+  boundaries.
+- Next: audit the current list/thread projection and define the smallest
+  shippable conversation-row slice before changing shared shell files.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 
@@ -97,6 +115,20 @@ live state.
   enable a write.
 - Next: defer schema allocation and implementation until physical candidate.5
   HIL establishes the exact event and rollback evidence the ledger must retain.
+
+## Recent Gmail Labels & Move Release
+
+- Existing synchronized Gmail user labels are first-class across list, table,
+  bulk, reader, `L`, and commands. Color chips use the owned account catalog;
+  mixed-account and system-label mutations fail closed.
+- Label actions expand across existing synchronized conversation messages.
+  Literal-Inbox-only Move applies the destination and archives, active custom
+  label removal drops the row, and accepted count, Undo, retry, focus, and lost
+  response recovery stay durable.
+- Consolidated validation passed 623 backend and 354 frontend tests, a
+  539-module build, disposable PostgreSQL and migration gates, and generated
+  desktop/mobile browser QA with zero provider calls. Full evidence is in
+  `LABELS_AND_MOVE_RELEASE_2026-08-30.md`.
 
 ## Recent Universal Snooze Release
 

@@ -602,3 +602,24 @@ add a new entry that explicitly supersedes the old one.
   return waits for a fresh sync checkpoint before concluding nobody replied,
   terminal provider failures release uniqueness, and lost browser responses
   reconcile the same client-keyed operation instead of creating another.
+
+## D-032 — Existing Gmail labels are account-scoped conversation actions
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Represent Label and Move as durable mail-action deltas against one
+  positive local `label_type=user` catalog identity from the exact owned Gmail
+  account. Expand explicit anchors to current synchronized conversation
+  members. Define Move narrowly as applying the destination label and removing
+  Inbox, and expose it only from the literal Inbox view.
+- Reason: Gmail label IDs are provider/account-local, a conversation can contain
+  multiple stored messages, and an accepted action must survive catalog refresh,
+  lost responses, retry, Undo, and process restart. Calling the same operation
+  “Move” from a custom label, All Mail, Spam, or Trash would falsely imply that
+  every source label or protected placement is removed.
+- Consequence: Idempotency is based on the original email IDs, action, and local
+  label ID before mutable resolution; every item persists exact provider deltas;
+  mixed-account, system, stale, and foreign labels fail closed; successful full
+  catalog sync prunes only after complete validation. Existing-label actions
+  ship independently from future durable create/rename/delete label lifecycle,
+  and split/focused Inbox work must reuse this account/conversation boundary.
