@@ -268,6 +268,40 @@ backup.
 
 ## Post-deploy closeout
 
-Pending authorized release. Record the exact application commit, docs closeout
-commit, backup path/size, production Alembic head, build count, service state,
-health response, recent-log audit, and read-only user-facing verification here.
+The reviewed application release is
+`61e0ad8f47bd12dff07b7c0e695ea3f5680af7a4`, comprising the durable-session
+foundation at `e6bca84df0d55686c5b965cd0a6fbbcc11a75c93` and the final recovery,
+accessibility, generated-fixture, and documentation hardening at `61e0ad8`.
+It was pushed to the feature branch and GitHub `main`, then fast-forwarded onto
+clean production from `8fed5d1c9cd356c3222891251e692dfbe932a8eb`.
+
+Before migration, production created and validated the PostgreSQL custom-format
+backup
+`/var/backups/mailapp/maildb-pre-durable-drafts-20260830T1859Z.dump`:
+1,383,545,000 bytes, mode `0600`, owner `postgres:postgres`, with 273 readable
+archive entries. Alembic then advanced transactionally from `d1e2f3a4b5c6` to
+`e2f3a4b5c6d7 (head)`.
+
+Only `mailapp` and `mailworker-cron` were restarted. The old API process retained
+a long-lived connection beyond its 90-second graceful-stop deadline, so systemd
+killed that old process and immediately started the reviewed replacement. Both
+affected services and the regular worker, mail TUI, Caddy, PostgreSQL, and Redis
+were active afterward with zero automatic restarts. Public health returned
+`ok`; the anonymous recent-drafts boundary returned 401; and the API and cron
+worker recorded zero warning-or-higher entries after their replacements entered
+service.
+
+Production installed the unchanged frontend lock as `mailapp` with zero audit
+vulnerabilities and built 518 modules. The exact new main asset returned 200.
+Postflight confirmed the exact clean Git commit, migration head, all seven
+services, and zero rows in `draft_sessions`, `draft_attachments`, and
+`draft_mutations`.
+
+Signed-in read-only browser QA opened a blank Compose surface with a stable
+draft UUID in the URL and verified sender, recipient, subject, attachment,
+rich-editor, status, discard, save, and Send controls with no console warning or
+error. No text or attachment was entered and the tab was closed without Save,
+Discard, or Send. The three production draft tables remained at zero rows. The
+production screenshot is
+`/Users/austinmcchord/Desktop/email-production-durable-drafts-readonly-2026-08-30.png`.
+No real draft, mail, calendar, or provider mutation occurred.
