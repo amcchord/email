@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { runTerminalFirmwareInstallWorkflow } from './terminalFirmwareInstallWorkflow.js';
+import { loadTerminalFirmwareInstallArtifacts } from './terminalFirmwareInstallPlan.js';
 import {
   createFixtureFetch,
   createTerminalFirmwareInstallFixture,
@@ -118,6 +119,29 @@ test('fake transport exercises exact write, verify, reset, and status-v2 success
   assert.equal(result.status.firmware_build_id, fixture.release.git_sha);
   assert.equal(result.probe.factoryMac, fixture.factoryMac);
   assert.deepEqual(transport.calls.slice(-2), ['close-application', 'close-rom']);
+});
+
+test('prepared package is re-hashed without a second network fetch before transport', async () => {
+  const fixture = await createTerminalFirmwareInstallFixture();
+  const preparedPlan = await loadTerminalFirmwareInstallArtifacts(fixture.plan, {
+    fetchImpl: createFixtureFetch(fixture),
+  });
+  const transport = fakeTransports(fixture);
+  let fetchCalls = 0;
+  const result = await runTerminalFirmwareInstallWorkflow({
+    preparedPlan,
+    fetchImpl: async () => {
+      fetchCalls += 1;
+      throw new Error('must not fetch');
+    },
+    romTransport: transport.rom,
+    applicationTransport: transport.application,
+    statusSettleMs: 0,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(fetchCalls, 0);
+  assert.deepEqual(result.history.slice(0, 2).map(event => event.state), ['preflight', 'verifying']);
 });
 
 test('throwing UI observers cannot interrupt an in-flight flash or hide success', async () => {

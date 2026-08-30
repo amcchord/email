@@ -6,6 +6,7 @@ import {
   compileTerminalFirmwareInstallPlan,
   loadTerminalFirmwareInstallArtifacts,
   validateTerminalFirmwareRomIdentity,
+  verifyPreparedTerminalFirmwareInstallArtifacts,
 } from './terminalFirmwareInstallPlan.js';
 import {
   createFixtureFetch,
@@ -20,8 +21,10 @@ function code(expected) {
 test('compiles and loads only the exact four-segment preserve-config plan', async () => {
   const fixture = await createTerminalFirmwareInstallFixture();
   const calls = [];
+  const progress = [];
   const loaded = await loadTerminalFirmwareInstallArtifacts(fixture.plan, {
     fetchImpl: createFixtureFetch(fixture, calls),
+    onProgress: event => progress.push(event),
   });
 
   assert.equal(Object.isFrozen(fixture.plan), true);
@@ -34,6 +37,13 @@ test('compiles and loads only the exact four-segment preserve-config plan', asyn
   assert.equal(loaded.requiredFlashBytes, 32 * 1024 * 1024);
   assert.equal(loaded.artifactsVerified, true);
   assert.equal(calls.length, 4);
+  assert.deepEqual(progress.map(event => event.role), [
+    'bootloader', 'partition_table', 'ota_data_initial', 'application',
+  ]);
+  assert.equal(
+    (await verifyPreparedTerminalFirmwareInstallArtifacts(loaded)).artifactsVerified,
+    true,
+  );
   for (const call of calls) {
     assert.deepEqual(call.options, {
       method: 'GET',
@@ -129,6 +139,23 @@ test('artifact loading requires exact headers, byte length, and SHA-256 before t
       }),
     }),
     code('artifact_unavailable'),
+  );
+});
+
+test('prepared package is re-hashed and rejects in-memory byte drift', async () => {
+  const fixture = await createTerminalFirmwareInstallFixture();
+  const loaded = await loadTerminalFirmwareInstallArtifacts(fixture.plan, {
+    fetchImpl: createFixtureFetch(fixture),
+  });
+  const changed = Uint8Array.from(loaded.segments[3].bytes);
+  changed[0] ^= 1;
+  const tampered = {
+    ...loaded,
+    segments: loaded.segments.map((segment, index) => index === 3 ? { ...segment, bytes: changed } : segment),
+  };
+  await assert.rejects(
+    verifyPreparedTerminalFirmwareInstallArtifacts(tampered),
+    code('artifact_hash_mismatch'),
   );
 });
 

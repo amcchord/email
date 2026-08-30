@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
   import { createAuthenticatedSessionGuard } from '../lib/stores.js';
+  import FirmwareInstaller from '../lib/admin/FirmwareInstaller.svelte';
   import {
     atAGlanceProfile,
     availableAtAGlanceDesigns,
@@ -364,6 +365,14 @@
           </div>
         </section>
       {/if}
+
+      <section class="space-y-3" aria-labelledby="at-a-glance-firmware-title">
+        <div>
+          <h2 id="at-a-glance-firmware-title" class="text-base font-semibold" style="color: var(--text-primary)">Terminal firmware</h2>
+          <p class="mt-1 text-xs" style="color: var(--text-tertiary)">Select and verify an exact package here. Physical device transport remains separately gated.</p>
+        </div>
+        <FirmwareInstaller />
+      </section>
 
       <section class="space-y-3" aria-labelledby="terminal-health-title">
         <div class="flex flex-wrap items-end justify-between gap-3">

@@ -251,21 +251,8 @@ function authSessionChanged() {
   return error;
 }
 
-async function readArtifact(response, segment, runtime) {
-  if (!response?.ok || response.redirected === true) {
-    fail('artifact_unavailable', `${segment.role} firmware artifact is unavailable.`);
-  }
-  const contentType = response.headers?.get?.('content-type')?.split(';', 1)[0]?.trim()?.toLowerCase();
-  const rawLength = response.headers?.get?.('content-length');
-  const declaredLength = Number(rawLength);
-  if (contentType !== 'application/octet-stream'
-    || rawLength === null
-    || rawLength === undefined
-    || !Number.isSafeInteger(declaredLength)
-    || declaredLength !== segment.size) {
-    fail('artifact_invalid', `${segment.role} firmware artifact headers are invalid.`);
-  }
-  const raw = bytes(await response.arrayBuffer());
+async function verifyArtifactBytes(rawValue, segment, runtime) {
+  const raw = bytes(rawValue);
   if (raw.length !== segment.size) {
     fail('artifact_invalid', `${segment.role} firmware artifact byte length changed.`);
   }
@@ -282,12 +269,34 @@ async function readArtifact(response, segment, runtime) {
   return Object.freeze({ ...segment, bytes: raw });
 }
 
+async function readArtifact(response, segment, runtime) {
+  if (!response?.ok || response.redirected === true) {
+    fail('artifact_unavailable', `${segment.role} firmware artifact is unavailable.`);
+  }
+  const contentType = response.headers?.get?.('content-type')?.split(';', 1)[0]?.trim()?.toLowerCase();
+  const rawLength = response.headers?.get?.('content-length');
+  const declaredLength = Number(rawLength);
+  if (contentType !== 'application/octet-stream'
+    || rawLength === null
+    || rawLength === undefined
+    || !Number.isSafeInteger(declaredLength)
+    || declaredLength !== segment.size) {
+    fail('artifact_invalid', `${segment.role} firmware artifact headers are invalid.`);
+  }
+  return verifyArtifactBytes(await response.arrayBuffer(), segment, runtime);
+}
+
 /**
  * Fetch and hash every immutable segment before any device transport is used.
  */
 export async function loadTerminalFirmwareInstallArtifacts(
   plan,
-  { fetchImpl = globalThis.fetch, runtime = globalThis.crypto, signal } = {},
+  {
+    fetchImpl = globalThis.fetch,
+    runtime = globalThis.crypto,
+    signal,
+    onProgress = () => {},
+  } = {},
 ) {
   assertPlan(plan);
   if (typeof fetchImpl !== 'function') fail('artifact_unavailable', 'Firmware artifact fetch is unavailable.');
@@ -298,7 +307,8 @@ export async function loadTerminalFirmwareInstallArtifacts(
   }
   const authEpoch = captureAuthEpoch();
   const loaded = [];
-  for (const segment of plan.segments) {
+  for (let index = 0; index < plan.segments.length; index += 1) {
+    const segment = plan.segments[index];
     let response;
     try {
       response = await fetchImpl(segment.downloadUrl, {
@@ -315,8 +325,33 @@ export async function loadTerminalFirmwareInstallArtifacts(
     if (!isAuthEpochCurrent(authEpoch)) throw authSessionChanged();
     loaded.push(await readArtifact(response, segment, runtime));
     if (!isAuthEpochCurrent(authEpoch)) throw authSessionChanged();
+    try {
+      onProgress(Object.freeze({ role: segment.role, completed: index + 1, total: plan.segments.length }));
+    } catch {
+      // UI progress is observational and cannot weaken artifact verification.
+    }
   }
   return Object.freeze({ ...plan, segments: Object.freeze(loaded), artifactsVerified: true });
+}
+
+export async function verifyPreparedTerminalFirmwareInstallArtifacts(
+  plan,
+  { runtime = globalThis.crypto, signal } = {},
+) {
+  assertPlan(plan);
+  if (plan.artifactsVerified !== true) {
+    fail('artifact_invalid', 'Prepared firmware artifacts are not marked as verified.');
+  }
+  const verified = [];
+  for (const segment of plan.segments) {
+    if (signal?.aborted) {
+      const error = new Error('Prepared firmware verification was cancelled.');
+      error.name = 'AbortError';
+      throw error;
+    }
+    verified.push(await verifyArtifactBytes(segment.bytes, segment, runtime));
+  }
+  return Object.freeze({ ...plan, segments: Object.freeze(verified), artifactsVerified: true });
 }
 
 export function validateTerminalFirmwareRomIdentity(probe, plan) {

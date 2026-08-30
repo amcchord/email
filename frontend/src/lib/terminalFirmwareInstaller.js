@@ -57,3 +57,64 @@ export function getTerminalInstallerLock(catalogAudit, support) {
   }
   return { locked: true, blockers: [...new Set(blockers)] };
 }
+
+const OPERATOR_PRESENTATIONS = Object.freeze({
+  preflight: ['neutral', 'Preparing preflight', 'Confirm the exact release, model, and physical hardware revision.'],
+  fetching: ['neutral', 'Downloading signed package', 'All four preserve-config artifacts are being loaded before any device connection.'],
+  verifying: ['neutral', 'Verifying package', 'Artifact byte lengths and SHA-256 digests are being checked in this browser.'],
+  awaiting_rom: ['neutral', 'Ready for ROM mode', 'The verified package is ready. Device connection remains locked in this build.'],
+  probing: ['neutral', 'Checking device identity', 'Confirming ESP32-S3, flash capacity, and factory MAC.'],
+  flashing: ['warning', 'Writing firmware', 'Do not unplug the terminal. An interruption now requires recovery.'],
+  verifying_flash: ['warning', 'Verifying flash', 'The written segments are being read back before reset.'],
+  resetting: ['warning', 'Restarting terminal', 'Waiting for the application firmware to start.'],
+  awaiting_status: ['warning', 'Reading terminal status', 'Waiting for the bounded RET1 status-v2 recovery window.'],
+  verifying_status: ['warning', 'Confirming runtime identity', 'Checking model, release, build, slot, boot state, and factory MAC.'],
+  succeeded: ['success', 'Firmware verified', 'The terminal reported the exact signed build from stable ota_0.'],
+  cancelled_before_write: ['neutral', 'Cancelled safely', 'No firmware bytes were written.'],
+  blocked: ['danger', 'Installer blocked', 'A qualification or preflight check failed closed before writing.'],
+  recovery_required: ['danger', 'Recovery required', 'Keep the terminal connected and return it to ROM mode before retrying the exact preserve-config package.'],
+});
+
+export function describeTerminalFirmwareInstallState(state, errorCode = '') {
+  const [tone, title, detail] = OPERATOR_PRESENTATIONS[state] || OPERATOR_PRESENTATIONS.blocked;
+  return Object.freeze({
+    state: Object.hasOwn(OPERATOR_PRESENTATIONS, state) ? state : 'blocked',
+    tone,
+    title,
+    detail,
+    errorCode: typeof errorCode === 'string' ? errorCode : '',
+    recoveryRequired: state === 'recovery_required',
+    canDisconnect: ['succeeded', 'cancelled_before_write', 'blocked'].includes(state),
+  });
+}
+
+export function createTerminalFirmwareDeviceSession() {
+  let current = null;
+  return Object.freeze({
+    attach({ abortController, transports = [] }) {
+      if (current) throw new Error('A terminal device session is already active.');
+      if (!abortController || typeof abortController.abort !== 'function' || !Array.isArray(transports)) {
+        throw new Error('Terminal device cleanup contract is invalid.');
+      }
+      current = { abortController, transports: [...new Set(transports.filter(Boolean))] };
+    },
+    isActive() {
+      return current !== null;
+    },
+    release() {
+      const active = current !== null;
+      current = null;
+      return active;
+    },
+    async disconnect() {
+      const session = current;
+      current = null;
+      if (!session) return false;
+      session.abortController.abort();
+      await Promise.allSettled(session.transports.map(async transport => {
+        await transport?.close?.();
+      }));
+      return true;
+    },
+  });
+}

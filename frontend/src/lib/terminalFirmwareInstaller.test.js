@@ -3,6 +3,8 @@ import test from 'node:test';
 
 import {
   BROWSER_INSTALLER_SAFETY_GATES,
+  createTerminalFirmwareDeviceSession,
+  describeTerminalFirmwareInstallState,
   detectTerminalFirmwareSupport,
   getTerminalInstallerLock,
 } from './terminalFirmwareInstaller.js';
@@ -67,4 +69,48 @@ test('installer preserves server-side catalog blockers while remaining client-lo
   assert.equal(lock.locked, true);
   assert.equal(lock.blockers[0], 'Server writing is disabled.');
   assert.equal(lock.blockers.length, 4);
+});
+
+test('operator state presentation distinguishes recovery from safe pre-write cancellation', () => {
+  assert.deepEqual(describeTerminalFirmwareInstallState('recovery_required', 'write_interrupted'), {
+    state: 'recovery_required',
+    tone: 'danger',
+    title: 'Recovery required',
+    detail: 'Keep the terminal connected and return it to ROM mode before retrying the exact preserve-config package.',
+    errorCode: 'write_interrupted',
+    recoveryRequired: true,
+    canDisconnect: false,
+  });
+  const cancelled = describeTerminalFirmwareInstallState('cancelled_before_write');
+  assert.equal(cancelled.recoveryRequired, false);
+  assert.equal(cancelled.canDisconnect, true);
+  assert.equal(describeTerminalFirmwareInstallState('unknown').state, 'blocked');
+});
+
+test('device session aborts and closes each injected transport exactly once on disconnect', async () => {
+  const session = createTerminalFirmwareDeviceSession();
+  const controller = new AbortController();
+  let closeCalls = 0;
+  const transport = { close: async () => { closeCalls += 1; } };
+  session.attach({ abortController: controller, transports: [transport, transport] });
+  assert.equal(session.isActive(), true);
+  assert.equal(await session.disconnect(), true);
+  assert.equal(controller.signal.aborted, true);
+  assert.equal(closeCalls, 1);
+  assert.equal(session.isActive(), false);
+  assert.equal(await session.disconnect(), false);
+
+  let secondClosed = false;
+  const throwing = { close: () => { throw new Error('close failed'); } };
+  const second = { close: async () => { secondClosed = true; } };
+  const cleanupController = new AbortController();
+  session.attach({ abortController: cleanupController, transports: [throwing, second] });
+  assert.equal(await session.disconnect(), true);
+  assert.equal(secondClosed, true);
+
+  const released = new AbortController();
+  session.attach({ abortController: released, transports: [transport] });
+  assert.equal(session.release(), true);
+  assert.equal(released.signal.aborted, false);
+  assert.equal(closeCalls, 1);
 });

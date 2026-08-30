@@ -2,6 +2,7 @@ import {
   TerminalFirmwareInstallError,
   loadTerminalFirmwareInstallArtifacts,
   validateTerminalFirmwareRomIdentity,
+  verifyPreparedTerminalFirmwareInstallArtifacts,
 } from './terminalFirmwareInstallPlan.js';
 import {
   createTerminalFirmwareStatusRequest,
@@ -121,6 +122,7 @@ function notify(callback, event) {
  */
 export async function runTerminalFirmwareInstallWorkflow({
   plan,
+  preparedPlan = null,
   fetchImpl,
   runtime = globalThis.crypto,
   romTransport,
@@ -160,10 +162,16 @@ export async function runTerminalFirmwareInstallWorkflow({
     transportMethod(applicationTransport, 'sendStatusRequest');
     transportMethod(applicationTransport, 'readChunks');
 
-    emit('fetching');
-    const loadedPlan = await loadTerminalFirmwareInstallArtifacts(plan, { fetchImpl, runtime, signal });
+    let loadedPlan;
+    if (preparedPlan) {
+      emit('verifying', { segmentCount: preparedPlan.segments?.length || 0 });
+      loadedPlan = await verifyPreparedTerminalFirmwareInstallArtifacts(preparedPlan, { runtime, signal });
+    } else {
+      emit('fetching');
+      loadedPlan = await loadTerminalFirmwareInstallArtifacts(plan, { fetchImpl, runtime, signal });
+      emit('verifying', { segmentCount: loadedPlan.segments.length });
+    }
     throwIfAborted(signal);
-    emit('verifying', { segmentCount: loadedPlan.segments.length });
 
     emit('awaiting_rom');
     throwIfAborted(signal);
