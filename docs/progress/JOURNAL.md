@@ -3,6 +3,78 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Executable command surface
+
+### Scope
+
+Replace informational and ghost shortcuts with a truthful, accessible command
+surface while using generated mail only and preserving the concurrent AI
+owner's checkout and files.
+
+### Completed
+
+- Added a visible Cmd/Ctrl+K command trigger and deterministic palette that
+  exposes only registered commands for the active page, ranks normalized
+  queries, reports live disabled reasons, and never executes an unavailable or
+  no-match result.
+- Added dialog semantics, initial focus, background inerting, scroll lock,
+  focus trapping/restoration, configured-key toggle, IME safety, stale async
+  session rejection, desktop and bottom-sheet layouts, and equivalent modal
+  ownership for the existing shortcut-help dialog.
+- Replaced the single shortcut handler slot with stack-safe owned
+  registrations and deterministic cleanup. Chat, Flow, and Todos now register
+  synchronously, so async loading cannot leak stale page closures after
+  navigation.
+- Removed advertised no-op commands, registered Subscriptions navigation and
+  real Inbox reply/forward actions, corrected Compose and cross-page Search
+  navigation, and normalized shifted punctuation and letters.
+- Added reentry and promise tracking for Compose/Flow send, Flow Ignore, and
+  Todo mutations. Non-idempotent Send remains a direct shortcut but is hidden
+  from the palette until a durable lost-response contract exists.
+- Reconciled delayed Flow completion against captured email/source identity,
+  including navigation to another item or another Flow source and the
+  last-needs-reply case, without closing or clearing the newer reply draft.
+- Added a localhost-only read-only generated command harness that serves
+  immutable `.example.test` fixtures, audits reads, rejects all mutation
+  methods, and has no outbound calls.
+
+### Verification
+
+- `make check`: 215 backend tests passed, 4 opt-in PostgreSQL tests skipped,
+  58 frontend tests passed, and the production frontend build completed with
+  only the existing large-chunk advisory.
+- Focused tests cover ranking, context filtering, selection, modal sessions,
+  registry ownership, disabled actions, shifted keys, Send palette exclusion,
+  per-item pending guards, delayed A/B completion, cross-source draft
+  preservation, and last-item reconciliation.
+- Generated browser QA passed at 1280x720 and 375x812 for Cmd+K open/toggle,
+  filter/no-match behavior, disabled-reason selection, Escape return focus,
+  shortcut-help focus/key ownership, Chat/Todos/Flow lifecycle cleanup,
+  mobile no-overflow layout, 44px help controls, and focus trapping. Browser
+  console errors: none.
+- The final generated harness audit contained no mutation attempts and no
+  unknown routes. Saved screenshots contain generated content only.
+- Independent feature and safety reviews found lifecycle, duplicate-send,
+  accessibility, and delayed-mutation blockers; every P0/P1 finding was
+  corrected and the final gate was ready.
+- Harness syntax, `git diff --check`, and the concurrent AI checkout status
+  passed; the AI checkout stayed clean at `41d2898`.
+
+### Production Actions
+
+- None. No deploy, migration, restart, configuration change, production write,
+  real-mail read, or mailbox mutation occurred.
+- Committed the implementation as `21fcb11` and pushed it to
+  `origin/codex/product-polish-cycle-1` without rebasing or touching the
+  separately owned AI branch.
+
+### Next
+
+Implement composable structured search against generated fixtures. Coordinate
+with the AI owner before changing shared authentication persistence for saved
+views or shortcut reset, and add durable client-keyed send idempotency before
+making Send palette-executable.
+
 ## 2026-08-30 — Durable mail actions and recovery UX
 
 ### Scope

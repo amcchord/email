@@ -13,7 +13,7 @@ continue without overlapping files or Git state.
 
 - Product worktree: `codex/product-polish-cycle-1`, pushed to
   `origin/codex/product-polish-cycle-1`; product implementation is complete
-  through `a41a90d`, followed only by progress documentation.
+  through the executable command surface at `21fcb11`.
 - Repository source baseline: `origin/main` at `41d2898`.
 - Concurrent AI-model work is owned by another process in the original
   checkout; do not edit, stage, or reconcile its files from this worktree.
@@ -57,15 +57,16 @@ live state.
 
 ### P1 — Fast retrieval and command surface
 
-- State: ready
+- State: command surface complete; structured search and saved views ready
 - Why: modern high-speed clients provide a discoverable command palette,
   composable search operators, and reusable saved views.
-- Scope: command palette, complete shortcut registration, search operator
-  parser, and saved splits/views.
+- Scope: truthful executable command palette, complete shortcut registration,
+  search operator parser, and saved splits/views.
 - Acceptance: primary navigation and triage commands are keyboard discoverable,
   search operators compose predictably, and saved views remain account-scoped.
-- Next: define the command registry and search grammar after the mutation
-  durability item.
+- Next: implement a composable search grammar against generated fixtures,
+  then coordinate account-scoped saved-view persistence after the separate AI
+  owner releases the shared authentication contract.
 
 ### P2 — Attachment cache lifecycle
 
@@ -105,11 +106,21 @@ live state.
   focus to the adjacent row after keyboard triage. Ambiguous submissions retain
   their original queue position so newer same-email intent cannot overtake
   confirmation (`a41a90d`).
+- Added an accessible executable command palette with deterministic ranking,
+  live handler/enabled-state truth, descriptive unavailable actions, exact
+  focus restoration, modal key ownership, responsive 375px layout, complete
+  navigation registration, real Inbox reply/forward actions, stack-safe page
+  cleanup, and shifted-key normalization (`21fcb11`).
+- Prevented command-surface mutation races: Compose/Flow sends have defensive
+  reentry guards and remain outside the palette until send idempotency exists;
+  Flow Ignore and Todo mutations return their promises, expose disabled state,
+  and reconcile delayed completion to the captured item without clearing a
+  newer cross-source reply or draft (`21fcb11`).
 
 ## Verification
 
 - Latest `make check`: 215 backend tests passed, 4 disposable-PostgreSQL tests
-  skipped by default, and 35 frontend tests passed; the production build
+  skipped by default, and 58 frontend tests passed; the production build
   passed with only the existing large-chunk advisory.
 - Forty-three generated durable-action tests cover every supported transition,
   strict request validation, cross-account staging, idempotency, exact bulk
@@ -136,6 +147,21 @@ live state.
   bounded-lease, projection-reconciliation, and generated-fixture blockers were
   addressed. Generated API action logs remained empty; no real mail mutation
   was performed.
+- Generated command-surface browser QA passed at 1280x720 and 375x812. Cmd+K
+  opened and toggled the palette without browser-focus leakage; no-match Enter
+  was inert; Escape restored the exact opener; shortcut help owned focus and
+  its configured close key; disabled commands were keyboard-selected with an
+  associated reason; Chat, Todos, and Flow registrations did not leak across
+  navigation; and the 375px sheet had no horizontal overflow with a trapped
+  focus path. Browser console errors: none.
+- The localhost-only `.example.test` command harness rejected every mutating
+  method. Its final audit reported empty `mutation_attempts` and
+  `unknown_routes`; no real message was opened or changed.
+- Independent feature and safety reviews identified and then cleared command
+  lifecycle, modal ownership, duplicate-send, inaccessible disabled-state, and
+  delayed Flow mutation blockers. The generated-user agent validated the
+  harness but could not acquire a browser; the primary browser run completed
+  those scenarios, and the final code review found no remaining P0/P1 issue.
 - Python compilation and `git diff --check`: passed.
 
 ## Known Constraints and Risks
@@ -152,6 +178,13 @@ live state.
 - This product branch predates the separately owned AI-provider commits now on
   `origin/main`. Do not rebase or resolve the shared worker registry until its
   owner confirms the coordination point.
+- Compose/send still lacks a durable client-keyed lost-response contract.
+  Direct keyboard sending is preserved, but irreversible Send commands are
+  deliberately excluded from the executable palette until that contract and a
+  generated lost-response test exist.
+- Shortcut override reset/reset-all still uses a merge-only persistence API;
+  a removed override can reappear after reload. Coordinate the shared
+  authentication preference contract with the AI owner before correcting it.
 - Failed full-sync attempts can commit new mail before a later page fails; the
   mail is retained safely, but durable notification/analysis handoff remains a
   follow-up.
@@ -161,6 +194,8 @@ live state.
 ## Next Safe Action
 
 Preserve the reviewed, pushed product branch without rebasing it onto the
-separately owned AI work. On the next cycle, confirm the coordination point,
-then reconcile the shared worker registry and re-run all checks before any
-merge or explicitly authorized deployment.
+separately owned AI work. Implement structured email search as a focused,
+generated-fixture slice without touching AI-owned authentication files. Defer
+saved-view and shortcut-reset persistence until that ownership boundary is
+explicitly coordinated, and repeat all checks before any merge or explicitly
+authorized deployment.

@@ -97,3 +97,21 @@ add a new entry that explicitly supersedes the old one.
   publication is bounded best effort, lost create responses are reconciled by
   owned idempotency-key lookup, and one-attempt Gmail mutations use a finite
   transport deadline before durable retry policy takes over.
+
+## D-008 — Command discovery reflects executable state
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Build command discovery from the active shortcut catalog plus the
+  currently registered page/component handlers. Surface live unavailable
+  reasons, make command/help dialogs own focus and keyboard input, and exclude
+  irreversible Send from the palette until send has a durable client-keyed
+  idempotency contract.
+- Reason: A palette that advertises no-op, stale, unavailable, or ambiguous
+  irreversible actions is less trustworthy than direct shortcuts and can
+  duplicate real-world side effects after lost responses.
+- Consequence: Page handlers register synchronously with owned cleanup and may
+  provide `isEnabled` and `disabledReason`; disabled commands remain
+  discoverable but Enter-inert; async completion is scoped to its originating
+  palette session and captured entity; and new irreversible palette commands
+  require deterministic lost-response coverage before exposure.
