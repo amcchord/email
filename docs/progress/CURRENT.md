@@ -4,12 +4,13 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Qualify physical E1001/E1002 enrollment, trusted-TLS candidate.4, A/B recovery,
-and browser-install recovery before enabling any terminal write path. At a
-Glance is a first-class application destination with robust battery guidance;
-keep its daily experience separate from destructive terminal management. Add
-OTA scheduling, artifact transport, and acknowledgements only after physical
-HIL and a durable idempotent event ledger exist.
+Qualify physical E1001/E1002 enrollment, trusted-TLS candidate.5, exact runtime
+identity, A/B recovery, and browser-install recovery before enabling any
+terminal write path. At a Glance is a first-class application destination with
+robust battery guidance; keep its daily experience separate from destructive
+terminal management. Add OTA scheduling, artifact transport, and
+acknowledgements only after physical HIL and a durable idempotent event ledger
+exist.
 
 ## Baseline
 
@@ -19,11 +20,12 @@ HIL and a durable idempotent event ledger exist.
   `35e3700e8a22eabf49e701fb873d4662d5b7abdc`. One durable reminder owns the
   exact account/conversation across Inbox, reader, Flow, search, first-class
   Snoozed, `H`, reload, provider retry, and cron recovery.
-- The deployed At a Glance terminal-safety application/runtime commit is
-  `92d22a54c49ec9b4ba74042ece01a1c6d527ea07`; the following closeout is docs
-  only. Battery estimates are bounded and advisory, the browser performs exact
-  SHA-256/Ed25519 metadata preflight with an intentionally empty production key
-  map, and the read-only OTA capability endpoint remains independently locked.
+- The deployed combined application/runtime commit is
+  `35e3700e8a22eabf49e701fb873d4662d5b7abdc`. Its migration-free terminal slice
+  excludes candidate.5 battery bursts marked invalid and understands exact
+  RET1 status v2 runtime/build identity while retaining fail-closed candidate.4
+  status-v1 compatibility. Browser firmware writes, device OTA transport, and
+  the read-only OTA capability endpoint remain independently locked.
 - The deployed Scheduled Send application/runtime commit is
   `8b0f1c974ecc3c52a0a5e48a0cbe3e61c5eb2ae6`; the following closeout is docs
   only. Compose, reader, and Flow share one durable future-delivery workflow,
@@ -45,17 +47,18 @@ HIL and a durable idempotent event ledger exist.
   `8ff01848a2be2818dfd9eb88b84be9aab4befb0a`; the following closeout is docs
   only. Production and GitHub were exact and clean at the runtime boundary.
 - Production Alembic is `a4b5c6d7e8f9 (head)`, the Universal Snooze child of
-  terminal-only `f3a4b5c6d7e8`. The additive Snooze table is empty at release,
-  the terminal credential and attempt tables remain empty, all four existing
-  terminals remain legacy, and the secure-MAC unique index is present.
+  the terminal secure-enrollment revision `f3a4b5c6d7e8`. Candidate.5 required
+  no schema change. The additive Snooze table was empty at release; terminal
+  credential and attempt tables remain empty, all four existing terminals
+  remain legacy, and the secure-MAC unique index is present.
 - All seven checked production services are active, public health is `ok`, and
   the replacement API process has zero automatic restarts and no post-start
   warning-or-higher entries. Production has no secure-enrollment or OTA
   enablement, online key, approved catalog, qualified release/model pair,
   durable OTA event ledger, or device update route.
 - Private firmware `main` is
-  `2e835543dfe7095fe65a4f62b0da9e3c91ca47d1`
-  (`0.2.0-candidate.4`). Exact-main run `33336177159` passed its software gates;
+  `f23d6302ae4bc64326f385fe44593e2ec47febd0`
+  (`0.2.0-candidate.5`). Exact-main run `33338824057` passed its software gates;
   generic bundles remain unkeyed, enrollment-disabled, OTA-disabled, and
   physically unqualified.
 
@@ -66,7 +69,7 @@ live state.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 
-- State: candidate.4 and both application-side policy foundations are complete;
+- State: candidate.5 and both application-side policy foundations are complete;
   production remains locked. No device write, enrollment key, OTA offer, or
   firmware artifact has been enabled.
 - Scope: physical RET1 enrollment, interrupted serial/config write, three-slot
@@ -86,13 +89,13 @@ live state.
 - State: policy core and read-only capability reporting are shipped locked;
   schedule offers, artifact delivery, event ingestion, cohorts, and device
   authentication are absent.
-- Scope: one additive event-ledger migration after the coordinated Universal
-  Snooze migration, authenticated device offer/artifact/event endpoints,
+- Scope: one future additive event-ledger migration descending from the
+  then-current head, authenticated device offer/artifact/event endpoints,
   idempotent attempt state, power gates, rollout cohorts, and rescue controls.
 - Acceptance: a restart or repeated request cannot duplicate or lose update
   truth, only exact HIL-qualified evidence is offerable, and no single flag can
   enable a write.
-- Next: defer schema allocation and implementation until physical candidate.4
+- Next: defer schema allocation and implementation until physical candidate.5
   HIL establishes the exact event and rollback evidence the ledger must retain.
 
 ## Recent Universal Snooze Release
@@ -123,18 +126,19 @@ live state.
   built 526 modules. Full behavior, production, and rollback evidence is in
   `AT_A_GLANCE_FIRST_CLASS_RELEASE_2026-08-30.md`.
 
-## Recent At a Glance Firmware Safety Release
+## Recent At a Glance Terminal Recovery-Evidence Release
 
-- Firmware candidate.4 now fails closed on fresh trusted time and CA/hostname
-  validation, uses exact E1001/E1002 A/B partitions, verifies content-addressed
-  Ed25519 OTA descriptors, writes only the inactive slot, and exposes pending
-  image valid/rollback primitives. The writer is disabled and not invoked.
-- Application battery estimates use bounded robust trends, truthfully report
-  possible rather than proven charging, and suppress stale or implausibly long
-  forecasts. Browser signature preflight and the OTA policy/status surface ship
-  locked with no device transport or artifact path.
-- Full evidence and rollback boundaries are in
-  `AT_A_GLANCE_FIRMWARE_SAFETY_RELEASE_2026-08-30.md`.
+- Firmware candidate.5 measures a bounded seven-sample battery burst, proves
+  the complete runtime A/B table and source build identity, and validates or
+  rolls back a pending image before enrollment, display, network, restart, or
+  sleep work.
+- The application rejects explicitly invalid battery bursts and parses strict
+  RET1 status v2 identity. Candidate.4 status v1 stays compatible but cannot be
+  treated as recovery-success evidence.
+- Generic artifacts and every browser/OTA write path remain disabled and
+  unkeyed pending physical E1001/E1002 qualification. Full evidence and
+  rollback boundaries are in
+  `AT_A_GLANCE_TERMINAL_RECOVERY_EVIDENCE_RELEASE_2026-08-30.md`.
 
 ## Recent Durable Replies Release
 
@@ -174,11 +178,11 @@ live state.
   and add compare-and-swap protection against stale token persistence; neither
   weakens the direct deployed recurrence fix.
 
-## Recent Terminal Release
+## Historical Secure Terminal Enrollment Release
 
-- The default-locked secure terminal enrollment foundation is deployed at
-  runtime `8ff01848a2be2818dfd9eb88b84be9aab4befb0a`, with Alembic
-  `f3a4b5c6d7e8 (head)`.
+- The default-locked secure terminal enrollment foundation was introduced at
+  runtime `8ff01848a2be2818dfd9eb88b84be9aab4befb0a`, with terminal revision
+  `f3a4b5c6d7e8`.
 - Full application checks, the exact migration cycle, deterministic PostgreSQL
   contention/lifecycle tests, Caddy validation, secret/diff review, and
   authenticated read-only production QA passed. The locked browser exposed no

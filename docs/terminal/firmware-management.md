@@ -8,13 +8,15 @@ formats remain in [`firmware-variants.md`](firmware-variants.md).
 
 Baselines verified on 2026-08-30:
 
-- Email GitHub `main` and production closeout at
-  `4f85578d25292deabeb9f3c844ed1178afa8a72d`, with terminal-safety runtime
-  `92d22a54c49ec9b4ba74042ece01a1c6d527ea07`, first-class At a Glance, the
-  default-locked secure enrollment foundation, and Alembic at `f3a4b5c6d7e8`;
+- Email GitHub `main` and production application/runtime at
+  `35e3700e8a22eabf49e701fb873d4662d5b7abdc`, with first-class At a Glance,
+  candidate.5 battery/recovery identity, the default-locked secure enrollment
+  foundation, and Alembic at Universal Snooze head `a4b5c6d7e8f9`; the terminal
+  slice is migration-free and retains secure-enrollment revision
+  `f3a4b5c6d7e8` as its schema boundary;
 - private `reterminal-color` `main` at
   `f23d6302ae4bc64326f385fe44593e2ec47febd0` (`0.2.0-candidate.5`); and
-- Exact-main GitHub Actions run `33338824057`, which exercises the candidate's
+- Exact-main GitHub Actions run `33338824057`, which passed the candidate's
   keyed RET1/OTA guards, cross-language and host safety tests, all-model
   reproducibility, manifest, and bundle verification gates.
 

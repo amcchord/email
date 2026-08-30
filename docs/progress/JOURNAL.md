@@ -3,6 +3,56 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — At a Glance terminal recovery evidence
+
+### Scope
+
+Advance candidate.5 battery and A/B recovery evidence on the coordinated
+Universal Snooze baseline without enabling a browser or device write path.
+
+### Completed
+
+- Released private firmware candidate.5 at
+  `f23d6302ae4bc64326f385fe44593e2ec47febd0` with a bounded seven-sample battery
+  quality burst, full `ab-v1` runtime-table proof, source build identity, strict
+  RET1 status v2, and an early pending-image validate-or-rollback gate.
+- Taught the application to exclude explicitly invalid battery readings and
+  accept exact status v1/v2 shapes without treating legacy v1 as recovery
+  identity evidence.
+- Kept generic firmware unkeyed and disabled. Browser Serial, artifact writes,
+  OTA offers/events, production trust keys, HIL allowlists, and E1004 OTA remain
+  absent.
+
+### Verification
+
+- The consolidated application gate passed 607 backend tests with 47 expected
+  skips, 336 frontend tests, and a 532-module local production build.
+- Firmware tooling, OTA host safety, enrollment, keyed synthetic compile/marker,
+  clean all-model build, packaging, manifest, and disabled/unkeyed artifact
+  checks passed. Exact-main Actions run `33338824057` passed the complete
+  candidate.5 software gate.
+- Authenticated production browser QA loaded the empty first-class Snoozed
+  mailbox and At a Glance read-only. No message or real mutation was used.
+
+### Production Actions
+
+- Deployed exact combined runtime
+  `35e3700e8a22eabf49e701fb873d4662d5b7abdc` after validating the coordinated
+  pre-Snooze database backup.
+- Applied only Universal Snooze migration `a4b5c6d7e8f9`, built 534 frontend
+  modules, and restarted the API and workers. The terminal slice is
+  migration-free.
+- Exact clean Git, Alembic head, all seven services, public health, zero
+  post-start warning-or-higher logs, anonymous Snooze 401, and aggregate-empty
+  Snooze state passed. The retired API stop timeout occurred before the new
+  process boundary.
+
+### Next
+
+Run the physical E1001/E1002 enrollment, TLS, A/B migration, interruption,
+rollback, power, preserved-configuration, and ROM-recovery matrix before adding
+Web Serial or the durable OTA ledger and transport.
+
 ## 2026-08-30 — Universal Snooze release
 
 ### Scope
