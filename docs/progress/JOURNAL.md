@@ -3,6 +3,67 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Remote-content privacy controls
+
+### Scope
+
+Block sender-controlled email resources by default across every reader and
+quoted Compose path, provide a truthful one-message direct-load control, and
+deploy the generated-only validated frontend release for user testing without
+touching the separately owned AI worktree.
+
+### Completed
+
+- Added a shared CSP-isolated email frame for Inbox, standalone/subscription,
+  and Flow with no-referrer requests, safe parent link handoff, System-aware
+  theme updates, scoped approval reset, and accessible privacy announcements.
+- Parsed sender HTML inside a CSP-locked detached template before DOMPurify,
+  then blocked remote images/media/CSS, pings, stylesheets, same-host resources,
+  and broad SVG/MathML references. Direct permission restores only absolute
+  external-host HTTP(S) image/media values; CSS, fonts, pings, SVG references,
+  active content, and authenticated app requests remain blocked.
+- Added deliberate accessible placeholders for blocked/unavailable images and
+  hardened Forward/Compose plus both basic and rich editor ingestion.
+- Added a deterministic generated mailbox/resource beacon covering mixed,
+  embedded, permanently blocked, permission-reset, same-host, Inbox, Flow,
+  Forward/Compose, theme, desktop, dark, and exact-375 states. Three parallel
+  reviewers handled architecture/security, competitive UX, and final QA; all
+  release blockers were fixed before deployment.
+- Added `REMOTE_CONTENT_PRIVACY_RELEASE_2026-08-30.md`, three screenshot
+  artifacts, a captured request audit, and durable decision D-016.
+
+### Verification
+
+- `make check`: 303 backend tests passed, 4 opt-in PostgreSQL tests skipped,
+  113 frontend tests passed, and the 502-module production build completed.
+- Harness syntax, audit JSON parsing, and `git diff --check` passed.
+- Generated browser QA recorded zero requests before permission; exactly seven
+  approved external-host image/media requests afterward, all without referrer;
+  and zero mailbox mutations or unknown routes. CSS/SVG/ping/same-host vectors
+  stayed blocked, theme changes did not re-request, and A → B → A cleared
+  permission.
+- Safe embedded raster and permanently-blocked-only states were truthful;
+  desktop, exact 375×812, and dark Flow visual reviews passed with 44 px mobile
+  controls and no overflow. No real mail was opened or changed.
+
+### Production Actions
+
+- Pushed `9b9730a` to `origin/codex/remote-content-controls` and fast-forwarded
+  GitHub `main` from `ee93396` without rewriting history.
+- Fast-forwarded clean production `/opt/mail` to exact full commit
+  `9b9730a68c65de2b7ee9910c0d2c3bd70939e273` as `mailapp`, ran only the locked
+  frontend install and build, and observed zero npm vulnerabilities.
+- No database migration/write/backup, Python install, service restart, or
+  Caddy/systemd change occurred. Public health, seven active services with zero
+  restarts, representative static assets, recent error-level logs, and clean
+  Git state all passed. The concurrent AI worktree remained untouched.
+
+### Next
+
+Pause for production user testing. When work resumes, coordinate the existing
+AI Markdown-image SSRF follow-up with its owner, then design the owned
+remote-resource proxy/manifest and CID mapping as a separate security release.
+
 ## 2026-08-30 — Frontend dependency security candidate
 
 ### Scope

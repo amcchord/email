@@ -158,5 +158,14 @@ fast-forwards the reviewed commit, runs the locked frontend install, and builds
 the static assets.
 
 Rollback returns production to `ee93396`, runs the locked frontend install and
-build, and leaves the database/schema untouched. The exact release commit and
-post-deploy evidence will be recorded here after the authorized deployment.
+build, and leaves the database/schema untouched.
+
+Production was fast-forwarded from `ee93396cd3fa63c44a65a746bcf6fd278425486a`
+to exact release `9b9730a68c65de2b7ee9910c0d2c3bd70939e273` as `mailapp`. The locked install
+reported zero vulnerabilities and the 502-module build passed. No migration,
+database write, backup, service restart, or Caddy/systemd change was needed.
+
+Post-deploy checks passed: clean Git state at the exact commit, public health
+`ok`, all seven services active with zero restarts, HTTP 200 for the root plus
+the new reader/sanitizer/Flow/Inbox assets, and zero error-level app/worker log
+lines in the release window. No real message was opened or changed.

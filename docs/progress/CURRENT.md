@@ -4,20 +4,21 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Release the remote-content privacy controls for explicit production user
-testing. Preserve the clean, separately owned AI-provider worktree, keep all
+Pause for production user testing of the deployed remote-content privacy
+controls. Preserve the clean, separately owned AI-provider worktree, keep all
 mail rendering and mutation QA on generated messages, and do not open or
 change real production mail.
 
 ## Baseline
 
-- Production and GitHub `main` are clean at documentation closeout `ee93396`;
-  the running frontend application release is `3f9e743`. Public health is
-  `ok`, all seven checked services are active with zero restarts, and Alembic
-  remains at `z7a8b9c0d1e2 (head)`.
+- Production and GitHub `main` include remote-content application release
+  `9b9730a68c65de2b7ee9910c0d2c3bd70939e273` and its documentation closeout.
+  The running frontend assets were built from that application release. Public
+  health is `ok`, all seven checked services are active with zero restarts, and
+  Alembic remains at `z7a8b9c0d1e2 (head)`.
 - The original AI worktree remains clean at `41d2898` on
   `codex/openai-anthropic-model-support` and has not been edited by this work.
-- The remote-content candidate lives in the isolated worktree
+- The deployed remote-content release was developed in the isolated worktree
   `/Users/austinmcchord/Development/Email-remote-content-controls` on
   `codex/remote-content-controls`.
 - A validated 1.38 GB custom-format backup remains protected at
@@ -27,7 +28,7 @@ change real production mail.
 This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
 
-## Remote-Content Candidate Scope
+## Deployed Remote-Content Scope
 
 - Sender-controlled images, media, stylesheet links, remote CSS, legacy
   backgrounds, SVG resource references, tracking pings, and similar resources
@@ -93,6 +94,7 @@ live state.
 
 ## Next Safe Action
 
-After production user testing, coordinate the AI Markdown image SSRF fix with
-the AI work owner, then design the owned remote-resource manifest/proxy and CID
-mapping as a separately reviewed backend security release.
+Pause here for production user testing. After the user resumes work, coordinate
+the AI Markdown image SSRF fix with the AI work owner, then design the owned
+remote-resource manifest/proxy and CID mapping as a separately reviewed backend
+security release.
