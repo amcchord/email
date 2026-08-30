@@ -21,3 +21,18 @@ test('full-viewport TopBar backdrops stay transparent on hover', () => {
     /\.topbar-backdrop:hover\s*\{[^}]*background:\s*transparent;/s,
   );
 });
+
+test('More menu is positioned by its trigger instead of the full primary navigation', () => {
+  const moreTriggerBlock = topBarSource.match(
+    /    <div class="more-trigger relative flex items-center shrink-0">([\s\S]*?)\n    <\/div>\n  <\/nav>/,
+  )?.[1];
+  assert.ok(moreTriggerBlock, 'the More trigger should own its positioning wrapper');
+  assert.match(
+    moreTriggerBlock,
+    /bind:this=\{moreButton\}[\s\S]*?\{#if moreMenuOpen\}[\s\S]*?bind:this=\{moreMenu\}[\s\S]*?class="more-menu absolute left-0 top-full/,
+  );
+  assert.match(
+    topBarSource,
+    /\.more-menu\s*\{\s*position:\s*fixed;\s*top:\s*3\.25rem;\s*left:\s*0\.5rem;\s*right:\s*0\.5rem;/s,
+  );
+});

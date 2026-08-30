@@ -276,66 +276,68 @@
         <span class="primary-tab-label">{tab.label}</span>
       </button>
     {/each}
-    <button
-      bind:this={moreButton}
-      onclick={() => moreMenuOpen ? closeMoreMenu() : moreMenuOpen = true}
-      class="more-button min-h-11 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-150"
-      class:tab-active={secondaryPageActive}
-      class:tab-inactive={!secondaryPageActive}
-      aria-label={activeSecondaryTab ? `More app sections, current: ${activeSecondaryTab.label}` : 'More app sections'}
-      aria-expanded={moreMenuOpen}
-      aria-controls="more-app-sections-menu"
-      aria-current={secondaryPageActive ? 'page' : undefined}
-    >
-      <Icon name="more-horizontal" size={16} />
-      <span class="primary-tab-label">More</span>
-    </button>
-    {#if moreMenuOpen}
+    <div class="more-trigger relative flex items-center shrink-0">
       <button
-        class="topbar-backdrop fixed inset-0 z-40 cursor-default"
-        onclick={() => closeMoreMenu({ restoreFocus: true })}
-        tabindex="-1"
-        aria-hidden="true"
-      ></button>
-      <div bind:this={moreMenu} id="more-app-sections-menu" class="more-menu absolute left-0 top-full mt-2 z-50 w-56 rounded-xl border p-1.5 shadow-xl" style="background: var(--bg-secondary); border-color: var(--border-color)">
-        {#each secondaryTabs as tab}
-          <button
-            onclick={() => switchTab(tab.id, { restoreMoreFocus: true })}
-            onpointerenter={() => warmRoute(tab.id)}
-            onfocus={() => warmRoute(tab.id)}
-            class="min-h-11 w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left"
-            class:menu-item-active={$currentPage === tab.id}
-            aria-current={$currentPage === tab.id ? 'page' : undefined}
-          >
-            <Icon name={tab.icon} size={16} />
-            {tab.label}
-          </button>
-        {/each}
-        <div class="mobile-menu-utilities border-t mt-1 pt-1" style="border-color: var(--border-color)">
-          <button
-            onclick={() => switchTab('admin', { restoreMoreFocus: true })}
-            onpointerenter={() => warmRoute('admin')}
-            onfocus={() => warmRoute('admin')}
-            class="min-h-11 w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left"
-            class:menu-item-active={$currentPage === 'admin'}
-            aria-current={$currentPage === 'admin' ? 'page' : undefined}
-          >
-            <Icon name="settings" size={16} /> Settings
-          </button>
-          <button onclick={() => { theme.toggle(); closeMoreMenu({ restoreFocus: true }); }} class="min-h-11 w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left">
-            <Icon name={getEffectiveMode($theme) === 'dark' ? 'sun' : 'moon'} size={16} />
-            {getEffectiveMode($theme) === 'dark' ? 'Light theme' : 'Dark theme'}
-          </button>
-          <button
-            onclick={handleLogout}
-            disabled={logoutInProgress}
-            class="min-h-11 w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left disabled:opacity-50"
-          >
-            <Icon name="log-out" size={16} /> Log out
-          </button>
+        bind:this={moreButton}
+        onclick={() => moreMenuOpen ? closeMoreMenu() : moreMenuOpen = true}
+        class="more-button min-h-11 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-150"
+        class:tab-active={secondaryPageActive}
+        class:tab-inactive={!secondaryPageActive}
+        aria-label={activeSecondaryTab ? `More app sections, current: ${activeSecondaryTab.label}` : 'More app sections'}
+        aria-expanded={moreMenuOpen}
+        aria-controls="more-app-sections-menu"
+        aria-current={secondaryPageActive ? 'page' : undefined}
+      >
+        <Icon name="more-horizontal" size={16} />
+        <span class="primary-tab-label">More</span>
+      </button>
+      {#if moreMenuOpen}
+        <button
+          class="topbar-backdrop fixed inset-0 z-40 cursor-default"
+          onclick={() => closeMoreMenu({ restoreFocus: true })}
+          tabindex="-1"
+          aria-hidden="true"
+        ></button>
+        <div bind:this={moreMenu} id="more-app-sections-menu" class="more-menu absolute left-0 top-full mt-2 z-50 w-56 rounded-xl border p-1.5 shadow-xl" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          {#each secondaryTabs as tab}
+            <button
+              onclick={() => switchTab(tab.id, { restoreMoreFocus: true })}
+              onpointerenter={() => warmRoute(tab.id)}
+              onfocus={() => warmRoute(tab.id)}
+              class="min-h-11 w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left"
+              class:menu-item-active={$currentPage === tab.id}
+              aria-current={$currentPage === tab.id ? 'page' : undefined}
+            >
+              <Icon name={tab.icon} size={16} />
+              {tab.label}
+            </button>
+          {/each}
+          <div class="mobile-menu-utilities border-t mt-1 pt-1" style="border-color: var(--border-color)">
+            <button
+              onclick={() => switchTab('admin', { restoreMoreFocus: true })}
+              onpointerenter={() => warmRoute('admin')}
+              onfocus={() => warmRoute('admin')}
+              class="min-h-11 w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left"
+              class:menu-item-active={$currentPage === 'admin'}
+              aria-current={$currentPage === 'admin' ? 'page' : undefined}
+            >
+              <Icon name="settings" size={16} /> Settings
+            </button>
+            <button onclick={() => { theme.toggle(); closeMoreMenu({ restoreFocus: true }); }} class="min-h-11 w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left">
+              <Icon name={getEffectiveMode($theme) === 'dark' ? 'sun' : 'moon'} size={16} />
+              {getEffectiveMode($theme) === 'dark' ? 'Light theme' : 'Dark theme'}
+            </button>
+            <button
+              onclick={handleLogout}
+              disabled={logoutInProgress}
+              class="min-h-11 w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left disabled:opacity-50"
+            >
+              <Icon name="log-out" size={16} /> Log out
+            </button>
+          </div>
         </div>
-      </div>
-    {/if}
+      {/if}
+    </div>
   </nav>
 
   <!-- Center: Contextual content -->
@@ -657,7 +659,8 @@
       margin-right: 0;
       flex: 1 1 auto;
     }
-    .primary-nav > button:not(.fixed) {
+    .primary-nav > button:not(.fixed),
+    .primary-nav > .more-trigger > .more-button {
       padding-left: 0.65rem;
       padding-right: 0.65rem;
     }
