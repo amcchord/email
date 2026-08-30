@@ -3,7 +3,7 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
-## 2026-08-30 — Fail-closed terminal firmware gateway candidate
+## 2026-08-30 — Fail-closed terminal firmware gateway release
 
 ### Scope
 
@@ -46,15 +46,33 @@ release and its migration head.
 
 ### Production Actions
 
-- Pending exact reviewed merge and deployment. No database migration, signing
-  key, catalog, artifact tree, or enablement flag will be added.
+- Pushed rebased application `0fe2ef7` and release documentation `69a5622` to
+  the feature branch and GitHub `main`, then fast-forwarded clean production
+  from outbound closeout `6d8e945` to exact `69a5622`.
+- Confirmed no dependency or Alembic diff, validated the exact tracked
+  `/opt/mail/Caddyfile`, installed the unchanged frontend lock as `mailapp`
+  with zero audit vulnerabilities, built 514 production modules, restarted
+  only `mailapp`, and reloaded Caddy. No database backup was required because
+  no schema or data mutation occurred.
+- Postflight passed: exact clean Git, public health, all seven services, zero
+  mailapp/Caddy warning-or-higher log entries or automatic restarts, exact
+  frontend asset 200, anonymous catalog 401, `serial=(self)` policy, and
+  unchanged Alembic `d1e2f3a4b5c6`.
+- Signed-in read-only Admin QA showed the locked installer, all three unmet
+  safety gates, safe catalog-unavailable copy, no controls inside the installer
+  section, and zero browser warnings/errors. No serial permission, artifact
+  download, flash, erase, terminal mutation, mail mutation, or calendar
+  mutation occurred.
+- Production retained empty/default firmware trust configuration. No signing
+  key, approved catalog, artifact tree, generation floor, or enablement flag
+  was staged.
 
 ### Next
 
-Deploy the locked foundation and verify authentication, fail-closed empty
-catalog behavior, Admin presentation, Caddy policy, service health, exact Git,
-and unchanged Alembic head. Then resume the preserved secure-enrollment branch
-without treating its partial implementation as releasable.
+Resume the preserved secure-enrollment branch by auditing its partial files,
+completing deterministic crypto/protocol/power-loss tests, and obtaining real
+E1001/E1002 hardware evidence. Do not treat that branch as releasable or enable
+browser writes.
 
 ## 2026-08-30 — Safe outbound delivery and More anchoring
 

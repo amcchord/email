@@ -12,11 +12,13 @@ flash.
 
 - Email base: `6d8e94584f21a6090b16cc697bd4579c3a3c0400`
 - Email gateway application commit: `0fe2ef7`
+- Email reviewed/deployed release commit: `69a5622659d39709a07334b04aa8f517a8b12728`
 - Firmware `main`: `1b5364e5d4b48666b3ecfd0cf8ba31ab7f4bd5c4`
 - Firmware reproducibility run: GitHub Actions `33322241770`
 - Production Alembic before and after: `d1e2f3a4b5c6`
 
-The final GitHub/production docs-closeout SHA is recorded after deployment.
+The final GitHub/production docs-closeout SHA is recorded in the coordinating
+task handoff after this release record is committed.
 
 ## Implemented boundary
 
@@ -71,15 +73,23 @@ surface remains locked even if browser primitives exist.
 
 ## Production verification
 
-Pending exact merge/deployment. Required postflight:
-
-- exact clean Git and unchanged Alembic `d1e2f3a4b5c6`;
-- Caddy syntax/reload and `serial=(self)` response policy;
-- all seven services active and public health `ok`;
-- anonymous firmware catalog request rejected with 401;
-- authenticated missing-key/catalog state fails closed without details; and
-- signed-in Admin shows the locked catalog-only installer without requesting a
-  serial port or mutating real data.
+- Clean production fast-forwarded from `6d8e945` to exact reviewed release
+  `69a5622`. The tracked Caddyfile validated before the frontend build,
+  `mailapp` restart, and Caddy reload.
+- The unchanged frontend lock installed with zero audit vulnerabilities and
+  built 514 production modules. The exact new entry asset returned 200.
+- All seven services were active, public health returned `ok`, and mailapp and
+  Caddy had zero warning-or-higher log entries or automatic restarts after the
+  release.
+- The unauthenticated catalog returned 401. Response policy included
+  `serial=(self)` while camera, microphone, and geolocation remained disabled.
+- Signed-in Admin showed the installer as locked, detected HTTPS/Web
+  Serial/Web Locks support, and handled the absent trust/catalog as safe
+  unavailable state. The installer section had no buttons and listed each
+  unmet safety gate. Browser logs contained no warning/error and no serial
+  permission prompt appeared.
+- Alembic remained exactly `d1e2f3a4b5c6`. No database, mail, calendar,
+  terminal, artifact, catalog, signing-key, or configuration mutation occurred.
 
 ## Remaining milestones
 
