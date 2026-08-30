@@ -13,7 +13,7 @@ continue without overlapping files or Git state.
 
 - Product worktree: `codex/product-polish-cycle-1`, pushed to
   `origin/codex/product-polish-cycle-1`; product implementation is complete
-  through the bounded attachment-cache lifecycle at `fe57077`.
+  through the safe attachment-preview gallery at `8fd46a0`.
 - Repository source baseline: `origin/main` at `41d2898`.
 - Concurrent AI-model work is owned by another process in the original
   checkout; do not edit, stage, or reconcile its files from this worktree.
@@ -81,6 +81,22 @@ live state.
 - Next: coordinate migration of the separate AI-owned Chat attachment path
   before claiming that all attachment consumers share this lifecycle.
 
+### P2 — Safe attachment preview and download trust
+
+- State: locally verified, independently reviewed, committed, and pushed
+- Why: modern triage needs fast text/image/PDF inspection without trusting
+  sender MIME metadata or silently downloading derivative preview bytes.
+- Scope: owned byte-classified preview API, bounded pipeline admission,
+  normalized raster/text renderers, untrusted PDF handoff, risk cues,
+  confirmation-required downloads, accessible desktop/mobile gallery, and
+  stale/cancelled request handling.
+- Acceptance: generated tests and browser audits prove ownership isolation,
+  renderer/type agreement, bounded CPU/memory admission, original-byte
+  downloads, keyboard/focus behavior, responsive and short-height layouts,
+  terminal/retry/abort states, and an empty mutation log.
+- Next: keep raw PDFs explicitly untrusted and the separate AI-owned Chat
+  attachment path outside this contract. Deploy only on explicit request.
+
 ## Completed This Cycle
 
 - Enforced account ownership on sync-status reads (`c3fb912`).
@@ -130,11 +146,17 @@ live state.
   cancellation-safe download/write behavior, duplicate-safe daily cleanup,
   aggregate observability, terminal/retryable UI states, and generated
   pressure/browser verification (`fe57077`).
+- Added a safe attachment-preview gallery with the same owned membership join,
+  two-slot retrieval-through-render admission, byte-derived text/raster/PDF
+  contracts, metadata-stripped images, untrusted native PDF handoff, active and
+  mismatched-file warnings, original-byte downloads, exact modal focus,
+  three-transfer admission, and generated desktop/mobile verification
+  (`8fd46a0`).
 
 ## Verification
 
-- Latest `make check`: 267 backend tests passed, 4 disposable-PostgreSQL tests
-  skipped by default, and 82 frontend tests passed; the production build
+- Latest `make check`: 293 backend tests passed, 4 disposable-PostgreSQL tests
+  skipped by default, and 91 frontend tests passed; the production build
   passed with only the existing large-chunk advisory.
 - Forty-three generated durable-action tests cover every supported transition,
   strict request validation, cross-account staging, idempotency, exact bulk
@@ -203,6 +225,22 @@ live state.
   delayed Flow mutation blockers. The generated-user agent validated the
   harness but could not acquire a browser; the primary browser run completed
   those scenarios, and the final code review found no remaining P0/P1 issue.
+- Generated attachment-preview browser QA passed for text, normalized image,
+  untrusted PDF handoff, archives, active files, metadata mismatch, corrupt
+  bytes, delayed cancellation, and 503-to-200 retry. Exact Escape/Cancel/
+  backdrop focus restoration, trapped Tab focus, command-shortcut isolation,
+  and original `/download` retrieval were verified. The three-transfer cap was
+  visibly enforced; risky downloads showed in-dialog progress; and runtime 415
+  failures promoted downloads to confirmation.
+- At 375x812 the full-screen dialog had no horizontal overflow, five controls
+  measured at least 44px, the app root was inert, and the image stayed within
+  12px side gutters. At 375x390 the warning body became scrollable and the
+  44px `Download anyway` control remained visible. Browser console errors,
+  mutation attempts, and unknown generated routes were empty.
+- Independent backend, frontend, and generated-user reviewers cleared all
+  attachment-preview P0/P1 findings after the admission, PDF-trust wording,
+  preview/download integrity, request-identity, contrast, and short-viewport
+  corrections.
 - Python compilation and `git diff --check`: passed.
 
 ## Known Constraints and Risks
@@ -235,6 +273,10 @@ live state.
 - Attachment quota is per user, not a global disk-cap/minimum-free-space
   policy. Canonical cache integrity is checked structurally and by recorded
   size, not by a stored content digest; both are future hardening opportunities.
+- PDF preview performs basic outer-signature and obvious-feature checks, not a
+  structural safety proof or malware scan. PDF bytes remain untrusted and open
+  in a separate browser-native viewer. The first typed-contract request and the
+  user-opened viewer request may produce two cache-backed GETs by design.
 - Failed full-sync attempts can commit new mail before a later page fails; the
   mail is retained safely, but durable notification/analysis handoff remains a
   follow-up.
@@ -247,6 +289,6 @@ Preserve the reviewed, pushed product branch without rebasing it onto the
 separately owned AI work. Coordinate the legacy Chat attachment migration only
 after its owner releases those files; until then, keep that path explicitly out
 of the canonical lifecycle claim. The next isolated product slice should avoid
-shared authentication/AI files and can address attachment preview/risk cues or
-frontend bundle splitting. Repeat all checks before any merge or explicitly
-authorized deployment.
+shared authentication/AI files and address route-level frontend bundle
+splitting, beginning with the current 1.17 MB entry chunk. Repeat all checks
+before any merge or explicitly authorized deployment.

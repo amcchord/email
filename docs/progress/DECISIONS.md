@@ -158,3 +158,24 @@ add a new entry that explicitly supersedes the old one.
   reports aggregates rather than cache paths. The separately owned legacy Chat
   attachment path is explicitly excluded until a coordinated migration brings
   it into this namespace and policy.
+
+## D-011 — Attachment previews are typed derivatives, not trust proofs
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Expose received-attachment previews only through the same owned
+  membership and canonical byte-loading boundary as downloads. Derive a
+  bounded renderer kind from bytes, normalize raster/text output, require the
+  client kind and content type to agree, and treat every preview as untrusted.
+  PDF preview performs only basic checks and opens in a separate browser-native
+  viewer; it is never described as structurally safe or malware-scanned.
+- Reason: Sender filenames and MIME metadata are attacker-controlled, preview
+  derivatives can be truncated or transformed, and raw PDF feature scans are
+  bypassable. Reusing a derivative for Download can silently corrupt user data,
+  while unbounded classification can exhaust process memory or CPU.
+- Consequence: Preview and Download remain separate requests; Download always
+  returns canonical original bytes. Active/archive/mismatched metadata and
+  runtime type failures require confirmation, images/text use inert renderers,
+  PDF bytes remain untrusted, and a process admission lease spans retrieval
+  through classification. The AI-owned legacy Chat attachment path is outside
+  this contract until separately coordinated.

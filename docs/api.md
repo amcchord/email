@@ -670,7 +670,7 @@ Both routes require the normal browser session cookie and verify the user,
 owning account, email, and attachment with the same membership lookup. Missing,
 foreign, and wrong-message attachment IDs all return the same 404 response.
 
-Downloads always use attachment disposition, validated sender metadata,
+Downloads always use attachment disposition, sanitized sender metadata,
 private no-store caching, `nosniff`, and same-origin resource policy headers.
 The browser treats active formats, archives, and filename/type mismatches as
 confirmation-required downloads.

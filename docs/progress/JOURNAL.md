@@ -3,6 +3,74 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Safe attachment preview gallery
+
+### Scope
+
+Add modern text, image, and PDF attachment previews plus truthful download-risk
+UX using immutable generated mail only, while leaving the separately owned AI
+checkout and Chat files untouched.
+
+### Completed
+
+- Added a session-authenticated preview route that reuses the exact owned
+  account/email/attachment membership join and canonical byte loader. Known
+  oversized metadata fails before retrieval, and a two-slot process admission
+  lease covers retrieval through cancellation-draining classification.
+- Added byte-derived preview contracts: bounded strict UTF-8 text with safe
+  truncation, Pillow-verified JPEG/PNG/WebP normalized to metadata-free bounded
+  raster output, and basic PDF signature/tail/obvious-feature checks. PDFs stay
+  explicitly untrusted and open in a separate browser-native viewer.
+- Added no-store/nosniff/same-origin/sandbox response headers, stable
+  404/413/415/503 behavior, client kind/MIME/size agreement, expected-kind
+  enforcement, revocable image URLs, and stale request/object cleanup.
+- Rebuilt attachment cards and the preview dialog with separate Preview and
+  Download actions, safe filenames/type labels, archive/active/MIME mismatch
+  cues, runtime-415 confirmation, original-byte-only downloads, three-transfer
+  admission, in-dialog download progress, retry/error states, gallery
+  navigation, trapped focus, exact focus restoration, inert app background,
+  accessible scroll regions, and desktop/full-screen/short-mobile layouts.
+- Extended the localhost generated harness with text/image/PDF, active,
+  archive, mismatched, corrupt, delayed, retryable, concurrency, original
+  download, 375x812, and 375x390 fixtures plus a read/mutation audit.
+
+### Verification
+
+- `make check`: 293 backend tests passed, 4 opt-in PostgreSQL tests skipped,
+  91 frontend tests passed, and the production frontend build completed with
+  only the existing large-chunk advisory. Fifty-four focused attachment tests,
+  Python compilation, harness syntax, and `git diff --check` passed.
+- Generated desktop browser QA verified text escaping, normalized image,
+  untrusted PDF handoff, unsupported/risky/mismatched/corrupt states, terminal
+  415, delayed 499 cancellation without stale UI, 503-to-200 retry, exact
+  Escape/Cancel/backdrop focus restoration, focus trapping, command isolation,
+  three visible concurrent transfers, in-dialog risky-download progress, and
+  authoritative `/download` retrieval. Console errors were empty.
+- At 375x812 the dialog exactly filled the viewport with no horizontal
+  overflow, an inert app root, a contained image, and five controls at least
+  44px tall. At 375x390 the warning body scrolled and the 44px confirmation
+  control remained visible. Generated mutation attempts and unknown routes
+  were empty.
+- Independent backend, frontend, and generated-user agents cleared all final
+  P0/P1 findings after fixes for retrieval admission, untrusted PDF wording,
+  derivative-download integrity, request identity, status/contrast, modal
+  background ownership, and short-viewport scrolling.
+- The concurrent AI checkout remained clean and untouched at `41d2898`.
+
+### Production Actions
+
+- None. No deploy, migration, restart, configuration change, production write,
+  real-mail read, message open, attachment fetch, or mailbox mutation occurred.
+- Committed the implementation as `8fd46a0` and pushed it to
+  `origin/codex/product-polish-cycle-1` without rebasing or editing the AI
+  owner's checkout.
+
+### Next
+
+Keep the AI-owned Chat attachment path outside the preview/cache guarantee
+until coordinated migration. Use route-level frontend bundle splitting as the
+next isolated product slice, starting with the current 1.17 MB entry chunk.
+
 ## 2026-08-30 — Bounded attachment cache lifecycle
 
 ### Scope
