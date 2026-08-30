@@ -11,9 +11,9 @@ continue without overlapping files or Git state.
 
 ## Baseline
 
-- Product worktree: `codex/product-polish-cycle-1` at `ae36211`, pushed to
+- Product worktree: `codex/product-polish-cycle-1` at `a41a90d`, pushed to
   `origin/codex/product-polish-cycle-1`.
-- Repository source baseline: `origin/main` at `0500d1a`.
+- Repository source baseline: `origin/main` at `41d2898`.
 - Concurrent AI-model work is owned by another process in the original
   checkout; do not edit, stage, or reconcile its files from this worktree.
 - Production observation at 2026-08-30 02:55 UTC: clean `main` at `0500d1a`,
@@ -29,15 +29,16 @@ live state.
 
 ### P0 — Reliable, reconcilable mail actions
 
-- State: ready
+- State: locally verified; review/merge pending
 - Why: local mail state can diverge from Gmail when a remote mutation fails;
   fast triage also needs a trustworthy undo path.
 - Scope: durable action outbox, idempotent retries, reconciliation status,
-  safe undo semantics, and visible failure recovery.
+  exact staged undo, optimistic Inbox recovery, and visible partial failure.
 - Acceptance: generated-message tests prove retries cannot duplicate or lose
   an action, failures remain visible, and supported actions can be undone.
-- Next: define the smallest durable action/outbox contract before changing the
-  data model or worker behavior.
+- Next: preserve the verified branch while the separate AI owner finishes;
+  then reconcile with current `origin/main` in an explicitly coordinated
+  review before any production migration.
 
 ### P1 — Sync durability and account-scoped identity
 
@@ -89,20 +90,51 @@ live state.
   processing, authoritative high-water handling, per-account PostgreSQL
   transaction advisory locks, versioned full-scan checkpoints, exact CAS page
   ownership, existing-message refresh, and atomic baseline replay (`ae36211`).
+- Added optimistic Inbox action removal/recovery, request-scoped idempotency,
+  keyboard Undo, partial-failure rollback, and actionable status UI
+  (`8f696d0`).
+- Added a generated local-only action harness and browser scenarios without
+  reading or mutating real mail (`55ed38c`).
+- Implemented the durable PostgreSQL action outbox, exact staged Undo,
+  per-email ordering, bounded Gmail/Redis I/O, sync overlay, visible failure
+  recovery, and authenticated idempotency reconciliation; the implementation
+  is verified locally and remains undeployed (`ee4fa19`).
+- Made list/table actions keyboard operable, moved 375px list and bulk targets
+  to at least 44px, prevented narrow-page overflow, and transferred real DOM
+  focus to the adjacent row after keyboard triage. Ambiguous submissions retain
+  their original queue position so newer same-email intent cannot overtake
+  confirmation (`a41a90d`).
 
 ## Verification
 
-- `make check`: 172 backend tests and 10 frontend tests passed; the frontend
-  production build passed with only the existing large-chunk advisory.
+- Latest `make check`: 215 backend tests passed, 4 disposable-PostgreSQL tests
+  skipped by default, and 35 frontend tests passed; the production build
+  passed with only the existing large-chunk advisory.
+- Forty-three generated durable-action tests cover every supported transition,
+  strict request validation, cross-account staging, idempotency, exact bulk
+  undo, retry, bounded lease recovery, canonical Gmail results, lock ordering,
+  credential failures, orphan recovery, worker registration, sync rebasing,
+  Gmail transport deadlines, bounded Redis publication, lost-response lookup,
+  and persistent failure visibility.
 - The 23 generated sync tests cover partial/malformed batches, poison-message
   rollback, monotonic high-waters, busy locks, stale checkpoint owners, legacy
   recovery, existing-message refresh, replay update/delete, expired baselines,
   and atomic completion.
-- Browser QA passed at 1440x900 and 390x844 with generated fixtures for Inbox
-  request races and received-attachment loading, failure/retry, download, table,
-  and mobile states.
-- Independent user and safety reviews reported no blocking findings. Generated
-  API action logs remained empty; no real mail mutation was performed.
+- A disposable PostgreSQL 17 cluster upgraded from the initial migration to
+  `z7a8b9c0d1e2`, downgraded one revision, and upgraded again. Four opt-in
+  two-session tests passed for concurrent idempotency, strict per-email
+  sequencing, mixed-ownership atomicity, and claim-versus-Undo races.
+- Browser QA passed with generated fixtures at 1280x720 and 375x844. The
+  375px page had no horizontal overflow; list and bulk actions measured at
+  least 44px. Two lost create responses plus lost lookup responses displayed
+  persistent confirmation, then reconciled by idempotent POST without
+  rollback. Desktop keyboard archive removed the row, opened the adjacent
+  message, and moved DOM focus to that adjacent row. Browser console errors:
+  none.
+- Independent user, safety, and worker reviews were completed; their lock-order,
+  bounded-lease, projection-reconciliation, and generated-fixture blockers were
+  addressed. Generated API action logs remained empty; no real mail mutation
+  was performed.
 - Python compilation and `git diff --check`: passed.
 
 ## Known Constraints and Risks
@@ -112,7 +144,13 @@ live state.
 - Opening an unread message currently marks it read. Production browser audits
   must therefore avoid opening real messages; mutation testing must use
   explicitly generated messages.
-- Real PostgreSQL lock/CAS interleavings are not yet integration-tested.
+- The sync-checkpoint suite still needs broader real-PostgreSQL CAS coverage;
+  the new mail-action interleavings now have focused two-session coverage.
+- The durable mail-action migration and worker are locally verified but not
+  deployed; no production database has the new table or column.
+- This product branch predates the separately owned AI-provider commits now on
+  `origin/main`. Do not rebase or resolve the shared worker registry until its
+  owner confirms the coordination point.
 - Failed full-sync attempts can commit new mail before a later page fails; the
   mail is retained safely, but durable notification/analysis handoff remains a
   follow-up.
@@ -121,6 +159,7 @@ live state.
 
 ## Next Safe Action
 
-Design and implement the durable action reconciliation/undo outbox with
-generated messages in this isolated worktree. Continue to avoid every file
-owned by the concurrent AI-model task.
+Preserve the reviewed, pushed product branch without rebasing it onto the
+separately owned AI work. On the next cycle, confirm the coordination point,
+then reconcile the shared worker registry and re-run all checks before any
+merge or explicitly authorized deployment.

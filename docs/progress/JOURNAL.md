@@ -3,6 +3,89 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Durable mail actions and recovery UX
+
+### Scope
+
+Replace best-effort inline Gmail mutations with an honest, durable backend
+contract for all current mail actions, using generated fixtures only.
+
+### Completed
+
+- Added an ordered per-email `mail_actions` outbox and
+  `emails.mail_action_version`, including ownership/idempotency identity,
+  immutable Gmail identity, exact before/after snapshots, label deltas,
+  staged undo deadlines, retry/lease state, sanitized errors, timestamps,
+  constraints, and worker/query indexes.
+- Replaced `POST /api/emails/actions` with strict 1–200 fully owned atomic
+  staging and added owned operation status, recent, undo, and retry routes.
+- Made repeated idempotency keys return the existing operation and reject
+  mismatched payloads; bulk undo is all-or-none and restores exact snapshots.
+- Refactored the account advisory lock into a shared helper used by sync and
+  action draining. The PostgreSQL drainer claims oldest-per-email due work with
+  `SKIP LOCKED`, one-attempt idempotent Gmail label changes, expiring leases,
+  bounded backoff, canonical response persistence, partial item results, and
+  per-account failure isolation.
+- Standardized mutable paths on Email-before-MailAction row locking, bounded
+  lease-expiry recovery at the attempt limit, reconciled failed action chains
+  without reviving later cancelled intent, and surfaced orphan/credential
+  failures as durable operation updates.
+- Added a deferred Redis wakeup plus periodic database sweeper so accepted work
+  does not depend on Redis delivery.
+- Added hard deadlines around mail-action Redis publication/enqueue and a
+  finite `httplib2` transport timeout for one-attempt Gmail mutations, so
+  post-commit best-effort I/O cannot hold an API response or account lock.
+- Added owned idempotency-key lookup for lost create responses and made the
+  bounded recent-operation query prioritize unresolved failures.
+- Added active-action overlay during sync upsert so Gmail refresh cannot erase
+  staged, processing, or retrying local intent.
+- Kept a lost create response optimistic and visibly pending, retried with the
+  same idempotency key, used an owned lookup as positive evidence only, and
+  continued idempotent POST confirmation when a lookup could not find the
+  operation. Overlapping actions serialize per email, an uncertain action
+  retains its queue position until confirmation, and rollback changes only its
+  own label delta.
+- Rebuilt normal list rows around separate native select, star, and open
+  buttons; added table keyboard activation, 44px mobile/bulk targets,
+  responsive bulk layout, and real adjacent-row DOM focus transfer.
+- Extended the generated local browser harness to simulate lost responses and
+  lost reconciliation lookups without touching Gmail or real mailbox data.
+- Documented the browser-session action API and recorded the durable ordering
+  decision.
+
+### Verification
+
+- `make check` passed 215 backend tests, 35 frontend tests, and the production
+  build with only the existing large-chunk advisory.
+- Forty-three generated action tests passed without network, credentials, real
+  mailbox data, or production access.
+- A disposable PostgreSQL 17 cluster upgraded from the initial schema through
+  the new head, downgraded the action revision, and upgraded it again. Four
+  opt-in two-session tests passed for concurrent idempotency, strict sequence
+  allocation, mixed-ownership atomicity, and claim-versus-Undo races. The
+  disposable cluster was stopped and moved to Trash after validation.
+- Generated browser QA passed at 1280x720 and 375x844. The narrow page had no
+  overflow and 44px list/bulk targets; the deliberately ambiguous response
+  state stayed visible until idempotent POST confirmation; desktop keyboard
+  archive moved DOM focus to the adjacent message. Saved screenshots contain
+  generated content only. Browser console errors: none.
+- Python compilation, harness syntax, and `git diff --check` passed.
+
+### Production Actions
+
+- None. No deploy, production migration, service restart, production write, or
+  real mailbox action was performed. The original AI checkout remained clean
+  and untouched.
+- Committed the durable backend as `ee4fa19` and the ordered recovery and
+  accessibility frontend as `a41a90d`; both were pushed to
+  `origin/codex/product-polish-cycle-1` without rebasing over the AI work.
+
+### Next
+
+Preserve this isolated pushed branch without rebasing over the separately owned
+AI-provider work. Coordinate the shared worker registry before merge, then
+repeat checks and deployment preflight only if deployment is explicitly asked.
+
 ## 2026-08-30 — Product safety cycle 2
 
 ### Scope
