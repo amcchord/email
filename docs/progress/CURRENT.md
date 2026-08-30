@@ -4,95 +4,87 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Complete and review confidential serial enrollment, per-device credential
-boundaries, and an E1001/E1002 hardware qualification plan on top of the now
-deployed fail-closed firmware gateway. Keep every browser write and OTA path
-disabled until physical recovery evidence exists.
+Release the default-locked secure terminal enrollment foundation, then add At a
+Glance as a first-class application route after the coordinated Durable Replies
+release clears the shared shell baseline. Keep browser Serial, device writes,
+firmware flashing, and OTA disabled until physical E1001/E1002 recovery evidence
+exists.
 
 ## Baseline
 
-- The exact reviewed/deployed Email application release is
-  `61e0ad8f47bd12dff07b7c0e695ea3f5680af7a4`; its deployment record is
-  `0c92e59bb47101f24a9c08afd692296cda8d47c0`. It includes the terminal gateway
-  runtime `69a5622659d39709a07334b04aa8f517a8b12728` unchanged.
-- Production Alembic is `e2f3a4b5c6d7 (head)`. Durable draft sessions own that
-  additive revision; future terminal schema work must branch from this exact
-  head rather than the prior `d1e2f3a4b5c6` baseline.
-- All seven checked production services are active, public health is `ok`, the
-  new frontend asset returns 200, and the replacement API and cron worker have
-  no post-start warning-or-higher entries or automatic restarts. The retired
-  API process required systemd's 90-second graceful-stop timeout before the
-  reviewed replacement started successfully.
-- Durable drafts passed 472 backend tests plus 21 opt-in PostgreSQL skips, 256
-  frontend tests, eight focused PostgreSQL tests, the full `e2 → d1 → e2`
-  migration cycle, generated-provider safety QA, and a 518-module production
-  build. Read-only production Compose QA produced no browser error and left all
-  three new draft tables empty.
-- The private firmware repository is cleanly released at
-  `1b5364e5d4b48666b3ecfd0cf8ba31ab7f4bd5c4`. GitHub Actions run
-  `33322241770` reproducibly built and strictly verified all three model
-  bundles; those artifacts remain explicitly unsigned, single-slot, and
-  non-installable.
-- The gateway application commit is `0fe2ef7`. Full combined validation passed:
-  459 backend tests plus 13 opt-in PostgreSQL skips, 221 frontend tests, and a
-  512-module local production build; the clean host build contained 514
-  modules. A final adversarial review found no P0-P2 issue.
-- Anonymous firmware catalog access returns 401. Signed-in Admin reports the
-  absent trust/catalog as unavailable, visibly lists all three unmet safety
-  gates, contains no installer buttons, and produced no browser warning/error
-  or permission prompt. The live policy includes `serial=(self)`.
+- GitHub `main` and clean production are exact
+  `931cd50b042f008125e2b1eafb7f65ca325b2305`; deployed application runtime is
+  `61e0ad8f47bd12dff07b7c0e695ea3f5680af7a4`, and the deployment record is
+  `0c92e59bb47101f24a9c08afd692296cda8d47c0`.
+- Production Alembic is `e2f3a4b5c6d7 (head)`. The terminal-only additive
+  revision is allocated as direct child `f3a4b5c6d7e8`; no parallel task uses a
+  migration.
+- All seven checked production services are active, public health is `ok`, and
+  production Git is clean. No secure-enrollment configuration, online key,
+  qualified release, credential, or terminal row exists in production.
+- Private firmware `main` is
+  `fd8671bd9a3641ecf9af37491bb8a00607dec4d6`
+  (`0.2.0-candidate.3`). Exact-main run `33329094948` passed its software gates;
+  generic bundles remain unkeyed, enrollment-disabled, and unqualified.
 
 This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
 
-## Active Work Item
+## Active Work Items
 
-### P1 — Secure serial enrollment implementation audit
+### P1 — Default-locked secure terminal enrollment release
 
-- State: active; private firmware candidate.3 is merged at
-  `fd8671bd9a3641ecf9af37491bb8a00607dec4d6`, while its exact-main keyed and
-  reproducibility run remains the release gate. No Email enrollment/API slice
-  or production enablement has started.
-- Scope: bounded `@RET1` NDJSON, P-256/ES256, HKDF-SHA256, directional
-  AES-256-GCM, transcript binding, monotonic generation, two-slot atomic
-  configuration, one-time persisted server tickets, credential
-  activation/rotation/revocation, and legacy-route isolation.
-- Acceptance: deterministic cross-language vectors and fault injection pass;
-  secrets never enter logs or persistence outside the device; power loss
-  always selects a complete old or new configuration; current firmware boot
-  behavior remains compatible; and no qualification flag changes.
-- Next: confirm the exact-main firmware run, add strict schema-2 manifest
-  support, then implement fail-closed server/browser RET1 enrollment from the
-  exact Email baseline recorded above. Obtain a physical E1001/E1002 for HIL
-  rather than claiming qualification from builds alone.
+- State: ready for release; implementation and independent review report no
+  remaining P0/P1, and deterministic PostgreSQL contention/lifecycle coverage
+  closes the final P2 test gap. The production migration/deployment has not run.
+- Scope: signed schema-2 RET1 release claims, protected independent online
+  P-256 identity, exact transcript/ticket validation, three-slot firmware
+  configuration, owner-scoped attempts, hashed per-device credentials,
+  device-check-in activation, same-owner pending legacy continuity, bounded
+  rollback, full revocation, log suppression, and locked Admin policy UI.
+- Acceptance: full application checks, exact migration cycle, deterministic
+  PostgreSQL lock/race tests, Caddy validation, secret/diff review, and
+  authenticated post-deploy read-only QA pass; production remains locked and
+  all new enrollment tables remain empty.
+- Next: commit/push the reviewed runtime, take and validate a production backup,
+  advance Alembic to `f3a4b5c6d7e8`, deploy, verify, and publish the exact
+  release record.
+
+### P1 — First-class At a Glance application destination
+
+- State: queued by explicit live-QA requirement; Settings currently owns only
+  the management section and does not satisfy the product-navigation contract.
+- Scope: authenticated app route, lazy route registration, primary desktop and
+  narrow-screen navigation, daily view/design/display experience, session
+  generation safety, and management links back to Settings.
+- Acceptance: At a Glance is discoverable and directly navigable like Flow,
+  Email, Calendar, and Todos; it uses the existing shared catalog/adapters and
+  preserves responsive, loading, empty, and error behavior.
+- Next: receive the exact Durable Replies GitHub/production SHA after this f3
+  release, rebase onto that shared-shell baseline, and implement the route in a
+  separate migration-free slice.
 
 ## Near-Term Terminal Queue
 
-- Complete the bounded `@RET1` Web Serial protocol using ephemeral P-256 ECDH,
-  HKDF-SHA256, AES-GCM, signed one-time enrollment tickets, and power-loss-safe
-  two-slot configuration.
-- Add owner-scoped per-device credentials after a new migration based on exact
-  `e2f3a4b5c6d7`; preserve legacy terminals while preventing enrolled devices
-  from reappearing through spoofable MAC auto-registration.
-- Run physical E1001/E1002 enrollment, interrupted-commit, preserve-config,
-  ROM-recovery, and browser qualification. No compatible serial device is
-  currently attached to the development host; E1004 remains blocked.
-- Remove firmware `setInsecure()`, establish trusted time and CA validation,
-  then design signed A/B OTA and automatic rollback as later milestones.
+- Run physical E1001/E1002 RET1 enrollment, interruption, three-slot selection,
+  pending legacy continuity, rollback grace, revocation, CA failure,
+  preserve-config, and ROM-recovery HIL. E1004 remains blocked.
+- Add the production Web Serial transport only after HIL; keep the pure
+  WebCrypto module outside the production import graph until then.
+- Replace firmware `setInsecure()`, establish trusted time and CA validation,
+  then design signed A/B OTA, pending-image validation, automatic rollback,
+  power gates, acknowledgements, cohorts, and rescue.
 
 ## Safety Constraints
 
-- The shipped browser installer has no serial request, artifact download,
-  erase, write, esptool, or dynamic flashing path. Its browser-signature,
-  secure-provisioning, and HIL gates remain fixed false.
-- Production defaults contain no trusted firmware public key, approved catalog,
-  positive generation floor, or browser-flash enablement. Do not stage or
-  enable a release as part of this deployment.
-- Firmware signing private keys remain offline and separate from the future
-  online enrollment-signing key. Never put either in Git, browser code, or the
-  artifact tree.
-- The merged private RET1 firmware candidate remains generic-bundle unkeyed,
-  disabled, and ineligible for hardware use until its exact-main run and later
-  physical qualification pass. It changed no Email production state, key,
-  signed release, or device.
-- Real production mail and calendars remain read-only during automated QA.
+- Production enrollment defaults are false/empty. Do not generate or stage the
+  online P-256 private key, signed schema-2 release, positive catalog generation,
+  or release/model HIL allowlist during the locked foundation deployment.
+- Firmware release signing stays offline and independent from the future online
+  enrollment key. Neither private key belongs in Git, browser code, artifacts,
+  application logs, or progress documents.
+- The shipped browser contains no serial request, Wi-Fi form, configuration
+  write, binary download, erase, esptool, or dynamic flashing path.
+- Physical cable observation is not hardware attestation. MAC, model, chip
+  revision, and firmware version are self-reported inventory fields.
+- Real production mail and calendars remain read-only during terminal QA.

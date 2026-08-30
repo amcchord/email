@@ -26,6 +26,8 @@
   import Button from '../components/common/Button.svelte';
   import AIModelsPanel from '../lib/admin/AIModelsPanel.svelte';
   import FirmwareInstaller from '../lib/admin/FirmwareInstaller.svelte';
+  import TerminalEnrollment from '../lib/admin/TerminalEnrollment.svelte';
+  import { revokeTerminalEnrollment } from '../lib/terminalEnrollmentApi.js';
   import Input from '../components/common/Input.svelte';
   import Icon from '../components/common/Icon.svelte';
 
@@ -821,6 +823,7 @@
   let terminalsLoaded = $state(false);
   let terminalsRefreshing = $state(false);
   let terminalRowSaving = $state({});
+  let terminalEnrollmentPanel = $state(null);
   let haUrlInput = $state('');
   let haTokenInput = $state('');
   let haSaving = $state(false);
@@ -1079,6 +1082,40 @@
       showToast('Terminal forgotten', 'success');
     } catch (err) {
       showToast(err.message, 'error');
+    }
+  }
+
+  function terminalEnrollmentCanBeRevoked(device) {
+    return Boolean(
+      device?.public_id
+      && (device.enrollment_state === 'enrolled' || device.enrollment_state === 'pending'),
+    );
+  }
+
+  async function revokeSecureTerminal(device) {
+    if (!terminalEnrollmentCanBeRevoked(device)) return;
+    const terminalLabel = device.name || device.mac || 'this terminal';
+    if (!confirm(
+      `Revoke secure access for "${terminalLabel}"? Its private device URL will stop working. `
+      + 'The terminal must be enrolled again through a browser-observed physical serial session.',
+    )) return;
+
+    terminalRowSaving = { ...terminalRowSaving, [device.id]: true };
+    try {
+      await revokeTerminalEnrollment(device.public_id);
+      if (!sessionIsCurrent()) return;
+      await Promise.all([
+        loadTerminals(),
+        terminalEnrollmentPanel?.refresh?.(),
+      ]);
+      if (!sessionIsCurrent()) return;
+      showToast('Secure terminal access revoked', 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      if (sessionIsCurrent()) {
+        terminalRowSaving = { ...terminalRowSaving, [device.id]: false };
+      }
     }
   }
 
@@ -1549,12 +1586,13 @@
           <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">At a Glance</h3>
           <p class="text-xs" style="color: var(--text-tertiary)">
             Put your day, dashboard, or clock on a browser display or a SeeedStudio reTerminal (E1001 / E1002 / E1004).
-            Browser displays use ready-to-open links; e-ink devices share one firmware URL and are identified by MAC address.
+            Browser displays use ready-to-open links. Legacy e-ink devices share one firmware URL and are labeled by their reported MAC; securely enrolled devices use a revocable per-device URL.
             See <code style="color: var(--text-secondary)">docs/terminal/</code> for the terminal protocol.
           </p>
         </div>
 
         <FirmwareInstaller />
+        <TerminalEnrollment bind:this={terminalEnrollmentPanel} />
 
         {#if !terminalSettingsLoaded}
           <div class="rounded-xl border p-5 text-xs" style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-tertiary)">Loading...</div>
@@ -1745,7 +1783,7 @@
           <div class="flex items-center justify-between mb-3">
             <div>
               <h4 class="text-sm font-semibold" style="color: var(--text-primary)">Checked-in devices</h4>
-              <p class="text-[11px] mt-0.5" style="color: var(--text-tertiary)">Devices auto-register on their first wake. "Forget" deletes the row; the device will reappear with default settings on its next check-in.</p>
+              <p class="text-[11px] mt-0.5" style="color: var(--text-tertiary)">Legacy devices auto-register on their first wake. Securely enrolled devices use a revocable per-device URL and cannot fall back to the shared code.</p>
             </div>
             <Button size="sm" onclick={refreshTerminals} disabled={terminalsRefreshing}>
               {terminalsRefreshing ? 'Refreshing…' : 'Refresh'}
@@ -1767,7 +1805,7 @@
                 {@const fieldsGridCols = einkFieldsGridCols(isEink)}
                 {@const battery = d.battery_health || null}
                 <div class="rounded-lg border p-4" style="background: var(--bg-primary); border-color: var(--border-color)">
-                  <!-- Header: name + variant + Forget -->
+                  <!-- Header: name + variant + credential action -->
                   <div class="flex items-start justify-between gap-3 mb-3">
                     <div class="flex-1 min-w-0">
                       <input
@@ -1783,6 +1821,7 @@
                       <div class="flex flex-wrap gap-x-3 gap-y-1 mt-1.5 text-[11px]" style="color: var(--text-tertiary)">
                         <span class="font-mono">{d.mac}</span>
                         <span>{d.variant || 'unknown variant'}</span>
+                        <span>{d.enrollment_state === 'legacy' ? 'legacy shared URL' : `secure · ${d.enrollment_state} · generation ${d.enrollment_generation}`}</span>
                         <span>last seen {formatRelative(d.last_seen_at)}</span>
                         {#if d.last_wake_reason}<span>wake: {d.last_wake_reason}</span>{/if}
                       </div>
@@ -1791,9 +1830,15 @@
                       <Button size="sm" onclick={() => openPreview(d)}>
                         Preview
                       </Button>
-                      <Button size="sm" variant="danger" onclick={() => deleteTerminal(d)}>
-                        Forget
-                      </Button>
+                      {#if d.enrollment_state === 'legacy'}
+                        <Button size="sm" variant="danger" onclick={() => deleteTerminal(d)}>
+                          Forget
+                        </Button>
+                      {:else if terminalEnrollmentCanBeRevoked(d)}
+                        <Button size="sm" variant="danger" onclick={() => revokeSecureTerminal(d)} disabled={saving}>
+                          {saving ? 'Revoking…' : 'Revoke access'}
+                        </Button>
+                      {/if}
                     </div>
                   </div>
 

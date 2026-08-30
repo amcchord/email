@@ -53,7 +53,7 @@ function model(name, options = {}) {
 
 function catalog() {
   return {
-    schema_version: 1,
+    schema_version: 2,
     installer_state: 'locked',
     browser_flash_enabled: false,
     trusted_key_ids: [KEY_ID],
@@ -63,7 +63,16 @@ function catalog() {
       firmware_version: '0.2.0',
       git_sha: GIT_SHA,
       source_date_epoch: 1788062400,
+      manifest_schema_version: 1,
       signing_key_id: KEY_ID,
+      serial_enrollment: {
+        protocol: 'RET1',
+        enabled: false,
+        trust_key_id: null,
+        public_key_sha256: null,
+        identity_strength: 'physical_cable_only',
+        attestation: false,
+      },
       manifest_url: `/api/terminal/firmware/releases/${RELEASE_ID}/manifest.json`,
       signature_url: `/api/terminal/firmware/releases/${RELEASE_ID}/manifest.sig`,
       models: [model('E1001'), model('E1002'), model('E1004')],
@@ -75,6 +84,73 @@ test('accepts a closed signed catalog with qualified E1001/E1002 metadata', () =
   const result = validateTerminalFirmwareCatalog(catalog());
   assert.equal(result.valid, true);
   assert.equal(result.catalog.releases[0].models.length, 3);
+});
+
+test('accepts normalized schema-two disabled and enabled RET1 evidence', () => {
+  const disabled = catalog();
+  disabled.releases[0].manifest_schema_version = 2;
+  assert.equal(validateTerminalFirmwareCatalog(disabled).valid, true);
+
+  const enabled = catalog();
+  enabled.releases[0].manifest_schema_version = 2;
+  enabled.releases[0].serial_enrollment = {
+    protocol: 'RET1',
+    enabled: true,
+    trust_key_id: 'terminal-enrollment-2026-01',
+    public_key_sha256: 'd'.repeat(64),
+    identity_strength: 'physical_cable_only',
+    attestation: false,
+  };
+  const result = validateTerminalFirmwareCatalog(enabled);
+  assert.equal(result.valid, true);
+  assert.equal(result.catalog.releases[0].serial_enrollment.enabled, true);
+});
+
+test('rejects RET1 enablement on a legacy schema-one manifest', () => {
+  const candidate = catalog();
+  candidate.releases[0].serial_enrollment.enabled = true;
+  candidate.releases[0].serial_enrollment.trust_key_id = 'terminal-enrollment-2026-01';
+  candidate.releases[0].serial_enrollment.public_key_sha256 = 'd'.repeat(64);
+
+  const result = validateTerminalFirmwareCatalog(candidate);
+
+  assert.equal(result.valid, false);
+  assert.match(result.errors.join(' '), /legacy manifest/i);
+});
+
+test('rejects malformed or ambiguous normalized RET1 evidence', () => {
+  const cases = [
+    enrollment => { enrollment.protocol = 'RET2'; },
+    enrollment => { enrollment.enabled = 1; },
+    enrollment => { enrollment.trust_key_id = 'bad key'; },
+    enrollment => { enrollment.public_key_sha256 = 'D'.repeat(64); },
+    enrollment => { enrollment.identity_strength = 'attested'; },
+    enrollment => { enrollment.attestation = true; },
+    enrollment => { enrollment.unexpected = true; },
+  ];
+
+  for (const mutate of cases) {
+    const candidate = catalog();
+    candidate.releases[0].manifest_schema_version = 2;
+    candidate.releases[0].serial_enrollment.enabled = true;
+    candidate.releases[0].serial_enrollment.trust_key_id = 'terminal-enrollment-2026-01';
+    candidate.releases[0].serial_enrollment.public_key_sha256 = 'd'.repeat(64);
+    mutate(candidate.releases[0].serial_enrollment);
+    assert.equal(validateTerminalFirmwareCatalog(candidate).valid, false);
+  }
+});
+
+test('rejects disabled RET1 evidence that retains either trust field', () => {
+  for (const field of ['trust_key_id', 'public_key_sha256']) {
+    const candidate = catalog();
+    candidate.releases[0].manifest_schema_version = 2;
+    candidate.releases[0].serial_enrollment[field] = field === 'trust_key_id'
+      ? 'terminal-enrollment-2026-01'
+      : 'd'.repeat(64);
+    const result = validateTerminalFirmwareCatalog(candidate);
+    assert.equal(result.valid, false);
+    assert.match(result.errors.join(' '), /declares trust material/i);
+  }
 });
 
 test('rejects unknown fields instead of silently widening the catalog contract', () => {

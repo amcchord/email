@@ -27,7 +27,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 CATALOG_NAME = "catalog.json"
 CATALOG_SIGNATURE_NAME = "catalog.sig"
 CATALOG_SCHEMA = 1
-MANIFEST_SCHEMA = 1
+CATALOG_RESPONSE_SCHEMA = 2
+SUPPORTED_MANIFEST_SCHEMAS = {1, 2}
 MAX_CATALOG_BYTES = 256 * 1024
 MAX_MANIFEST_BYTES = 512 * 1024
 MAX_ARTIFACT_BYTES = 8 * 1024 * 1024
@@ -168,16 +169,48 @@ class VerifiedModel:
 
 
 @dataclass(frozen=True)
+class VerifiedSerialEnrollment:
+    protocol: str
+    enabled: bool
+    trust_key_id: str | None
+    public_key_sha256: str | None
+    identity_strength: str
+    attestation: bool
+
+    def as_catalog_record(self) -> dict[str, Any]:
+        return {
+            "protocol": self.protocol,
+            "enabled": self.enabled,
+            "trust_key_id": self.trust_key_id,
+            "public_key_sha256": self.public_key_sha256,
+            "identity_strength": self.identity_strength,
+            "attestation": self.attestation,
+        }
+
+
+@dataclass(frozen=True)
 class VerifiedBundle:
     release_id: str
     signing_key_id: str
     firmware_version: str
     git_sha: str
     source_date_epoch: int
+    manifest_schema_version: int
+    serial_enrollment: VerifiedSerialEnrollment
     manifest_bytes: bytes
     signature_bytes: bytes
     payload_root: Path
     models: dict[str, VerifiedModel]
+
+
+LEGACY_SERIAL_ENROLLMENT = VerifiedSerialEnrollment(
+    protocol="RET1",
+    enabled=False,
+    trust_key_id=None,
+    public_key_sha256=None,
+    identity_strength="physical_cable_only",
+    attestation=False,
+)
 
 
 def _strict_json_equal(actual: Any, expected: Any) -> bool:
@@ -193,6 +226,66 @@ def _strict_json_equal(actual: Any, expected: Any) -> bool:
             for left, right in zip(actual, expected, strict=True)
         )
     return actual == expected
+
+
+def _validate_manifest_security(
+    schema_version: int,
+    security: Any,
+) -> VerifiedSerialEnrollment:
+    base_keys = {"signed", "ota_eligible", "reason"}
+    expected_keys = base_keys if schema_version == 1 else base_keys | {"serial_enrollment"}
+    if (
+        not isinstance(security, dict)
+        or set(security) != expected_keys
+        or security.get("signed") is not True
+        or security.get("ota_eligible") is not False
+        or not isinstance(security.get("reason"), str)
+    ):
+        raise FirmwareArtifactError("firmware security state is not browser-installable")
+    if schema_version == 1:
+        return LEGACY_SERIAL_ENROLLMENT
+
+    claim = security["serial_enrollment"]
+    expected_claim_keys = {
+        "protocol",
+        "enabled",
+        "trust_key_id",
+        "public_key_sha256",
+        "identity_strength",
+        "attestation",
+    }
+    if (
+        not isinstance(claim, dict)
+        or set(claim) != expected_claim_keys
+        or claim.get("protocol") != "RET1"
+        or type(claim.get("enabled")) is not bool
+        or claim.get("identity_strength") != "physical_cable_only"
+        or claim.get("attestation") is not False
+    ):
+        raise FirmwareArtifactError("firmware serial enrollment state is invalid")
+
+    enabled = claim["enabled"]
+    key_id = claim["trust_key_id"]
+    public_key_sha256 = claim["public_key_sha256"]
+    if enabled:
+        if (
+            not isinstance(key_id, str)
+            or KEY_ID_RE.fullmatch(key_id) is None
+            or not isinstance(public_key_sha256, str)
+            or SHA256_RE.fullmatch(public_key_sha256) is None
+        ):
+            raise FirmwareArtifactError("firmware serial enrollment trust key is invalid")
+    elif key_id is not None or public_key_sha256 is not None:
+        raise FirmwareArtifactError("disabled serial enrollment declares trust material")
+
+    return VerifiedSerialEnrollment(
+        protocol="RET1",
+        enabled=enabled,
+        trust_key_id=key_id,
+        public_key_sha256=public_key_sha256,
+        identity_strength="physical_cable_only",
+        attestation=False,
+    )
 
 
 def _read_json_bytes(raw: bytes, label: str) -> Any:
@@ -850,7 +943,11 @@ def _validate_bundle(
     }
     if not isinstance(manifest, dict) or set(manifest) != expected_root_keys:
         raise FirmwareArtifactError("firmware manifest root is invalid")
-    if type(manifest["schema_version"]) is not int or manifest["schema_version"] != 1:
+    manifest_schema_version = manifest["schema_version"]
+    if (
+        type(manifest_schema_version) is not int
+        or manifest_schema_version not in SUPPORTED_MANIFEST_SCHEMAS
+    ):
         raise FirmwareArtifactError("firmware manifest schema is unsupported")
     if (
         not isinstance(manifest["firmware_version"], str)
@@ -870,15 +967,10 @@ def _validate_bundle(
         raise FirmwareArtifactError("firmware chip or flash contract is invalid")
     if not isinstance(manifest["toolchain"], dict):
         raise FirmwareArtifactError("firmware toolchain metadata is invalid")
-    security = manifest["security"]
-    if (
-        not isinstance(security, dict)
-        or set(security) != {"signed", "ota_eligible", "reason"}
-        or security.get("signed") is not True
-        or security.get("ota_eligible") is not False
-        or not isinstance(security.get("reason"), str)
-    ):
-        raise FirmwareArtifactError("firmware security state is not browser-installable")
+    serial_enrollment = _validate_manifest_security(
+        manifest_schema_version,
+        manifest["security"],
+    )
 
     evidence = manifest["toolchain_evidence"]
     if not isinstance(evidence, dict) or set(evidence) != {"path", "size", "sha256"}:
@@ -963,6 +1055,8 @@ def _validate_bundle(
         firmware_version=manifest["firmware_version"],
         git_sha=manifest["git_sha"],
         source_date_epoch=manifest["source_date_epoch"],
+        manifest_schema_version=manifest_schema_version,
+        serial_enrollment=serial_enrollment,
         manifest_bytes=manifest_bytes,
         signature_bytes=signature,
         payload_root=payload_root,
@@ -998,7 +1092,7 @@ def build_firmware_catalog(
     blockers: list[str] = []
     if not trusted_keys:
         return {
-            "schema_version": 1,
+            "schema_version": CATALOG_RESPONSE_SCHEMA,
             "installer_state": "locked",
             "browser_flash_enabled": browser_flash_enabled,
             "trusted_key_ids": [],
@@ -1070,7 +1164,9 @@ def build_firmware_catalog(
                     "firmware_version": bundle.firmware_version,
                     "git_sha": bundle.git_sha,
                     "source_date_epoch": bundle.source_date_epoch,
+                    "manifest_schema_version": bundle.manifest_schema_version,
                     "signing_key_id": bundle.signing_key_id,
+                    "serial_enrollment": bundle.serial_enrollment.as_catalog_record(),
                     "manifest_url": (
                         f"/api/terminal/firmware/releases/{bundle.release_id}/manifest.json"
                     ),
@@ -1090,7 +1186,7 @@ def build_firmware_catalog(
     if not installable:
         blockers.append("No signed, browser-qualified firmware is installable.")
     return {
-        "schema_version": 1,
+        "schema_version": CATALOG_RESPONSE_SCHEMA,
         "installer_state": "ready" if installable else "locked",
         "browser_flash_enabled": browser_flash_enabled,
         "trusted_key_ids": sorted(trusted_keys),

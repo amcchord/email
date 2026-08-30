@@ -18,6 +18,8 @@ docs that together define the server contract:
   the 4 bpp 800×480 BMP byte layout.
 - **[`firmware-variants.md`](firmware-variants.md)** — wire-level spec
   for the BW (E1001), Gray, and 13.3" Spectra-6 (E1004) BMP layouts.
+- **[`secure-enrollment.md`](secure-enrollment.md)** — RET1 provisioning,
+  per-device path credentials, activation, rollback grace, and revocation.
 
 **Authoritative scope:** this document is the contract between the
 firmware and the server for the canonical Spectra-6 path. If something
@@ -51,10 +53,13 @@ GET <base>/schedule.json     # cheap metadata check-in, ~1 KB JSON
 GET <base>/image.bmp         # ~192 KB pre-dithered 4-bit BMP, only when changed
 ```
 
-Where `<base>` is `https://www.mcchord.net/trmnl/reTerminal/device`. The
-`schedule.json` response can advertise a different URL for the image (e.g.
-to point at a CDN); the firmware will follow whatever URL the schedule
-returns.
+Legacy deployments choose one shared `<base>`. Email currently uses
+`/terminal/{code}` for that compatibility path. A securely enrolled terminal
+instead receives the opaque base
+`/terminal/device/{public_id}/{credential}`. Both route families retain this
+version-1 schedule/BMP body contract; the scoped route changes authorization,
+not the render schema. The `schedule.json` response can advertise a different
+URL for the image, and firmware follows the exact URL returned.
 
 ### Why two endpoints?
 
@@ -89,8 +94,10 @@ work.
 ## 3. Device -> server (request headers)
 
 The device emits these headers on **every** request to **both** endpoints.
-Servers should treat any missing or unparseable header as "unknown" and
-still respond — a brand-new device must always be able to check in.
+Legacy servers may treat missing or unparseable telemetry as "unknown" and
+still respond. The secure route is stricter: `X-Device-MAC` must be present,
+normalized, and match the credential-bound device or the response is the same
+404 as any unknown credential.
 
 
 | Header              | Type / format                  | Example                 | Notes                                                                                                                             |
@@ -544,7 +551,10 @@ schedule advertised.
 - HTTPS with a publicly trusted certificate.
 - Stable response times under ~5s (firmware HTTP read timeout is 20s
 but anything > 5s eats battery for no reason).
-- No 401/403/429 in v1 (add auth in a coordinated firmware-side change).
+- A valid legacy route should not use 401/403 for missing optional telemetry.
+  A secure path credential uses uniform 404 for a wrong UUID, credential, MAC,
+  model/query, state, or rollback window. Rate limiting remains a bounded
+  availability guard.
 
 ---
 
@@ -582,7 +592,9 @@ breaking schema change behind a higher `schema_version`.
 The following are explicitly *not* in this protocol yet. Don't preemptively
 add support for them; they need a coordinated firmware-side change first.
 
-- Authentication / shared-secret headers.
+- Authentication headers. Secure enrollment uses a revocable path credential
+  because current firmware persists one schedule URL; see
+  [`secure-enrollment.md`](secure-enrollment.md).
 - OTA firmware updates.
 - Server-initiated push (the device is asleep; it can't be pushed to).
 - Multiple images / playlists in a single response (use one `image` object).
@@ -614,4 +626,3 @@ Headers from device (informational, never required):
   X-Boot-Count, X-Uptime-Sec, X-Battery-MV, X-Battery-Pct,
   X-RSSI-Dbm, X-Free-PSRAM, X-Last-Image-ETag, If-None-Match
 ```
-

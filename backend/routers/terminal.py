@@ -139,19 +139,29 @@ async def _upsert_device(
     variant: Variant,
     image_etag: Optional[str] = None,
 ) -> Optional[TerminalDevice]:
-    """Best-effort upsert of telemetry. Returns None when no usable MAC."""
+    """Best-effort legacy-device upsert. Returns ``None`` when MAC is unusable.
+
+    An enrolled, revoked, or review-held MAC is never resolved through the
+    shared per-user code again. During an owner-scoped pending enrollment, the
+    same owner's legacy URL remains usable so an interrupted serial write does
+    not strand the terminal. Another user's shared code still cannot claim it.
+    """
     h = request.headers
     mac = _normalize_mac(h.get("x-device-mac"))
     if not mac:
         return None
 
     result = await db.execute(
-        select(TerminalDevice).where(
-            TerminalDevice.user_id == user_id,
-            TerminalDevice.mac == mac,
-        )
+        select(TerminalDevice).where(TerminalDevice.mac == mac)
     )
-    device = result.scalar_one_or_none()
+    devices = list(result.scalars().all())
+    if any(
+        device.enrollment_state in {"enrolled", "revoked", "review"}
+        or (device.enrollment_state == "pending" and device.user_id != user_id)
+        for device in devices
+    ):
+        return None
+    device = next((device for device in devices if device.user_id == user_id), None)
     now = datetime.now(timezone.utc)
 
     if device is None:
@@ -166,6 +176,42 @@ async def _upsert_device(
         )
         db.add(device)
 
+    await _apply_device_telemetry(
+        db,
+        device=device,
+        request=request,
+        variant=variant,
+        now=now,
+        image_etag=image_etag,
+    )
+
+    try:
+        await db.commit()
+        await db.refresh(device)
+    except Exception:
+        logger.exception("Failed to upsert terminal device telemetry")
+        await db.rollback()
+        return None
+    return device
+
+
+async def _apply_device_telemetry(
+    db: AsyncSession,
+    *,
+    device: TerminalDevice,
+    request: Request,
+    variant: Variant,
+    now: datetime | None = None,
+    image_etag: Optional[str] = None,
+) -> None:
+    """Apply one terminal request's bounded telemetry without committing.
+
+    Secure enrollment needs telemetry and credential activation to share one
+    database transaction. Legacy callers retain their previous behavior by
+    committing immediately after this helper returns.
+    """
+    h = request.headers
+    now = now or datetime.now(timezone.utc)
     device.variant = variant.key
     device.last_seen_at = now
     device.last_wake_reason = (h.get("x-wake-reason") or "").strip()[:32] or device.last_wake_reason
@@ -190,49 +236,41 @@ async def _upsert_device(
     if image_etag:
         device.last_image_etag = image_etag[:128]
 
-    try:
-        # Flush first so a newly auto-registered device has an id. Battery
-        # sampling is deliberately sparse: meaningful changes plus a six-hour
-        # heartbeat, never duplicate schedule/image requests seconds apart.
-        await db.flush()
-        if battery_pct is not None or battery_mv is not None:
-            sample_result = await db.execute(
-                select(TerminalBatterySample)
-                .where(TerminalBatterySample.device_id == device.id)
-                .order_by(TerminalBatterySample.observed_at.desc())
-                .limit(1)
+    # Flush first so a newly auto-registered device has an id. Battery
+    # sampling is deliberately sparse: meaningful changes plus a six-hour
+    # heartbeat, never duplicate schedule/image requests seconds apart.
+    await db.flush()
+    if battery_pct is not None or battery_mv is not None:
+        sample_result = await db.execute(
+            select(TerminalBatterySample)
+            .where(TerminalBatterySample.device_id == device.id)
+            .order_by(TerminalBatterySample.observed_at.desc())
+            .limit(1)
+        )
+        latest_sample = sample_result.scalar_one_or_none()
+        if should_record_sample(
+            latest_sample,
+            observed_at=now,
+            battery_pct=battery_pct,
+            battery_mv=battery_mv,
+        ):
+            db.add(
+                TerminalBatterySample(
+                    device_id=device.id,
+                    observed_at=now,
+                    battery_pct=battery_pct,
+                    battery_mv=battery_mv,
+                    boot_count=boot_count,
+                )
             )
-            latest_sample = sample_result.scalar_one_or_none()
-            if should_record_sample(
-                latest_sample,
-                observed_at=now,
-                battery_pct=battery_pct,
-                battery_mv=battery_mv,
-            ):
-                db.add(
-                    TerminalBatterySample(
-                        device_id=device.id,
-                        observed_at=now,
-                        battery_pct=battery_pct,
-                        battery_mv=battery_mv,
-                        boot_count=boot_count,
-                    )
+            # The five-minute ingestion floor bounds short-term growth;
+            # this per-device cleanup bounds it over the long term.
+            await db.execute(
+                delete(TerminalBatterySample).where(
+                    TerminalBatterySample.device_id == device.id,
+                    TerminalBatterySample.observed_at < now - BATTERY_RETENTION,
                 )
-                # The five-minute ingestion floor bounds short-term growth;
-                # this per-device cleanup bounds it over the long term.
-                await db.execute(
-                    delete(TerminalBatterySample).where(
-                        TerminalBatterySample.device_id == device.id,
-                        TerminalBatterySample.observed_at < now - BATTERY_RETENTION,
-                    )
-                )
-        await db.commit()
-        await db.refresh(device)
-    except Exception:
-        logger.exception("Failed to upsert terminal device telemetry")
-        await db.rollback()
-        return None
-    return device
+            )
 
 
 # ── Endpoints ───────────────────────────────────────────────────────
@@ -338,7 +376,7 @@ async def schedule(
     inm = (request.headers.get("if-none-match") or "").strip()
     if inm and inm == schedule_etag:
         response.headers["ETag"] = schedule_etag
-        response.headers["Cache-Control"] = "no-cache"
+        response.headers["Cache-Control"] = "private, no-cache"
         return Response(status_code=304, headers=response.headers)
 
     now = datetime.now(timezone.utc)
@@ -376,7 +414,7 @@ async def schedule(
     }
 
     response.headers["ETag"] = schedule_etag
-    response.headers["Cache-Control"] = "no-cache"
+    response.headers["Cache-Control"] = "private, no-cache"
     response.headers["Content-Type"] = "application/json; charset=utf-8"
     return payload
 
@@ -410,7 +448,7 @@ async def image_bmp(
             status_code=304,
             headers={
                 "ETag": etag,
-                "Cache-Control": "no-cache",
+                "Cache-Control": "private, no-cache",
             },
         )
 
@@ -418,7 +456,7 @@ async def image_bmp(
         "Content-Type": "image/bmp",
         "Content-Length": str(len(body)),
         "ETag": etag,
-        "Cache-Control": "no-cache",
+        "Cache-Control": "private, no-cache",
     }
     return Response(content=body, status_code=200, headers=headers, media_type="image/bmp")
 

@@ -462,3 +462,46 @@ add a new entry that explicitly supersedes the old one.
   authoritative Undo deadline while a content-free tombstone finishes provider
   reconciliation. Public tokens cannot mutate or read draft detail, and a
   schema downgrade is an explicit data-loss operation.
+
+## D-026 — Terminal enrollment activates from device proof, not browser success
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Treat RET1 as confidential, server-authorized provisioning under
+  physical-cable observation, not hardware attestation. Approve enrollment only
+  when a signed schema-2 firmware claim, positive catalog generation, protected
+  independent online P-256 key, exact HTTPS origin, and explicit E1001/E1002
+  release/model HIL allowlist agree. Persist only credential/config hashes and
+  activate a candidate only on its first matching scoped HTTPS check-in. Keep
+  the same owner's shared route during first-enrollment interruption, retain
+  only the immediately previous generation for a 24-hour rollback grace, and
+  make all credential generations owner-revocable.
+- Reason: A browser result can be lost or forged, a MAC and open ESP32 ROM
+  downloader do not prove hardware identity, replacing the active credential
+  before connectivity is observed can strand a device, and an unrevocable URL
+  secret turns one leak into indefinite access.
+- Consequence: The browser completion event is advisory; enrolled and revoked
+  devices cannot fall back to a shared code; revocation requires qualified
+  physical re-enrollment; path secrets are suppressed at both Caddy and ASGI
+  logging boundaries; all state transitions use device-first PostgreSQL locks,
+  absent-row ownership uses an advisory lock plus partial unique index, and the
+  production transport remains absent until physical HIL passes. The online
+  enrollment key is never the offline firmware release key.
+
+## D-027 — At a Glance is a first-class application destination
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Give At a Glance its own authenticated application route and
+  primary navigation entry, comparable to Flow, Email, Calendar, and Todos.
+  Keep Settings as the management surface for device credentials, browser
+  display links, firmware policy, and destructive actions; the first-class page
+  is the everyday view/design/display experience.
+- Reason: Promoting e-ink and browser displays to a product feature requires a
+  discoverable daily destination. Renaming a Settings section leaves the
+  feature structurally hidden and does not satisfy that product contract.
+- Consequence: The route must use the shared catalog and adapters from D-020,
+  preserve session-generation isolation, work on desktop and narrow screens,
+  and integrate with lazy routes and primary navigation. It will land after the
+  coordinated Durable Replies release clears shared shell files; the secure
+  enrollment migration does not opportunistically modify those files.

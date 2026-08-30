@@ -23,6 +23,16 @@ class Settings(BaseSettings):
     terminal_firmware_trusted_signing_keys: str = "{}"
     terminal_firmware_minimum_catalog_generation: int = 0
     terminal_firmware_browser_flash_enabled: bool = False
+    # RET1 enrollment is an independent trust boundary from offline firmware
+    # release signing. Production defaults remain locked until an operator
+    # supplies an exact HTTPS base URL, an online P-256 key via a protected
+    # file, and a release/model HIL allowlist.
+    terminal_enrollment_enabled: bool = False
+    terminal_enrollment_base_url: str = ""
+    terminal_enrollment_signing_key_id: str = ""
+    terminal_enrollment_private_key_path: str = ""
+    terminal_enrollment_qualified_releases: str = "{}"
+    terminal_enrollment_ticket_ttl_seconds: int = 300
     brave_search_api_key: str = ""
     sync_interval_seconds: int = 60
 

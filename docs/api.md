@@ -1219,3 +1219,86 @@ return 404, a recognized but ineligible model returns 409, and missing,
 untrusted, stale-generation, or corrupt approved state returns a non-disclosing
 503. Catalog/metadata reads are limited to six per minute per client; artifact
 reads are limited to twelve.
+
+### Secure terminal enrollment foundation
+
+RET1 enrollment uses the authenticated browser session for owner intent and a
+separate per-device credential for later terminal check-ins. Public API tokens
+cannot call the enrollment APIs. The production browser surface remains
+transport-locked: it can inspect capabilities and revoke an existing secure
+credential, but it does not import the RET1 transport module, request a serial
+port, accept Wi-Fi values, flash, or erase.
+
+```text
+GET  /api/terminal/enrollment/capabilities
+POST /api/terminal/enrollment/intents
+POST /api/terminal/enrollment/intents/{attempt_id}/ticket
+POST /api/terminal/enrollment/intents/{attempt_id}/complete
+GET  /api/terminal/enrollment/intents/{attempt_id}
+POST /api/terminal/enrollment/devices/{public_id}/revoke
+
+GET /terminal/device/{public_id}/{credential}/schedule.json
+GET /terminal/device/{public_id}/{credential}/image.bmp
+```
+
+The capabilities read is session-authenticated and private. Intent, ticket,
+completion, and revocation writes additionally require a browser session
+cookie, an approved same-origin `Origin`, and a same-origin Fetch Metadata
+claim when the browser sends one. Intent and ticket UUIDs are idempotency keys;
+reusing one with different exact input returns 409. The server accepts only an
+exact RET1 status/hello/hello-ack transcript for a catalog-qualified E1001 or
+E1002 release and refuses E1004.
+
+Issuance remains fail-closed unless all of these agree:
+
+- the explicit server enablement flag and exact HTTPS origin;
+- a protected, process-owned P-256 online signing key and configured key ID;
+- a detached-signature-verified schema-2 firmware release whose RET1 public
+  key hash and key ID match that online identity;
+- a positive pinned catalog generation; and
+- an explicit release/model physical-HIL allowlist.
+
+The online ES256 enrollment key is independent of the offline Ed25519 firmware
+release key. Tickets last at most ten minutes (the configured default is five),
+use low-S raw `R || S` signatures, and bind the exact transcript hash, model,
+reported MAC, firmware version, opaque terminal UUID, next configuration
+generation, configuration SHA-256, operation, and one-time ticket ID. Physical
+cable observation is not hardware attestation: the MAC, model, chip revision,
+and firmware version remain self-reported inventory data.
+
+The browser creates a 32-byte URL credential and sends only its SHA-256 plus
+the configuration SHA-256 to the server. PostgreSQL stores only those hashes;
+the raw credential exists in the device configuration and subsequent scoped
+HTTPS path. The exact compact JWS is retained only so an identical ticket retry
+can receive the same signed result. Wi-Fi SSID/password and configuration JSON
+never enter an application request, database row, log, browser persistence, or
+artifact. The server authorizes the browser-supplied configuration hash; it
+cannot independently inspect the encrypted configuration or prove that its
+schedule URL matches the issued URL without a future RET1 protocol extension.
+The first-party browser builder therefore remains part of this trust boundary.
+
+Browser completion is advisory. A candidate credential becomes active only on
+the first matching scoped HTTPS check-in with the expected normalized MAC and
+model-specific query (`variant=bw` for E1001; no query for E1002). A pending
+first enrollment keeps only the same owner's legacy shared URL usable, so an
+interrupted serial write does not strand the terminal. Once active, the device
+cannot fall back to any shared URL. Re-enrollment keeps the existing active
+credential until the new candidate checks in; the immediately previous
+generation then remains a bounded rollback credential for 24 hours. Older
+generations are revoked. Owner revocation is row-locked and idempotently
+revokes candidate, active, and rollback credentials; a revoked terminal stays
+isolated from shared routing and requires a new qualified physical enrollment.
+
+The terminal UUID and credential are both required, unknown or mismatched
+devices return the same 404, and schedule/image responses are private and
+revalidated. Treat the scoped URL as a secret and do not paste it into support
+records. Caddy skips `/terminal/device/*` access logs, while an outer-scope ASGI
+redactor protects Uvicorn success and exception logs. Enrollment state changes
+use one PostgreSQL device-to-attempt-to-credential lock order; a transaction
+advisory lock and partial unique secure-MAC index serialize absent-row ownership
+claims. Migration `f3a4b5c6d7e8` adds this state without changing legacy
+terminal credentials; downgrade intentionally destroys enrollment audit and
+credential-hash state.
+
+The complete trust and recovery contract is in
+[`docs/terminal/secure-enrollment.md`](terminal/secure-enrollment.md).

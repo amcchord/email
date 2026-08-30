@@ -144,7 +144,12 @@ def _artifact_record(
     return record
 
 
-def stage_signed_bundle(root: Path) -> dict[str, Any]:
+def stage_signed_bundle(
+    root: Path,
+    *,
+    manifest_schema_version: int = 1,
+    serial_enrollment: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Stage one complete deterministic signed bundle and return test metadata."""
 
     evidence = b"generated deterministic toolchain evidence\n"
@@ -234,8 +239,22 @@ def stage_signed_bundle(root: Path) -> dict[str, Any]:
                 "files": files,
             }
         )
+    security: dict[str, Any] = {
+        "signed": True,
+        "ota_eligible": False,
+        "reason": "test fixture is detached-signed but single-slot",
+    }
+    if manifest_schema_version == 2:
+        security["serial_enrollment"] = serial_enrollment or {
+            "protocol": "RET1",
+            "enabled": False,
+            "trust_key_id": None,
+            "public_key_sha256": None,
+            "identity_strength": "physical_cable_only",
+            "attestation": False,
+        }
     manifest = {
-        "schema_version": 1,
+        "schema_version": manifest_schema_version,
         "firmware_version": "0.2.0-test.1",
         "git_sha": "1" * 40,
         "source_date_epoch": 1_700_000_000,
@@ -253,11 +272,7 @@ def stage_signed_bundle(root: Path) -> dict[str, Any]:
             "size": len(evidence),
             "sha256": _sha256(evidence),
         },
-        "security": {
-            "signed": True,
-            "ota_eligible": False,
-            "reason": "test fixture is detached-signed but single-slot",
-        },
+        "security": security,
         "models": models,
     }
     manifest_bytes = _json_bytes(manifest)
@@ -369,10 +384,20 @@ def test_signed_qualified_bundle_is_installable(tmp_path: Path):
 
     catalog = build_firmware_catalog(str(tmp_path), fixture["trusted_keys"], True, 1)
 
+    assert catalog["schema_version"] == 2
     assert catalog["installer_state"] == "ready"
     assert catalog["blockers"] == []
     release = catalog["releases"][0]
     assert release["release_id"] == fixture["release_id"]
+    assert release["manifest_schema_version"] == 1
+    assert release["serial_enrollment"] == {
+        "protocol": "RET1",
+        "enabled": False,
+        "trust_key_id": None,
+        "public_key_sha256": None,
+        "identity_strength": "physical_cable_only",
+        "attestation": False,
+    }
     by_model = {model["model"]: model for model in release["models"]}
     assert by_model["E1001"]["install_eligible"] is True
     assert by_model["E1002"]["install_eligible"] is True
@@ -387,6 +412,133 @@ def test_signed_qualified_bundle_is_installable(tmp_path: Path):
         "size": 0x400000,
     }
     assert "download_url" in by_model["E1001"]["artifacts"][0]
+
+
+def test_schema_two_disabled_enrollment_is_normalized(tmp_path: Path):
+    fixture = stage_signed_bundle(tmp_path, manifest_schema_version=2)
+
+    catalog = build_firmware_catalog(str(tmp_path), fixture["trusted_keys"], False, 1)
+
+    release = catalog["releases"][0]
+    assert release["manifest_schema_version"] == 2
+    assert release["serial_enrollment"] == {
+        "protocol": "RET1",
+        "enabled": False,
+        "trust_key_id": None,
+        "public_key_sha256": None,
+        "identity_strength": "physical_cable_only",
+        "attestation": False,
+    }
+
+
+def test_schema_two_enabled_enrollment_is_normalized(tmp_path: Path):
+    enrollment = {
+        "protocol": "RET1",
+        "enabled": True,
+        "trust_key_id": "terminal-enrollment-2026-01",
+        "public_key_sha256": "2" * 64,
+        "identity_strength": "physical_cable_only",
+        "attestation": False,
+    }
+    fixture = stage_signed_bundle(
+        tmp_path,
+        manifest_schema_version=2,
+        serial_enrollment=enrollment,
+    )
+
+    catalog = build_firmware_catalog(str(tmp_path), fixture["trusted_keys"], False, 1)
+
+    assert catalog["releases"][0]["serial_enrollment"] == enrollment
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("protocol", "RET2"),
+        ("enabled", 1),
+        ("trust_key_id", "bad key id"),
+        ("public_key_sha256", "A" * 64),
+        ("identity_strength", "attested"),
+        ("attestation", True),
+        ("unexpected", True),
+    ),
+)
+def test_schema_two_malformed_enrollment_fails_closed(
+    tmp_path: Path,
+    field: str,
+    value: Any,
+):
+    enrollment = {
+        "protocol": "RET1",
+        "enabled": True,
+        "trust_key_id": "terminal-enrollment-2026-01",
+        "public_key_sha256": "2" * 64,
+        "identity_strength": "physical_cable_only",
+        "attestation": False,
+    }
+    enrollment[field] = value
+    fixture = stage_signed_bundle(
+        tmp_path,
+        manifest_schema_version=2,
+        serial_enrollment=enrollment,
+    )
+
+    with pytest.raises(FirmwareCatalogUnavailable):
+        build_firmware_catalog(str(tmp_path), fixture["trusted_keys"], False, 1)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("trust_key_id", "unexpected-key"),
+        ("public_key_sha256", "2" * 64),
+    ),
+)
+def test_schema_two_disabled_enrollment_rejects_trust_material(
+    tmp_path: Path,
+    field: str,
+    value: str,
+):
+    fixture = stage_signed_bundle(tmp_path, manifest_schema_version=2)
+
+    def add_disabled_key(manifest, _payload_root):
+        manifest["security"]["serial_enrollment"][field] = value
+
+    _resign_manifest(fixture, add_disabled_key)
+
+    with pytest.raises(FirmwareCatalogUnavailable):
+        build_firmware_catalog(str(tmp_path), fixture["trusted_keys"], False, 1)
+
+
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_manifest_security_unknown_fields_fail_closed(
+    tmp_path: Path,
+    schema_version: int,
+):
+    fixture = stage_signed_bundle(
+        tmp_path,
+        manifest_schema_version=schema_version,
+    )
+
+    def add_unknown_field(manifest, _payload_root):
+        manifest["security"]["unexpected"] = True
+
+    _resign_manifest(fixture, add_unknown_field)
+
+    with pytest.raises(FirmwareCatalogUnavailable):
+        build_firmware_catalog(str(tmp_path), fixture["trusted_keys"], False, 1)
+
+
+def test_schema_two_requires_serial_enrollment_claim(tmp_path: Path):
+    fixture = stage_signed_bundle(tmp_path, manifest_schema_version=2)
+
+    def remove_enrollment_claim(manifest, _payload_root):
+        del manifest["security"]["serial_enrollment"]
+
+    _resign_manifest(fixture, remove_enrollment_claim)
+
+    with pytest.raises(FirmwareCatalogUnavailable):
+        build_firmware_catalog(str(tmp_path), fixture["trusted_keys"], False, 1)
 
 
 def test_global_gate_locks_downloads_without_hiding_verified_release(tmp_path: Path):
@@ -571,8 +723,15 @@ def test_corrupt_approved_entry_aborts_catalog_instead_of_returning_partial_resu
         build_firmware_catalog(str(tmp_path), fixture["trusted_keys"], True, 1)
 
 
-def test_signed_manifest_with_unsigned_security_claim_is_rejected(tmp_path: Path):
-    fixture = stage_signed_bundle(tmp_path)
+@pytest.mark.parametrize("manifest_schema_version", [1, 2])
+def test_signed_manifest_with_unsigned_security_claim_is_rejected(
+    tmp_path: Path,
+    manifest_schema_version: int,
+):
+    fixture = stage_signed_bundle(
+        tmp_path,
+        manifest_schema_version=manifest_schema_version,
+    )
 
     def mark_unsigned(manifest, _payload_root):
         manifest["security"]["signed"] = False

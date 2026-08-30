@@ -8,13 +8,13 @@ formats remain in [`firmware-variants.md`](firmware-variants.md).
 
 Baselines verified on 2026-08-30:
 
-- Email application release `0fe2ef7` for the authenticated firmware gateway
-  and locked browser surface;
+- Email application release `61e0ad8` as the production baseline before the
+  additive secure-enrollment foundation;
 - private `reterminal-color` `main` at
-  `1b5364e5d4b48666b3ecfd0cf8ba31ab7f4bd5c4`; and
-- GitHub Actions run `33322241770`, which built E1001, E1002, and E1004 twice,
-  proved byte-identical output, strictly verified the release manifest, and
-  uploaded the checksummed bundle.
+  `fd8671bd9a3641ecf9af37491bb8a00607dec4d6` (`0.2.0-candidate.3`); and
+- exact-main GitHub Actions run `33329094948`, which passed the candidate's
+  keyed RET1, cross-language, power-loss, reproducibility, manifest, and bundle
+  verification gates.
 
 ## Status today
 
@@ -22,7 +22,7 @@ Baselines verified on 2026-08-30:
 | --- | --- | --- |
 | USB build and flash | PlatformIO environments, pinned dependencies/toolchain evidence, exact per-model partitions, deterministic build metadata, and immutable checksummed bundles exist for E1001, E1002, and E1004. | Current artifacts truthfully declare `signed=false`; no browser may install them. Command-line PlatformIO/esptool remains the only qualified write path. |
 | Browser firmware gateway | Cookie-authenticated, rate-limited catalog/manifest/signature/artifact routes verify a signed approval catalog and every bundle byte from local immutable storage. | Production defaults contain no trusted key or approved catalog. The Admin surface is metadata-only and all three write gates are fixed false. |
-| Runtime configuration | Firmware reads `/config.json` from LittleFS without auto-formatting, keeps generic release images free of credentials, and emits redacted provisioning status. | Secure serial enrollment and atomic configuration rotation are the next milestone; current provisioning still uses command-line `uploadfs`. |
+| Runtime configuration | Candidate.3 implements bounded RET1 and three-slot atomic NVS configuration while keeping generic release images unkeyed, enrollment-disabled, and free of credentials. The application now has a fail-closed policy, intent/ticket API, hashed per-device credentials, activation, bounded rollback, and revocation. | Production has no online enrollment key or qualified release/model allowlist, and the shipped browser does not import serial transport. Command-line `uploadfs` remains the only hardware workflow until HIL passes. |
 | Application partitions | Explicit single-slot layouts and exact protected NVS/LittleFS ranges are release-verified. Normal preserve-config artifacts cannot overlap either range. | There is no second application slot, so safe A/B OTA and automatic rollback remain impossible. |
 | Device check-in | Firmware reports bounded model, build, wake, battery, RSSI, memory, boot, and image metadata. The server stores sparse bounded battery history and gives conservative charge guidance. | MAC and the legacy shared terminal URL are routing data, not device authentication. Charging inference is not a write-safety proof. |
 | TLS and OTA | No update transport is enabled. Firmware continues to fetch only schedule JSON and BMP images. | Runtime HTTPS still uses `setInsecure()`, and there is no A/B updater, acknowledgement, rollout, or boot rollback. OTA remains blocked. |
@@ -189,6 +189,9 @@ another explicitly named USB migration, not an ordinary OTA.
 
 ### Confidential, server-authorized serial enrollment
 
+The implemented Email-side contract, state machine, and production enablement
+checklist are maintained in [`secure-enrollment.md`](secure-enrollment.md).
+
 After the generic image boots, the installer reopens the same CH340 serial
 port and speaks bounded newline-delimited frames prefixed with `@RET1 `. Normal
 diagnostic lines remain separate and must never contain credentials. The target
@@ -206,11 +209,13 @@ transactional ticket consumption to the server. SSID/password values never
 enter a URL, server log, artifact, analytics system, or browser persistence.
 
 Firmware verifies the signed ticket before decrypting. It stages configuration
-into one of two compact NVS slots, commits and reads it back, then publishes a
-new marker only after full schema/hash validation. Boot selects the highest
-valid generation. An interrupted commit therefore yields the complete old or
-new record, never a partial configuration. Rollback to the retained older blob
-requires a fresh signed ticket with a higher anti-replay generation.
+into one of three compact NVS slots, commits and reads it back, then publishes a
+new marker only after full schema/hash validation. Three slots preserve the
+active and immediate rollback records while a later transition is staged. Boot
+selects the highest valid generation. An interrupted commit therefore yields a
+complete retained record, never a partial configuration. A durable device-side
+rollback still requires a fresh signed ticket with a higher anti-replay
+generation; the server's old scoped URL is only a bounded recovery grace.
 
 The ESP32 factory MAC, optional eFuse UID, chip revision, and flash ID are
 inventory identifiers, not attestation. Current devices have no Secure Boot,
@@ -219,12 +224,14 @@ open. This milestone must be described as confidential, server-authorized
 enrollment under physical-cable trust—not proof of genuine hardware or approved
 firmware. Manufacturing-grade identity is a separate irreversible project.
 
-The existing shared terminal code remains a legacy route credential. Securely
-enrolled devices require a distinct per-device credential and must not be
-upserted or reassigned through a spoofable MAC on that legacy path. Server-side
-ticket consumption, credential activation/rotation, revocation, and the new
-device-authenticated routes remain blocked until their post-`d1e2f3a4b5c6`
-migration and hardware-in-loop tests are complete.
+The existing shared terminal code remains a legacy route credential. A pending
+first enrollment preserves that route only for the same owner so an interrupted
+serial write does not strand the device. Enrolled and revoked devices require a
+distinct per-device credential and cannot be upserted or reassigned through a
+spoofable MAC on the legacy path. Migration `f3a4b5c6d7e8` implements the
+server state, activation, bounded one-generation rollback URL, and owner
+revocation, but production enablement and browser transport remain blocked on
+physical E1001/E1002 HIL.
 
 ## TLS and device-side update sequence
 
@@ -416,10 +423,12 @@ device that has the immediately previous production partition layout.
    application verifies a signed, generation-pinned, one-release catalog and
    exact bundle contents behind cookie auth and rate limits. The browser audits
    metadata only; it cannot request a port, download, erase, or write.
-3. **Secure serial enrollment and HIL qualification — active:** finish the
-   `@RET1` P-256/AES-GCM protocol, atomic two-slot configuration, one-time
-   server tickets, per-device credential lifecycle, CA validation, and a
-   repeatable E1001/E1002 interruption/recovery matrix. E1004 stays locked.
+3. **Secure serial enrollment and HIL qualification — active:** the bounded
+   `@RET1` P-256/AES-GCM protocol, three-slot configuration, schema-2 release
+   claim, fail-closed server tickets, per-device activation, rollback grace,
+   and revocation now have deterministic software tests. CA validation,
+   production Web Serial transport, and the repeatable physical E1001/E1002
+   interruption/recovery matrix remain. E1004 stays locked.
 4. **Browser first install:** add a pinned flashing implementation only after
    browser-side signature verification and milestone 3 pass. Flash exact
    preserve-config artifacts, verify ROM-loader output and rebooted identity,

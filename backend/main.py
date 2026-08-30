@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from backend.config import get_settings
 from backend.database import engine, Base
 from backend.middleware.compose_body_limit import ComposeSendBodyLimitMiddleware
+from backend.middleware.sensitive_terminal_path import SensitiveTerminalPathMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from backend.routers import (
@@ -24,6 +25,7 @@ from backend.routers import (
     public_api,
     terminal,
     terminal_admin,
+    terminal_enrollment,
     terminal_firmware,
     todos,
 )
@@ -77,6 +79,7 @@ app = FastAPI(
 app.state.limiter = auth.limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(ComposeSendBodyLimitMiddleware)
+app.add_middleware(SensitiveTerminalPathMiddleware)
 
 # CORS
 origins = [o.strip() for o in settings.allowed_origins.split(",")]
@@ -101,6 +104,7 @@ app.include_router(calendar.router)
 app.include_router(events.router)
 app.include_router(public_api.router)
 app.include_router(terminal_admin.router)
+app.include_router(terminal_enrollment.router)
 app.include_router(terminal_firmware.router)
 app.include_router(terminal.router)
 

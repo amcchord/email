@@ -145,9 +145,14 @@ class BatteryHealthResponse(BaseModel):
 
 class TerminalDeviceResponse(BaseModel):
     id: int
+    public_id: str
     mac: str
     name: str
     variant: Optional[str]
+    hardware_model: Optional[str] = None
+    enrollment_state: str
+    enrollment_generation: int
+    last_secure_checkin_at: Optional[datetime] = None
     content_type: str
     content_config: Optional[dict] = None
     refresh_interval_sec: Optional[int] = None
@@ -318,9 +323,14 @@ def _serialize_device(
         health = estimate_battery_health([synthetic], now=now)
     return TerminalDeviceResponse(
         id=d.id,
+        public_id=str(d.public_id),
         mac=d.mac,
         name=d.name or "",
         variant=d.variant,
+        hardware_model=d.hardware_model,
+        enrollment_state=d.enrollment_state or "legacy",
+        enrollment_generation=d.enrollment_generation or 0,
+        last_secure_checkin_at=d.last_secure_checkin_at,
         content_type=d.content_type or "clock",
         content_config=d.content_config,
         refresh_interval_sec=d.refresh_interval_sec,
@@ -581,15 +591,29 @@ async def delete_device(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        delete(TerminalDevice).where(
+    device_result = await db.execute(
+        select(TerminalDevice).where(
             TerminalDevice.id == device_id,
             TerminalDevice.user_id == user.id,
         )
     )
-    await db.commit()
-    if result.rowcount == 0:
+    device = device_result.scalar_one_or_none()
+    if device is None:
         raise HTTPException(status_code=404, detail="Device not found")
+    if device.enrollment_state != "legacy":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Securely enrolled terminals cannot be forgotten while their "
+                "credential history exists. Revoke secure access instead."
+            ),
+        )
+    result = await db.execute(
+        delete(TerminalDevice).where(TerminalDevice.id == device.id)
+    )
+    await db.commit()
+    if result.rowcount != 1:
+        raise HTTPException(status_code=409, detail="Device changed while being forgotten")
     return None
 
 

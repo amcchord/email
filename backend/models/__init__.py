@@ -12,6 +12,8 @@ from backend.models.settings import Setting
 from backend.models.terminal import (
     TerminalBatterySample,
     TerminalDevice,
+    TerminalDeviceCredential,
+    TerminalEnrollmentAttempt,
     TerminalSettings,
     TerminalWebDisplay,
 )
@@ -37,6 +39,8 @@ __all__ = [
     "ApiToken",
     "TerminalSettings",
     "TerminalDevice",
+    "TerminalDeviceCredential",
+    "TerminalEnrollmentAttempt",
     "TerminalBatterySample",
     "TerminalWebDisplay",
     "DashboardSnippet",

@@ -162,7 +162,8 @@ def test_draft_models_routes_migration_and_worker_are_complete():
     scripts = ScriptDirectory.from_config(config)
     revision = scripts.get_revision("e2f3a4b5c6d7")
     assert revision.down_revision == "d1e2f3a4b5c6"
-    assert scripts.get_heads() == ["e2f3a4b5c6d7"]
+    assert scripts.get_revision("f3a4b5c6d7e8").down_revision == "e2f3a4b5c6d7"
+    assert scripts.get_heads() == ["f3a4b5c6d7e8"]
 
     assert drain_draft_sessions_task in CronWorkerSettings.functions
     assert any(job.coroutine is drain_draft_sessions_task for job in CronWorkerSettings.cron_jobs)

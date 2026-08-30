@@ -204,6 +204,41 @@ function validateArtifacts(release, model, protectedRanges, errors, prefix) {
   }
 }
 
+function validateSerialEnrollment(release, errors) {
+  const prefix = `Release ${releaseLabel(release)} serial enrollment`;
+  const enrollment = release.serial_enrollment;
+  if (!hasExactKeys(enrollment, [
+    'protocol',
+    'enabled',
+    'trust_key_id',
+    'public_key_sha256',
+    'identity_strength',
+    'attestation',
+  ])) {
+    errors.push(`${prefix} has an invalid schema.`);
+    return;
+  }
+  if (![1, 2].includes(release.manifest_schema_version)
+    || enrollment.protocol !== 'RET1'
+    || typeof enrollment.enabled !== 'boolean'
+    || enrollment.identity_strength !== 'physical_cable_only'
+    || enrollment.attestation !== false) {
+    errors.push(`${prefix} has an invalid trust state.`);
+    return;
+  }
+  if (release.manifest_schema_version === 1 && enrollment.enabled) {
+    errors.push(`${prefix} cannot enable RET1 from a legacy manifest.`);
+  }
+  if (enrollment.enabled) {
+    if (!IDENTIFIER_PATTERN.test(enrollment.trust_key_id)
+      || !SHA256_PATTERN.test(enrollment.public_key_sha256)) {
+      errors.push(`${prefix} has invalid trust-key evidence.`);
+    }
+  } else if (enrollment.trust_key_id !== null || enrollment.public_key_sha256 !== null) {
+    errors.push(`${prefix} is disabled but still declares trust material.`);
+  }
+}
+
 function validateModel(release, model, trustedKeyIds, errors) {
   const prefix = `Release ${releaseLabel(release)} model ${model?.model || 'unknown'}`;
   if (!hasExactKeys(model, [
@@ -268,7 +303,9 @@ function validateRelease(release, trustedKeyIds, errors) {
     'firmware_version',
     'git_sha',
     'source_date_epoch',
+    'manifest_schema_version',
     'signing_key_id',
+    'serial_enrollment',
     'manifest_url',
     'signature_url',
     'models',
@@ -286,6 +323,7 @@ function validateRelease(release, trustedKeyIds, errors) {
   if (!trustedKeyIds.has(release.signing_key_id)) {
     errors.push(`Release ${releaseLabel(release)} uses an untrusted signing key.`);
   }
+  validateSerialEnrollment(release, errors);
   const expectedManifest = `/api/terminal/firmware/releases/${release.release_id}/manifest.json`;
   const expectedSignature = `/api/terminal/firmware/releases/${release.release_id}/manifest.sig`;
   if (release.manifest_url !== expectedManifest || release.signature_url !== expectedSignature) {
@@ -318,7 +356,7 @@ export function validateTerminalFirmwareCatalog(catalog) {
   ])) {
     return { valid: false, errors: ['Firmware catalog schema is invalid.'], catalog: null };
   }
-  if (catalog.schema_version !== 1
+  if (catalog.schema_version !== 2
     || !['locked', 'ready'].includes(catalog.installer_state)
     || typeof catalog.browser_flash_enabled !== 'boolean'
     || !isUniqueSafeStringArray(catalog.trusted_key_ids, IDENTIFIER_PATTERN)

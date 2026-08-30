@@ -50,6 +50,10 @@ email.mcchord.net {
     }
 
     # Logging
+    # Secure terminal credentials are path-bound because the current firmware
+    # cannot send an Authorization header. Never persist those request paths in
+    # the access log. Application logs likewise avoid rendering request URLs.
+    log_skip /terminal/device/*
     log {
         output file /var/log/caddy/mail.log
         format console
