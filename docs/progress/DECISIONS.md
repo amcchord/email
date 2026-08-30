@@ -328,3 +328,37 @@ add a new entry that explicitly supersedes the old one.
   boundaries; Reload remains a cache read; Sync captures one target set and
   requires server-observed progress for all targets; and uncertain/out-of-
   window empty states must use saved-data language with a recovery path.
+
+## D-020 — At a Glance separates content catalogs from delivery adapters
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Define views, designs, and display profiles in one catalog, and
+  require explicit device and browser renderer registrations for every catalog
+  content type. Preserve current visual designs through canonical raster
+  adapters while allowing future native-HTML adapters behind the same view
+  contract.
+- Reason: Independent hard-coded lists and renderer fallbacks make new designs
+  easy to expose without a working output path. Browser delivery should not
+  fork the product model or silently diverge from e-ink output.
+- Consequence: A new content type must add catalog metadata and both required
+  renderer registrations before startup succeeds. Current browser pages are
+  exact-aspect HTML shells around canonical PNG frames; a native reflow is an
+  explicit adapter change, not an accidental rewrite of the existing art.
+
+## D-021 — Browser displays and firmware updates use separate trust scopes
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Give each browser display a high-entropy, revocable credential
+  bound server-side to one view/design/profile. Keep firmware routing separate,
+  and require future firmware installation and OTA to consume immutable
+  per-model artifacts with hashes, signatures, exact variant/layout gates,
+  CA-validated transport, A/B rollback, and per-device authentication.
+- Reason: Reusing the firmware route secret lets one leaked display link expose
+  every private view, while unauthenticated single-slot updates cannot fail
+  safely or prove artifact/model identity.
+- Consequence: Rotating a display invalidates only that URL. Firmware-code
+  rotation does not disturb browser displays. Browser flashing and OTA remain
+  blocked until their release, recovery, enrollment, power, and rollout gates
+  are implemented and hardware-qualified.

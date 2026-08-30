@@ -3,6 +3,54 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — At a Glance platform candidate
+
+### Scope
+
+Promote e-ink terminals into an extensible At a Glance platform with 16:9 and
+9:16 browser delivery, robust battery guidance, isolated display credentials,
+and a safe firmware-management path while preserving the concurrent Calendar
+release.
+
+### Completed
+
+- Centralized view, design, profile, device-renderer, and web-renderer
+  registration; added exact-size fullscreen HTML/PNG adapters alongside the
+  existing BMP protocol.
+- Added individually rotatable browser credentials bound to one catalog
+  combination, leaving the firmware code and other display links unchanged.
+- Added bounded sparse battery history, stale/partial telemetry handling,
+  conservative runtime prediction, charge notices, and Admin presentation.
+- Promoted the Admin section and documentation to At a Glance, including
+  ready-to-open browser display cards and scoped link rotation.
+- Documented the inspected firmware baseline and gated path through Web Serial,
+  local provisioning, CA validation, per-device trust, signed A/B OTA, staged
+  rollout, rollback, and rescue. The dirty firmware checkout was not modified.
+- Coordinated with and rebased twice after the Calendar task; both Calendar and
+  terminal additions remain present in `docs/api.md`.
+
+### Verification
+
+- Post-final-rebase `make check`: 387 backend passed, 4 opt-in PostgreSQL tests
+  skipped, 156 frontend passed, and the 504-module production build completed.
+- Focused terminal/display/battery tests: 91 passed. Compile/import lint and
+  `git diff --check` passed.
+- Disposable PostgreSQL 17 upgrade/downgrade/re-upgrade rehearsal passed for
+  both new revisions and verified their tables and indexes.
+- Generated browser QA confirmed exact no-overflow 1280×720 and 720×1280
+  delivery. Existing artwork was preserved without cropping or distortion.
+
+### Production Actions
+
+- None yet. Calendar is clean and healthy on production at `a2c02bf`; this
+  candidate has not been pushed, migrated, or deployed.
+
+### Next
+
+Push the reviewed candidate, take a protected database backup, deploy the exact
+release, apply the additive migrations, rebuild the frontend, restart only
+`mailapp`, and record post-deploy evidence.
+
 ## 2026-08-30 — Calendar state-integrity candidate
 
 ### Scope

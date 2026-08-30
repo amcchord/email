@@ -4,100 +4,82 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-User-test the deployed Calendar state-integrity release without touching the
-separately owned At a Glance/terminal or AI-provider work. Application commit
-`bbf96b327650b243cf50ae4d6c1707f12b08ad8c` and release record
-`b6cfd9870fb2d3813c52b14ad1005493fbabb1d2` are live and healthy.
+Deploy the first At a Glance platform milestone: shared e-ink/browser views,
+scoped 16:9 and 9:16 browser links, terminal battery-life guidance, and an
+extensible renderer catalog. Browser flashing and managed OTA remain the next
+firmware milestones, not capabilities claimed by this release.
 
 ## Baseline
 
-- Production and GitHub `main` include Calendar release
-  `b6cfd9870fb2d3813c52b14ad1005493fbabb1d2` with application commit
-  `bbf96b327650b243cf50ae4d6c1707f12b08ad8c`. The production frontend was
-  rebuilt from the release and only `mailapp` restarted. Public health is `ok`
-  and all seven checked services are active.
-- The Calendar release is isolated in
-  `/Users/austinmcchord/Development/Email-calendar-state-integrity` on
-  `codex/calendar-state-integrity`.
-- The concurrent At a Glance task owns the terminal routers/models/services,
-  Admin UI, two terminal Alembic revisions, terminal documentation, and an
-  overlapping `docs/api.md` addition. Its owner will preserve both API sections
-  while rebasing after this release.
-- This Calendar release contains no migration, dependency-lock, worker,
-  terminal/e-ink, AI-provider, Caddy/systemd, or production-configuration work.
-  The rollback code point is `aa91430`.
-- A validated 1.38 GB custom-format backup remains protected at
-  `/var/backups/mailapp/maildb-pre-product-polish-20260830T1031Z.dump`, mode
-  `0600`, owned by `postgres`. This release does not change the schema.
+- GitHub `main` and production are clean, healthy, and exact at Calendar
+  closeout `a2c02bfcf62f0147209b365cdb918cb915d2a762`; all seven checked
+  services are active.
+- The rebased At a Glance application commit is
+  `4c5a1febe7ba6508c74e51c1a950f7fb5ca9f124`; the firmware roadmap commit is
+  `1359a24671d3a738dfcf64b08238562b703663c9`.
+- The release adds two Alembic revisions after current production head
+  `z7a8b9c0d1e2`: sparse battery history, then scoped browser-display
+  credentials. Both are additive; old application code ignores the new tables.
+- The sibling `reTerminalColor` checkout remains intentionally untouched. Its
+  dirty working tree and single-slot, insecure-TLS baseline are not suitable
+  release artifacts.
 
 This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
 
-## Calendar Release Scope
+## Release Scope
 
-- Every view/account/timezone/range owns an immutable request identity.
-  Superseded reads abort and late completions cannot overwrite the visible
-  dataset or its loading/error state.
-- Account authority is generation-scoped across login, logout, polling,
-  unmount, retry, and same-document re-login. Calendar distinguishes account
-  discovery from freshness/status reads.
-- Empty results are described as verified only when every visible calendar has
-  a successful full-sync window covering the displayed range. Unknown,
-  disconnected, partial, stale, syncing, failed, and outside-window states use
-  honest saved-data copy and recovery actions.
-- Reload reads the local cache; Sync starts Google ingestion and monitors the
-  exact submitted account set. Completion requires every target to reach a
-  terminal/fresh state, and timeout copy only says “still running” when the
-  final status response says a target is currently syncing.
-- API date boundaries are local-date, DST-correct, half-open intervals. Timed
-  and all-day events ending exactly at the lower boundary are excluded.
-- Cross-midnight events render on every overlapping local day, including
-  midnight-clipped and full-middle-day segments. Google all-day exclusive ends
-  display correctly, and overnight details show both dates.
-- Desktop and exact-375 layouts expose account scope, timezone, responsive
-  Day/Month views, 44 px controls, accessible view/filter state, and a proper
-  focus-trapped event dialog.
+- One shared catalog defines Home, Day Ahead, and Clock views; Editorial and
+  Swiss designs; and landscape 16:9 / portrait 9:16 profiles. Device and web
+  renderer registries fail startup when a catalog content type lacks an
+  adapter.
+- Fullscreen browser pages preserve the existing designs through canonical PNG
+  frames at exact 1280×720 or 720×1280 geometry. Browser credentials are
+  high-entropy, bound server-side to one exact view/design/profile,
+  private-cache protected, and individually rotatable without changing
+  firmware URLs.
+- The Admin screen promotes terminals to At a Glance, exposes ready-to-open
+  display cards and link rotation, and keeps existing firmware/device controls.
+- Sparse battery history has a five-minute ingestion floor and 90-day
+  per-device retention cleanup. Predictions require a credible discharge
+  window; stale telemetry and uncertain charging stay explicit, and critical
+  charge notices take precedence.
+- The firmware roadmap specifies immutable per-model artifacts, Web Serial
+  first install, local-only provisioning, CA validation, device enrollment,
+  signed A/B OTA, rollback, staged rollout, and rescue gates.
 
 ## Verification State
 
-- `make check`: 341 backend tests passed, 4 opt-in PostgreSQL tests skipped,
-  156 frontend tests passed, and the 506-module production frontend built.
-- Focused Calendar/account tests cover DST 23/25-hour ranges, exact boundary
-  exclusion, month-grid ranges, stale response ordering, account-generation
-  ABA races, retry recovery, sync target completion, coverage windows,
-  exclusive all-day ends, and midnight/full-day geometry.
-- Generated in-app browser QA covers loading, populated, verified empty,
-  outside-window empty, failure/retry, disconnected/partial, unavailable
-  status, slow account overlap, DST boundaries, reauthorization, event dialog,
-  desktop, and exact 375×812 layouts.
-- Fresh audit evidence contains only generated `.example.test` identities,
-  exact expected Calendar GETs, zero accepted mutations, and zero unknown
-  routes. The boundary day returned only IDs 9301–9304 and excluded exact
-  lower/upper-boundary fixtures.
-- Independent architecture, competitive UX, and QA release gates report no
-  remaining P0/P1 blockers.
-- Production Git is clean; `/api/health`, `/`, and the exact new Calendar asset
-  return 200; the Calendar route is loaded and returns the expected 401 without
-  a session; all seven services are active; the five checked application-edge
-  restart counters are zero; Alembic remains `z7a8b9c0d1e2 (head)`; and the new
-  `mailapp` process has zero warning-or-higher entries.
+- Post-rebase `make check`: 387 backend tests passed, 4 opt-in PostgreSQL tests
+  skipped, 156 frontend tests passed, and the 504-module production frontend
+  built.
+- Focused terminal/display/battery/renderer coverage: 91 passed.
+- Disposable PostgreSQL 17 rehearsal upgraded through both new revisions,
+  verified tables/indexes, downgraded the browser-display revision while
+  retaining battery history, and re-upgraded to head.
+- Generated in-app browser QA verified exact 1280×720 and 720×1280 stage,
+  image, viewport, and overflow geometry. The preserved 3:4 Day Ahead artwork
+  is centered within the 9:16 frame rather than cropped or distorted.
+- Compile checks, focused import lint, and `git diff --check` passed.
 
 ## Known Constraints and Follow-ups
 
-- The two newly reported external Google accounts remain absent from the
-  production allowlist. No allowlist or Google grant changed; prefer adding
-  only the exact addresses after explicit confirmation.
-- Calendar remains a bounded local cache. The UI now discloses ranges outside
-  the confirmed full-sync window instead of certifying them empty. A future
-  product slice could add demand-loaded historical/future ranges.
-- Real mail and calendars remain read-only for user testing. Only generated
-  fixture messages/events may be mutated.
-- The remote-content and reply-envelope constraints documented in their
-  release records remain in force.
+- Browser pages are HTML delivery shells around canonical raster renderers,
+  not native semantic HTML/CSS recompositions. Native 9:16 reflow is a future
+  design adapter; the current milestone intentionally preserves existing art.
+- Battery runtime remains unknown until real terminals provide at least three
+  useful samples across 12 hours. Charging is only confirmed after
+  corroborating rises; predictions are advisory and never an OTA safety gate.
+- Browser flashing, local provisioning, CA-correct firmware transport,
+  per-device trust, A/B partition migration, signed OTA, and staged rollout are
+  documented next milestones and are not yet exposed in production.
+- The deployed Calendar state-integrity release remains available for separate
+  read-only user testing; this slice does not alter Calendar behavior.
 
 ## Next Safe Action
 
-User-test Calendar with real accounts using read-only navigation, Reload, and
-event-detail flows. Do not trigger Sync or mutate real calendars unless the
-user explicitly chooses that operation. Then resume the next isolated product
-slice or the exact-address allowlist change if separately confirmed.
+Push the reviewed At a Glance candidate, fast-forward GitHub `main`, create and
+verify a protected PostgreSQL backup, deploy the exact commit, run both Alembic
+revisions, rebuild the frontend, restart only `mailapp`, and verify health,
+schema head, services, logs, scoped link behavior, and the user-facing Admin
+path.
