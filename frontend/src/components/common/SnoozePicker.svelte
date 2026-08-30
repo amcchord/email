@@ -112,7 +112,7 @@
           {mode === 'reschedule' ? 'Change reminder' : 'Snooze email'}
         </h2>
         <p id="snooze-picker-description" class="mt-1 text-xs" style="color: var(--text-secondary)">
-          {mode === 'reschedule' ? 'Choose a new return time' : 'Move it out of the inbox until you need it'} · {timezone}
+          {mode === 'reschedule' ? 'Choose a new return time' : 'Bring this conversation back when you need it'} · {timezone}
         </p>
         {#if email?.subject}
           <p class="mt-2 truncate text-sm font-medium" title={email.subject}>{email.subject}</p>

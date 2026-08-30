@@ -47,6 +47,39 @@ const generatedEmails = [
   is_subscription: false,
 }));
 
+generatedEmails.push({
+  ...structuredClone(generatedEmails[0]),
+  id: 107,
+  gmail_message_id: 'generated-message-7',
+  message_id_header: '<generated-7@example.test>',
+  from_name: 'Jamie Ortiz',
+  from_address: 'jamie.ortiz@example.test',
+  reply_to: 'jamie.ortiz@example.test',
+  subject: 'Re: Design review notes',
+  snippet: 'The generated sibling message belongs to the same conversation.',
+  body_text: 'The generated sibling message belongs to the same conversation.\n\nThis message was generated locally for browser testing.',
+  body_html: '<p>The generated sibling message belongs to the same conversation.</p><p>This message was generated locally for browser testing.</p>',
+  date: new Date(now.getTime() - 12 * 60_000).toISOString(),
+  labels: ['INBOX', 'UNREAD'],
+  is_read: false,
+  is_starred: false,
+});
+
+generatedEmails.push({
+  ...structuredClone(generatedEmails[1]),
+  id: 108,
+  gmail_message_id: 'generated-message-8',
+  gmail_thread_id: 'generated-thread-8',
+  message_id_header: '<generated-8@example.test>',
+  subject: 'Generated sent-only reminder',
+  snippet: 'This generated message starts outside Inbox.',
+  body_text: 'This generated message starts outside Inbox.\n\nThis message was generated locally for browser testing.',
+  body_html: '<p>This generated message starts outside Inbox.</p><p>This message was generated locally for browser testing.</p>',
+  labels: ['SENT'],
+  is_read: true,
+  is_sent: true,
+});
+
 const emails = new Map(generatedEmails.map(email => [email.id, email]));
 const snapshots = new Map();
 const operations = new Map();
@@ -120,6 +153,32 @@ function isActiveSnooze(snooze) {
   return ['pending_archive', 'scheduled', 'pending_return'].includes(snooze.state);
 }
 
+function conversationEmails(value) {
+  return [...emails.values()].filter(email => (
+    email.account_id === value.account_id
+    && email.gmail_thread_id === value.gmail_thread_id
+  ));
+}
+
+function inboxReturnTargets(snooze) {
+  return snooze.return_target_email_ids
+    .map(emailId => emails.get(emailId))
+    .filter(Boolean);
+}
+
+function restoreOriginalInbox(snooze) {
+  for (const emailId of snooze.original_inbox_email_ids) {
+    const email = emails.get(emailId);
+    if (email && !email.is_trash && !email.is_spam) applyAction(email, 'unarchive');
+  }
+}
+
+function returnConversationToInbox(snooze) {
+  const targets = inboxReturnTargets(snooze).filter(email => !email.is_trash && !email.is_spam);
+  targets.forEach(email => applyAction(email, 'unarchive'));
+  return targets.length;
+}
+
 function snoozeResponse(snooze) {
   const email = emails.get(snooze.email_id);
   return {
@@ -134,6 +193,8 @@ function snoozeResponse(snooze) {
     state: snooze.state,
     status_detail: snooze.status_detail,
     archive_required: snooze.archive_required,
+    originally_in_inbox: snooze.original_inbox_email_ids.length > 0,
+    conversation_message_count: snooze.conversation_email_ids.length,
     archive_action_request_id: snooze.archive_action_request_id,
     archive_undo_until: snooze.archive_undo_until,
     error_code: snooze.error_code,
@@ -184,7 +245,8 @@ function processDueSnoozes() {
       snooze.failed_at = snooze.updated_at;
       continue;
     }
-    if (email.is_trash || email.is_spam) {
+    const targets = inboxReturnTargets(snooze);
+    if (!targets.length || targets.every(item => item.is_trash || item.is_spam)) {
       snooze.state = 'dismissed';
       snooze.status_detail = 'protected_mailbox';
       snooze.dismissed_at = snooze.updated_at;
@@ -196,7 +258,7 @@ function processDueSnoozes() {
       snooze.dismissed_at = snooze.updated_at;
       continue;
     }
-    applyAction(email, 'unarchive');
+    returnConversationToInbox(snooze);
     snooze.state = 'returned';
     snooze.status_detail = 'returned_to_inbox';
     snooze.returned_at = snooze.updated_at;
@@ -234,22 +296,26 @@ async function handleSnoozeCreate(request, response) {
   }
   const email = emails.get(Number(payload.email_id));
   const alreadyActive = [...snoozes.values()].find(
-    item => item.email_id === email.id && isActiveSnooze(item),
+    item => item.account_id === email.account_id
+      && item.gmail_thread_id === email.gmail_thread_id
+      && isActiveSnooze(item),
   );
   if (alreadyActive) {
     return writeJson(response, { detail: { code: 'snooze_conflict', message: 'This email is already snoozed' } }, 409);
   }
   const createdAt = generatedClock().toISOString();
-  const archiveRequired = email.labels.includes('INBOX');
+  const conversation = conversationEmails(email);
+  const originalInbox = conversation.filter(item => item.labels.includes('INBOX'));
+  const archiveRequired = originalInbox.length > 0;
   const archiveRequestId = archiveRequired ? randomUUID() : null;
   let archiveUndoUntil = null;
   if (archiveRequired) {
     const operationPayload = {
       action: 'archive',
-      email_ids: [email.id],
+      email_ids: originalInbox.map(item => item.id),
       idempotency_key: randomUUID(),
     };
-    const selected = [email];
+    const selected = originalInbox;
     snapshots.set(archiveRequestId, selected.map(item => structuredClone(item)));
     selected.forEach(item => applyAction(item, 'archive'));
     archiveUndoUntil = new Date(clockMs + 10_000).toISOString();
@@ -258,14 +324,14 @@ async function handleSnoozeCreate(request, response) {
       idempotency_key: operationPayload.idempotency_key,
       action: 'archive',
       state: 'staged',
-      accepted_count: 1,
+      accepted_count: selected.length,
       undo_until: archiveUndoUntil,
       created_at: createdAt,
-      items: [{
-        id: 2_000 + operations.size,
-        email_id: email.id,
-        account_id: email.account_id,
-        gmail_message_id: email.gmail_message_id,
+      items: selected.map((item, index) => ({
+        id: 2_000 + operations.size + index,
+        email_id: item.id,
+        account_id: item.account_id,
+        gmail_message_id: item.gmail_message_id,
         sequence: 1,
         action: 'archive',
         state: 'staged',
@@ -276,7 +342,7 @@ async function handleSnoozeCreate(request, response) {
         applied_at: null,
         failed_at: null,
         cancelled_at: null,
-      }],
+      })),
     });
   }
   const snooze = {
@@ -291,6 +357,9 @@ async function handleSnoozeCreate(request, response) {
     state: archiveRequired ? 'pending_archive' : 'scheduled',
     status_detail: archiveRequired ? 'archiving' : 'scheduled',
     archive_required: archiveRequired,
+    conversation_email_ids: conversation.map(item => item.id),
+    original_inbox_email_ids: originalInbox.map(item => item.id),
+    return_target_email_ids: originalInbox.length ? originalInbox.map(item => item.id) : [email.id],
     archive_action_request_id: archiveRequestId,
     archive_undo_until: archiveUndoUntil,
     error_code: null,
@@ -447,6 +516,12 @@ async function handleRequest(request, response) {
   if (request.method === 'GET' && pathname === '/api/emails/actions/recent') {
     return writeJson(response, [...operations.values()].slice(-20).reverse());
   }
+  if (request.method === 'GET' && pathname === '/api/compose/sends/recent') {
+    return writeJson(response, { operations: [] });
+  }
+  if (request.method === 'GET' && pathname === '/api/compose/sends/scheduled') {
+    return writeJson(response, { operations: [] });
+  }
   if (request.method === 'POST' && pathname === '/api/snoozes') {
     return handleSnoozeCreate(request, response);
   }
@@ -500,19 +575,11 @@ async function handleRequest(request, response) {
     const snooze = snoozes.get(cancelSnoozeMatch[1]);
     if (!snooze) return writeJson(response, { detail: 'Not found' }, 404);
     if (isActiveSnooze(snooze)) {
-      const email = emails.get(snooze.email_id);
-      if (email?.is_trash || email?.is_spam) {
-        snooze.state = 'dismissed';
-        snooze.status_detail = 'protected_mailbox';
-        snooze.dismissed_at = generatedClock().toISOString();
-        snooze.updated_at = snooze.dismissed_at;
-      } else if (email) {
-        applyAction(email, 'unarchive');
-        snooze.state = 'cancelled';
-        snooze.status_detail = 'cancelled';
-        snooze.cancelled_at = generatedClock().toISOString();
-        snooze.updated_at = snooze.cancelled_at;
-      }
+      restoreOriginalInbox(snooze);
+      snooze.state = 'cancelled';
+      snooze.status_detail = 'cancelled';
+      snooze.cancelled_at = generatedClock().toISOString();
+      snooze.updated_at = snooze.cancelled_at;
     }
     audit.snooze_cancels.push({ id: snooze.id, at: generatedClock().toISOString() });
     return writeJson(response, snoozeResponse(snooze));
@@ -523,12 +590,12 @@ async function handleRequest(request, response) {
     const snooze = snoozes.get(returnSnoozeMatch[1]);
     if (!snooze) return writeJson(response, { detail: 'Not found' }, 404);
     const email = emails.get(snooze.email_id);
-    if (email?.is_trash || email?.is_spam) {
+    const returnedCount = email ? returnConversationToInbox(snooze) : 0;
+    if (email && returnedCount === 0) {
       snooze.state = 'dismissed';
       snooze.status_detail = 'protected_mailbox';
       snooze.dismissed_at = generatedClock().toISOString();
     } else if (email) {
-      applyAction(email, 'unarchive');
       snooze.state = 'returned';
       snooze.status_detail = 'returned_now';
       snooze.returned_at = generatedClock().toISOString();

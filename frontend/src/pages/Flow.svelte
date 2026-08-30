@@ -27,7 +27,13 @@
   import DraftStatus from '../components/email/DraftStatus.svelte';
   import SendSplitButton from '../components/common/SendSplitButton.svelte';
   import SnoozePicker from '../components/common/SnoozePicker.svelte';
-  import { buildSnoozeRequest, createSnoozeWithReconciliation } from '../lib/snooze.js';
+  import {
+    buildSnoozeRequest,
+    cancelAccepted,
+    createSnoozeWithReconciliation,
+    runSnoozeMutationWithReconciliation,
+    snoozeThreadKey,
+  } from '../lib/snooze.js';
   import { formatSnoozeWake } from '../lib/remindLater.js';
 
   // --- Day Summary State ---
@@ -37,6 +43,7 @@
   let needsReplyEmails = $state([]);
   let needsReplyTotal = $state(0);
   let activeSnoozedEmailIds = $state(new Set());
+  let activeSnoozedThreadKeys = $state(new Set());
   let hideFyi = $state(localStorage.getItem('flowHideFyi') !== 'false');
   let urgentCount = $state(0);
   let trendsSummary = $state('');
@@ -45,6 +52,23 @@
   let awaitingResponse = $state([]);
   let awaitingResponseTotal = $state(0);
   let activeThreads = $state([]);
+
+  function updateActiveSnoozeIdentities(items) {
+    const records = Array.isArray(items) ? items : [];
+    activeSnoozedEmailIds = new Set(
+      records.map(item => Number(item.email_id)).filter(Number.isSafeInteger)
+    );
+    activeSnoozedThreadKeys = new Set(
+      records.map(snoozeThreadKey).filter(Boolean)
+    );
+  }
+
+  function isActivelySnoozed(email) {
+    const emailId = Number(email?.id);
+    const threadKey = snoozeThreadKey(email);
+    return activeSnoozedEmailIds.has(emailId)
+      || (threadKey !== null && activeSnoozedThreadKeys.has(threadKey));
+  }
 
   // --- Chat State ---
   let chatCollapsed = $state(
@@ -375,8 +399,12 @@
           ? 'Ignore is already in progress'
           : 'Open a needs-reply email first',
       },
-      'flow.snooze': () => {
-        if (replyViewOpen && selectedReplyEmail) return openSnoozePopover(selectedReplyEmail.id, true);
+      'flow.snooze': {
+        run: () => openSnoozePopover(selectedReplyEmail.id, true),
+        isEnabled: () => Boolean(
+          replyViewOpen && Number.isSafeInteger(Number(selectedReplyEmail?.id))
+        ),
+        disabledReason: 'Open an exact email in Flow before snoozing it',
       },
       'flow.newChat': () => startNewChat(),
       'flow.send': {
@@ -480,15 +508,13 @@
       pendingTodos = (results[1].value.todos || results[1].value || []).slice(0, 10);
     }
     if (results[4].status === 'fulfilled') {
-      activeSnoozedEmailIds = new Set(
-        (results[4].value.items || []).map(item => Number(item.email_id)).filter(Number.isSafeInteger)
-      );
+      updateActiveSnoozeIdentities(results[4].value.items);
     }
     if (results[2].status === 'fulfilled') {
       const priority = { urgent: 0, awaiting_reply: 1, fyi: 3, can_ignore: 4 };
       const serverNeedsReply = [...(results[2].value.emails || [])];
       needsReplyEmails = serverNeedsReply
-        .filter(email => !activeSnoozedEmailIds.has(Number(email.id)))
+        .filter(email => !isActivelySnoozed(email))
         .sort((a, b) => {
         const categoryDelta = (priority[a.category] ?? 2) - (priority[b.category] ?? 2);
         return categoryDelta || new Date(b.date || 0) - new Date(a.date || 0);
@@ -507,10 +533,18 @@
 
   async function loadAwaitingResponse() {
     try {
-      const data = await api.getAwaitingResponse({ limit: 10 });
+      const [data, snoozes] = await Promise.all([
+        api.getAwaitingResponse({ limit: 10 }),
+        api.listSnoozes({ state: 'active', limit: 200, offset: 0 }),
+      ]);
       if (!sessionIsCurrent()) return;
-      awaitingResponse = data.emails || [];
-      awaitingResponseTotal = data.total || 0;
+      updateActiveSnoozeIdentities(snoozes.items);
+      const serverAwaiting = data.emails || [];
+      awaitingResponse = serverAwaiting.filter(
+        email => !isActivelySnoozed(email)
+      );
+      const hiddenVisibleCount = serverAwaiting.length - awaitingResponse.length;
+      awaitingResponseTotal = Math.max(0, (data.total || 0) - hiddenVisibleCount);
     } catch {
       // ignore
     }
@@ -518,9 +552,15 @@
 
   async function loadActiveThreads() {
     try {
-      const data = await api.getThreadDigests({ page_size: 8, sort: 'recent' });
+      const [data, snoozes] = await Promise.all([
+        api.getThreadDigests({ page_size: 8, sort: 'recent' }),
+        api.listSnoozes({ state: 'active', limit: 200, offset: 0 }),
+      ]);
       if (!sessionIsCurrent()) return;
-      activeThreads = (data.digests || []).slice(0, 6);
+      updateActiveSnoozeIdentities(snoozes.items);
+      activeThreads = (data.digests || [])
+        .filter(thread => !isActivelySnoozed(thread))
+        .slice(0, 6);
     } catch {
       // ignore
     }
@@ -1532,9 +1572,26 @@
 
     const previousEmails = needsReplyEmails;
     const previousTotal = needsReplyTotal;
+    const previousAwaiting = awaitingResponse;
+    const previousAwaitingTotal = awaitingResponseTotal;
+    const previousActiveThreads = activeThreads;
     activeSnoozedEmailIds = new Set(activeSnoozedEmailIds).add(Number(target.id));
+    const targetThreadKey = snoozeThreadKey(target);
+    if (targetThreadKey) {
+      activeSnoozedThreadKeys = new Set(activeSnoozedThreadKeys).add(targetThreadKey);
+    }
     if (fromReplyView && viewSource === 'needs_reply') {
       removeEmailAndAdvance(target.id);
+    } else if (fromReplyView && viewSource === 'awaiting') {
+      awaitingResponse = awaitingResponse.filter(email => email.id !== target.id);
+      if (awaitingResponseTotal > 0) awaitingResponseTotal -= 1;
+      closeReplyView();
+    } else if (fromReplyView && viewSource === 'thread') {
+      const targetThreadId = target.thread_id || target.gmail_thread_id;
+      if (targetThreadId) {
+        activeThreads = activeThreads.filter(thread => thread.thread_id !== targetThreadId);
+      }
+      closeReplyView();
     } else if (fromReplyView) {
       needsReplyEmails = needsReplyEmails.filter(email => email.id !== target.id);
       if (needsReplyTotal > 0) needsReplyTotal -= 1;
@@ -1558,11 +1615,20 @@
           actionLabel: 'Undo',
           dismissLabel: 'Dismiss snooze confirmation',
           onAction: async () => {
-            await api.returnSnoozeNow(reminder.id);
+            await runSnoozeMutationWithReconciliation({
+              mutate: () => api.cancelSnooze(reminder.id),
+              lookup: () => api.getSnooze(reminder.id),
+              accepted: cancelAccepted,
+            });
             if (!sessionIsCurrent()) return;
             activeSnoozedEmailIds = new Set([...activeSnoozedEmailIds].filter(id => id !== Number(target.id)));
-            await loadDaySummary();
-            showToast('Snooze undone — returned to inbox', 'success');
+            if (targetThreadKey) {
+              activeSnoozedThreadKeys = new Set(
+                [...activeSnoozedThreadKeys].filter(key => key !== targetThreadKey)
+              );
+            }
+            await Promise.all([loadDaySummary(), loadAwaitingResponse(), loadActiveThreads()]);
+            showToast('Snooze undone — original placement restored', 'success');
           },
         },
       );
@@ -1573,8 +1639,16 @@
         return;
       }
       activeSnoozedEmailIds = new Set([...activeSnoozedEmailIds].filter(id => id !== Number(target.id)));
+      if (targetThreadKey) {
+        activeSnoozedThreadKeys = new Set(
+          [...activeSnoozedThreadKeys].filter(key => key !== targetThreadKey)
+        );
+      }
       needsReplyEmails = previousEmails;
       needsReplyTotal = previousTotal;
+      awaitingResponse = previousAwaiting;
+      awaitingResponseTotal = previousAwaitingTotal;
+      activeThreads = previousActiveThreads;
       showToast(error.message || 'The email could not be snoozed', 'error');
     }
   }
@@ -2668,16 +2742,18 @@
                   <Icon name="eye-off" size={12} />
                   Ignore
                 </button>
-                <button
-                  onclick={() => openSnoozePopover(selectedReplyEmail?.id, true)}
-                  class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
-                  style="color: var(--text-secondary)"
-                  title="Snooze — hide until later"
-                  data-shortcut="flow.snooze"
-                >
-                  <Icon name="clock" size={12} />
-                  Snooze
-                </button>
+                {#if Number.isSafeInteger(Number(selectedReplyEmail?.id))}
+                  <button
+                    onclick={() => openSnoozePopover(selectedReplyEmail.id, true)}
+                    class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
+                    style="color: var(--text-secondary)"
+                    title="Snooze — hide until later"
+                    data-shortcut="flow.snooze"
+                  >
+                    <Icon name="clock" size={12} />
+                    Snooze
+                  </button>
+                {/if}
                 <button
                   onclick={archiveCurrentEmail}
                   class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
@@ -2719,16 +2795,18 @@
                   <Icon name="eye-off" size={12} />
                   Ignore
                 </button>
-                <button
-                  onclick={() => openSnoozePopover(selectedReplyEmail?.id, true)}
-                  class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
-                  style="color: var(--text-secondary)"
-                  title="Snooze — hide until later"
-                  data-shortcut="flow.snooze"
-                >
-                  <Icon name="clock" size={12} />
-                  Snooze
-                </button>
+                {#if Number.isSafeInteger(Number(selectedReplyEmail?.id))}
+                  <button
+                    onclick={() => openSnoozePopover(selectedReplyEmail.id, true)}
+                    class="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium transition-fast hover-bg-subtle"
+                    style="color: var(--text-secondary)"
+                    title="Snooze — hide until later"
+                    data-shortcut="flow.snooze"
+                  >
+                    <Icon name="clock" size={12} />
+                    Snooze
+                  </button>
+                {/if}
               {/if}
             </div>
 
@@ -2984,7 +3062,7 @@
                   class="p-2.5 rounded-lg cursor-pointer transition-fast hover-bg-subtle"
                   style="background: var(--bg-primary); {focusedSection === 'threads' && highlightedIndex === thIdx ? 'outline: 2px solid var(--color-accent-500); outline-offset: -2px; background: var(--bg-tertiary)' : ''}"
                   data-flow-item="threads-{thIdx}"
-                  onclick={() => openThreadInFlow(thread.thread_id, { subject: thread.subject, summary: thread.summary, date: thread.latest_date, account_id: thread.account_id }, 'thread')}
+                  onclick={() => openThreadInFlow(thread.thread_id, { thread_id: thread.thread_id, subject: thread.subject, summary: thread.summary, date: thread.latest_date, account_id: thread.account_id }, 'thread')}
                 >
                   <div class="flex items-center gap-2 mb-0.5">
                     {#if thread.conversation_type}

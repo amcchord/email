@@ -74,6 +74,54 @@ export function removeSnoozedEmail(list, emailId) {
   return (Array.isArray(list) ? list : []).filter(email => email.id !== emailId);
 }
 
+export function snoozeThreadKey(value) {
+  const accountId = Number(value?.account_id);
+  const threadId = String(value?.gmail_thread_id ?? value?.thread_id ?? '').trim();
+  if (!Number.isSafeInteger(accountId) || accountId <= 0 || !threadId) return null;
+  return `${accountId}:${threadId}`;
+}
+
+export function snoozeMatchesEmail(record, email) {
+  if (Number(record?.email_id) === Number(email?.id)) return true;
+  const recordThreadKey = snoozeThreadKey(record);
+  return recordThreadKey !== null && recordThreadKey === snoozeThreadKey(email);
+}
+
+export function partitionSnoozeConversation(emails, record) {
+  const remaining = [];
+  const matched = [];
+  for (const [index, email] of (Array.isArray(emails) ? emails : []).entries()) {
+    if (snoozeMatchesEmail(record, email)) matched.push({ email, index });
+    else remaining.push(email);
+  }
+  return { matched, remaining };
+}
+
+export function reconcileActiveSnoozeEmails(emails, reminders, { retain = false } = {}) {
+  const active = Array.isArray(reminders) ? reminders : [];
+  const reconciled = [];
+  let matchedCount = 0;
+  for (const email of (Array.isArray(emails) ? emails : [])) {
+    const reminder = active.find(item => snoozeMatchesEmail(item, email));
+    if (!reminder) {
+      reconciled.push(email);
+      continue;
+    }
+    matchedCount += 1;
+    if (!retain) continue;
+    reconciled.push({
+      ...email,
+      snooze_id: reminder.id,
+      snooze_wake_at: reminder.wake_at,
+      snooze_time_zone: reminder.time_zone,
+      snooze_condition: reminder.condition,
+      snooze_state: reminder.state,
+      snooze_outcome_unknown: false,
+    });
+  }
+  return { emails: reconciled, matchedCount };
+}
+
 export function isSnoozeTransportError(error) {
   return error?.name !== 'AbortError' && !Number.isFinite(Number(error?.status));
 }
@@ -107,5 +155,52 @@ export async function createSnoozeWithReconciliation(transport, payload) {
     unknown.code = 'snooze_outcome_unknown';
     unknown.cause = lookupError;
     throw unknown;
+  }
+}
+
+function mutationUnknown(error) {
+  const unknown = new Error('The reminder change was sent, but its status is not confirmed yet.');
+  unknown.code = 'snooze_mutation_outcome_unknown';
+  unknown.cause = error;
+  return unknown;
+}
+
+export function rescheduleMatches(record, wakeAt, timeZone) {
+  return Number.isFinite(Date.parse(record?.wake_at))
+    && Date.parse(record.wake_at) === Date.parse(wakeAt)
+    && record?.time_zone === timeZone
+    && !['returned', 'cancelled', 'dismissed', 'failed'].includes(record?.state);
+}
+
+export function returnNowAccepted(record) {
+  return ['pending_return', 'returned'].includes(record?.state);
+}
+
+export function cancelAccepted(record) {
+  return ['pending_return', 'cancelled'].includes(record?.state);
+}
+
+/**
+ * A write response may be lost after PostgreSQL commits. Read the exact
+ * reminder before deciding whether an optimistic projection must roll back.
+ */
+export async function runSnoozeMutationWithReconciliation({
+  mutate,
+  lookup,
+  accepted,
+}) {
+  try {
+    return await mutate();
+  } catch (error) {
+    if (!isSnoozeTransportError(error)) throw error;
+    let record;
+    try {
+      record = await lookup();
+    } catch (lookupError) {
+      if (isSnoozeTransportError(lookupError)) throw mutationUnknown(lookupError);
+      throw error;
+    }
+    if (accepted(record)) return record;
+    throw error;
   }
 }

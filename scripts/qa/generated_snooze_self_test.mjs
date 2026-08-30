@@ -55,6 +55,16 @@ async function emailVisible(emailId) {
   return payload.emails.filter(email => email.id === emailId).length;
 }
 
+async function expectConflict(path, body) {
+  const response = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  assert.equal(response.status, 409);
+  return response.json();
+}
+
 try {
   await waitForServer();
 
@@ -62,12 +72,16 @@ try {
   const first = await request('POST', '/api/snoozes', firstPayload);
   const replay = await request('POST', '/api/snoozes', firstPayload);
   assert.equal(replay.id, first.id);
+  assert.equal(first.conversation_message_count, 2);
   assert.equal(await emailVisible(101), 0);
+  assert.equal(await emailVisible(107), 0, 'all current Inbox messages in the conversation must hide');
+  await expectConflict('/api/snoozes', createPayload(107, '2026-08-30T16:30:00.000Z', 99));
 
   await request('POST', '/api/__qa/clock', { now: '2026-08-30T15:59:59.999Z' });
   assert.equal(await emailVisible(101), 0, 'mail must stay hidden one millisecond before wake');
   await request('POST', '/api/__qa/clock', { now: '2026-08-30T16:00:00.000Z' });
   assert.equal(await emailVisible(101), 1, 'mail must return at the exact wake instant');
+  assert.equal(await emailVisible(107), 1, 'the current conversation must return together');
   assert.equal((await request('GET', `/api/snoozes/${first.id}`)).state, 'returned');
 
   const second = await request(
@@ -113,17 +127,37 @@ try {
   assert.equal(await emailVisible(105), 1, 'Undo must restore the optimistic archive');
   assert.equal((await request('GET', `/api/snoozes/${fifth.id}`)).status_detail, 'archive_undone');
 
+  const sentCancel = await request(
+    'POST',
+    '/api/snoozes',
+    createPayload(108, '2026-08-30T22:00:00.000Z', 6),
+  );
+  assert.equal(sentCancel.originally_in_inbox, false);
+  await request('POST', `/api/snoozes/${sentCancel.id}/cancel`, {});
+  assert.equal(await emailVisible(108), 0, 'Cancel must preserve a sent-only conversation outside Inbox');
+
+  const sentReturn = await request(
+    'POST',
+    '/api/snoozes',
+    createPayload(108, '2026-08-30T23:00:00.000Z', 7),
+  );
+  await request('POST', `/api/snoozes/${sentReturn.id}/return-now`, {});
+  assert.equal(await emailVisible(108), 1, 'Return now must bring a sent-only reminder to Inbox');
+
   const audit = await request('GET', '/api/__qa/snooze-audit');
   assert.equal(audit.provider_calls, 0);
   assert.equal(audit.unknown_routes.length, 0);
   assert.equal(audit.rejected_mutations.length, 0);
-  assert.equal(audit.snooze_creates.length, 5);
+  assert.equal(audit.snooze_creates.length, 7);
   assert.equal(audit.snooze_replays.length, 1);
   assert.equal(audit.snooze_returns.filter(item => item.reason === 'due').length, 2);
 
   process.stdout.write(`${JSON.stringify({
     ok: true,
     boundary: 'wake-minus-1ms / exact-wake',
+    conversation_messages: first.conversation_message_count,
+    original_placement_restored_on_cancel: true,
+    sent_only_returned_to_inbox: true,
     idempotent_replays: audit.snooze_replays.length,
     due_returns: audit.snooze_returns.filter(item => item.reason === 'due').length,
     protected_mailbox_resurrections: 0,

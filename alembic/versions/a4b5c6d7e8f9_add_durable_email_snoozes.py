@@ -13,6 +13,7 @@ from typing import Sequence, Union
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 
 revision: str = "a4b5c6d7e8f9"
@@ -54,6 +55,28 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("0"),
         ),
+        sa.Column(
+            "conversation_email_ids",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
+        ),
+        sa.Column(
+            "original_inbox_email_ids",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
+        ),
+        sa.Column(
+            "mail_action_versions_at_schedule",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
+        ),
+        sa.Column(
+            "return_target_email_ids",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
+        ),
+        sa.Column("completion_state", sa.String(length=16), nullable=True),
+        sa.Column("pending_action_purpose", sa.String(length=16), nullable=True),
         sa.Column("archive_idempotency_key", sa.Uuid(), nullable=False),
         sa.Column("archive_action_id", sa.BigInteger(), nullable=True),
         sa.Column("return_idempotency_key", sa.Uuid(), nullable=False),
@@ -94,6 +117,22 @@ def upgrade() -> None:
             "attempt_count >= 0", name="ck_email_snoozes_attempt_count"
         ),
         sa.CheckConstraint(
+            "jsonb_typeof(conversation_email_ids) = 'array' AND "
+            "jsonb_typeof(original_inbox_email_ids) = 'array' AND "
+            "jsonb_typeof(return_target_email_ids) = 'array' AND "
+            "jsonb_typeof(mail_action_versions_at_schedule) = 'object'",
+            name="ck_email_snoozes_json_shape",
+        ),
+        sa.CheckConstraint(
+            "completion_state IS NULL OR completion_state IN ('returned','cancelled')",
+            name="ck_email_snoozes_completion_state",
+        ),
+        sa.CheckConstraint(
+            "pending_action_purpose IS NULL OR "
+            "pending_action_purpose IN ('archive','unarchive')",
+            name="ck_email_snoozes_pending_action_purpose",
+        ),
+        sa.CheckConstraint(
             "(lease_token IS NULL AND lease_expires_at IS NULL) OR "
             "(lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)",
             name="ck_email_snoozes_lease_shape",
@@ -128,24 +167,33 @@ def upgrade() -> None:
         ["state", "next_attempt_at", "wake_at", "id"],
     )
     op.create_index(
-        "uq_email_snoozes_active_email",
+        "uq_email_snoozes_active_conversation",
         "email_snoozes",
-        ["user_id", "email_id"],
+        ["user_id", "account_id", "gmail_thread_id"],
         unique=True,
         postgresql_where=sa.text(
-            "email_id IS NOT NULL AND state IN "
-            "('pending_archive','scheduled','pending_return')"
+            "state IN ('pending_archive','scheduled','pending_return')"
         ),
     )
 
 
 def downgrade() -> None:
-    op.drop_index("uq_email_snoozes_active_email", table_name="email_snoozes")
+    op.drop_index("uq_email_snoozes_active_conversation", table_name="email_snoozes")
     op.drop_index("ix_email_snoozes_due", table_name="email_snoozes")
     op.drop_index("ix_email_snoozes_user_wake", table_name="email_snoozes")
     op.drop_table("email_snoozes")
 
     op.drop_constraint("ck_mail_actions_action", "mail_actions", type_="check")
+    # Preserve accepted inbox-return work across a code rollback. The prior
+    # runtime understands ``unspam`` and executes the persisted add/remove
+    # label delta rather than deriving transport behavior from the action
+    # name, so this compatibility mapping still adds INBOX without inventing
+    # a destructive provider operation. Deleting these rows would strand
+    # staged returns; restoring the older constraint without mapping them
+    # would make downgrade fail once the feature had been used.
+    op.execute(
+        "UPDATE mail_actions SET action = 'unspam' WHERE action = 'unarchive'"
+    )
     op.create_check_constraint(
         "ck_mail_actions_action",
         "mail_actions",

@@ -27,7 +27,7 @@ test('Flow rejects stale thread and action completions after an identity change'
   );
   assert.match(
     text,
-    /await api\.snoozeNeedsReply\(emailId, duration\);\s*if \(!sessionIsCurrent\(\)\) return;/,
+    /const reminder = await createSnoozeWithReconciliation\([\s\S]*buildSnoozeRequest\(target\.id, schedule\)[\s\S]*if \(!sessionIsCurrent\(\)\) return;/,
   );
   assert.match(
     text,

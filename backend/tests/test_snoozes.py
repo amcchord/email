@@ -98,9 +98,12 @@ def test_unarchive_is_a_first_class_inverse_mail_action():
 def test_snooze_model_has_one_active_email_guard_and_lease_shape():
     active_index = next(
         item for item in EmailSnooze.__table__.indexes
-        if item.name == "uq_email_snoozes_active_email"
+        if item.name == "uq_email_snoozes_active_conversation"
     )
     assert active_index.unique is True
+    assert [column.name for column in active_index.columns] == [
+        "user_id", "account_id", "gmail_thread_id"
+    ]
     assert set(SNOOZE_ACTIVE_STATES) == {
         "pending_archive", "scheduled", "pending_return"
     }

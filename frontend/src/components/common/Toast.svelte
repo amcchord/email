@@ -1,6 +1,7 @@
 <script>
   let { toast, onDismiss = () => {} } = $props();
   let actionRunning = $state(false);
+  let actionError = $state('');
 
   const colors = {
     success: 'bg-emerald-700 text-white',
@@ -12,9 +13,12 @@
   async function runAction() {
     if (!toast.onAction || actionRunning) return;
     actionRunning = true;
+    actionError = '';
     try {
       await toast.onAction();
       onDismiss();
+    } catch (error) {
+      actionError = error?.message || 'That action could not be completed. Try again.';
     } finally {
       actionRunning = false;
     }
@@ -27,7 +31,12 @@
   aria-live={toast.type === 'error' ? 'assertive' : 'polite'}
   aria-atomic="true"
 >
-  <span class="message">{toast.message}</span>
+  <span class="toast-copy">
+    <span class="message">{toast.message}</span>
+    {#if actionError}
+      <span class="action-error" role="alert">{actionError}</span>
+    {/if}
+  </span>
   {#if toast.actionLabel && toast.onAction}
     <button
       class="action-button"
@@ -63,9 +72,22 @@
     font-weight: 600;
   }
 
-  .message {
+  .toast-copy {
     min-width: 0;
     flex: 1;
+    display: grid;
+    gap: 0.2rem;
+  }
+
+  .message {
+    display: block;
+  }
+
+  .action-error {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 500;
+    line-height: 1.25;
   }
 
   .action-button,

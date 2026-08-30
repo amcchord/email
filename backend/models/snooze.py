@@ -15,6 +15,7 @@ from sqlalchemy import (
     Uuid,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
@@ -56,6 +57,12 @@ class EmailSnooze(Base):
     mail_action_version_at_schedule: Mapped[int] = mapped_column(
         BigInteger, nullable=False, default=0
     )
+    conversation_email_ids = mapped_column(JSONB, nullable=False, default=list)
+    original_inbox_email_ids = mapped_column(JSONB, nullable=False, default=list)
+    mail_action_versions_at_schedule = mapped_column(JSONB, nullable=False, default=dict)
+    return_target_email_ids = mapped_column(JSONB, nullable=False, default=list)
+    completion_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    pending_action_purpose: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     archive_idempotency_key: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
     archive_action_id: Mapped[int | None] = mapped_column(
@@ -104,6 +111,21 @@ class EmailSnooze(Base):
         ),
         CheckConstraint("attempt_count >= 0", name="ck_email_snoozes_attempt_count"),
         CheckConstraint(
+            "jsonb_typeof(conversation_email_ids) = 'array' AND "
+            "jsonb_typeof(original_inbox_email_ids) = 'array' AND "
+            "jsonb_typeof(return_target_email_ids) = 'array' AND "
+            "jsonb_typeof(mail_action_versions_at_schedule) = 'object'",
+            name="ck_email_snoozes_json_shape",
+        ),
+        CheckConstraint(
+            "completion_state IS NULL OR completion_state IN ('returned','cancelled')",
+            name="ck_email_snoozes_completion_state",
+        ),
+        CheckConstraint(
+            "pending_action_purpose IS NULL OR pending_action_purpose IN ('archive','unarchive')",
+            name="ck_email_snoozes_pending_action_purpose",
+        ),
+        CheckConstraint(
             "(lease_token IS NULL AND lease_expires_at IS NULL) OR "
             "(lease_token IS NOT NULL AND lease_expires_at IS NOT NULL)",
             name="ck_email_snoozes_lease_shape",
@@ -114,12 +136,13 @@ class EmailSnooze(Base):
         Index("ix_email_snoozes_user_wake", "user_id", "wake_at", "id"),
         Index("ix_email_snoozes_due", "state", "next_attempt_at", "wake_at", "id"),
         Index(
-            "uq_email_snoozes_active_email",
+            "uq_email_snoozes_active_conversation",
             "user_id",
-            "email_id",
+            "account_id",
+            "gmail_thread_id",
             unique=True,
             postgresql_where=text(
-                "email_id IS NOT NULL AND state IN ('pending_archive','scheduled','pending_return')"
+                "state IN ('pending_archive','scheduled','pending_return')"
             ),
         ),
     )

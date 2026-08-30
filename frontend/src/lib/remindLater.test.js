@@ -35,4 +35,3 @@ test('custom reminders share scheduled-send DST gap and fold handling', () => {
   assert.equal(fold.candidates.length, 2);
   assert.notEqual(fold.candidates[0].offsetLabel, fold.candidates[1].offsetLabel);
 });
-

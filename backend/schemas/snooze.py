@@ -91,6 +91,8 @@ class SnoozeResponse(BaseModel):
     state: str
     status_detail: str | None = None
     archive_required: bool
+    originally_in_inbox: bool
+    conversation_message_count: int
     archive_action_request_id: UUID | None = None
     archive_undo_until: datetime | None = None
     error_code: str | None = None

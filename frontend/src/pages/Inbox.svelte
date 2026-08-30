@@ -38,7 +38,19 @@
   import EmailSearchSummary from '../components/email/EmailSearchSummary.svelte';
   import Icon from '../components/common/Icon.svelte';
   import SnoozePicker from '../components/common/SnoozePicker.svelte';
-  import { buildSnoozeRequest, createSnoozeWithReconciliation, normalizeSnoozedList } from '../lib/snooze.js';
+  import {
+    buildSnoozeRequest,
+    cancelAccepted,
+    createSnoozeWithReconciliation,
+    normalizeSnoozedList,
+    partitionSnoozeConversation,
+    reconcileActiveSnoozeEmails,
+    rescheduleMatches,
+    returnNowAccepted,
+    runSnoozeMutationWithReconciliation,
+    snoozeMatchesEmail,
+  } from '../lib/snooze.js';
+  import { focusEmailRow } from '../lib/emailRowFocus.js';
   import { formatSnoozeWake } from '../lib/remindLater.js';
 
   let selectedEmail = $state(null);
@@ -401,6 +413,18 @@
           params.exclude_ai_category = 'can_ignore';
         }
         result = await api.listEmails(params);
+      }
+
+      const reconcileActiveSnoozes = sf?.type !== 'snoozed';
+      if (reconcileActiveSnoozes) {
+        const active = await api.listSnoozes({ state: 'active', limit: 200, offset: 0 });
+        const activeItems = active.items || [];
+        const retain = !sf && (Boolean(snapshot.search) || snapshot.mailbox !== 'INBOX');
+        const reconciled = reconcileActiveSnoozeEmails(result.emails, activeItems, { retain });
+        result = { ...result, emails: reconciled.emails };
+        if (!retain) {
+          result.total = Math.max(0, Number(result.total || 0) - reconciled.matchedCount);
+        }
       }
 
       if (!listRequestIsCurrent(requestId)) return false;
@@ -817,6 +841,11 @@
   async function openSnoozePicker(target) {
     const candidate = emailForSnooze(target);
     if (!candidate || snoozeBusyIds.has(candidate.id)) return;
+    if (candidate.snooze_outcome_unknown) {
+      showToast('Checking whether that reminder was accepted…', 'info');
+      await refreshDataset();
+      return;
+    }
     if (candidate.is_draft || candidate.is_trash || candidate.is_spam) {
       showToast('Restore or send this email before snoozing it', 'info');
       return;
@@ -831,36 +860,147 @@
     snoozeBusyIds = next;
   }
 
-  function removeEmailOptimistically(emailId) {
+  function removeEmailOptimistically(target) {
     const list = get(emails);
+    const emailId = Number(target?.id ?? target);
+    const identity = {
+      email_id: emailId,
+      account_id: target?.account_id,
+      gmail_thread_id: target?.gmail_thread_id,
+    };
+    const conversation = partitionSnoozeConversation(list, identity);
     const index = list.findIndex(email => email.id === emailId);
     const item = index >= 0 ? list[index] : null;
-    if (index >= 0) {
-      emails.set(list.filter(email => email.id !== emailId));
-      emailsTotal.update(total => Math.max(0, total - 1));
+    const firstRemovedIndex = conversation.matched[0]?.index ?? index;
+    const nextFocusId = firstRemovedIndex >= 0
+      ? (conversation.remaining[firstRemovedIndex]?.id
+        ?? conversation.remaining[firstRemovedIndex - 1]?.id
+        ?? null)
+      : null;
+    if (conversation.matched.length > 0) {
+      emails.set(conversation.remaining);
+      emailsTotal.update(total => Math.max(0, total - conversation.matched.length));
     }
-    const wasSelected = get(selectedEmailId) === emailId;
+    const removedIds = new Set(conversation.matched.map(entry => entry.email.id));
+    const selectedId = get(selectedEmailId);
+    const wasSelected = removedIds.has(selectedId);
     const detail = wasSelected ? selectedEmail : null;
     if (wasSelected) {
-      selectedEmailId.set(null);
+      selectedEmailId.set(nextFocusId);
       selectedEmail = null;
     }
-    return { detail, index, item, removed: index >= 0, wasSelected };
+    queueMicrotask(() => {
+      if (!inboxSessionIsCurrent()) return;
+      const inboxRoot = document.querySelector('.inbox-page');
+      if (!focusEmailRow(inboxRoot, nextFocusId)) {
+        document.querySelector('[data-inbox-focus-fallback]')?.focus?.();
+      }
+    });
+    return {
+      affectedItems: conversation.matched.map(entry => entry.email),
+      detail,
+      identity,
+      index,
+      item,
+      matched: conversation.matched,
+      nextFocusId,
+      removed: conversation.matched.length > 0,
+      selectedId,
+      wasSelected,
+    };
+  }
+
+  function keepSnoozedEmailInCurrentDataset() {
+    if (get(searchQuery)) return true;
+    const filter = get(smartFilter);
+    if (filter && filter.type !== 'snoozed') return false;
+    return !filter && get(currentMailbox) !== 'INBOX';
+  }
+
+  function captureRetainedSnooze(target, schedule, idempotencyKey) {
+    const list = get(emails);
+    const identity = {
+      email_id: target.id,
+      account_id: target.account_id,
+      gmail_thread_id: target.gmail_thread_id,
+    };
+    const index = list.findIndex(email => email.id === target.id);
+    const item = index >= 0 ? list[index] : null;
+    const detail = selectedEmail && snoozeMatchesEmail(identity, selectedEmail) ? selectedEmail : null;
+    const affectedItems = list.filter(email => snoozeMatchesEmail(identity, email));
+    const projection = email => snoozeMatchesEmail(identity, email)
+      ? {
+          ...email,
+          snooze_wake_at: schedule.wakeAt,
+          snooze_time_zone: schedule.timeZone,
+          snooze_condition: schedule.condition,
+          snooze_state: 'pending_archive',
+          snooze_idempotency_key: idempotencyKey,
+          snooze_outcome_unknown: false,
+        }
+      : email;
+    emails.set(list.map(projection));
+    if (detail) selectedEmail = projection(detail);
+    return {
+      affectedItems,
+      detail,
+      identity,
+      index,
+      item,
+      nextFocusId: null,
+      removed: false,
+      wasSelected: Boolean(detail),
+    };
+  }
+
+  function projectAcceptedSnooze(reminder) {
+    const projection = email => snoozeMatchesEmail(reminder, email)
+      ? {
+          ...email,
+          snooze_id: reminder.id,
+          snooze_wake_at: reminder.wake_at,
+          snooze_time_zone: reminder.time_zone,
+          snooze_condition: reminder.condition,
+          snooze_state: reminder.state,
+          snooze_idempotency_key: null,
+          snooze_outcome_unknown: false,
+        }
+      : email;
+    emails.update(list => list.map(projection));
+    if (selectedEmail && snoozeMatchesEmail(reminder, selectedEmail)) {
+      selectedEmail = projection(selectedEmail);
+    }
   }
 
   function restoreOptimisticSnooze(snapshot) {
-    if (!snapshot?.removed || !snapshot.item) return;
+    if (!snapshot?.item) return;
+    if (!snapshot.removed) {
+      const originals = new Map(snapshot.affectedItems.map(email => [email.id, email]));
+      emails.update(list => list.map(email => originals.get(email.id) || email));
+      if (snapshot.detail && selectedEmail && originals.has(selectedEmail.id)) {
+        selectedEmail = snapshot.detail;
+      }
+      return;
+    }
+    const presentIds = new Set(get(emails).map(email => email.id));
+    const missing = snapshot.matched.filter(entry => !presentIds.has(entry.email.id));
     emails.update(list => {
-      if (list.some(email => email.id === snapshot.item.id)) return list;
       const next = [...list];
-      next.splice(Math.min(snapshot.index, next.length), 0, snapshot.item);
+      for (const entry of missing) {
+        next.splice(Math.min(entry.index, next.length), 0, entry.email);
+      }
       return next;
     });
-    emailsTotal.update(total => total + 1);
+    emailsTotal.update(total => total + missing.length);
     if (snapshot.wasSelected) {
-      selectedEmailId.set(snapshot.item.id);
+      selectedEmailId.set(snapshot.selectedId);
       selectedEmail = snapshot.detail;
     }
+    queueMicrotask(() => {
+      if (inboxSessionIsCurrent()) {
+        focusEmailRow(document.querySelector('.inbox-page'), snapshot.selectedId ?? snapshot.item.id);
+      }
+    });
   }
 
   async function handleSnoozeSubmit(schedule) {
@@ -879,14 +1019,22 @@
         selectedEmail = { ...selectedEmail, snooze_wake_at: schedule.wakeAt, snooze_time_zone: schedule.timeZone };
       }
       try {
-        await api.rescheduleSnooze(target.snooze_id, {
-          wake_at: schedule.wakeAt,
-          time_zone: schedule.timeZone,
+        await runSnoozeMutationWithReconciliation({
+          mutate: () => api.rescheduleSnooze(target.snooze_id, {
+            wake_at: schedule.wakeAt,
+            time_zone: schedule.timeZone,
+          }),
+          lookup: () => api.getSnooze(target.snooze_id),
+          accepted: record => rescheduleMatches(record, schedule.wakeAt, schedule.timeZone),
         });
         if (inboxSessionIsCurrent()) {
           showToast(`Reminder moved to ${formatSnoozeWake(schedule.wakeAt, schedule.timeZone)}`, 'success');
         }
       } catch (error) {
+        if (error.code === 'snooze_mutation_outcome_unknown' && inboxSessionIsCurrent()) {
+          showToast('Reminder change sent — refresh Snoozed to confirm', 'info');
+          return;
+        }
         if (inboxSessionIsCurrent() && currentDatasetSnapshot().key === datasetKey) {
           emails.update(list => list.map(email => email.id === target.id
             ? { ...email, snooze_wake_at: previousWake }
@@ -900,13 +1048,17 @@
       return;
     }
 
-    const snapshot = removeEmailOptimistically(target.id);
+    const createPayload = buildSnoozeRequest(target.id, schedule);
+    const snapshot = keepSnoozedEmailInCurrentDataset()
+      ? captureRetainedSnooze(target, schedule, createPayload.idempotency_key)
+      : removeEmailOptimistically(target);
     try {
       const reminder = await createSnoozeWithReconciliation(
         api,
-        buildSnoozeRequest(target.id, schedule),
+        createPayload,
       );
       if (!inboxSessionIsCurrent()) return;
+      if (!snapshot.removed) projectAcceptedSnooze(reminder);
       showToast(
         `Snoozed until ${formatSnoozeWake(reminder.wake_at || schedule.wakeAt, reminder.time_zone || schedule.timeZone)}`,
         'success',
@@ -915,15 +1067,31 @@
           actionLabel: 'Undo',
           dismissLabel: 'Dismiss snooze confirmation',
           onAction: async () => {
-            await api.returnSnoozeNow(reminder.id);
+            await runSnoozeMutationWithReconciliation({
+              mutate: () => api.cancelSnooze(reminder.id),
+              lookup: () => api.getSnooze(reminder.id),
+              accepted: cancelAccepted,
+            });
             if (!inboxSessionIsCurrent()) return;
-            if (currentDatasetSnapshot().key === datasetKey) restoreOptimisticSnooze(snapshot);
-            showToast('Snooze undone — returned to inbox', 'success');
+            if (currentDatasetSnapshot().key === datasetKey) {
+              if (snapshot.removed) restoreOptimisticSnooze(snapshot);
+              else restoreOptimisticSnooze(snapshot);
+            }
+            showToast('Snooze undone — original placement restored', 'success');
           },
         },
       );
     } catch (error) {
       if (error.code === 'snooze_outcome_unknown' && inboxSessionIsCurrent()) {
+        if (!snapshot.removed) {
+          const markUnknown = email => snoozeMatchesEmail(snapshot.identity, email)
+            ? { ...email, snooze_outcome_unknown: true, snooze_state: 'unknown' }
+            : email;
+          emails.update(list => list.map(markUnknown));
+          if (selectedEmail && snoozeMatchesEmail(snapshot.identity, selectedEmail)) {
+            selectedEmail = markUnknown(selectedEmail);
+          }
+        }
         showToast('Snooze sent — open Snoozed or refresh to confirm', 'info');
         return;
       }
@@ -940,11 +1108,19 @@
     if (!target?.snooze_id || snoozeBusyIds.has(target.id)) return;
     const datasetKey = currentDatasetSnapshot().key;
     markSnoozeBusy(target.id, true);
-    const snapshot = removeEmailOptimistically(target.id);
+    const snapshot = removeEmailOptimistically(target);
     try {
-      await api.returnSnoozeNow(target.snooze_id);
+      await runSnoozeMutationWithReconciliation({
+        mutate: () => api.returnSnoozeNow(target.snooze_id),
+        lookup: () => api.getSnooze(target.snooze_id),
+        accepted: returnNowAccepted,
+      });
       if (inboxSessionIsCurrent()) showToast('Returned to inbox', 'success');
     } catch (error) {
+      if (error.code === 'snooze_mutation_outcome_unknown' && inboxSessionIsCurrent()) {
+        showToast('Return sent — refreshing Snoozed will confirm it', 'info');
+        return;
+      }
       if (inboxSessionIsCurrent() && currentDatasetSnapshot().key === datasetKey) {
         restoreOptimisticSnooze(snapshot);
         showToast(error.message || 'The email could not be returned', 'error');
@@ -958,11 +1134,19 @@
     if (!target?.snooze_id || snoozeBusyIds.has(target.id)) return;
     const datasetKey = currentDatasetSnapshot().key;
     markSnoozeBusy(target.id, true);
-    const snapshot = removeEmailOptimistically(target.id);
+    const snapshot = removeEmailOptimistically(target);
     try {
-      await api.cancelSnooze(target.snooze_id);
-      if (inboxSessionIsCurrent()) showToast('Reminder cancelled and returned to inbox', 'success');
+      await runSnoozeMutationWithReconciliation({
+        mutate: () => api.cancelSnooze(target.snooze_id),
+        lookup: () => api.getSnooze(target.snooze_id),
+        accepted: cancelAccepted,
+      });
+      if (inboxSessionIsCurrent()) showToast('Reminder cancelled — original placement restored', 'success');
     } catch (error) {
+      if (error.code === 'snooze_mutation_outcome_unknown' && inboxSessionIsCurrent()) {
+        showToast('Cancellation sent — refreshing Snoozed will confirm it', 'info');
+        return;
+      }
       if (inboxSessionIsCurrent() && currentDatasetSnapshot().key === datasetKey) {
         restoreOptimisticSnooze(snapshot);
         showToast(error.message || 'The reminder could not be cancelled', 'error');
@@ -1019,7 +1203,7 @@
   }
 </script>
 
-<div class="inbox-page h-full flex flex-col" class:select-none={panelDragging} aria-busy={datasetUpdating}>
+<div class="inbox-page h-full flex flex-col" class:select-none={panelDragging} aria-busy={datasetUpdating} tabindex="-1" data-inbox-focus-fallback>
   {#if $searchQuery}
     <EmailSearchSummary
       query={$searchQuery}
