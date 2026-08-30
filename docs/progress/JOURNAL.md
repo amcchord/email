@@ -39,14 +39,24 @@ redacted production evidence and generated OAuth/browser fixtures.
 
 ### Production Actions
 
-- Pending Git-first deployment after the reviewed candidate is committed and
-  pushed. No production data, grant, configuration, migration, or service has
-  been changed during diagnosis or implementation.
+- Committed application release `1ded3ccba22b0d300123a080fe25adae77dcc8df`,
+  pushed it to GitHub `main` and `codex/oauth-reauthorization`, and
+  fast-forwarded the clean `/opt/mail` checkout to that exact commit.
+- Reinstalled locked frontend packages with zero reported vulnerabilities,
+  rebuilt the 503-module frontend as `mailapp`, and restarted only `mailapp`.
+  No dependency lock, migration, database data, Google grant, configuration,
+  Caddy, systemd, worker, mailbox, or AI file/service was changed.
+- Post-deploy checks passed: Git was clean and exact, all seven checked services
+  were active, five application-edge services reported zero restarts, public
+  health was `ok`, `/` returned 200, an empty generated callback returned a
+  sanitized 303 landing, and the post-deploy mailapp warning-or-higher count was
+  zero.
 
 ### Next
 
-Commit, push, deploy, verify, and then use a fresh Google reauthorization for
-user testing. Do not reuse the failed one-time authorization code.
+Use a fresh Google reauthorization for user testing. Confirm the Calendar
+landing and green reconnection notice; do not reuse the failed one-time
+authorization code.
 
 ## 2026-08-30 — Remote-content privacy controls
 

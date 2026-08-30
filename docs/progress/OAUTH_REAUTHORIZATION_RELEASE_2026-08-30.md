@@ -154,8 +154,19 @@ changed.
 
 ## Deployment
 
-Release commit and production verification are recorded in the closeout update
-to this document after the Git-first deployment.
+Application release `1ded3ccba22b0d300123a080fe25adae77dcc8df` was pushed to
+GitHub `main` and `codex/oauth-reauthorization`, then deployed by fast-forwarding
+the clean `/opt/mail` checkout to that exact commit. The locked frontend
+packages were installed with zero reported vulnerabilities, the 503-module
+production frontend was rebuilt as `mailapp`, and only `mailapp` was restarted.
+
+Post-deploy verification found exact clean Git alignment, all seven checked
+services active, zero reported restarts across mailapp/workers/TUI/Caddy,
+healthy public API and frontend responses, zero warning-or-higher mailapp log
+entries in the deploy window, and a generated empty callback returning a
+sanitized HTTP 303 to Profile & Accounts with `oauth_error=invalid_state`.
+No migration, dependency lock, production data, Google grant, configuration,
+mailbox, worker, Caddy, systemd, or AI file/service changed.
 
 ## User-Test Path
 

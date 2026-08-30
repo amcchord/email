@@ -4,18 +4,19 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Release the Google OAuth callback reliability fix for production user testing.
-Preserve the clean, separately owned AI-provider worktree, use only generated
-OAuth identities and read-only production evidence, and do not replay the
-reported authorization code or open/change real mail.
+User-test the deployed Google OAuth callback reliability fix with a fresh
+Calendar reauthorization. Preserve the clean, separately owned AI-provider
+worktree, do not replay the reported authorization code, and do not open or
+change real mail during follow-up verification.
 
 ## Baseline
 
-- Production and GitHub `main` include remote-content application release
-  `9b9730a68c65de2b7ee9910c0d2c3bd70939e273` and its documentation closeout.
-  The running frontend assets were built from that application release. Public
-  health is `ok`, all seven checked services are active with zero restarts, and
-  Alembic remains at `z7a8b9c0d1e2 (head)`.
+- Production and GitHub `main` include OAuth application release
+  `1ded3ccba22b0d300123a080fe25adae77dcc8df`. The production frontend was built
+  from that release. Public health is `ok`, all seven checked services are
+  active, the five application-edge services report zero restarts, and the
+  post-deploy mailapp warning-or-higher count is zero. Alembic remains at
+  `z7a8b9c0d1e2 (head)`; this release contains no schema change.
 - The original AI worktree remains clean at `41d2898` on
   `codex/openai-anthropic-model-support` and has not been edited by this work.
 - The deployed remote-content release was developed in the isolated worktree
@@ -61,6 +62,9 @@ live state.
   desktop and exact 375×812 mobile layouts, with sanitized one-time results,
   visible Calendar/Profile landings, no overflow, zero mailbox mutations, and
   zero unknown routes.
+- Production `/api/health` and `/` return HTTP 200, while a generated empty
+  callback returns a sanitized HTTP 303 to Profile & Accounts with
+  `oauth_error=invalid_state` instead of a raw API response.
 - The prior remote-content release remains covered by its existing generated
   browser matrix and request audit.
 - Generated browser QA records zero remote resource requests before permission,
@@ -101,8 +105,6 @@ live state.
 
 ## Next Safe Action
 
-Commit and push the reviewed OAuth callback candidate, fast-forward production,
-restart only the API service required for the backend change, rebuild the
-frontend, and verify public health, service state, redacted recent logs, exact
-Git alignment, and the user-facing callback landing. Then ask the user to start
-a fresh Calendar reauthorization; the failed one-time code must not be reused.
+Ask the user to start a fresh Calendar reauthorization and approve all requested
+Google access. Confirm that it returns to Calendar with the green reconnection
+notice. The failed one-time authorization code must not be reused.
