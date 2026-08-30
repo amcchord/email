@@ -25,7 +25,7 @@
 >
   <span class="draft-status-message">{view.message}</span>
   {#if view.retry && onretry}
-    <button type="button" onclick={onretry}>Retry</button>
+    <button type="button" onclick={onretry}>{view.retryLabel || 'Retry'}</button>
   {/if}
   {#if view.undo && onundo}
     <button type="button" onclick={onundo}>Undo</button>

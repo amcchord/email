@@ -37,6 +37,13 @@ function safePositiveInteger(value) {
   return Number.isSafeInteger(candidate) && candidate > 0 ? candidate : null;
 }
 
+function safeUuid(value) {
+  const candidate = typeof value === 'string' ? value.toLowerCase() : '';
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(candidate)
+    ? candidate
+    : null;
+}
+
 function defaultSessionKey(snapshot) {
   return `${snapshot?.generation ?? 'unknown'}:${snapshot?.userId ?? 'anonymous'}`;
 }
@@ -105,6 +112,7 @@ export function normalizeOutboundSendOperation(raw, { fallbackKey = null } = {})
     idempotency_key: idempotencyKey,
     account_id: safePositiveInteger(source.account_id),
     source_email_id: safePositiveInteger(source.source_email_id),
+    client_draft_id: safeUuid(source.client_draft_id),
     state,
     execute_after: safeDate(source.execute_after),
     undo_until: safeDate(source.undo_until),
@@ -325,7 +333,7 @@ export function createOutboundSendController({
             callbackSafely(record?.callbacks.onRestore, operation, 'cancelled');
             if (record) assertCurrent(record.session);
             notify(
-              hasRestore ? 'Send cancelled and draft restored' : 'Send cancelled',
+              hasRestore ? 'Send cancelled; recovering draft' : 'Send cancelled',
               'success',
             );
           } else {
@@ -335,7 +343,7 @@ export function createOutboundSendController({
             notify(
               operation.error_message
                 || (hasRestore
-                  ? 'Email could not be sent; draft restored'
+                  ? 'Email could not be sent; recovering draft'
                   : 'Email could not be sent'),
               'error',
             );
@@ -542,6 +550,20 @@ export function createOutboundSendController({
     return operations;
   }
 
+  function attachCallbacks(operation, callbacks = {}) {
+    const session = ensureSession();
+    assertCurrent(session);
+    if (!operation?.idempotency_key || records.has(operation.idempotency_key)) return false;
+    records.set(operation.idempotency_key, {
+      callbacks,
+      session,
+      accepted: Boolean(operation.send_id),
+      lastFingerprint: null,
+      undoOffered: false,
+    });
+    return true;
+  }
+
   function destroy() {
     destroyed = true;
     clearPollTimer();
@@ -559,6 +581,7 @@ export function createOutboundSendController({
     undo,
     retry,
     getLatestReversible,
+    attachCallbacks,
     resetForCurrentSession,
     destroy,
   };

@@ -16,12 +16,22 @@ Object.defineProperty(globalThis, 'localStorage', {
 
 const {
   createOutboundDraftRestorer,
+  forgetRetainedOutboundDraft,
+  loadRetainedOutboundDraft,
   outboundRecoveryDraft,
 } = await import('./outboundDraftRecovery.js');
 
 test('recovered sends use their own bounded Compose intent key', () => {
   const recovered = outboundRecoveryDraft(
-    { draft_key: 'new', body_html: '<p>Generated</p>' },
+    {
+      draft_key: 'new',
+      client_draft_id: '10000000-0000-4000-8000-000000000001',
+      draft_revision: 7,
+      draft_state: 'sending',
+      synced_revision: 7,
+      linked_send_id: '10000000-0000-4000-8000-000000000002',
+      body_html: '<p>Generated</p>',
+    },
     { send_id: '00000000-0000-4000-8000-000000000111' },
   );
 
@@ -30,6 +40,53 @@ test('recovered sends use their own bounded Compose intent key', () => {
     'outbound-recovery:00000000-0000-4000-8000-000000000111',
   );
   assert.equal(recovered.body_html, '<p>Generated</p>');
+  assert.equal('client_draft_id' in recovered, false);
+  assert.equal('draft_revision' in recovered, false);
+  assert.equal('draft_state' in recovered, false);
+  assert.equal('synced_revision' in recovered, false);
+  assert.equal('linked_send_id' in recovered, false);
+  assert.equal(
+    recovered.recovery_source_client_draft_id,
+    '10000000-0000-4000-8000-000000000001',
+  );
+});
+
+test('retained outbound recovery clones auth-scoped content and deletes only on request', async () => {
+  const retained = {
+    snapshot: {
+      body_html: '<p>Retained until terminal truth</p>',
+      attachments: [{ filename: 'generated.txt', bytes: new Uint8Array([1, 2, 3]) }],
+    },
+  };
+  const calls = [];
+  const durableStorage = {
+    async get(userId, clientDraftId) {
+      calls.push(['get', userId, clientDraftId]);
+      return retained;
+    },
+    async delete(userId, clientDraftId) {
+      calls.push(['delete', userId, clientDraftId]);
+      return true;
+    },
+  };
+
+  const restored = await loadRetainedOutboundDraft(durableStorage, '7', 'draft-a');
+  restored.attachments[0].bytes[0] = 9;
+  assert.equal(retained.snapshot.attachments[0].bytes[0], 1);
+  assert.equal(await forgetRetainedOutboundDraft(durableStorage, '7', 'draft-a'), true);
+  assert.deepEqual(calls, [
+    ['get', '7', 'draft-a'],
+    ['delete', '7', 'draft-a'],
+  ]);
+});
+
+test('retained outbound recovery fails closed when browser storage is unavailable', async () => {
+  const unavailable = {
+    async get() { throw new Error('generated storage failure'); },
+    async delete() { throw new Error('generated storage failure'); },
+  };
+  assert.equal(await loadRetainedOutboundDraft(unavailable, '7', 'draft-a'), null);
+  assert.equal(await forgetRetainedOutboundDraft(unavailable, '7', 'draft-a'), false);
 });
 
 test('an existing composer is preserved while a recovered draft waits', () => {

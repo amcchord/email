@@ -3,12 +3,15 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
+  applyComposeDraftRoute,
   clearUnscopedComposeStorage,
   composeDraftHasContent,
+  composeDraftIntentFromRoute,
   composeLastAccountStorageKey,
   composeDraftStorageKey,
   composeReplyContext,
   createComposeDraftIntent,
+  ensureComposeDraftIntent,
   newComposeIntent,
 } from './composeDraft.js';
 
@@ -104,7 +107,38 @@ test('new compose intents are stable per object and distinct per invocation', ()
   assert.equal(first.draft_key, `client:${first.client_draft_id}`);
 });
 
+test('prefilled new-message callers receive isolated identities before routing', () => {
+  const randomUUID = uuidFactory();
+  const first = ensureComposeDraftIntent({ subject: 'Generated A' }, { randomUUID });
+  const second = ensureComposeDraftIntent({ subject: 'Generated B' }, { randomUUID });
+  assert.notEqual(first.client_draft_id, second.client_draft_id);
+  assert.notEqual(first.intent_key, second.intent_key);
+
+  const reply = ensureComposeDraftIntent({ draft_key: 'reply:2:42', subject: 'Reply' }, { randomUUID });
+  assert.equal(reply.intent_key, 'reply:2:42');
+});
+
+test('Compose deep links retain only a valid stable draft identity', () => {
+  const id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const intent = composeDraftIntentFromRoute(id.toUpperCase());
+  assert.equal(intent.client_draft_id, id);
+  assert.equal(intent.draft_key, `client:${id}`);
+  assert.equal(composeDraftIntentFromRoute('not-a-draft'), null);
+
+  const composeUrl = applyComposeDraftRoute(
+    new URL('https://mail.example.test/?page=compose'),
+    'compose',
+    intent,
+  );
+  assert.equal(composeUrl.searchParams.get('draft'), id);
+  const inboxUrl = applyComposeDraftRoute(composeUrl, 'inbox', intent);
+  assert.equal(inboxUrl.searchParams.has('draft'), false);
+});
+
 test('attachment-only snapshots remain recoverable', () => {
+  assert.equal(composeDraftHasContent({ to: [], cc: [], bcc: [] }), false);
+  assert.equal(composeDraftHasContent({ to: [''] }), false);
+  assert.equal(composeDraftHasContent({ to: ['generated@example.test'] }), true);
   assert.equal(composeDraftHasContent({ attachments: [] }), false);
   assert.equal(composeDraftHasContent({ attachments: [{ filename: 'generated.txt' }] }), true);
 });
@@ -121,25 +155,56 @@ test('Compose persists the latest edit before navigation disposes its session gu
 
 test('Compose owns one durable, attachment-complete draft through send handoff', async () => {
   const text = await readFile(new URL('../pages/Compose.svelte', import.meta.url), 'utf8');
+  const releaseEditor = text.match(/const releaseEditor = \(\) => \{([\s\S]*?)\n\s*\};\n\s*try \{/)?.[1] || '';
 
   assert.match(text, /createIndexedDbDraftStorage\(\)/);
   assert.match(text, /migrateLegacyScopedDrafts\(\{/);
   assert.match(text, /createDraftSessionController\(\{/);
-  assert.match(text, /draftController\?\.beginAttachmentImport/);
-  assert.match(text, /draftController\.completeAttachmentImport/);
+  assert.match(text, /const intent = ensureComposeDraftIntent\(data\);/);
+  assert.match(text, /if \(data\?\.client_draft_id !== intent\.client_draft_id\) composeData\.set\(intent\);/);
+  assert.match(text, /draftState\.discardInProgress/);
+  assert.match(text, /draftState\.sending/);
+  assert.match(text, /let draftLocked = \$derived\(\s*sending/);
+  assert.match(text, /Boolean\(autosaveStatus\)/);
+  assert.match(text, /const input = event\.currentTarget;/);
+  assert.match(text, /const ownerController = draftController;/);
+  assert.match(text, /draftController === ownerController/);
+  assert.match(text, /ownerController\.completeAttachmentImport/);
+  assert.doesNotMatch(text, /draftController\.completeAttachmentImport/);
+  assert.match(text, /activeDraftKey = state\.clientDraftId \|\| intent\.client_draft_id;/);
+  assert.match(text, /client_draft_id: activeDraftKey,/);
+  assert.match(text, /markSendUncertain\(operation\)/);
+  assert.doesNotMatch(text, /await[\s\S]{0,1000}event\.currentTarget\.value/);
   assert.match(text, /Attachments are stored with this draft and restored when you return\./);
   assert.match(text, /const restoreDraft = \{\s*\.\.\.data,[\s\S]*attachments: attachments\.map/);
   assert.match(text, /await submitOutboundSend\(data, \{[\s\S]*onAccepted: releaseEditor,[\s\S]*onRestore: restoreEditor/);
+  assert.match(text, /onSent: forgetSentDraft/);
+  assert.doesNotMatch(releaseEditor, /durableStorage|\.delete\(/);
+  assert.match(text, /recovery_source_client_draft_id/);
+  assert.match(text, /await durableStorage\.delete\(sessionGuard\.userId, recoverySourceClientId\)/);
   assert.match(text, /if \(replyContext\.source_email_id\) data\.source_email_id = replyContext\.source_email_id;/);
   assert.match(text, /attachments = Array\.isArray\(draft\.attachments\)/);
+  assert.match(text, /attachments: attachments\.map\(item => \(\{ \.\.\.item \}\)\)/);
   assert.match(text, /recipientFieldValue\(draft\.to\)/);
   assert.match(text, /recipientFieldValue\(draft\.cc\)/);
   assert.match(text, /recipientFieldValue\(draft\.bcc\)/);
   assert.match(text, /client_draft_id: capturedDraftKey,/);
   assert.match(text, /draft_revision: capturedDraftRevision,/);
   assert.match(text, /draftController\?\.revision !== capturedDraftRevision/);
-  assert.match(text, /durableStorage\?\.delete\(sessionGuard\.userId, capturedDraftKey\)/);
   assert.match(text, /source_email_id: replyContext\.source_email_id,/);
   assert.doesNotMatch(text, /localStorage\.setItem\(activeDraftKey/);
   assert.doesNotMatch(text, /await api\.sendEmail\(/);
+  assert.doesNotMatch(text, /window\.confirm\(/);
+  assert.match(text, /aria-labelledby="draft-conflict-title"/);
+  assert.match(text, /role="dialog"/);
+  assert.match(text, /aria-modal="true"/);
+  assert.match(text, /conflictCancelButton\?\.focus\(\)/);
+  assert.match(text, /bind:element=\{conflictCancelButton\}/);
+  assert.match(text, /event\.key === 'Escape'/);
+  assert.match(text, /event\.key !== 'Tab'/);
+  assert.match(text, /conflictTrigger\?\.isConnected \? conflictTrigger : conflictFallbackFocus/);
+  assert.match(text, /restoreTarget\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(text, /bind:this=\{conflictFallbackFocus\}/);
+  assert.match(text, />Keep this version</);
+  assert.match(text, />Use server version</);
 });

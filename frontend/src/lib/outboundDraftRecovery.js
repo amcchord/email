@@ -1,5 +1,7 @@
 import { get, writable } from 'svelte/store';
 import { captureAuthEpoch, isAuthEpochCurrent } from './authSession.js';
+import { isComposeDraftUuid } from './composeDraft.js';
+import { cloneDraftValue } from './draftStorage.js';
 import { composeData, currentPage } from './stores.js';
 
 const pendingStore = writable([]);
@@ -51,10 +53,45 @@ function recoveryIdentity(operation) {
 }
 
 export function outboundRecoveryDraft(draft, operation) {
+  const {
+    client_draft_id: _clientDraftId,
+    recovery_source_client_draft_id: _recoverySourceClientDraftId,
+    draft_revision: _draftRevision,
+    draft_state: _draftState,
+    synced_revision: _syncedRevision,
+    linked_send_id: _linkedSendId,
+    ...recoverable
+  } = draft && typeof draft === 'object' ? draft : {};
+  const recoverySourceClientId = [operation?.client_draft_id, _clientDraftId]
+    .find(isComposeDraftUuid);
   return {
-    ...(draft && typeof draft === 'object' ? draft : {}),
+    ...recoverable,
     draft_key: `outbound-recovery:${recoveryIdentity(operation)}`,
+    ...(recoverySourceClientId
+      ? { recovery_source_client_draft_id: recoverySourceClientId.toLowerCase() }
+      : {}),
   };
+}
+
+export async function loadRetainedOutboundDraft(storage, userId, clientDraftId) {
+  if (!storage?.get || !userId || !clientDraftId) return null;
+  try {
+    const record = await storage.get(userId, clientDraftId);
+    return record?.snapshot && typeof record.snapshot === 'object'
+      ? cloneDraftValue(record.snapshot)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function forgetRetainedOutboundDraft(storage, userId, clientDraftId) {
+  if (!storage?.delete || !userId || !clientDraftId) return false;
+  try {
+    return await storage.delete(userId, clientDraftId);
+  } catch {
+    return false;
+  }
 }
 
 /**

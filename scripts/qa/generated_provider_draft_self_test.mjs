@@ -26,6 +26,8 @@ const ids = Object.freeze({
   deletion: '00000000-0000-4000-8000-000000000107',
   offline: '00000000-0000-4000-8000-000000000108',
   guard: '00000000-0000-4000-8000-000000000109',
+  mailboxA: '00000000-0000-4000-8000-000000000111',
+  mailboxB: '00000000-0000-4000-8000-000000000112',
 });
 
 let mutationSequence = 200;
@@ -85,6 +87,11 @@ async function request(method, pathname, body, { expectedStatus = 200 } = {}) {
 
 const get = pathname => request('GET', pathname);
 const post = (pathname, body = {}, options = {}) => request('POST', pathname, body, options);
+const postDraft = (body, options = {}) => post(
+  '/api/compose/draft',
+  body,
+  { expectedStatus: 202, ...options },
+);
 
 async function reset(scenario = 'clean', options = {}) {
   return post('/api/qa/reset', {
@@ -128,15 +135,15 @@ try {
     clientDraftId: ids.repeated,
     mutation: repeatedMutation,
   });
-  const created = await post('/api/compose/draft', revisionOne);
-  const repeatedMutationResponse = await post('/api/compose/draft', revisionOne);
+  const created = await postDraft(revisionOne);
+  const repeatedMutationResponse = await postDraft(revisionOne);
   assert.equal(repeatedMutationResponse.client_draft_id, created.client_draft_id);
-  const sameRevision = await post('/api/compose/draft', {
+  const sameRevision = await postDraft({
     ...revisionOne,
     mutation_id: mutationId(),
   });
   assert.equal(sameRevision.client_draft_id, created.client_draft_id);
-  const updated = await post('/api/compose/draft', draftPayload({
+  const updated = await postDraft(draftPayload({
     clientDraftId: ids.repeated,
     revision: 2,
     subject: 'Generated provider draft revision two',
@@ -161,21 +168,21 @@ try {
     clientDraftId: ids.immutable,
     mutation: immutableMutation,
   });
-  await post('/api/compose/draft', immutableRevisionOne);
-  await post('/api/compose/draft', {
+  await postDraft(immutableRevisionOne);
+  await postDraft({
     ...immutableRevisionOne,
     subject: 'Changed under the same mutation',
   }, { expectedStatus: 409 });
-  await post('/api/compose/draft', {
+  await postDraft({
     ...immutableRevisionOne,
     mutation_id: mutationId(),
     subject: 'Changed under the same revision',
   }, { expectedStatus: 409 });
-  await post('/api/compose/draft', draftPayload({
+  await postDraft(draftPayload({
     clientDraftId: ids.immutable,
     revision: 2,
   }));
-  await post('/api/compose/draft', {
+  await postDraft({
     ...immutableRevisionOne,
     mutation_id: mutationId(),
   }, { expectedStatus: 409 });
@@ -205,7 +212,7 @@ try {
     }),
     error => error instanceof TypeError,
   );
-  const recoveredLost = await post('/api/compose/draft', lostPayload);
+  const recoveredLost = await postDraft(lostPayload);
   assert.equal(recoveredLost.state, 'synced');
   snapshot = await audit();
   assert.equal(snapshot.counters.provider_draft_creates, 1);
@@ -225,7 +232,7 @@ try {
     content_type: 'text/plain',
     data_base64: attachmentBytes.toString('base64'),
   };
-  const attachmentCreated = await post('/api/compose/draft', draftPayload({
+  const attachmentCreated = await postDraft(draftPayload({
     clientDraftId: ids.attachment,
     attachments: [attachment],
   }));
@@ -240,7 +247,7 @@ try {
     Buffer.from(rehydrated.attachments[0].data_base64, 'base64'),
     attachmentBytes,
   );
-  const attachmentUpdated = await post('/api/compose/draft', draftPayload({
+  const attachmentUpdated = await postDraft(draftPayload({
     clientDraftId: ids.attachment,
     revision: 2,
     subject: 'Generated attachment after reload',
@@ -259,12 +266,12 @@ try {
   // Reply metadata is derived from the owned source. Foreign/mismatched
   // provenance and cross-account reuse are rejected before provider mutation.
   await reset('clean');
-  await post('/api/compose/draft', draftPayload({
+  await postDraft(draftPayload({
     clientDraftId: ids.provenance,
     sourceEmailId: 1301,
     threadId: 'wrong-generated-thread',
   }), { expectedStatus: 422 });
-  const provenanceCreated = await post('/api/compose/draft', draftPayload({
+  const provenanceCreated = await postDraft(draftPayload({
     clientDraftId: ids.provenance,
     sourceEmailId: 1301,
   }));
@@ -277,7 +284,27 @@ try {
     provenanceDetail.references,
     '<generated-root-a@example.test> <generated-parent-a@example.test>',
   );
-  await post('/api/compose/draft', draftPayload({
+  const draftMailbox = await get('/api/emails/?mailbox=DRAFTS');
+  assert.equal(draftMailbox.emails.length, 1);
+  const reopenedByEmail = await get(
+    `/api/compose/drafts/by-email/${draftMailbox.emails[0].id}`,
+  );
+  assert.equal(reopenedByEmail.client_draft_id, ids.provenance);
+  await post('/api/auth/login', {
+    username: 'generated-b',
+    password: 'generated-only',
+  });
+  await request(
+    'GET',
+    `/api/compose/drafts/by-email/${draftMailbox.emails[0].id}`,
+    undefined,
+    { expectedStatus: 404 },
+  );
+  await post('/api/auth/login', {
+    username: 'generated-a',
+    password: 'generated-only',
+  });
+  await postDraft(draftPayload({
     clientDraftId: ids.provenance,
     revision: 2,
     accountId: 1102,
@@ -292,6 +319,48 @@ try {
   assert.equal(provenanceCreated.client_draft_id, ids.provenance);
   assertExpectedFlowSafety(snapshot);
   results.provenance_account = snapshot.counters;
+
+  // Provider-draft email identities stay stable when an earlier draft is
+  // removed. A stale email ID must never retarget a different logical draft.
+  await reset('clean', { discardWindowMs: 15 });
+  await postDraft(draftPayload({
+    clientDraftId: ids.mailboxA,
+    subject: 'Generated mailbox draft A',
+  }));
+  await postDraft(draftPayload({
+    clientDraftId: ids.mailboxB,
+    subject: 'Generated mailbox draft B',
+  }));
+  const mailboxBeforeDiscard = await get('/api/emails/?mailbox=DRAFTS');
+  const mailboxA = mailboxBeforeDiscard.emails.find(email => email.subject.endsWith('A'));
+  const mailboxB = mailboxBeforeDiscard.emails.find(email => email.subject.endsWith('B'));
+  assert.ok(mailboxA);
+  assert.ok(mailboxB);
+  assert.notEqual(mailboxA.id, mailboxB.id);
+  await post(
+    `/api/compose/drafts/${ids.mailboxA}/discard`,
+    { mutation_id: mutationId() },
+    { expectedStatus: 202 },
+  );
+  await new Promise(resolve => setTimeout(resolve, 25));
+  await get(`/api/compose/drafts/by-client-id/${ids.mailboxA}`);
+  await get(`/api/compose/drafts/by-client-id/${ids.mailboxA}`);
+  const mailboxAfterDiscard = await get('/api/emails/?mailbox=DRAFTS');
+  assert.deepEqual(mailboxAfterDiscard.emails.map(email => email.id), [mailboxB.id]);
+  await request(
+    'GET',
+    `/api/compose/drafts/by-email/${mailboxA.id}`,
+    undefined,
+    { expectedStatus: 404 },
+  );
+  const stableMailboxB = await get(`/api/compose/drafts/by-email/${mailboxB.id}`);
+  assert.equal(stableMailboxB.client_draft_id, ids.mailboxB);
+  snapshot = await audit();
+  assert.equal(snapshot.counters.provider_draft_creates, 2);
+  assert.equal(snapshot.counters.provider_draft_deletes, 1);
+  assert.equal(snapshot.counters.live_provider_drafts, 1);
+  assertExpectedFlowSafety(snapshot);
+  results.stable_mailbox_identity = snapshot.counters;
 
   // Hold User A's persisted response, authenticate as B, then release it.
   // B cannot look up A's UUID and the fixture records the stale response.
@@ -312,7 +381,7 @@ try {
   });
   await post('/api/qa/release-held');
   const heldResult = await heldPromise;
-  assert.equal(heldResult.status, 200);
+  assert.equal(heldResult.status, 202);
   assert.equal(heldResult.body.client_draft_id, ids.held);
   await request(
     'GET',
@@ -331,7 +400,7 @@ try {
   // Discard is staged, replayable, and undo restores the identical provider
   // draft without ever invoking provider delete.
   await reset('clean', { discardWindowMs: 20 });
-  const undoCreated = await post('/api/compose/draft', draftPayload({
+  const undoCreated = await postDraft(draftPayload({
     clientDraftId: ids.undo,
   }));
   const discardMutation = mutationId();
@@ -369,7 +438,7 @@ try {
   // A fail-before-mutation deletion becomes failed, then one later attempt
   // commits exactly one provider delete. Additional polling is idempotent.
   await reset('delete-fails', { discardWindowMs: 15 });
-  await post('/api/compose/draft', draftPayload({
+  await postDraft(draftPayload({
     clientDraftId: ids.deletion,
   }));
   await post(
@@ -423,7 +492,7 @@ try {
   let offlineAudit = await audit();
   assert.equal(offlineAudit.counters.provider_draft_creates, 0);
   await post('/api/qa/connectivity', { draft_api: 'online' });
-  const onlineSaved = await post('/api/compose/draft', offlinePayload);
+  const onlineSaved = await postDraft(offlinePayload);
   assert.equal(onlineSaved.state, 'synced');
   const offlineRehydrated = await get(
     `/api/compose/drafts/by-client-id/${ids.offline}`,
@@ -447,15 +516,20 @@ try {
   // Guard behavior is tested in its own reset so expected-flow safety audits
   // remain exactly zero for unknown and external mutations.
   await reset('clean');
-  await post('/api/compose/draft', draftPayload({
+  await postDraft(draftPayload({
     clientDraftId: ids.guard,
     to: ['not-generated@example.com'],
+  }), { expectedStatus: 422 });
+  await postDraft(draftPayload({
+    clientDraftId: ids.guard,
+    mutation: mutationId(),
+    to: ['victim@outside.invalid <safe@example.test>'],
   }), { expectedStatus: 422 });
   await post('/api/todos/', { title: 'Generated mutation must be rejected' }, {
     expectedStatus: 405,
   });
   snapshot = await audit();
-  assert.equal(snapshot.counters.non_example_test_rejections, 1);
+  assert.equal(snapshot.counters.non_example_test_rejections, 2);
   assert.equal(snapshot.counters.provider_draft_creates, 0);
   assert.equal(snapshot.counters.unexpected_mutations, 1);
   assert.equal(snapshot.counters.external_network_calls, 0);

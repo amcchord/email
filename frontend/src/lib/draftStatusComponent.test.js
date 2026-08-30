@@ -9,7 +9,7 @@ test('DraftStatus renders controlled announcements and accessible recovery actio
   assert.match(source, /aria-live=\{view\.live\}/);
   assert.match(source, /aria-atomic="true"/);
   assert.match(source, /data-draft-state=\{state\.status \|\| 'pristine'\}/);
-  assert.match(source, /view\.retry && onretry[\s\S]*>Retry</);
+  assert.match(source, /view\.retry && onretry[\s\S]*view\.retryLabel \|\| 'Retry'/);
   assert.match(source, /view\.undo && onundo[\s\S]*>Undo</);
   assert.match(source, /view\.review && onreview[\s\S]*>Review versions</);
   assert.match(source, /min-height: 2\.75rem/);

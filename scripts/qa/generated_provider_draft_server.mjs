@@ -183,7 +183,12 @@ function mailboxAddress(value) {
 
 function isGeneratedAddress(value) {
   const address = mailboxAddress(value);
-  return /^[^@\s]+@(?:[^@\s.]+\.)*example\.test$/i.test(address);
+  const addrSpecs = typeof value === 'string'
+    ? value.match(/[^\s<>"(),;:]+@[^\s<>"(),;:]+/g) || []
+    : [];
+  return addrSpecs.length === 1
+    && addrSpecs[0].toLowerCase() === address
+    && /^[^@\s]+@(?:[^@\s.]+\.)*example\.test$/i.test(address);
 }
 
 function clone(value) {
@@ -381,7 +386,7 @@ export function createGeneratedProviderDraftFixture({
         counters.non_example_test_rejections += 1;
         throw new Error(`${field} accepts only .example.test addresses`);
       }
-      recipientFields[field] = values.map(value => String(value).trim());
+      recipientFields[field] = values.map(mailboxAddress);
     }
 
     const attachments = raw.attachments ?? [];
@@ -703,7 +708,7 @@ export function createGeneratedProviderDraftFixture({
         replayedDraft.updated_at = new Date().toISOString();
         counters.retries_after_lost_response += 1;
       }
-      return writeJson(response, draftResponse(replayedDraft), 200);
+      return writeJson(response, draftResponse(replayedDraft), 202);
     }
 
     if (connectivity === 'offline') {
@@ -756,7 +761,7 @@ export function createGeneratedProviderDraftFixture({
         }
         counters.same_revision_replays += 1;
         rememberMutation(currentUser.id, payload.mutation_id, expectedMutation);
-        return writeJson(response, draftResponse(existing));
+        return writeJson(response, draftResponse(existing), 202);
       }
 
       existing.revision = payload.revision;
@@ -785,6 +790,7 @@ export function createGeneratedProviderDraftFixture({
       drafts.set(key, {
         client_draft_id: payload.client_draft_id,
         draft_id: providerDraftId(currentUser.id, providerSequence),
+        email_id: 50_000 + providerSequence,
         owner_user_id: currentUser.id,
         account_id: payload.account_id,
         revision: payload.revision,
@@ -842,7 +848,7 @@ export function createGeneratedProviderDraftFixture({
     ) {
       return holdResponseAfterPersistence(request, response, record, payload.mutation_id);
     }
-    return writeJson(response, draftResponse(record));
+    return writeJson(response, draftResponse(record), 202);
   }
 
   function getDraftRecord(response, clientDraftId) {
@@ -877,6 +883,35 @@ export function createGeneratedProviderDraftFixture({
       payload_hash: record.payload_hash,
       attachment_count: record.payload.attachments.length,
       attachment_bytes: record.attachment_bytes,
+      state: record.state,
+    });
+    return writeJson(response, draftResponse(record, { includeContent: true }));
+  }
+
+  function handleDraftGetByEmail(request, response, pathname, emailId) {
+    if (!requireUser(response)) return;
+    counters.draft_get_requests += 1;
+    if (!Number.isSafeInteger(emailId) || emailId < 50_000) {
+      return writeError(response, 404, 'draft_not_found', 'Generated provider draft not found');
+    }
+    const record = [...drafts.values()].find(candidate => (
+      candidate.owner_user_id === currentUser.id
+      && candidate.email_id === emailId
+      && candidate.state !== 'discarded'
+    )) || null;
+    if (!record) {
+      return writeError(response, 404, 'draft_not_found', 'Generated provider draft not found');
+    }
+    advanceDiscard(request, pathname, record);
+    if (record.state === 'discarded') {
+      return writeError(response, 404, 'draft_not_found', 'Generated provider draft not found');
+    }
+    counters.attachment_rehydrates += record.payload.attachments.length;
+    counters.attachment_bytes_rehydrated += record.attachment_bytes;
+    recordEvent('draft_rehydrated_by_email', request, pathname, {
+      client_draft_id: record.client_draft_id,
+      revision: record.revision,
+      payload_hash: record.payload_hash,
       state: record.state,
     });
     return writeJson(response, draftResponse(record, { includeContent: true }));
@@ -995,8 +1030,8 @@ export function createGeneratedProviderDraftFixture({
       .map(source => clone(source));
     const providerDrafts = [...drafts.values()]
       .filter(record => record.owner_user_id === currentUser.id && record.state !== 'discarded')
-      .map((record, index) => ({
-        id: 50_000 + index,
+      .map(record => ({
+        id: record.email_id,
         account_id: record.account_id,
         account_email: accountForUser(currentUser.id, record.account_id)?.email,
         gmail_message_id: `generated-draft-message-${record.draft_id}`,
@@ -1066,7 +1101,7 @@ export function createGeneratedProviderDraftFixture({
       }
       writeJson(held.response, record ? draftResponse(record) : {
         detail: { code: 'draft_not_found', message: 'Generated held draft disappeared' },
-      }, record ? 200 : 404);
+      }, record ? 202 : 404);
     }
     recordEvent('qa_release_held', request, '/api/qa/release-held', {
       released: pending.length,
@@ -1267,6 +1302,17 @@ export function createGeneratedProviderDraftFixture({
         response,
         pathname,
         decodeURIComponent(detailMatch[1]),
+      );
+    }
+    const emailDraftMatch = pathname.match(
+      /^\/api\/compose\/drafts\/by-email\/(\d+)$/,
+    );
+    if (request.method === 'GET' && emailDraftMatch) {
+      return handleDraftGetByEmail(
+        request,
+        response,
+        pathname,
+        Number(emailDraftMatch[1]),
       );
     }
     const discardMatch = pathname.match(/^\/api\/compose\/drafts\/([^/]+)\/discard$/);

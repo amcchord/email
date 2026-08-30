@@ -27,6 +27,19 @@ test('global outbound status queues recovery without interrupting an active comp
   assert.match(statusSource, /Finish or leave your current draft before reviewing it/);
 });
 
+test('global outbound status recovers an accepted durable draft after reload-time Undo', () => {
+  assert.match(statusSource, /operation\.client_draft_id/);
+  assert.match(statusSource, /outboundSends\.attachCallbacks\(operation/);
+  assert.match(statusSource, /onSent: terminalOperation => forgetAcceptedDraft/);
+  assert.match(statusSource, /onRestore: \(terminalOperation, reason\)/);
+  assert.match(statusSource, /loadRetainedOutboundDraft\(/);
+  assert.match(statusSource, /const draft = localDraft \|\| await api\.getComposeDraft/);
+  assert.match(statusSource, /api\.getComposeDraft\(operation\.client_draft_id\)/);
+  assert.match(statusSource, /restoreOutboundComposeDraft\(draft, operation, reason\)/);
+  assert.match(statusSource, /composeDraftHasContent\(draft\)/);
+  assert.match(statusSource, /isAuthenticatedSessionCurrent\(session\)/);
+});
+
 test('global outbound status follows authenticated generation and never reads message content', () => {
   assert.match(statusSource, /authenticatedSessionGeneration\.subscribe/);
   assert.match(statusSource, /isAuthenticatedSessionCurrent\(session\)/);

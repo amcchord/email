@@ -93,15 +93,23 @@ function publicState(record, attachmentGate, sending, announcement = null) {
       attachmentErrors: [],
       canSend: false,
       canUndoDiscard: false,
+      discardInProgress: false,
+      sendInProgress: false,
       sending: false,
       announcement,
     });
   }
   const importing = cloneDraftValue(attachmentGate.importing);
   const errors = cloneDraftValue(attachmentGate.errors);
+  const discardInProgress = Boolean(record.tombstone) && record.status !== 'discarded';
+  const sendInProgress = Boolean(record.send_tombstone);
   const blockedStatus = record.status === 'discard-pending'
     || record.status === 'discarded'
-    || record.status === 'conflict';
+    || record.status === 'conflict'
+    || record.status === 'offline'
+    || record.error?.phase === 'local'
+    || discardInProgress
+    || sendInProgress;
   return Object.freeze({
     status: record.status,
     clientDraftId: record.client_draft_id,
@@ -119,6 +127,8 @@ function publicState(record, attachmentGate, sending, announcement = null) {
     canUndoDiscard: Boolean(record.tombstone)
       && record.status !== 'discarded'
       && record.tombstone.can_undo !== false,
+    discardInProgress,
+    sendInProgress,
     sending,
     updatedAt: record.updated_at,
     syncedRevision: record.synced_revision || 0,
@@ -137,6 +147,7 @@ export function draftStatusView(state = {}) {
       role: 'alert',
       live: 'assertive',
       retry: true,
+      retryLabel: 'Choose file',
       undo: false,
       review: false,
     };
@@ -153,6 +164,12 @@ export function draftStatusView(state = {}) {
       review: false,
     };
   }
+  const failedView = state.error?.phase === 'local'
+    ? ['Draft is only in this open window. Copy it before leaving.', 'error', 'alert', 'assertive']
+    : ['Couldn’t sync draft. Your local copy is safe.', 'error', 'alert', 'assertive'];
+  const reconcilingView = state.sendInProgress || state.error?.phase === 'send-reconcile'
+    ? ['Confirming send status. Draft retained here—do not resend.', 'warning', 'alert', 'assertive']
+    : ['Checking draft status… Don’t save again.', 'warning', 'status', 'polite'];
   const views = {
     pristine: ['Draft', 'muted', 'status', 'off'],
     dirty: ['Unsaved changes', 'muted', 'status', 'off'],
@@ -160,8 +177,8 @@ export function draftStatusView(state = {}) {
     saving: ['Saving draft…', 'neutral', 'status', 'off'],
     synced: [state.server?.account_email ? `Saved to ${state.server.account_email}` : 'Draft saved', 'success', 'status', 'off'],
     offline: ['Saved on this device · will sync when online', 'warning', 'status', 'polite'],
-    reconciling: ['Checking draft status… Don’t save again.', 'warning', 'status', 'polite'],
-    failed: ['Couldn’t sync draft. Your local copy is safe.', 'error', 'alert', 'assertive'],
+    reconciling: reconcilingView,
+    failed: failedView,
     conflict: ['This draft changed elsewhere.', 'warning', 'alert', 'assertive'],
     'discard-pending': ['Draft discarded', 'warning', 'status', 'polite'],
     discarded: ['Draft discarded', 'muted', 'status', 'polite'],
@@ -173,7 +190,8 @@ export function draftStatusView(state = {}) {
     role,
     live,
     retry: state.status === 'failed',
-    undo: state.status === 'discard-pending' || Boolean(state.canUndoDiscard),
+    retryLabel: 'Retry',
+    undo: Boolean(state.canUndoDiscard),
     review: state.status === 'conflict',
   };
 }
@@ -189,9 +207,12 @@ function recordFromServer(record, response, acknowledgedRevision) {
   if (!Number.isSafeInteger(responseRevision) || responseRevision < acknowledgedRevision) {
     throw Object.assign(new Error('Draft response revision was stale'), { code: 'draft_stale_response' });
   }
+  const explicitServerRevision = Number(response?.server_revision);
   return {
     draft_id: response?.draft_id ?? response?.server_draft_id ?? record.server?.draft_id ?? null,
-    revision: Number(response?.server_revision ?? responseRevision),
+    revision: Number.isSafeInteger(explicitServerRevision) && explicitServerRevision > 0
+      ? explicitServerRevision
+      : responseRevision,
     account_email: response?.account_email ?? record.server?.account_email ?? null,
     mutation_id: response?.mutation_id ?? record.mutation_id,
     updated_at: response?.updated_at ?? null,
@@ -236,6 +257,8 @@ export function createDraftSession({
   onAnnouncement = () => {},
   onDiscard = () => {},
   onUndoDiscard = () => {},
+  onSendAccepted = () => {},
+  onSendTerminal = () => {},
 } = {}) {
   const safeUserId = normalizeComposeDraftUserId(userId);
   if (!safeUserId) throw new TypeError('A valid authenticated user is required');
@@ -340,9 +363,69 @@ export function createDraftSession({
       server: {},
       error: null,
       conflict: null,
+      send_tombstone: null,
       tombstone: null,
       created_at: createdAt,
       updated_at: createdAt,
+      session,
+    };
+  }
+
+  function recordFromRemote(intent, response, session) {
+    const revision = Number(response?.revision || 0);
+    if (!Number.isSafeInteger(revision) || revision < 1) {
+      throw new Error('Server draft revision is invalid');
+    }
+    const remoteState = serverDraftState(response);
+    const syncedRevision = Number(response?.synced_revision || 0);
+    const localStatus = remoteState === 'synced'
+      ? 'synced'
+      : remoteState === 'failed'
+        ? 'failed'
+        : remoteState === 'discard-pending'
+          ? 'discard-pending'
+          : remoteState === 'discarded'
+            ? 'discarded'
+            : 'reconciling';
+    const createdAt = response?.created_at || timestamp(now);
+    const deadline = serverDiscardDeadline(response, response?.updated_at || timestamp(now));
+    return {
+      user_id: safeUserId,
+      client_draft_id: intent.client_draft_id,
+      intent_key: intent.intent_key,
+      draft_key: intent.draft_key,
+      storage_namespace: draftStorageNamespace(safeUserId, intent.intent_key),
+      revision,
+      mutation_id: randomUUID(),
+      synced_revision: Number.isSafeInteger(syncedRevision) && syncedRevision > 0 ? syncedRevision : 0,
+      status: localStatus,
+      snapshot: remoteState === 'discarded' ? {} : snapshotFromServerResponse(response),
+      server: {
+        draft_id: response?.draft_id || null,
+        revision: Number(response?.synced_revision || response?.revision || 0),
+        state: remoteState,
+        account_email: response?.account_email || null,
+      },
+      error: remoteState === 'failed'
+        ? { phase: 'server', message: response?.error_message || 'Draft synchronization failed', retryable: true }
+        : null,
+      conflict: null,
+      send_tombstone: remoteState === 'sending'
+        ? {
+          send_id: response?.linked_send_id || null,
+          requested_at: response?.updated_at || createdAt,
+          confirmed_server_ownership: Boolean(response?.linked_send_id),
+        }
+        : null,
+      tombstone: remoteState === 'discard-pending' || remoteState === 'discarded'
+        ? {
+          deadline,
+          can_undo: response?.can_undo_discard === true,
+          server_pending: remoteState === 'discard-pending',
+        }
+        : null,
+      created_at: createdAt,
+      updated_at: response?.updated_at || createdAt,
       session,
     };
   }
@@ -365,30 +448,72 @@ export function createDraftSession({
     if (disposed) throw new Error('Draft session is disposed');
     if (!clientDraftId && !intent?.intent_key) throw new TypeError('Draft ID or explicit intent is required');
     const session = captureSession();
-    const loaded = clientDraftId
+    let loaded = clientDraftId
       ? await storage.get(safeUserId, clientDraftId)
       : await storage.findByIntent?.(safeUserId, intent.intent_key);
     if (!isSessionCurrent(session)) return latestState;
+    if (!loaded && clientDraftId && (
+      typeof api.getComposeDraft === 'function' || typeof api.lookupDraft === 'function'
+    )) {
+      try {
+        const response = await callLookup({ client_draft_id: clientDraftId });
+        if (!isSessionCurrent(session)) return latestState;
+        if (response) {
+          const resolvedIntent = createComposeDraftIntent(
+            { ...intent, client_draft_id: clientDraftId },
+            { randomUUID },
+          );
+          loaded = recordFromRemote(resolvedIntent, response, session);
+          await putRecord(loaded);
+          if (!isSessionCurrent(session)) return latestState;
+        }
+      } catch (error) {
+        if (!isNotFound(error)) throw error;
+      }
+    }
     if (!loaded) return create({ intent: { ...intent, client_draft_id: clientDraftId }, initialSnapshot });
 
-    if (loaded.status === 'saving' || loaded.status === 'reconciling' || loaded.status === 'dirty') {
+    if (loaded.send_tombstone) {
+      loaded.status = 'reconciling';
+      loaded.error = {
+        phase: 'send-reconcile',
+        message: 'Send acceptance is still being confirmed',
+        retryable: true,
+      };
+    } else if (loaded.status === 'saving' || loaded.status === 'reconciling') {
+      loaded.status = isOnline() ? 'reconciling' : 'offline';
+    } else if (loaded.status === 'dirty') {
       loaded.status = isOnline() ? 'local-only' : 'offline';
     }
     const loadedGeneration = activate(loaded, session);
     publish(loaded.status);
-    if (loaded.status === 'discard-pending') {
+    if (loaded.send_tombstone) {
+      if (isOnline()) scheduleSendRefresh(0);
+    } else if (loaded.tombstone && loaded.status !== 'discarded') {
       const remaining = new Date(loaded.tombstone?.deadline || 0).getTime() - new Date(now()).getTime();
-      if (remaining > 0) armDiscard(remaining);
+      if (loaded.status === 'discard-pending' && remaining > 0) armDiscard(remaining);
       else void reconcileDiscard(loadedGeneration, session, loaded.client_draft_id);
     } else if (loaded.status === 'local-only' || loaded.status === 'offline') {
-      if (isOnline()) scheduleFlush(0);
+      if (isOnline() && Number(loaded.server?.revision || 0) >= loaded.revision) {
+        loaded.error = null;
+        loaded.status = loaded.server?.state === 'synced' ? 'synced' : 'reconciling';
+        await putRecord(loaded);
+        if (!currentAuthority(loadedGeneration, session, loaded.client_draft_id)) return latestState;
+        publish(loaded.status, String(loaded.revision));
+        if (loaded.status === 'reconciling') scheduleRefresh(0);
+      } else if (isOnline()) scheduleFlush(0);
+    } else if (loaded.status === 'reconciling') {
+      scheduleRefresh(0);
     }
     return latestState;
   }
 
   function update(snapshot) {
     if (!active || disposed) throw new Error('No active draft');
-    if (active.status === 'discard-pending' || active.status === 'discarded') {
+    if (active.send_tombstone) {
+      throw new Error('Send status is still being confirmed');
+    }
+    if (active.tombstone || active.status === 'discard-pending' || active.status === 'discarded') {
       throw new Error('Discarded draft cannot be edited');
     }
     active.snapshot = cloneDraftValue(snapshot || {});
@@ -404,6 +529,7 @@ export function createDraftSession({
 
   function beginAttachmentImport({ id = randomUUID(), filename = 'attachment' } = {}) {
     if (!active) throw new Error('No active draft');
+    if (active.tombstone || active.send_tombstone) throw new Error('Draft is locked');
     attachmentGate.importing = [
       ...attachmentGate.importing.filter(item => item.id !== id),
       { id, filename },
@@ -464,6 +590,18 @@ export function createDraftSession({
     }, delay);
   }
 
+  function scheduleSendRefresh(delay = pollMs) {
+    clearPollTimer();
+    const capturedGeneration = generation;
+    const capturedSession = active?.session;
+    const draftId = active?.client_draft_id;
+    pollTimer = timers.setTimeout(() => {
+      pollTimer = null;
+      if (!currentAuthority(capturedGeneration, capturedSession, draftId)) return;
+      void reconcileSend(capturedGeneration, capturedSession, draftId);
+    }, delay);
+  }
+
   async function applyAck(response, request, capturedGeneration, capturedSession) {
     if (disposed || !isSessionCurrent(capturedSession)) return;
     const stored = await storage.get(safeUserId, request.clientDraftId);
@@ -476,6 +614,13 @@ export function createDraftSession({
     const responseState = serverDraftState(response) || 'synced';
     server.state = responseState;
     next.server = server;
+    if (responseState === 'sending') {
+      next.send_tombstone = {
+        send_id: response?.linked_send_id || null,
+        requested_at: response?.updated_at || timestamp(now),
+        confirmed_server_ownership: Boolean(response?.linked_send_id),
+      };
+    }
     if (responseState === 'synced') {
       next.synced_revision = Math.max(next.synced_revision || 0, request.revision);
     }
@@ -490,6 +635,13 @@ export function createDraftSession({
         phase: 'server',
         message: response?.error_message || 'Draft synchronization failed',
         retryable: response?.can_retry !== false,
+      };
+    } else if (responseState === 'sending') {
+      next.status = 'reconciling';
+      next.error = {
+        phase: 'send-reconcile',
+        message: 'Send acceptance is still being confirmed',
+        retryable: true,
       };
     } else if (responseState === 'discard-pending') next.status = 'discard-pending';
     else if (responseState === 'discarded') next.status = 'discarded';
@@ -513,6 +665,11 @@ export function createDraftSession({
     } else if (responseState === 'reconciling') {
       publish('reconciling', String(request.revision));
       scheduleRefresh();
+    } else if (responseState === 'sending') {
+      active.send_tombstone = next.send_tombstone;
+      active.error = next.error;
+      publish('reconciling', `send:${response?.linked_send_id || ''}`);
+      scheduleSendRefresh(0);
     } else if (responseState === 'discard-pending' || responseState === 'discarded') {
       await applyDiscardResponse(response, capturedGeneration, capturedSession, request.clientDraftId);
     } else {
@@ -613,7 +770,16 @@ export function createDraftSession({
   async function flush() {
     if (!active || disposed) return latestState;
     clearDebounce();
-    if (active.status === 'discard-pending' || active.status === 'discarded' || active.status === 'conflict') {
+    if (
+      active.status === 'discard-pending'
+      || active.status === 'discarded'
+      || active.status === 'conflict'
+      || active.send_tombstone
+    ) {
+      return latestState;
+    }
+    if (Number(active.server?.revision || 0) >= active.revision) return latestState;
+    if (active.status === 'synced' && active.synced_revision >= active.revision) {
       return latestState;
     }
     const capturedGeneration = generation;
@@ -711,8 +877,72 @@ export function createDraftSession({
     return latestState;
   }
 
+  async function reconcileSend(
+    capturedGeneration = generation,
+    capturedSession = active?.session,
+    draftId = active?.client_draft_id,
+  ) {
+    if (!active?.send_tombstone || !currentAuthority(capturedGeneration, capturedSession, draftId)) {
+      return latestState;
+    }
+    const tombstone = active.send_tombstone;
+    try {
+      let response = null;
+      if (tombstone.send_id && typeof api.getOutboundSend === 'function') {
+        response = await api.getOutboundSend(tombstone.send_id);
+      } else if (tombstone.idempotency_key && typeof api.getOutboundSendByIdempotency === 'function') {
+        response = await api.getOutboundSendByIdempotency(tombstone.idempotency_key);
+      }
+      if (!currentAuthority(capturedGeneration, capturedSession, draftId)) return latestState;
+      if (!response?.send_id) {
+        scheduleSendRefresh();
+        return latestState;
+      }
+      active.send_tombstone = {
+        ...tombstone,
+        send_id: response.send_id,
+        confirmed_server_ownership: true,
+        confirmed_at: timestamp(now),
+      };
+      active.error = {
+        phase: 'send-reconcile',
+        message: 'Send was accepted',
+        retryable: false,
+      };
+      await putRecord({ ...active, status: 'reconciling' });
+      if (!currentAuthority(capturedGeneration, capturedSession, draftId)) return latestState;
+      publish('reconciling', `send:${response.send_id}`);
+      const outboundState = String(response.state || '').replaceAll('_', '-').toLowerCase();
+      if (outboundState === 'cancelled' || outboundState === 'failed') {
+        onSendTerminal({
+          operation: cloneDraftValue(response),
+          reason: outboundState,
+          snapshot: cloneDraftValue(active.snapshot),
+        });
+      } else {
+        onSendAccepted(response);
+      }
+    } catch (error) {
+      if (!currentAuthority(capturedGeneration, capturedSession, draftId)) return latestState;
+      active.error = {
+        phase: 'send-reconcile',
+        message: errorMessage(error, 'Send status could not be confirmed'),
+        retryable: true,
+      };
+      await putRecord({ ...active, status: 'reconciling' });
+      publish('reconciling', `send:${tombstone.idempotency_key || tombstone.send_id || ''}`);
+      scheduleSendRefresh();
+    }
+    return latestState;
+  }
+
   async function retry() {
     if (!active || (active.status !== 'failed' && active.status !== 'offline')) return latestState;
+    if (active.send_tombstone) {
+      publish('reconciling', `send:${active.send_tombstone.idempotency_key || ''}`);
+      if (isOnline()) scheduleSendRefresh(0);
+      return latestState;
+    }
     if (active.tombstone && String(active.error?.phase || '').includes('discard')) {
       const capturedGeneration = generation;
       const capturedSession = active.session;
@@ -731,6 +961,14 @@ export function createDraftSession({
         publish('failed', `discard:${active.tombstone.mutation_id || ''}`);
         return latestState;
       }
+    }
+    if (
+      active.error?.phase === 'server'
+      && Number(active.server?.revision || 0) >= active.revision
+    ) {
+      active.revision += 1;
+      active.mutation_id = randomUUID();
+      active.updated_at = timestamp(now);
     }
     active.error = null;
     publish('local-only');
@@ -766,7 +1004,13 @@ export function createDraftSession({
     }, Math.max(0, delay));
   }
 
-  async function applyDiscardResponse(response, capturedGeneration, capturedSession, draftId) {
+  async function applyDiscardResponse(
+    response,
+    capturedGeneration,
+    capturedSession,
+    draftId,
+    { allowRestore = false } = {},
+  ) {
     if (!currentAuthority(capturedGeneration, capturedSession, draftId)) return latestState;
     const responseState = serverDraftState(response);
     if (responseState === 'discarded') {
@@ -774,7 +1018,27 @@ export function createDraftSession({
     }
     if (responseState !== 'discard-pending') {
       if (['pending', 'syncing', 'reconciling', 'synced'].includes(responseState)) {
-        return restoreDiscardAfterUndo(response, capturedGeneration, capturedSession, draftId);
+        const authoritativeExternalUndo = responseState !== 'syncing'
+          && active.tombstone?.server_pending
+          && response?.discard_at == null
+          && response?.discard_undo_until == null;
+        if (allowRestore || authoritativeExternalUndo) {
+          return restoreDiscardAfterUndo(response, capturedGeneration, capturedSession, draftId);
+        }
+        active.tombstone = {
+          ...(active.tombstone || {}),
+          can_undo: false,
+          server_pending: true,
+        };
+        active.error = {
+          phase: 'discard-reconcile',
+          message: 'Draft discard is still being confirmed',
+          retryable: true,
+        };
+        await putRecord({ ...active, status: 'reconciling' });
+        publish('reconciling', `discard:${active.tombstone.mutation_id || ''}`);
+        armDiscard(pollMs);
+        return latestState;
       }
       throw new Error(`Unexpected discard state: ${responseState || 'missing'}`);
     }
@@ -786,7 +1050,7 @@ export function createDraftSession({
       deadline,
       server_pending: true,
       can_undo: response.can_undo_discard !== false,
-      mutation_id: response.mutation_id || active.mutation_id,
+      mutation_id: response.mutation_id || active.tombstone?.mutation_id,
     };
     active.server = {
       ...(active.server || {}),
@@ -798,7 +1062,7 @@ export function createDraftSession({
     if (!currentAuthority(capturedGeneration, capturedSession, draftId)) return latestState;
     publish('discard-pending', deadline);
     const remaining = new Date(deadline).getTime() - new Date(now()).getTime();
-    armDiscard(Math.max(0, remaining));
+    armDiscard(remaining > 0 ? remaining : pollMs);
     return latestState;
   }
 
@@ -813,17 +1077,26 @@ export function createDraftSession({
   }
 
   async function discard({ delayMs = discardDelayMs } = {}) {
-    if (!active || active.status === 'discarded') return latestState;
+    if (
+      !active
+      || active.status === 'discarded'
+      || active.tombstone
+      || active.send_tombstone
+      || attachmentGate.importing.length > 0
+    ) return latestState;
     clearDebounce();
     clearPollTimer();
+    attachmentGate = emptyAttachmentGate();
     const capturedGeneration = generation;
     const capturedSession = active.session;
     const draftId = active.client_draft_id;
     const mutationId = randomUUID();
     const deadline = new Date(new Date(now()).getTime() + Math.max(0, delayMs)).toISOString();
     const priorStatus = active.status;
-    active.revision += 1;
-    active.mutation_id = mutationId;
+    const serverOutcomePossible = Number(active.server?.revision || 0) > 0
+      || active.status === 'saving'
+      || active.status === 'reconciling'
+      || active.error?.phase === 'reconcile';
     active.tombstone = {
       deadline,
       prior_status: priorStatus,
@@ -836,6 +1109,10 @@ export function createDraftSession({
     active.updated_at = timestamp(now);
     await putRecord(active);
     publish('discard-pending', deadline);
+    if (!serverOutcomePossible) {
+      armDiscard(delayMs);
+      return latestState;
+    }
     try {
       const response = await callDiscard(draftId, mutationId);
       if (!response) {
@@ -866,6 +1143,7 @@ export function createDraftSession({
     draftId = active?.client_draft_id,
   ) {
     if (!active || !currentAuthority(capturedGeneration, capturedSession, draftId)) return latestState;
+    active.tombstone.can_undo = false;
     if (!active.tombstone?.server_pending && typeof api.getComposeDraft !== 'function' && typeof api.lookupDraft !== 'function') {
       return finalizeAuthoritativeDiscard(
         { state: 'discarded', discarded_at: timestamp(now), local_only: true },
@@ -876,6 +1154,14 @@ export function createDraftSession({
     }
     publish('reconciling', `discard:${active.tombstone?.mutation_id || ''}`);
     try {
+      if (active.tombstone.server_outcome_unknown) {
+        const replay = await callDiscard(draftId, active.tombstone.mutation_id);
+        if (!currentAuthority(capturedGeneration, capturedSession, draftId)) return latestState;
+        if (replay) {
+          active.tombstone.server_outcome_unknown = false;
+          return applyDiscardResponse(replay, capturedGeneration, capturedSession, draftId);
+        }
+      }
       const response = await callLookup(active);
       if (!response) throw new Error('Draft discard status is unavailable');
       return applyDiscardResponse(response, capturedGeneration, capturedSession, draftId);
@@ -928,13 +1214,19 @@ export function createDraftSession({
       state: responseState || active.server?.state,
       revision: Number(response?.synced_revision || response?.revision || active.server?.revision || 0),
     };
-    active.status = !isOnline()
-      ? 'offline'
-      : (responseState === 'synced' ? 'synced' : restoredStatus);
-    active.error = null;
+    if (!isOnline()) active.status = 'offline';
+    else if (responseState === 'synced') active.status = 'synced';
+    else if (responseState === 'failed') active.status = 'failed';
+    else if (responseState === 'pending' || responseState === 'syncing') active.status = 'saving';
+    else if (responseState === 'reconciling') active.status = 'reconciling';
+    else active.status = restoredStatus;
+    active.error = responseState === 'failed'
+      ? { phase: 'server', message: response?.error_message || 'Draft synchronization failed', retryable: true }
+      : null;
     active.updated_at = timestamp(now);
     await putRecord(active);
     publish(active.status, `undo:${active.revision}`);
+    if (active.status === 'saving' || active.status === 'reconciling') scheduleRefresh();
     onUndoDiscard({ clientDraftId: active.client_draft_id, snapshot: cloneDraftValue(active.snapshot) });
     return true;
   }
@@ -948,6 +1240,8 @@ export function createDraftSession({
     if (!active.tombstone.server_pending && !active.tombstone.server_outcome_unknown) {
       return restoreDiscardAfterUndo({}, capturedGeneration, capturedSession, draftId);
     }
+    active.tombstone.undo_mutation_id = mutationId;
+    await putRecord(active);
     publish('reconciling', `undo:${mutationId}`);
     try {
       let response = null;
@@ -964,7 +1258,29 @@ export function createDraftSession({
       return restoreDiscardAfterUndo(response, capturedGeneration, capturedSession, draftId);
     } catch (error) {
       if (!currentAuthority(capturedGeneration, capturedSession, draftId)) return false;
-      if (isAmbiguous(error) || error?.status === 409) {
+      if (isAmbiguous(error)) {
+        try {
+          let replay = null;
+          if (typeof api.undoDiscard === 'function') {
+            replay = await api.undoDiscard({ clientDraftId: draftId, mutationId });
+          } else if (typeof api.undoComposeDraftDiscard === 'function') {
+            replay = await api.undoComposeDraftDiscard(draftId, mutationId);
+          }
+          if (replay && currentAuthority(capturedGeneration, capturedSession, draftId)) {
+            await applyDiscardResponse(
+              replay,
+              capturedGeneration,
+              capturedSession,
+              draftId,
+              { allowRestore: true },
+            );
+            return active.status !== 'discarded';
+          }
+        } catch {
+          // Keep the tombstone locked and reconcile provider truth below.
+        }
+        await reconcileDiscard(capturedGeneration, capturedSession, draftId);
+      } else if (error?.status === 409) {
         await reconcileDiscard(capturedGeneration, capturedSession, draftId);
       } else {
         active.error = { phase: 'undo-discard', message: errorMessage(error), retryable: true };
@@ -977,15 +1293,63 @@ export function createDraftSession({
 
   async function markSending(value = true) {
     if (!active) return latestState;
-    if (value) await flush();
+    if (value && (active.tombstone || active.send_tombstone)) {
+      throw new Error('Draft is locked');
+    }
+    if (value && (!isOnline() || active.status === 'offline')) {
+      throw new Error('Reconnect before sending');
+    }
     sending = Boolean(value);
     publish();
+    if (value) {
+      await flush();
+      if (Number(active.server?.revision || 0) < active.revision) {
+        sending = false;
+        publish();
+        throw new Error('Draft must be saved before it can be sent');
+      }
+    }
+    return latestState;
+  }
+
+  async function markSendUncertain(operation = {}) {
+    if (!active) return latestState;
+    clearDebounce();
+    clearPollTimer();
+    sending = false;
+    active.send_tombstone = {
+      idempotency_key: operation.idempotency_key || null,
+      send_id: operation.send_id || null,
+      requested_at: operation.requested_at || operation.created_at || timestamp(now),
+      confirmed_server_ownership: Boolean(operation.send_id),
+    };
+    active.error = {
+      phase: 'send-reconcile',
+      message: 'Send acceptance is still being confirmed',
+      retryable: true,
+    };
+    active.updated_at = timestamp(now);
+    await putRecord({ ...active, status: 'reconciling' });
+    publish('reconciling', `send:${active.send_tombstone.idempotency_key || active.send_tombstone.send_id || ''}`);
+    if (isOnline()) scheduleSendRefresh(0);
     return latestState;
   }
 
   function handleOnlineChange() {
     if (!active || disposed) return;
-    if (isOnline() && (active.status === 'offline' || active.status === 'failed')) void retry();
+    if (isOnline() && active.send_tombstone) scheduleSendRefresh(0);
+    else if (isOnline() && active.status === 'offline') {
+      if (Number(active.server?.revision || 0) >= active.revision) {
+        active.error = null;
+        if (active.server?.state === 'synced') publish('synced', String(active.revision));
+        else {
+          publish('reconciling', String(active.revision));
+          scheduleRefresh(0);
+        }
+      } else {
+        void retry();
+      }
+    } else if (isOnline() && active.status === 'failed') void retry();
     else if (!isOnline() && active.status !== 'discard-pending' && active.status !== 'discarded') {
       publish('offline', String(active.revision));
     }
@@ -1025,6 +1389,7 @@ export function createDraftSession({
     discard,
     undoDiscard,
     markSending,
+    markSendUncertain,
     handleOnlineChange,
     dispose,
   });

@@ -4,6 +4,7 @@
   import {
     authenticatedSessionGeneration,
     captureAuthenticatedSession,
+    composeData,
     currentPage,
     dismissToast,
     forceSyncPoll,
@@ -31,6 +32,13 @@
     getLazyRouteLabel,
     normalizeAuthenticatedPage,
   } from './lib/lazyRoutes.js';
+  import {
+    applyComposeDraftRoute,
+    composeDraftIntentFromRoute,
+    ensureComposeDraftIntent,
+    isComposeDraftUuid,
+    newComposeIntent,
+  } from './lib/composeDraft.js';
   import { accountOAuthOutcome } from './lib/oauthResult.js';
 
   let loading = $state(true);
@@ -92,12 +100,18 @@
     return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
   }
 
-  function canonicalPageLocation(page) {
+  function canonicalPageLocation(page, draft = null) {
     const url = new URL(window.location.href);
     if (page === DEFAULT_AUTHENTICATED_PAGE) url.searchParams.delete('page');
     else url.searchParams.set('page', page);
     if (page !== 'admin') url.searchParams.delete('tab');
+    applyComposeDraftRoute(url, page, draft);
     return `${url.pathname}${url.search}${url.hash}`;
+  }
+
+  function applyComposeRouteFromLocation(params, page) {
+    if (page !== 'compose') return;
+    composeData.set(composeDraftIntentFromRoute(params.get('draft')) || newComposeIntent());
   }
 
   function retryLazyRoute() {
@@ -149,6 +163,10 @@
     startVersionPolling();
 
     if (params.has('page')) currentPage.set(normalizeAuthenticatedPage(params.get('page')));
+    applyComposeRouteFromLocation(
+      params,
+      normalizeAuthenticatedPage(params.get('page') || DEFAULT_AUTHENTICATED_PAGE),
+    );
 
     const oauthOutcome = accountOAuthOutcome(window.location.href);
     if (oauthOutcome) {
@@ -172,6 +190,7 @@
       const nextParams = new URLSearchParams(window.location.search);
       const nextPage = normalizeAuthenticatedPage(nextParams.get('page') || DEFAULT_AUTHENTICATED_PAGE);
       historyNavigationPage = nextPage;
+      applyComposeRouteFromLocation(nextParams, nextPage);
       currentPage.set(nextPage);
       focusMainRegion();
     };
@@ -227,7 +246,12 @@
   $effect(() => {
     const page = authenticatedPage;
     if (typeof window === 'undefined' || loading || !$user || deviceAuthCode !== null || standaloneEmailId !== null) return;
-    const next = canonicalPageLocation(page);
+    if (page === 'compose' && !isComposeDraftUuid($composeData?.client_draft_id)) {
+      composeData.set(ensureComposeDraftIntent($composeData || {}));
+      return;
+    }
+    const draft = page === 'compose' ? $composeData : null;
+    const next = canonicalPageLocation(page, draft);
     const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     const fromHistory = historyNavigationPage === page;
     historyNavigationPage = null;

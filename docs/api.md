@@ -39,6 +39,7 @@ free-form questions about your inbox without touching the web UI.
 - [Web session-only attachment preview and download](#web-session-only-attachment-preview-and-download)
 - [Web session-only durable mail actions](#web-session-only-durable-mail-actions)
 - [Web session-only durable outbound delivery](#web-session-only-durable-outbound-delivery)
+- [Web session-only durable draft sessions](#web-session-only-durable-draft-sessions)
 - [Web session-only Todo ownership](#web-session-only-todo-ownership)
 - [At a Glance displays and terminal management](#at-a-glance-displays-and-terminal-management)
 
@@ -869,6 +870,8 @@ Create requires one client-generated UUID for one immutable logical payload:
   "subject": "Generated example",
   "body_text": "Generated fixture content",
   "body_html": "<p>Generated fixture content</p>",
+  "client_draft_id": "ca309a94-c45d-430c-a707-af10376124b1",
+  "draft_revision": 7,
   "source_email_id": null,
   "in_reply_to": null,
   "references": null,
@@ -909,6 +912,7 @@ logical send.
   "idempotency_key": "a48e819f-1bd6-4bf6-b2bc-b81e7300f226",
   "account_id": 3,
   "source_email_id": null,
+  "client_draft_id": "ca309a94-c45d-430c-a707-af10376124b1",
   "state": "staged",
   "execute_after": "2026-08-30T12:00:10Z",
   "undo_until": "2026-08-30T12:00:10Z",
@@ -947,11 +951,123 @@ Reconciliation performs only Sent lookups; it never replays the message.
 Expired pre-attempt work may follow bounded retry policy. Redis only wakes the
 drainer; PostgreSQL and the periodic cron sweep provide recovery.
 
+`client_draft_id` and `draft_revision` are optional only as a pair. When
+present, they must identify the current user's exact durable draft revision;
+admission links that immutable revision to this send. The browser keeps its
+auth-scoped IndexedDB snapshot until terminal truth: `sent` deletes it, while
+`failed` or `cancelled` converts it to a new Compose identity before removing
+the send-owned copy. This recovery authority does not weaken server-side
+payload scrubbing.
+
 Status responses contain lifecycle metadata only—never recipients, subject,
 body, or attachments. Provider errors are reduced to safe codes and copy.
 Payload content is removed after `sent`, `cancelled`, every non-retryable
 failure, or expiration of the bounded pre-provider retry window. Public API
 tokens cannot call these mutation routes.
+
+## Web session-only durable draft sessions
+
+Full Compose uses a user- and account-owned PostgreSQL draft session rather
+than treating a successful Gmail request as the first durable save. HTTP 202
+means the exact revision and attachment bytes are committed locally and owned
+by the server; only `state: "synced"` means Gmail has confirmed the provider
+draft.
+
+```text
+POST /api/compose/draft
+GET  /api/compose/drafts/recent?limit=20
+GET  /api/compose/drafts/by-client-id/{client_draft_id}
+GET  /api/compose/drafts/by-email/{email_id}
+POST /api/compose/drafts/{client_draft_id}/discard
+POST /api/compose/drafts/{client_draft_id}/undo-discard
+```
+
+Each writing intent receives one client UUID. Every changed snapshot advances
+its positive revision and receives a new mutation UUID:
+
+```json
+{
+  "client_draft_id": "ca309a94-c45d-430c-a707-af10376124b1",
+  "revision": 7,
+  "mutation_id": "7461b86c-2f33-41dc-9a30-d183d94cfa87",
+  "account_id": 3,
+  "to": ["recipient@example.test"],
+  "cc": [],
+  "bcc": [],
+  "subject": "Generated example",
+  "body_text": "Generated fixture content",
+  "body_html": "<p>Generated fixture content</p>",
+  "source_email_id": null,
+  "in_reply_to": null,
+  "references": null,
+  "thread_id": null,
+  "attachments": []
+}
+```
+
+The account must be active and owned by the current user. Recipient, header,
+body, attachment-count, decoded-byte, and streamed-body limits match Compose
+send. Reply metadata additionally requires an exact owned source message,
+account, Gmail thread, Message-ID, and References chain. Foreign, missing, or
+mismatched sources use the same non-disclosing 404.
+
+The same mutation and canonical payload is an idempotent lookup. A reused
+mutation for different content, a changed payload at an existing revision, or
+a stale revision returns 409 `draft_conflict`. PostgreSQL serializes admission
+per user and enforces active-draft, recent-mutation, and retained-byte quotas;
+quota failures return 429 `draft_rate_limited` with `Retry-After`. Persistence
+failure returns safe 503 `draft_unavailable` with `Retry-After: 5`.
+
+```json
+{
+  "client_draft_id": "ca309a94-c45d-430c-a707-af10376124b1",
+  "account_id": 3,
+  "source_email_id": null,
+  "revision": 7,
+  "synced_revision": 7,
+  "state": "synced",
+  "next_attempt_at": null,
+  "attempt_count": 1,
+  "can_undo_discard": false,
+  "discard_at": null,
+  "discard_undo_until": null,
+  "linked_send_id": null,
+  "error_code": null,
+  "error_message": null,
+  "attachment_count": 0,
+  "attachment_bytes": 0,
+  "created_at": "2026-08-30T12:00:00Z",
+  "updated_at": "2026-08-30T12:00:02Z",
+  "synced_at": "2026-08-30T12:00:02Z",
+  "discarded_at": null
+}
+```
+
+States are `pending`, `syncing`, `reconciling`, `synced`, `failed`,
+`discard_pending`, `discarded`, and `sending`. The detail lookups also return
+the owned content and attachment bytes needed to reopen a draft. Recent list
+responses remain metadata-only. `by-email` resolves only a provider draft that
+this application manages for the current user; a foreign or externally created
+Gmail draft remains read-only and returns the same safe 404.
+
+The worker assigns one stable RFC Message-ID before provider work. It attempts
+the initial Gmail draft create at most once. If that result is ambiguous, the
+session enters `reconciling` and performs lookup-only recovery; it never issues
+a blind second create. Confirmed drafts use Gmail update semantics for later
+revisions. Redis only wakes the drainer; PostgreSQL leases and the minutely cron
+sweep are the recovery authority.
+
+Discard is server-authoritative and starts a ten-second Undo window. Undo uses
+a distinct mutation UUID and succeeds only while the server still reports
+`can_undo_discard`. As soon as that authoritative window expires, the database
+scrubs recipients, bodies, and attachment bytes before any provider delete or
+reconciliation work. A content-free tombstone retains only the identities and
+state needed to finish safe provider reconciliation without claiming success.
+A send may link only the exact owned draft UUID and revision; the worker cleans
+up the matching provider draft after the authoritative Undo deadline, even
+while outbound delivery is still retrying or reconciling. The browser-owned
+recovery snapshot remains available until terminal delivery truth. Public API
+tokens cannot call any draft mutation or detail route.
 
 ## Web session-only Todo ownership
 

@@ -442,6 +442,25 @@ async def _stage_draft_upsert(
     payload = _message_payload(request)
     payload_hash = _payload_hash(payload, manifest)
 
+    # Draft upserts and outbound Send both acquire the account row before the
+    # per-draft advisory/row locks. Keeping that global order prevents an
+    # autosave racing Send from deadlocking with the account acceptance path.
+    await _lock_draft_acceptance(db, user_id=user_id)
+    account = (
+        await db.execute(
+            select(GoogleAccount)
+            .where(
+                GoogleAccount.id == request.account_id,
+                GoogleAccount.user_id == user_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if account is None:
+        raise DraftNotFound("Account not found")
+    if not account.is_active:
+        raise DraftValidationError("Account is inactive")
+
     await _lock_draft(db, user_id=user_id, client_draft_id=request.client_draft_id)
     draft = await _owned_draft(
         db,
@@ -472,21 +491,6 @@ async def _stage_draft_upsert(
             raise DraftNotFound("Draft not found")
         _validate_existing_reply_provenance(draft, request)
 
-    await _lock_draft_acceptance(db, user_id=user_id)
-    account = (
-        await db.execute(
-            select(GoogleAccount)
-            .where(
-                GoogleAccount.id == request.account_id,
-                GoogleAccount.user_id == user_id,
-            )
-            .with_for_update()
-        )
-    ).scalar_one_or_none()
-    if account is None:
-        raise DraftNotFound("Account not found")
-    if not account.is_active:
-        raise DraftValidationError("Account is inactive")
     source = None
     if draft is None:
         source = await _validate_new_reply_provenance(
@@ -877,6 +881,21 @@ async def _reclaim_expired_leases(
             draft.state = "pending"
 
 
+async def _scrub_expired_draft_payload(
+    db: AsyncSession,
+    *,
+    draft: DraftSession,
+) -> None:
+    """Remove message/attachment bytes once the authoritative Undo window ends."""
+    await db.execute(
+        delete(DraftAttachment).where(DraftAttachment.draft_session_id == draft.id)
+    )
+    draft.payload = None
+    draft.payload_hash = hashlib.sha256(b"discarded").hexdigest()
+    draft.attachment_count = 0
+    draft.attachment_bytes = 0
+
+
 async def _claim_due_drafts(
     db: AsyncSession,
     *,
@@ -905,6 +924,9 @@ async def _claim_due_drafts(
     for draft in claimed:
         if draft.state in {"discard_pending", "sending"}:
             operation = "discard"
+            # The Undo deadline is authoritative. Provider deletion may need
+            # retries, but local sensitive bytes do not survive that window.
+            await _scrub_expired_draft_payload(db, draft=draft)
         elif draft.state == "reconciling":
             operation = "reconcile"
         else:
@@ -1127,6 +1149,7 @@ async def _record_discard_reconciling(
         ).scalar_one_or_none()
         if draft is None:
             return
+        await _scrub_expired_draft_payload(db, draft=draft)
         draft.lease_operation = None
         draft.lease_token = None
         draft.lease_expires_at = None
@@ -1170,13 +1193,7 @@ async def _finish_discarded(*, claimed: DraftSession, now: datetime) -> None:
         ).scalar_one_or_none()
         if draft is None:
             return
-        await db.execute(
-            delete(DraftAttachment).where(DraftAttachment.draft_session_id == draft.id)
-        )
-        draft.payload = None
-        draft.payload_hash = hashlib.sha256(b"discarded").hexdigest()
-        draft.attachment_count = 0
-        draft.attachment_bytes = 0
+        await _scrub_expired_draft_payload(db, draft=draft)
         draft.provider_draft_id = None
         draft.provider_message_id = None
         draft.state = "discarded"

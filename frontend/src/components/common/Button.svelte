@@ -6,6 +6,7 @@
     onclick = null,
     type = 'button',
     class: className = '',
+    element = $bindable(null),
     children,
   } = $props();
 
@@ -26,6 +27,7 @@
 </script>
 
 <button
+  bind:this={element}
   {type}
   {disabled}
   onclick={onclick}

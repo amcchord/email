@@ -81,6 +81,18 @@ test('normalization exposes only safe lifecycle fields and honors server retry a
   assert.equal('attachments' in normalized, false);
 });
 
+test('normalization retains only a valid durable draft identity for recovery', () => {
+  const valid = '10000000-0000-4000-8000-000000000001';
+  assert.equal(
+    normalizeOutboundSendOperation(serverOperation({ client_draft_id: valid })).client_draft_id,
+    valid,
+  );
+  assert.equal(
+    normalizeOutboundSendOperation(serverOperation({ client_draft_id: '../shared-draft' })).client_draft_id,
+    null,
+  );
+});
+
 test('a state without a server id remains explicitly reconciling', () => {
   const operation = normalizeOutboundSendOperation({
     idempotency_key: 'client-key',
@@ -353,6 +365,41 @@ test('recent unexpired staged send rehydrates actionable Undo with truthful canc
 
   assert.equal(notices.at(-1)[0], 'Send cancelled');
   assert.equal(notices.some(([message]) => /draft restored/i.test(message)), false);
+});
+
+test('recent staged send can attach reload recovery before Undo', async () => {
+  const notices = [];
+  const restored = [];
+  const clientDraftId = '10000000-0000-4000-8000-000000000001';
+  const staged = serverOperation({ client_draft_id: clientDraftId });
+  const transport = {
+    create: async () => staged,
+    lookupByIdempotency: async () => staged,
+    get: async () => staged,
+    listRecent: async () => [staged],
+    undo: async () => serverOperation({
+      client_draft_id: clientDraftId,
+      state: 'cancelled',
+      can_undo: false,
+      cancelled_at: '2026-08-30T16:00:02.000Z',
+      updated_at: '2026-08-30T16:00:02.000Z',
+    }),
+  };
+  const controller = testController(transport, {
+    notify: (...args) => notices.push(args),
+  });
+
+  const operations = await controller.loadRecent();
+  assert.equal(controller.attachCallbacks(operations[0], {
+    onRestore: (operation, reason) => restored.push([
+      operation.client_draft_id,
+      reason,
+    ]),
+  }), true);
+
+  await notices[0][3].onAction();
+  assert.deepEqual(restored, [[clientDraftId, 'cancelled']]);
+  assert.equal(notices.at(-1)[0], 'Send cancelled; recovering draft');
 });
 
 test('recent terminal history never re-toasts old sent or failed operations', async () => {

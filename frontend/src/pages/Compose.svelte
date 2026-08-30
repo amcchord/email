@@ -1,9 +1,12 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { get } from 'svelte/store';
   import { api } from '../lib/api.js';
   import { submitOutboundSend } from '../lib/outboundSend.js';
-  import { restoreOutboundComposeDraft } from '../lib/outboundDraftRecovery.js';
+  import {
+    outboundRecoveryDraft,
+    restoreOutboundComposeDraft,
+  } from '../lib/outboundDraftRecovery.js';
   import {
     accounts,
     captureAuthenticatedSession,
@@ -19,6 +22,8 @@
     composeLastAccountStorageKey,
     composeReplyContext,
     createComposeDraftIntent,
+    ensureComposeDraftIntent,
+    isComposeDraftUuid,
     newComposeIntent,
   } from '../lib/composeDraft.js';
   import {
@@ -47,6 +52,11 @@
   let fileInput = $state(null);
   let writingSurfaceReady = $state(false);
   let savingDraft = $state(false);
+  let conflictDialogOpen = $state(false);
+  let conflictDialog = $state(null);
+  let conflictCancelButton = $state(null);
+  let conflictFallbackFocus = $state(null);
+  let conflictTrigger = null;
   let activeDraftKey = $state(null);
   let draftState = $state({ status: 'pristine', canSend: false, snapshot: {} });
   let draftController = $state.raw(null);
@@ -62,7 +72,15 @@
   let senderAccount = $derived(accountList.find(account => account.id === Number(selectedAccountId)) || null);
   let recipientChips = $derived(parseRecipients(to));
   let totalAttachmentBytes = $derived(attachments.reduce((sum, item) => sum + item.size, 0));
-  let draftLocked = $derived(draftState.status === 'discard-pending' || draftState.status === 'discarded');
+  let draftLocked = $derived(
+    sending
+    || draftState.status === 'discard-pending'
+    || draftState.status === 'discarded'
+    || draftState.status === 'conflict'
+    || draftState.sending
+    || draftState.discardInProgress
+    || draftState.sendInProgress,
+  );
 
   function parseRecipients(value) {
     return (value || '').split(/[;,]/).map(item => item.trim()).filter(Boolean);
@@ -93,7 +111,7 @@
       body_html: bodyHtml,
       body_text: bodyHtml.replace(/<[^>]*>/g, ''),
       is_draft: true,
-      attachments: attachments.map(({ size: _size, ...item }) => ({ ...item })),
+      attachments: attachments.map(item => ({ ...item })),
       in_reply_to: replyContext.in_reply_to,
       references: replyContext.references,
       thread_id: replyContext.thread_id,
@@ -107,7 +125,13 @@
   }
 
   function persistLocalDraft(draft = draftSnapshot()) {
-    if (suppressLocalPersistence || !draftController || !autosaveReady || !sessionGuard?.isCurrent()) return;
+    if (
+      suppressLocalPersistence
+      || !draftController
+      || !autosaveReady
+      || draftLocked
+      || !sessionGuard?.isCurrent()
+    ) return;
     const fingerprint = draftFingerprint(draft);
     if (!fingerprint || fingerprint === lastPersistedFingerprint) return;
     try {
@@ -149,10 +173,12 @@
     queueMicrotask(() => { suppressLocalPersistence = false; });
   }
 
-  async function seedServerDraftIfNeeded(intent, data) {
+  async function seedServerDraftIfNeeded(intent, data, requestGeneration) {
     if (!data?.draft_revision || !data?.client_draft_id) return;
+    if (requestGeneration !== openingDraftGeneration || !sessionGuard?.isCurrent()) return false;
     const existing = await durableStorage.get(sessionGuard.userId, intent.client_draft_id);
-    if (existing) return;
+    if (requestGeneration !== openingDraftGeneration || !sessionGuard?.isCurrent()) return false;
+    if (existing) return true;
     const snapshot = {
       ...draftSnapshot(),
       account_id: Number(data.account_id),
@@ -162,10 +188,11 @@
       subject: data.subject || '',
       body_html: data.body_html || '',
       body_text: data.body_text || '',
-      attachments: (data.attachments || []).map(({ size: _size, size_bytes: _bytes, ...item }) => item),
+      attachments: (data.attachments || []).map(normalizeDraftAttachment),
       ...composeReplyContext(data),
     };
     const now = new Date().toISOString();
+    if (requestGeneration !== openingDraftGeneration || !sessionGuard?.isCurrent()) return false;
     await durableStorage.put({
       user_id: sessionGuard.userId,
       client_draft_id: intent.client_draft_id,
@@ -183,13 +210,17 @@
       created_at: data.created_at || now,
       updated_at: data.updated_at || now,
     });
+    return requestGeneration === openingDraftGeneration && sessionGuard?.isCurrent();
   }
 
   async function openDraftIntent(data = {}) {
     if (!sessionGuard?.isCurrent() || !durableStorage) return;
     const requestGeneration = ++openingDraftGeneration;
     const suppliedClientId = data?.client_draft_id || null;
-    const intent = createComposeDraftIntent(data || newComposeIntent());
+    const recoverySourceClientId = isComposeDraftUuid(data?.recovery_source_client_draft_id)
+      ? data.recovery_source_client_draft_id.toLowerCase()
+      : null;
+    const intent = ensureComposeDraftIntent(data);
     if (activeDraftKey === intent.client_draft_id && draftController) return;
 
     if (draftController) {
@@ -203,7 +234,8 @@
     if (requestGeneration !== openingDraftGeneration || !sessionGuard.isCurrent()) return;
 
     hydrateDraftSnapshot(data);
-    await seedServerDraftIfNeeded(intent, data);
+    const seedCurrent = await seedServerDraftIfNeeded(intent, data, requestGeneration);
+    if (seedCurrent === false || requestGeneration !== openingDraftGeneration || !sessionGuard.isCurrent()) return;
     draftController = createDraftSessionController({
       userId: sessionGuard.userId,
       storage: durableStorage,
@@ -217,6 +249,19 @@
         composeData.set(null);
         currentPage.set('inbox');
       },
+      onSendAccepted: () => {
+        if (requestGeneration !== openingDraftGeneration || !sessionGuard?.isCurrent()) return;
+        suppressLocalPersistence = true;
+        composeData.set(null);
+        currentPage.set('inbox');
+      },
+      onSendTerminal: ({ snapshot, operation }) => {
+        if (requestGeneration !== openingDraftGeneration || !sessionGuard?.isCurrent()) return;
+        const priorDraftId = draftController?.clientDraftId;
+        suppressLocalPersistence = true;
+        composeData.set(outboundRecoveryDraft(snapshot, operation));
+        if (priorDraftId) void durableStorage?.delete(sessionGuard.userId, priorDraftId);
+      },
     });
     unsubscribeDraft = draftController.subscribe(state => {
       if (requestGeneration !== openingDraftGeneration || !sessionGuard?.isCurrent()) return;
@@ -225,11 +270,23 @@
       lastPersistedFingerprint = draftFingerprint(state.snapshot);
     });
     activeDraftKey = intent.client_draft_id;
+    if (data?.client_draft_id !== intent.client_draft_id) composeData.set(intent);
     const state = suppliedClientId
       ? await draftController.load({ clientDraftId: intent.client_draft_id, intent, initialSnapshot: draftSnapshot() })
       : await draftController.load({ intent, initialSnapshot: draftSnapshot() });
     if (requestGeneration !== openingDraftGeneration || !sessionGuard.isCurrent()) return;
+    activeDraftKey = state.clientDraftId || intent.client_draft_id;
     hydrateDraftSnapshot(state.snapshot);
+    if (recoverySourceClientId && recoverySourceClientId !== activeDraftKey) {
+      await durableStorage.delete(sessionGuard.userId, recoverySourceClientId);
+      if (requestGeneration !== openingDraftGeneration || !sessionGuard.isCurrent()) return;
+    }
+    composeData.set({
+      ...intent,
+      ...state.snapshot,
+      client_draft_id: activeDraftKey,
+      intent_key: state.intentKey || intent.intent_key,
+    });
     autosaveReady = true;
   }
 
@@ -238,7 +295,6 @@
     if (!sessionGuard.isCurrent()) {
       return () => sessionGuard?.dispose();
     }
-    durableStorage = createIndexedDbDraftStorage();
     let unsubCompose = null;
     let disposed = false;
 
@@ -257,17 +313,36 @@
         isEnabled: () => !sending && writingSurfaceReady && draftState.canSend,
         disabledReason: () => sending
           ? 'Email is already sending'
+          : draftState.status === 'offline'
+            ? 'Reconnect to send'
           : !draftState.canSend
             ? 'Draft is not ready to send'
             : 'Message editor is still opening',
       },
       'compose.draft': {
         run: () => handleSaveDraft(),
-        isEnabled: () => !savingDraft && writingSurfaceReady,
-        disabledReason: () => savingDraft ? 'Draft is already saving' : 'Message editor is still opening',
+        isEnabled: () => (
+          !savingDraft
+          && writingSurfaceReady
+          && Boolean(draftController)
+          && !draftLocked
+          && !autosaveStatus
+        ),
+        disabledReason: () => {
+          if (draftState.status === 'conflict') return 'Review the conflicting draft versions first';
+          if (draftLocked) return 'Draft editing is locked while its state is being confirmed';
+          if (autosaveStatus || !draftController) return 'Durable draft storage is unavailable';
+          return savingDraft ? 'Draft is already saving' : 'Message editor is still opening';
+        },
       },
       'compose.discard': () => returnToInbox(),
-      'compose.deleteDraft': () => discardDraft(),
+      'compose.deleteDraft': {
+        run: () => discardDraft(),
+        isEnabled: () => !draftLocked && (draftState.importingAttachments?.length || 0) === 0,
+        disabledReason: () => draftLocked
+          ? 'Draft editing is locked while its state is being confirmed'
+          : 'Wait for attachments to finish importing',
+      },
       'compose.cc': () => { showCcBcc = !showCcBcc; },
       'compose.bcc': () => { showCcBcc = !showCcBcc; },
     });
@@ -278,6 +353,7 @@
 
     void (async () => {
       try {
+        durableStorage = createIndexedDbDraftStorage();
         await migrateLegacyScopedDrafts({
           storage: durableStorage,
           localStorage,
@@ -285,6 +361,7 @@
         });
         if (disposed || !sessionGuard.isCurrent()) return;
         const initialIntent = get(composeData) || newComposeIntent();
+        if (!get(composeData)) composeData.set(initialIntent);
         await openDraftIntent(initialIntent);
         if (disposed || !sessionGuard.isCurrent()) return;
         unsubCompose = composeData.subscribe(data => {
@@ -353,16 +430,30 @@
   }
 
   async function addAttachments(event) {
-    const files = Array.from(event.currentTarget.files || []);
+    const input = event.currentTarget;
+    const files = Array.from(input.files || []);
     if (!files.length) return;
+    const ownerController = draftController;
+    const ownerDraftId = ownerController?.clientDraftId || null;
+    const ownerGeneration = openingDraftGeneration;
+    const stillOwnsImport = () => (
+      sessionGuard?.isCurrent()
+      && draftController === ownerController
+      && ownerController?.clientDraftId === ownerDraftId
+      && openingDraftGeneration === ownerGeneration
+    );
+    if (!ownerController || !ownerDraftId) {
+      input.value = '';
+      return;
+    }
     const nextTotal = totalAttachmentBytes + files.reduce((sum, file) => sum + file.size, 0);
     if (attachments.length + files.length > 10 || nextTotal > 18 * 1024 * 1024) {
       showToast('Attach up to 10 files totaling 18 MB', 'error');
-      event.currentTarget.value = '';
+      input.value = '';
       return;
     }
     await Promise.all(files.map(async file => {
-      const importId = draftController?.beginAttachmentImport({ filename: file.name }) || crypto.randomUUID();
+      const importId = ownerController.beginAttachmentImport({ filename: file.name });
       try {
         const encoded = await new Promise((resolve, reject) => {
           const reader = new FileReader();
@@ -376,17 +467,16 @@
           reader.onerror = () => reject(reader.error || new Error(`Could not read ${file.name}`));
           reader.readAsDataURL(file);
         });
-        if (!sessionGuard?.isCurrent()) return;
-        if (draftController) draftController.completeAttachmentImport(importId, encoded);
-        else attachments = [...attachments, encoded];
+        if (!stillOwnsImport()) return;
+        ownerController.completeAttachmentImport(importId, encoded);
       } catch (error) {
-        draftController?.failAttachmentImport(importId, error, file.name);
+        if (stillOwnsImport()) ownerController.failAttachmentImport(importId, error, file.name);
       }
     }));
-    if (draftController && sessionGuard?.isCurrent()) {
-      attachments = (draftController.getState().snapshot.attachments || []).map(normalizeDraftAttachment);
+    if (stillOwnsImport()) {
+      attachments = (ownerController.getState().snapshot.attachments || []).map(normalizeDraftAttachment);
     }
-    event.currentTarget.value = '';
+    input.value = '';
   }
 
   function removeAttachment(index) {
@@ -394,7 +484,12 @@
   }
 
   async function discardDraft() {
-    if (!sessionGuard?.isCurrent() || !draftController || draftLocked) return;
+    if (
+      !sessionGuard?.isCurrent()
+      || !draftController
+      || draftLocked
+      || (draftState.importingAttachments?.length || 0) > 0
+    ) return;
     persistLocalDraft();
     await draftController.flush();
     if (!sessionGuard.isCurrent()) return;
@@ -406,6 +501,16 @@
     await draftController.undoDiscard();
   }
 
+  function retryDraftStatus() {
+    const attachmentErrors = draftState.attachmentErrors || [];
+    if (attachmentErrors.length > 0) {
+      for (const error of attachmentErrors) draftController?.clearAttachmentError(error.id);
+      fileInput?.click();
+      return;
+    }
+    void draftController?.retry();
+  }
+
   async function returnToInbox() {
     if (!sessionGuard?.isCurrent()) return;
     persistLocalDraft();
@@ -415,14 +520,60 @@
     currentPage.set('inbox');
   }
 
-  async function resolveDraftConflict() {
+  function conflictPreview(snapshot = {}) {
+    const text = String(snapshot.body_text || snapshot.body_html || '')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return text.slice(0, 240) || 'No message body';
+  }
+
+  async function reviewDraftConflict(event) {
+    if (draftState.status !== 'conflict') return;
+    conflictTrigger = event?.currentTarget || document.activeElement;
+    conflictDialogOpen = true;
+    await tick();
+    conflictCancelButton?.focus();
+  }
+
+  async function closeConflictDialog() {
+    conflictDialogOpen = false;
+    await tick();
+    const restoreTarget = conflictTrigger?.isConnected ? conflictTrigger : conflictFallbackFocus;
+    if (restoreTarget?.isConnected) restoreTarget.focus({ preventScroll: true });
+    conflictTrigger = null;
+  }
+
+  function handleConflictDialogKeydown(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      void closeConflictDialog();
+      return;
+    }
+    if (event.key !== 'Tab' || !conflictDialog) return;
+    const focusable = [...conflictDialog.querySelectorAll('button:not([disabled])')];
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  async function resolveDraftConflict(choice) {
+    if (choice === 'cancel') {
+      await closeConflictDialog();
+      return;
+    }
     if (draftState.status !== 'conflict' || !draftController) return;
-    const useServer = window.confirm(
-      'This draft changed elsewhere. Choose OK to use the provider version, or Cancel to keep and resync this version.',
-    );
     try {
-      const state = await draftController.resolveConflict(useServer ? 'server' : 'local');
-      if (useServer && state?.snapshot) hydrateDraftSnapshot(state.snapshot);
+      const state = await draftController.resolveConflict(choice);
+      if (choice === 'server' && state?.snapshot) hydrateDraftSnapshot(state.snapshot);
+      await closeConflictDialog();
     } catch (error) {
       showToast(error?.message || 'The draft versions could not be reconciled', 'error');
     }
@@ -440,11 +591,24 @@
     }
 
     persistLocalDraft();
-    await draftController?.markSending(true);
-    if (!sessionGuard.isCurrent()) return false;
+    sending = true;
+    try {
+      await draftController?.markSending(true);
+    } catch (err) {
+      sending = false;
+      await draftController?.markSending(false);
+      if (sessionGuard?.isCurrent()) showToast(err.message, 'error');
+      return false;
+    }
+    if (!sessionGuard.isCurrent()) {
+      sending = false;
+      return false;
+    }
     const sendSession = captureAuthenticatedSession();
     const capturedDraftKey = draftController?.clientDraftId || activeDraftKey;
     const capturedDraftRevision = draftController?.revision || 0;
+    const capturedDraftStorage = durableStorage;
+    const capturedDraftUserId = sessionGuard.userId;
     let editorReleased = false;
     const releaseEditor = () => {
       if (editorReleased || !isAuthenticatedSessionCurrent(sendSession)) return;
@@ -458,12 +622,9 @@
         return;
       }
       suppressLocalPersistence = true;
-      void durableStorage?.delete(sessionGuard.userId, capturedDraftKey);
       composeData.set(null);
       currentPage.set('inbox');
     };
-
-    sending = true;
     try {
       const data = {
         account_id: selectedAccountId,
@@ -490,19 +651,24 @@
         client_draft_id: capturedDraftKey,
         attachments: attachments.map(item => ({ ...item })),
       };
-      const restoreEditor = (operation, reason) => (
-        restoreOutboundComposeDraft(restoreDraft, operation, reason)
+      const restoreEditor = async (operation, reason) => {
+        return restoreOutboundComposeDraft(restoreDraft, operation, reason);
+      };
+      const forgetSentDraft = () => (
+        capturedDraftStorage?.delete(capturedDraftUserId, capturedDraftKey)
       );
 
       const operation = await submitOutboundSend(data, {
         onAccepted: releaseEditor,
+        onSent: forgetSentDraft,
         onRestore: restoreEditor,
       });
       if (!sessionGuard.isCurrent()) return false;
       // Even if the acceptance response was lost, this logical send now owns
       // its idempotency key. Leave status reconciliation to the global monitor
       // instead of exposing a second Send action for the same message.
-      if (operation) releaseEditor();
+      if (operation?.send_id) releaseEditor();
+      else if (operation) await draftController?.markSendUncertain(operation);
       return true;
     } catch (err) {
       if (sessionGuard?.isCurrent()) showToast(err.message, 'error');
@@ -516,7 +682,15 @@
   }
 
   async function handleSaveDraft() {
-    if (!selectedAccountId || savingDraft || !writingSurfaceReady || !sessionGuard?.isCurrent()) return false;
+    if (
+      !selectedAccountId
+      || !draftController
+      || autosaveStatus
+      || draftLocked
+      || savingDraft
+      || !writingSurfaceReady
+      || !sessionGuard?.isCurrent()
+    ) return false;
     savingDraft = true;
     try {
       persistLocalDraft();
@@ -555,14 +729,22 @@
       {:else}
         <DraftStatus
           state={draftState}
-          onretry={() => draftController?.retry()}
+          onretry={retryDraftStatus}
           onundo={undoDiscardDraft}
-          onreview={resolveDraftConflict}
+          onreview={reviewDraftConflict}
           compact={true}
         />
       {/if}
-      <Button size="sm" onclick={discardDraft} disabled={draftLocked || !draftController}>Discard</Button>
-      <Button size="sm" onclick={handleSaveDraft} disabled={savingDraft || !writingSurfaceReady || draftLocked}>
+      <Button
+        size="sm"
+        onclick={discardDraft}
+        disabled={draftLocked || !draftController || draftState.importingAttachments?.length > 0}
+      >Discard</Button>
+      <Button
+        size="sm"
+        onclick={handleSaveDraft}
+        disabled={savingDraft || !writingSurfaceReady || draftLocked || !draftController || Boolean(autosaveStatus)}
+      >
         {savingDraft ? 'Saving…' : 'Save Draft'}
       </Button>
       <Button variant="primary" size="sm" onclick={handleSend} disabled={sending || !writingSurfaceReady || !draftState.canSend}>
@@ -608,6 +790,7 @@
           <input
             type="text"
             id="compose-to"
+            bind:this={conflictFallbackFocus}
             bind:value={to}
             readonly={draftLocked}
             use:focusInitialRecipient
@@ -621,7 +804,7 @@
               {#each recipientChips as address}
                 <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px]" style="background: var(--bg-tertiary); color: var(--text-secondary)">
                   {address}
-                  <button onclick={() => removeRecipient(address)} aria-label="Remove recipient {address}"><Icon name="x" size={11} /></button>
+                  <button disabled={draftLocked} onclick={() => removeRecipient(address)} aria-label="Remove recipient {address}"><Icon name="x" size={11} /></button>
                 </span>
               {/each}
             </div>
@@ -630,6 +813,7 @@
         {#if !showCcBcc}
           <button
             onclick={() => showCcBcc = true}
+            disabled={draftLocked}
             class="text-xs"
             style="color: var(--text-tertiary)"
           >Cc/Bcc</button>
@@ -682,7 +866,7 @@
           <input id="compose-files" bind:this={fileInput} type="file" multiple class="hidden" onchange={addAttachments} />
           <button
             onclick={() => fileInput?.click()}
-            disabled={draftLocked || draftState.importingAttachments?.length > 0}
+            disabled={draftLocked || !draftController || draftState.importingAttachments?.length > 0}
             class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-medium"
             style="border-color: var(--border-color); color: var(--text-secondary)"
           >
@@ -694,7 +878,7 @@
                 <span class="inline-flex items-center gap-1.5 max-w-full px-2 py-1 rounded-md text-xs" style="background: var(--bg-tertiary); color: var(--text-secondary)">
                   <span class="truncate max-w-[220px]">{attachment.filename}</span>
                   <span class="text-[10px] opacity-70">{Math.ceil(attachment.size / 1024)} KB</span>
-                  <button onclick={() => removeAttachment(index)} aria-label="Remove attachment {attachment.filename}"><Icon name="x" size={12} /></button>
+                  <button disabled={draftLocked} onclick={() => removeAttachment(index)} aria-label="Remove attachment {attachment.filename}"><Icon name="x" size={12} /></button>
                 </span>
               {/each}
               <span class="text-[10px] self-center" style="color: var(--text-tertiary)">{(totalAttachmentBytes / 1024 / 1024).toFixed(1)} of 18 MB</span>
@@ -724,6 +908,50 @@
   </div>
 </div>
 
+{#if conflictDialogOpen}
+  <div class="fixed inset-0 z-50 flex items-center justify-center p-4" role="presentation">
+    <button
+      class="absolute inset-0 bg-black/40"
+      aria-label="Close draft comparison"
+      onclick={() => resolveDraftConflict('cancel')}
+    ></button>
+    <div
+      bind:this={conflictDialog}
+      class="relative w-full max-w-2xl rounded-xl border p-5 shadow-2xl"
+      style="background: var(--bg-primary); border-color: var(--border-color)"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="draft-conflict-title"
+      tabindex="-1"
+      onkeydown={handleConflictDialogKeydown}
+    >
+      <h3 id="draft-conflict-title" class="text-base font-semibold" style="color: var(--text-primary)">Choose the version to keep</h3>
+      <p class="mt-1 text-sm" style="color: var(--text-secondary)">Nothing changes until you choose. Cancel closes this comparison.</p>
+      <div class="mt-4 grid gap-3 sm:grid-cols-2">
+        <article class="rounded-lg border p-3" style="border-color: var(--border-color)">
+          <h4 class="text-xs font-semibold uppercase tracking-wide" style="color: var(--text-tertiary)">This device · revision {draftState.revision}</h4>
+          <p class="mt-2 text-sm font-medium" style="color: var(--text-primary)">{draftState.snapshot?.subject || '(No subject)'}</p>
+          <p class="mt-1 text-sm" style="color: var(--text-secondary)">{conflictPreview(draftState.snapshot)}</p>
+        </article>
+        <article class="rounded-lg border p-3" style="border-color: var(--border-color)">
+          <h4 class="text-xs font-semibold uppercase tracking-wide" style="color: var(--text-tertiary)">Server · revision {draftState.conflict?.server_revision || 'newer'}</h4>
+          <p class="mt-2 text-sm font-medium" style="color: var(--text-primary)">{draftState.conflict?.server_snapshot?.subject || '(No subject)'}</p>
+          <p class="mt-1 text-sm" style="color: var(--text-secondary)">{conflictPreview(draftState.conflict?.server_snapshot)}</p>
+        </article>
+      </div>
+      <div class="mt-5 flex flex-wrap justify-end gap-2">
+        <Button bind:element={conflictCancelButton} onclick={() => resolveDraftConflict('cancel')}>Cancel</Button>
+        <Button onclick={() => resolveDraftConflict('local')}>Keep this version</Button>
+        <Button
+          variant="primary"
+          disabled={!draftState.conflict?.server_snapshot}
+          onclick={() => resolveDraftConflict('server')}
+        >Use server version</Button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   @media (max-width: 767px) {
     .compose-header {
@@ -732,9 +960,14 @@
       flex-wrap: wrap;
     }
     .compose-header h2,
-    .autosave-label,
     .sender-context {
       display: none;
+    }
+    .autosave-label {
+      flex: 1 1 100%;
+      order: 3;
+      text-align: center;
+      white-space: normal;
     }
     .compose-field {
       padding-left: 0.75rem;

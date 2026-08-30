@@ -1,16 +1,23 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
+  import { api } from '../../lib/api.js';
   import {
     authenticatedSessionGeneration,
     captureAuthenticatedSession,
     currentPage,
     isAuthenticatedSessionCurrent,
+    showToast,
   } from '../../lib/stores.js';
   import { outboundSendOperations, outboundSends } from '../../lib/outboundSend.js';
+  import { createIndexedDbDraftStorage } from '../../lib/draftStorage.js';
+  import { composeDraftHasContent } from '../../lib/composeDraft.js';
   import {
+    forgetRetainedOutboundDraft,
+    loadRetainedOutboundDraft,
     openPendingOutboundDraft,
     pendingOutboundDraftRecoveries,
     resetOutboundDraftRecoveries,
+    restoreOutboundComposeDraft,
   } from '../../lib/outboundDraftRecovery.js';
   import Icon from '../common/Icon.svelte';
 
@@ -19,6 +26,8 @@
   let unsubscribeGeneration = null;
   let checking = $state(false);
   let dismissedFailures = $state(new Set());
+  let durableStorage = null;
+  let recoveredRetainedDraftIds = new Set();
 
   let reconciling = $derived(
     $outboundSendOperations.filter(operation => operation.state === 'reconciling'),
@@ -34,13 +43,95 @@
     return String(operation?.send_id || operation?.idempotency_key || 'unknown');
   }
 
+  function getDurableStorage() {
+    if (durableStorage) return durableStorage;
+    try {
+      durableStorage = createIndexedDbDraftStorage();
+    } catch {
+      durableStorage = null;
+    }
+    return durableStorage;
+  }
+
   async function loadOperations() {
     if (!mounted) return;
     try {
-      await outboundSends.loadRecent(20);
+      const operations = await outboundSends.loadRecent(20);
+      for (const operation of operations) {
+        if (!operation.client_draft_id) continue;
+        if (operation.state === 'sent') {
+          void forgetRetainedOutboundDraft(
+            getDurableStorage(),
+            captureAuthenticatedSession().userId,
+            operation.client_draft_id,
+          );
+          continue;
+        }
+        if (operation.state === 'cancelled' || operation.state === 'failed') {
+          void recoverRetainedTerminalDraft(operation, operation.state);
+          continue;
+        }
+        outboundSends.attachCallbacks(operation, {
+          onSent: terminalOperation => forgetAcceptedDraft(terminalOperation),
+          onRestore: (terminalOperation, reason) => (
+            recoverAcceptedDraft(terminalOperation, reason)
+          ),
+        });
+      }
     } catch {
       // The main mail experience does not depend on this monitor. Its next
       // poll or an explicit status check will retry without recurring toasts.
+    }
+  }
+
+  async function forgetAcceptedDraft(operation) {
+    const session = captureAuthenticatedSession();
+    await forgetRetainedOutboundDraft(
+      getDurableStorage(),
+      session.userId,
+      operation.client_draft_id,
+    );
+  }
+
+  async function recoverRetainedTerminalDraft(operation, reason) {
+    if (recoveredRetainedDraftIds.has(operation.client_draft_id)) return true;
+    const session = captureAuthenticatedSession();
+    const localDraft = await loadRetainedOutboundDraft(
+      getDurableStorage(),
+      session.userId,
+      operation.client_draft_id,
+    );
+    if (!localDraft || !mounted || !isAuthenticatedSessionCurrent(session)) return false;
+    const restored = restoreOutboundComposeDraft(localDraft, operation, reason);
+    if (restored) recoveredRetainedDraftIds.add(operation.client_draft_id);
+    return restored;
+  }
+
+  async function recoverAcceptedDraft(operation, reason) {
+    const session = captureAuthenticatedSession();
+    try {
+      const localDraft = await loadRetainedOutboundDraft(
+        getDurableStorage(),
+        session.userId,
+        operation.client_draft_id,
+      );
+      const draft = localDraft || await api.getComposeDraft(operation.client_draft_id);
+      if (!mounted || !isAuthenticatedSessionCurrent(session)) return false;
+      if (!composeDraftHasContent(draft)) {
+        throw new Error('Send was stopped, but its draft content is no longer available');
+      }
+      const restored = restoreOutboundComposeDraft(draft, operation, reason);
+      if (restored && localDraft) recoveredRetainedDraftIds.add(operation.client_draft_id);
+      return restored;
+    } catch (error) {
+      if (mounted && isAuthenticatedSessionCurrent(session)) {
+        showToast(
+          error?.message || 'Send was stopped, but the draft could not be reopened automatically',
+          'error',
+          6000,
+        );
+      }
+      return false;
     }
   }
 
@@ -71,6 +162,7 @@
       if (!mounted) return;
       checking = false;
       dismissedFailures = new Set();
+      recoveredRetainedDraftIds = new Set();
       resetOutboundDraftRecoveries();
       outboundSends.resetForCurrentSession();
       void loadOperations();
@@ -83,6 +175,8 @@
     unsubscribeGeneration?.();
     unsubscribeGeneration = null;
     if (intervalId !== null) window.clearInterval(intervalId);
+    void durableStorage?.close?.();
+    durableStorage = null;
   });
 </script>
 

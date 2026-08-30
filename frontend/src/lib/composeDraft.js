@@ -44,6 +44,25 @@ export function isComposeDraftUuid(value) {
   return typeof value === 'string' && UUID_PATTERN.test(value);
 }
 
+export function composeDraftIntentFromRoute(value) {
+  if (!isComposeDraftUuid(value)) return null;
+  const clientDraftId = value.toLowerCase();
+  return createComposeDraftIntent({
+    client_draft_id: clientDraftId,
+    intent_key: `route:${clientDraftId}`,
+    draft_key: `client:${clientDraftId}`,
+  });
+}
+
+export function applyComposeDraftRoute(url, page, data = null) {
+  const clientDraftId = isComposeDraftUuid(data?.client_draft_id)
+    ? data.client_draft_id.toLowerCase()
+    : null;
+  if (page === 'compose' && clientDraftId) url.searchParams.set('draft', clientDraftId);
+  else url.searchParams.delete('draft');
+  return url;
+}
+
 function defaultRandomUuid() {
   if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
   throw new Error('Secure random UUID generation is unavailable');
@@ -90,6 +109,15 @@ export function newComposeIntent(data = {}, { randomUUID = defaultRandomUuid } =
   }, { randomUUID });
 }
 
+/** Normalize any caller payload before Compose navigation reaches history. */
+export function ensureComposeDraftIntent(data = {}, { randomUUID = defaultRandomUuid } = {}) {
+  const resumable = isComposeDraftUuid(data?.client_draft_id)
+    || Boolean(data?.intent_key || data?.draft_key || data?.thread_id || data?.in_reply_to || data?.source_email_id);
+  return resumable
+    ? createComposeDraftIntent(data, { randomUUID })
+    : newComposeIntent(data, { randomUUID });
+}
+
 /**
  * Old drafts were shared by every authenticated identity in one browser.
  * Never migrate or read them: their owner cannot be proven.
@@ -113,8 +141,13 @@ export function clearUnscopedComposeStorage(storage = globalThis.localStorage) {
 
 export function composeDraftHasContent(draft) {
   if (!draft || typeof draft !== 'object') return false;
+  const hasRecipients = ['to', 'cc', 'bcc'].some(field => (
+    Array.isArray(draft[field])
+      ? draft[field].some(value => String(value || '').trim())
+      : Boolean(String(draft[field] || '').trim())
+  ));
   return Boolean(
-    draft.to || draft.cc || draft.bcc || draft.subject || draft.body_html
+    hasRecipients || draft.subject || draft.body_html
     || (Array.isArray(draft.attachments) && draft.attachments.length > 0)
     || draft.in_reply_to || draft.thread_id || draft.source_email_id,
   );

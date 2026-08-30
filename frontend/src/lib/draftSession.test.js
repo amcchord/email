@@ -52,6 +52,8 @@ function controllerOptions(overrides = {}) {
     api: overrides.api || {},
     onDiscard: overrides.onDiscard,
     onUndoDiscard: overrides.onUndoDiscard,
+    onSendAccepted: overrides.onSendAccepted,
+    onSendTerminal: overrides.onSendTerminal,
   };
 }
 
@@ -225,12 +227,16 @@ test('server discard starts immediately, Undo is authoritative, and bytes scrub 
   let serverState = 'discard_pending';
   let discardCalls = 0;
   let undoCalls = 0;
+  let online = true;
   const controller = createDraftSessionController(controllerOptions({
     randomUUID,
     timers,
     storage,
-    isOnline: () => false,
+    isOnline: () => online,
     api: {
+      async saveDraft(payload) {
+        return { ...payload, state: 'synced', synced_revision: payload.revision };
+      },
       async discardComposeDraft(clientDraftId, mutationId) {
         discardCalls += 1;
         assert.ok(clientDraftId);
@@ -268,11 +274,16 @@ test('server discard starts immediately, Undo is authoritative, and bytes scrub 
   await controller.create({ intent: newComposeIntent({}, { randomUUID }) });
   controller.update({ body_html: '<p>Generated</p>', attachments: [{ bytes: new Uint8Array([9, 8, 7]) }] });
   await controller.flush();
+  const contentRevision = controller.revision;
+  const contentMutation = controller.getState().mutationId;
 
   await controller.discard({ delayMs: 5000 });
   assert.equal(discardCalls, 1);
   assert.equal(controller.getState().status, 'discard-pending');
+  online = false;
   assert.equal(await controller.undoDiscard(), true);
+  assert.equal(controller.revision, contentRevision);
+  assert.equal(controller.getState().mutationId, contentMutation);
   assert.equal(undoCalls, 1);
   assert.equal(controller.getState().status, 'offline');
   assert.equal(undone.length, 1);
@@ -369,6 +380,288 @@ test('attachment errors gate Send and expose actionable status copy', async () =
   assert.equal(controller.getState().canSend, false);
   assert.equal(draftStatusView(controller.getState()).message, 'Couldn’t add generated.pdf');
   assert.equal(draftStatusView(controller.getState()).retry, true);
+  assert.equal(draftStatusView(controller.getState()).retryLabel, 'Choose file');
   controller.clearAttachmentError(id);
   assert.equal(controller.getState().canSend, true);
+});
+
+test('a server-only URL rehydrates without replaying an accepted revision', async () => {
+  const randomUUID = uuidFactory();
+  const clientDraftId = randomUUID();
+  let saves = 0;
+  const controller = createDraftSessionController(controllerOptions({
+    randomUUID,
+    api: {
+      async getComposeDraft() {
+        return {
+          client_draft_id: clientDraftId,
+          account_id: 2,
+          revision: 3,
+          synced_revision: 0,
+          state: 'pending',
+          subject: 'Accepted remote draft',
+          body_html: '<p>Accepted</p>',
+        };
+      },
+      async saveDraft(payload) {
+        saves += 1;
+        return { ...payload, state: 'synced', synced_revision: payload.revision };
+      },
+    },
+  }));
+  const intent = newComposeIntent({}, { randomUUID });
+  await controller.load({ clientDraftId, intent: { ...intent, client_draft_id: clientDraftId } });
+  assert.equal(controller.getState().status, 'reconciling');
+  assert.equal(controller.getState().snapshot.subject, 'Accepted remote draft');
+  await controller.flush();
+  assert.equal(saves, 0);
+
+  controller.update({ ...controller.getState().snapshot, subject: 'Edited remote draft' });
+  await controller.flush();
+  assert.equal(saves, 1);
+  assert.equal(controller.revision, 4);
+});
+
+test('a stale authenticated session cannot persist or publish a delayed remote lookup', async () => {
+  const randomUUID = uuidFactory();
+  const storage = createMemoryDraftStorage();
+  const response = deferred();
+  let generation = 1;
+  const clientDraftId = randomUUID();
+  const controller = createDraftSessionController(controllerOptions({
+    randomUUID,
+    storage,
+    captureSession: () => ({ generation }),
+    isSessionCurrent: captured => captured.generation === generation,
+    api: { getComposeDraft: () => response.promise },
+  }));
+  const loading = controller.load({
+    clientDraftId,
+    intent: { ...newComposeIntent({}, { randomUUID }), client_draft_id: clientDraftId },
+  });
+  generation = 2;
+  response.resolve({
+    client_draft_id: clientDraftId,
+    account_id: 2,
+    revision: 1,
+    state: 'synced',
+    synced_revision: 1,
+    body_html: '<p>Must not cross sessions</p>',
+  });
+  await loading;
+
+  assert.equal(controller.getState().clientDraftId, null);
+  assert.equal(await storage.get(7, clientDraftId), null);
+});
+
+test('server-authoritative failure Retry creates one new revision and mutation', async () => {
+  const randomUUID = uuidFactory();
+  const clientDraftId = randomUUID();
+  let saved = null;
+  const controller = createDraftSessionController(controllerOptions({
+    randomUUID,
+    api: {
+      async getComposeDraft() {
+        return {
+          client_draft_id: clientDraftId,
+          account_id: 2,
+          revision: 4,
+          state: 'failed',
+          error_message: 'Generated provider failure',
+          body_html: '<p>Retry me</p>',
+        };
+      },
+      async saveDraft(payload) {
+        saved = payload;
+        return { ...payload, state: 'pending' };
+      },
+    },
+  }));
+  await controller.load({
+    clientDraftId,
+    intent: { ...newComposeIntent({}, { randomUUID }), client_draft_id: clientDraftId },
+  });
+  const priorMutation = controller.getState().mutationId;
+  await controller.retry();
+
+  assert.equal(saved.revision, 5);
+  assert.notEqual(saved.mutation_id, priorMutation);
+});
+
+test('discard keeps the content revision stable and local-only drafts never call the server', async () => {
+  const randomUUID = uuidFactory();
+  const timers = fakeTimers();
+  let discardCalls = 0;
+  const controller = createDraftSessionController(controllerOptions({
+    randomUUID,
+    timers,
+    isOnline: () => false,
+    api: { discardComposeDraft: async () => { discardCalls += 1; } },
+  }));
+  await controller.create({ intent: newComposeIntent({}, { randomUUID }) });
+  controller.update({ body_html: '<p>Local only</p>' });
+  await controller.flush();
+  const revision = controller.revision;
+  const mutationId = controller.getState().mutationId;
+  await controller.discard({ delayMs: 5000 });
+
+  assert.equal(controller.revision, revision);
+  assert.equal(controller.getState().mutationId, mutationId);
+  assert.equal(discardCalls, 0);
+  assert.equal(controller.getState().canUndoDiscard, true);
+  assert.equal(timers.runNext(), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(controller.getState().status, 'discarded');
+});
+
+test('ambiguous Send survives reload, remains locked, and terminal failure restores retained bytes', async () => {
+  const randomUUID = uuidFactory();
+  const storage = createMemoryDraftStorage();
+  const timers = fakeTimers();
+  const intent = newComposeIntent({}, { randomUUID });
+  const first = createDraftSessionController(controllerOptions({
+    randomUUID,
+    storage,
+    api: {
+      async saveDraft(payload) {
+        return { ...payload, state: 'synced', synced_revision: payload.revision };
+      },
+    },
+  }));
+  await first.create({ intent });
+  first.update({ body_html: '<p>Retained send body</p>' });
+  await first.flush();
+  await first.markSendUncertain({ idempotency_key: '30000000-0000-4000-8000-000000000001' });
+  assert.equal(first.getState().canSend, false);
+  first.dispose();
+
+  let terminal = null;
+  const restored = createDraftSessionController(controllerOptions({
+    randomUUID,
+    storage,
+    timers,
+    api: {
+      async getOutboundSendByIdempotency() {
+        return {
+          send_id: '40000000-0000-4000-8000-000000000001',
+          idempotency_key: '30000000-0000-4000-8000-000000000001',
+          state: 'failed',
+        };
+      },
+    },
+    onSendTerminal: event => { terminal = event; },
+  }));
+  await restored.load({ clientDraftId: intent.client_draft_id, intent });
+  assert.equal(restored.getState().sendInProgress, true);
+  assert.equal(restored.getState().canSend, false);
+  assert.match(draftStatusView(restored.getState()).message, /Draft retained/);
+  assert.equal(timers.runNext(), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(terminal.reason, 'failed');
+  assert.equal(terminal.snapshot.body_html, '<p>Retained send body</p>');
+});
+
+test('server-denied discard Undo stays hidden', () => {
+  assert.equal(draftStatusView({ status: 'discard-pending', canUndoDiscard: false }).undo, false);
+  assert.equal(draftStatusView({ status: 'discard-pending', canUndoDiscard: true }).undo, true);
+});
+
+test('an accepted offline record reloads online by polling instead of replaying', async () => {
+  const randomUUID = uuidFactory();
+  const storage = createMemoryDraftStorage();
+  const timers = fakeTimers();
+  const intent = newComposeIntent({}, { randomUUID });
+  const first = createDraftSessionController(controllerOptions({
+    randomUUID,
+    storage,
+    api: {
+      async saveDraft(payload) {
+        return { ...payload, state: 'pending' };
+      },
+    },
+  }));
+  await first.create({ intent });
+  first.update({ body_html: '<p>Accepted before offline</p>' });
+  await first.flush();
+  const record = await storage.get(7, intent.client_draft_id);
+  record.status = 'offline';
+  await storage.put(record);
+  first.dispose();
+
+  let saves = 0;
+  const restored = createDraftSessionController(controllerOptions({
+    randomUUID,
+    storage,
+    timers,
+    api: {
+      async saveDraft() { saves += 1; },
+      async getComposeDraft() {
+        return {
+          client_draft_id: intent.client_draft_id,
+          revision: 1,
+          synced_revision: 1,
+          state: 'synced',
+          body_html: '<p>Accepted before offline</p>',
+        };
+      },
+    },
+  }));
+  await restored.load({ clientDraftId: intent.client_draft_id, intent });
+  assert.equal(restored.getState().status, 'reconciling');
+  assert.equal(timers.runNext(), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(restored.getState().status, 'synced');
+  assert.equal(saves, 0);
+});
+
+test('discard worker syncing stays locked until a cross-tab Undo is authoritative', async () => {
+  const randomUUID = uuidFactory();
+  const timers = fakeTimers();
+  let lookupState = 'syncing';
+  const controller = createDraftSessionController(controllerOptions({
+    randomUUID,
+    timers,
+    api: {
+      async saveDraft(payload) {
+        return { ...payload, state: 'synced', synced_revision: payload.revision };
+      },
+      async discardComposeDraft(clientDraftId, mutationId) {
+        return {
+          client_draft_id: clientDraftId,
+          mutation_id: mutationId,
+          revision: controller.revision,
+          state: 'discard_pending',
+          discard_at: '2026-08-30T12:00:05.000Z',
+          discard_undo_until: '2026-08-30T12:00:05.000Z',
+          can_undo_discard: true,
+        };
+      },
+      async getComposeDraft(clientDraftId) {
+        return {
+          client_draft_id: clientDraftId,
+          revision: controller.revision,
+          state: lookupState,
+          discard_at: lookupState === 'syncing' ? '2026-08-30T12:00:05.000Z' : null,
+          discard_undo_until: lookupState === 'syncing' ? '2026-08-30T12:00:05.000Z' : null,
+        };
+      },
+    },
+  }));
+  await controller.create({ intent: newComposeIntent({}, { randomUUID }) });
+  controller.update({ body_html: '<p>Generated discard race</p>' });
+  await controller.flush();
+  await controller.discard({ delayMs: 5000 });
+
+  assert.equal(timers.runNext(), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(controller.getState().status, 'reconciling');
+  assert.equal(controller.getState().discardInProgress, true);
+  assert.equal(controller.getState().canSend, false);
+  assert.throws(() => controller.update({ body_html: '<p>Unsafe edit</p>' }), /Discarded draft/);
+
+  lookupState = 'pending';
+  assert.equal(timers.runNext(), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(controller.getState().status, 'saving');
+  assert.equal(controller.getState().discardInProgress, false);
 });

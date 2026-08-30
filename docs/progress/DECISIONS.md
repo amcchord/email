@@ -439,3 +439,26 @@ add a new entry that explicitly supersedes the old one.
   remains ineligible; private firmware signing keys stay offline; future
   enrollment uses a separate online signing key and physical-cable trust is not
   described as hardware attestation.
+
+## D-025 — Drafts are versioned sessions with dual recovery authority
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Give every Compose writing intent one user-scoped client UUID and
+  immutable, mutation-keyed revisions. Commit the complete snapshot and
+  attachment bytes to auth-scoped IndexedDB and PostgreSQL, then synchronize
+  one stable provider draft identity with at-most-once initial creation and
+  lookup-only ambiguity recovery. Keep a send-owned browser snapshot until
+  terminal delivery truth; delete it on `sent`, or convert it to a fresh
+  Compose identity after `failed` or `cancelled` recovery is durable.
+- Reason: A Gmail response, browser tab, Redis enqueue, or worker lease is not
+  durable writing-session truth. Blind create retry can duplicate provider
+  drafts, immediate local deletion can lose late Undo/failure content, and
+  content retention after an expired discard window unnecessarily preserves
+  sensitive bodies and attachments.
+- Consequence: Every edit advances revision and mutation identity; conflicts
+  require an explicit local/server choice; reply provenance and account
+  ownership fail closed; server discard scrubs content immediately after the
+  authoritative Undo deadline while a content-free tombstone finishes provider
+  reconciliation. Public tokens cannot mutate or read draft detail, and a
+  schema downgrade is an explicit data-loss operation.
