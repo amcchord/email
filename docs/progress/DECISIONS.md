@@ -269,3 +269,24 @@ add a new entry that explicitly supersedes the old one.
   Spam never inherits a trust exception, and persistent exact-sender/global
   modes may be added only through the owned proxy. CID images require an owned
   inline-resource mapping rather than a direct exception.
+
+## D-017 — OAuth callbacks restore explicit PKCE state and fail into the app
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Build every Google authorization-code flow with an explicit PKCE
+  verifier. Carry account-flow verifiers encrypted inside signed, expiring
+  state bound to a short-lived HttpOnly browser nonce; carry login verifiers in
+  a separate encrypted HttpOnly cookie. Bind reauthorization to one owned
+  account, validate the returned identity, actual required scopes, allowlist,
+  and effective refresh token before clearing health, and express every
+  expected callback result as a sanitized local HTTP 303 redirect.
+- Reason: Process-local flow objects do not survive browser redirects, access
+  cookies can expire during consent, login hints are advisory, and raw provider
+  errors/blank callback tabs turn recoverable authorization outcomes into
+  security and usability failures.
+- Consequence: New OAuth entry points must use the shared explicit-verifier
+  helper, one-time browser binding, bounded return targets, generated no-network
+  regressions, and centralized result copy. Callback URLs and logs must never
+  reflect authorization codes, tokens, provider descriptions, raw state, or
+  account identities.

@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { api, setUnauthorizedHandler } from './lib/api.js';
-  import { user, currentPage, showToast, toastMessages, dismissToast, startSyncPolling, stopSyncPolling, threadOrder } from './lib/stores.js';
+  import { user, currentPage, showToast, toastMessages, dismissToast, startSyncPolling, stopSyncPolling, forceSyncPoll, threadOrder } from './lib/stores.js';
   import { theme, activeTheme } from './lib/theme.js';
   import { startVersionPolling } from './lib/autoReload.js';
   import { startRealtime, stopRealtime } from './lib/realtime.js';
@@ -16,6 +16,7 @@
     getLazyRouteLabel,
     normalizeAuthenticatedPage,
   } from './lib/lazyRoutes.js';
+  import { accountOAuthOutcome } from './lib/oauthResult.js';
 
   let loading = $state(true);
   let standaloneEmailId = $state(null);
@@ -121,11 +122,11 @@
 
     if (params.has('page')) currentPage.set(normalizeAuthenticatedPage(params.get('page')));
 
-    if (params.get('connected') === 'true') {
-      showToast('Google account connected successfully', 'success');
-      const connectedUrl = new URL(window.location.href);
-      connectedUrl.searchParams.delete('connected');
-      window.history.replaceState({}, '', `${connectedUrl.pathname}${connectedUrl.search}${connectedUrl.hash}`);
+    const oauthOutcome = accountOAuthOutcome(window.location.href);
+    if (oauthOutcome) {
+      showToast(oauthOutcome.message, oauthOutcome.type, 6000);
+      window.history.replaceState({}, '', oauthOutcome.location);
+      if (oauthOutcome.type === 'success') forceSyncPoll();
     }
 
     loading = false;

@@ -199,7 +199,12 @@ export const api = {
   // Accounts
   listAccounts: () => request('GET', '/accounts/'),
   startOAuth: () => request('GET', '/accounts/oauth/start'),
-  reauthorizeAccount: (accountId) => request('GET', `/accounts/${accountId}/reauthorize`),
+  reauthorizeAccount: (accountId, { returnPage = 'admin' } = {}) => {
+    const params = new URLSearchParams({
+      return_page: returnPage === 'calendar' ? 'calendar' : 'admin',
+    });
+    return request('GET', `/accounts/${accountId}/reauthorize?${params.toString()}`);
+  },
   triggerSync: (accountId) => request('POST', `/accounts/${accountId}/sync`),
   getSyncStatus: (accountId) => request('GET', `/accounts/${accountId}/sync-status`),
 

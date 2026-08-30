@@ -4,10 +4,10 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Pause for production user testing of the deployed remote-content privacy
-controls. Preserve the clean, separately owned AI-provider worktree, keep all
-mail rendering and mutation QA on generated messages, and do not open or
-change real production mail.
+Release the Google OAuth callback reliability fix for production user testing.
+Preserve the clean, separately owned AI-provider worktree, use only generated
+OAuth identities and read-only production evidence, and do not replay the
+reported authorization code or open/change real mail.
 
 ## Baseline
 
@@ -23,7 +23,7 @@ change real production mail.
   `codex/remote-content-controls`.
 - A validated 1.38 GB custom-format backup remains protected at
   `/var/backups/mailapp/maildb-pre-product-polish-20260830T1031Z.dump`, mode
-  `0600`, owned by `postgres`. This frontend-only candidate has no schema work.
+  `0600`, owned by `postgres`. This OAuth candidate has no schema work.
 
 This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
@@ -54,8 +54,15 @@ live state.
 
 ## Verification State
 
-- `make check` passes: 303 backend tests, 4 opt-in PostgreSQL skips, 113
-  frontend tests, and a successful 502-module production build.
+- The OAuth release candidate passes `make check`: 318 backend tests, 4 opt-in
+  PostgreSQL skips, 117 frontend tests, and a successful 503-module production
+  build.
+- Generated OAuth QA verifies success and account-mismatch callbacks on
+  desktop and exact 375×812 mobile layouts, with sanitized one-time results,
+  visible Calendar/Profile landings, no overflow, zero mailbox mutations, and
+  zero unknown routes.
+- The prior remote-content release remains covered by its existing generated
+  browser matrix and request audit.
 - Generated browser QA records zero remote resource requests before permission,
   zero resource requests for safe embedded raster content, and only expected
   no-referrer image/media requests after the explicit local-fixture opt-in.
@@ -94,7 +101,8 @@ live state.
 
 ## Next Safe Action
 
-Pause here for production user testing. After the user resumes work, coordinate
-the AI Markdown image SSRF fix with the AI work owner, then design the owned
-remote-resource manifest/proxy and CID mapping as a separately reviewed backend
-security release.
+Commit and push the reviewed OAuth callback candidate, fast-forward production,
+restart only the API service required for the backend change, rebuild the
+frontend, and verify public health, service state, redacted recent logs, exact
+Git alignment, and the user-facing callback landing. Then ask the user to start
+a fresh Calendar reauthorization; the failed one-time code must not be reused.

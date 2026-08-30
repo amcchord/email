@@ -3,6 +3,7 @@
   import { api } from '../lib/api.js';
   import { user, showToast } from '../lib/stores.js';
   import { theme, getEffectiveMode } from '../lib/theme.js';
+  import { googleLoginErrorMessage } from '../lib/oauthResult.js';
 
   let username = $state('');
   let password = $state('');
@@ -15,11 +16,8 @@
     // Check for login errors from OAuth redirect
     const params = new URLSearchParams(window.location.search);
     const loginError = params.get('login_error');
-    if (loginError === 'not_allowed') {
-      error = 'Your Google account is not authorized to access this system.';
-      window.history.replaceState({}, '', '/');
-    } else if (loginError === 'no_email') {
-      error = 'Could not get email from Google. Please try again.';
+    if (loginError) {
+      error = googleLoginErrorMessage(loginError);
       window.history.replaceState({}, '', '/');
     }
   });

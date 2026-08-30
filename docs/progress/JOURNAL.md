@@ -3,6 +3,51 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Google OAuth callback reliability candidate
+
+### Scope
+
+Diagnose and fix the raw Internal Server Error reported after Calendar Google
+reauthorization, while preserving the separate AI worktree and using only
+redacted production evidence and generated OAuth/browser fixtures.
+
+### Completed
+
+- Redacted production traceback inspection identified a missing PKCE verifier
+  at token exchange; no code, token, credential, mail, or raw private log was
+  retained.
+- Added an explicit shared PKCE flow, encrypted verifier handoff, one-time
+  browser nonce, access-cookie-independent callback identity, target-account
+  binding, actual-scope and durable-refresh validation, allowlist enforcement,
+  sanitized 303 outcomes, and safe Google-login parity.
+- Returned Calendar initiators to Calendar, centralized accurate result/error
+  notifications and URL cleanup, fixed the nonexistent callback Settings tab,
+  and normalized legacy/unknown Settings tabs.
+- Added `OAUTH_REAUTHORIZATION_RELEASE_2026-08-30.md`, 15 backend regressions,
+  four frontend regressions, and an exact-375 generated browser wrapper.
+
+### Verification
+
+- `make setup` and `make check` passed: 318 backend tests passed, 4 isolated
+  PostgreSQL tests skipped, 117 frontend tests passed, and the 503-module
+  production frontend built successfully. Npm reported zero vulnerabilities.
+- Harness syntax and `git diff --check` passed.
+- Generated in-app browser desktop/exact-375 QA showed accurate success and
+  account-mismatch notifications on visible Calendar/Profile landings, cleaned
+  result parameters, no horizontal overflow, zero mailbox mutations, and zero
+  unknown routes.
+
+### Production Actions
+
+- Pending Git-first deployment after the reviewed candidate is committed and
+  pushed. No production data, grant, configuration, migration, or service has
+  been changed during diagnosis or implementation.
+
+### Next
+
+Commit, push, deploy, verify, and then use a fresh Google reauthorization for
+user testing. Do not reuse the failed one-time authorization code.
+
 ## 2026-08-30 — Remote-content privacy controls
 
 ### Scope

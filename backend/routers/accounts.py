@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -8,13 +8,18 @@ from backend.models.account import GoogleAccount, SyncStatus
 from backend.models.settings import Setting
 from backend.schemas.admin import CalendarSyncHealthResponse, GoogleAccountResponse, SyncStatusResponse, GoogleOAuthStart
 from backend.schemas.auth import AccountDescriptionUpdate
-from backend.routers.auth import get_current_user
+from backend.routers.auth import get_current_user, _check_allowed
 from backend.utils.security import encrypt_value, decrypt_value, sign_oauth_state, verify_oauth_state
 from backend.config import get_settings
+from backend.services.google_oauth import build_google_flow, new_code_verifier
 import json
+import logging
+import secrets
+from urllib.parse import urlencode
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 GMAIL_SCOPES = [
     "openid",
@@ -26,15 +31,87 @@ GMAIL_SCOPES = [
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
 ]
+REQUIRED_GMAIL_SCOPES = {
+    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/gmail.labels",
+}
 
 # The "connect account" callback is a separate redirect URI from the login callback
 CONNECT_REDIRECT_URI_PATH = "/api/accounts/oauth/callback"
+ACCOUNT_OAUTH_NONCE_COOKIE = "account_oauth_nonce"
 
 
 def _get_connect_redirect_uri():
     """Build the connect-account redirect URI from the allowed origin."""
-    origin = settings.allowed_origins.split(",")[0].strip()
+    origin = settings.allowed_origins.split(",")[0].strip().rstrip("/")
     return origin + CONNECT_REDIRECT_URI_PATH
+
+
+def _account_oauth_state(
+    user_id: int,
+    code_verifier: str,
+    *,
+    nonce: str,
+    account_id: int | None = None,
+    return_page: str = "admin",
+) -> str:
+    payload = {
+        "user_id": user_id,
+        "pkce": encrypt_value(code_verifier),
+        "nonce": nonce,
+        "return_page": "calendar" if return_page == "calendar" else "admin",
+    }
+    if account_id is not None:
+        payload["account_id"] = account_id
+    return sign_oauth_state(payload)
+
+
+def _account_oauth_redirect(
+    state_data: dict | None,
+    *,
+    result: str | None = None,
+    error: str | None = None,
+) -> RedirectResponse:
+    return_page = state_data.get("return_page") if state_data else None
+    params = {"page": "calendar"} if return_page == "calendar" else {
+        "page": "admin",
+        "tab": "profile",
+    }
+    if result:
+        params["oauth"] = result
+    if error:
+        params["oauth_error"] = error
+    response = RedirectResponse(url=f"/?{urlencode(params)}", status_code=303)
+    response.delete_cookie(ACCOUNT_OAUTH_NONCE_COOKIE)
+    return response
+
+
+def _set_account_oauth_nonce(response: Response, nonce: str) -> None:
+    response.set_cookie(
+        key=ACCOUNT_OAUTH_NONCE_COOKIE,
+        value=nonce,
+        httponly=True,
+        samesite="lax",
+        secure="https" in settings.allowed_origins,
+        max_age=600,
+    )
+
+
+def _restore_account_code_verifier(state_data: dict) -> str | None:
+    encrypted_verifier = state_data.get("pkce")
+    if not encrypted_verifier:
+        return None
+    try:
+        return decrypt_value(encrypted_verifier)
+    except Exception:
+        return None
+
+
+def _credential_scopes(credentials) -> list[str]:
+    granted = getattr(credentials, "granted_scopes", None)
+    scopes = granted if granted is not None else getattr(credentials, "scopes", None)
+    return sorted(set(scopes or []))
 
 
 # ── Allowed accounts ────────────────────────────────────────────────
@@ -133,6 +210,7 @@ async def list_accounts(
 
 @router.get("/oauth/start", response_model=GoogleOAuthStart)
 async def start_oauth(
+    response: Response,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -146,24 +224,18 @@ async def start_oauth(
             detail="Google OAuth not configured. Go to Settings > API Keys to add your Google Client ID and Secret.",
         )
 
-    from google_auth_oauthlib.flow import Flow
-
     redirect_uri = _get_connect_redirect_uri()
-    flow = Flow.from_client_config(
-        {
-            "web": {
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [redirect_uri],
-            }
-        },
-        scopes=GMAIL_SCOPES,
-        redirect_uri=redirect_uri,
+    code_verifier = new_code_verifier()
+    flow = build_google_flow(
+        client_id,
+        client_secret,
+        redirect_uri,
+        GMAIL_SCOPES,
+        code_verifier=code_verifier,
     )
 
-    state = sign_oauth_state({"user_id": user.id})
+    nonce = secrets.token_urlsafe(32)
+    state = _account_oauth_state(user.id, code_verifier, nonce=nonce)
 
     auth_url, _ = flow.authorization_url(
         access_type="offline",
@@ -171,12 +243,15 @@ async def start_oauth(
         prompt="consent",
         state=state,
     )
+    _set_account_oauth_nonce(response, nonce)
     return GoogleOAuthStart(auth_url=auth_url)
 
 
 @router.get("/{account_id}/reauthorize", response_model=GoogleOAuthStart)
 async def reauthorize_account(
     account_id: int,
+    response: Response,
+    return_page: str = Query("admin", pattern="^(admin|calendar)$"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -201,24 +276,24 @@ async def reauthorize_account(
             detail="Google OAuth not configured. Go to Settings > API Keys to add your Google Client ID and Secret.",
         )
 
-    from google_auth_oauthlib.flow import Flow
-
     redirect_uri = _get_connect_redirect_uri()
-    flow = Flow.from_client_config(
-        {
-            "web": {
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [redirect_uri],
-            }
-        },
-        scopes=GMAIL_SCOPES,
-        redirect_uri=redirect_uri,
+    code_verifier = new_code_verifier()
+    flow = build_google_flow(
+        client_id,
+        client_secret,
+        redirect_uri,
+        GMAIL_SCOPES,
+        code_verifier=code_verifier,
     )
 
-    state = sign_oauth_state({"user_id": user.id})
+    nonce = secrets.token_urlsafe(32)
+    state = _account_oauth_state(
+        user.id,
+        code_verifier,
+        nonce=nonce,
+        account_id=account.id,
+        return_page=return_page,
+    )
 
     auth_url, _ = flow.authorization_url(
         access_type="offline",
@@ -227,52 +302,78 @@ async def reauthorize_account(
         state=state,
         login_hint=account.email,
     )
+    _set_account_oauth_nonce(response, nonce)
     return GoogleOAuthStart(auth_url=auth_url)
 
 
 @router.get("/oauth/callback")
 async def oauth_callback(
-    code: str,
+    code: str = "",
     state: str = "",
+    error: str = "",
+    request: Request = None,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
 ):
     """Handle OAuth callback for connecting a Gmail account."""
-    from backend.services.credentials import get_google_credentials
-    client_id, client_secret = await get_google_credentials(db)
-
-    if not client_id or not client_secret:
-        raise HTTPException(status_code=400, detail="Google OAuth not configured")
-
     state_data = verify_oauth_state(state)
     if not state_data:
-        return RedirectResponse(url="/?page=admin&tab=accounts&error=invalid_state")
+        return _account_oauth_redirect(None, error="invalid_state")
 
     user_id = state_data.get("user_id")
-    if not user_id or user_id != user.id:
-        return RedirectResponse(url="/?page=admin&tab=accounts&error=invalid_state")
+    cookie_nonce = request.cookies.get(ACCOUNT_OAUTH_NONCE_COOKIE, "") if request else ""
+    state_nonce = state_data.get("nonce", "")
+    if (
+        not user_id
+        or not cookie_nonce
+        or not state_nonce
+        or not secrets.compare_digest(cookie_nonce, state_nonce)
+    ):
+        return _account_oauth_redirect(state_data, error="invalid_state")
 
-    from google_auth_oauthlib.flow import Flow
+    user_result = await db.execute(
+        select(User).where(User.id == user_id, User.is_active == True)
+    )
+    user = user_result.scalar_one_or_none()
+    if not user:
+        return _account_oauth_redirect(state_data, error="session_expired")
+
+    if error or not code:
+        return _account_oauth_redirect(
+            state_data,
+            error="access_denied" if error == "access_denied" else "authorization_failed",
+        )
+
+    code_verifier = _restore_account_code_verifier(state_data)
+    if not code_verifier:
+        return _account_oauth_redirect(state_data, error="invalid_state")
+
+    from backend.services.credentials import get_google_credentials
+    client_id, client_secret = await get_google_credentials(db)
+    if not client_id or not client_secret:
+        return _account_oauth_redirect(state_data, error="configuration_error")
+
     from googleapiclient.discovery import build
 
     redirect_uri = _get_connect_redirect_uri()
-    flow = Flow.from_client_config(
-        {
-            "web": {
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [redirect_uri],
-            }
-        },
-        scopes=GMAIL_SCOPES,
-        redirect_uri=redirect_uri,
+    flow = build_google_flow(
+        client_id,
+        client_secret,
+        redirect_uri,
+        GMAIL_SCOPES,
+        code_verifier=code_verifier,
     )
     import asyncio
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
-    await loop.run_in_executor(None, lambda: flow.fetch_token(code=code))
+    try:
+        await loop.run_in_executor(None, lambda: flow.fetch_token(code=code))
+    except Exception as exc:
+        logger.warning(
+            "Google account OAuth token exchange failed for user_id=%s: %s",
+            user.id,
+            type(exc).__name__,
+        )
+        return _account_oauth_redirect(state_data, error="token_exchange_failed")
     credentials = flow.credentials
 
     # Get account info (synchronous Google API, run in thread)
@@ -280,70 +381,126 @@ async def oauth_callback(
         service = build("oauth2", "v2", credentials=credentials)
         return service.userinfo().get().execute()
 
-    user_info = await loop.run_in_executor(None, _get_user_info)
+    try:
+        user_info = await loop.run_in_executor(None, _get_user_info)
+    except Exception as exc:
+        logger.warning(
+            "Google account OAuth profile lookup failed for user_id=%s: %s",
+            user.id,
+            type(exc).__name__,
+        )
+        return _account_oauth_redirect(state_data, error="profile_lookup_failed")
     email = user_info.get("email")
     name = user_info.get("name", email)
 
-    # Check if this Gmail account is already connected to ANY user
-    result = await db.execute(
-        select(GoogleAccount).where(GoogleAccount.email == email)
-    )
-    account = result.scalar_one_or_none()
+    if not email:
+        return _account_oauth_redirect(state_data, error="no_email")
 
-    if account:
-        if account.user_id != user_id:
-            # This Gmail is connected to a different user
-            return RedirectResponse(
-                url="/?page=admin&tab=accounts&error=account_taken"
+    if not await _check_allowed(email, db):
+        return _account_oauth_redirect(state_data, error="not_allowed")
+
+    actual_scopes = _credential_scopes(credentials)
+    calendar_scope = "https://www.googleapis.com/auth/calendar.readonly"
+    if calendar_scope not in actual_scopes:
+        return _account_oauth_redirect(state_data, error="calendar_scope_missing")
+    if not REQUIRED_GMAIL_SCOPES.issubset(actual_scopes):
+        return _account_oauth_redirect(state_data, error="required_scopes_missing")
+
+    expected_account_id = state_data.get("account_id")
+    if expected_account_id is not None:
+        result = await db.execute(
+            select(GoogleAccount).where(
+                GoogleAccount.id == expected_account_id,
+                GoogleAccount.user_id == user_id,
             )
-        # Update tokens for existing connection
-        account.encrypted_access_token = encrypt_value(credentials.token)
-        # Google may omit refresh_token on a repeat consent callback. Keep the
-        # known-good token instead of replacing it with an encrypted empty value.
-        if credentials.refresh_token:
-            account.encrypted_refresh_token = encrypt_value(credentials.refresh_token)
-        account.token_expiry = credentials.expiry
-        account.scopes = json.dumps(GMAIL_SCOPES)
-        account.is_active = True
-
-        # Clear calendar sync error so it retries with the new token
-        from backend.models.calendar import CalendarSyncStatus
-        cal_result = await db.execute(
-            select(CalendarSyncStatus).where(CalendarSyncStatus.account_id == account.id)
         )
-        cal_sync = cal_result.scalar_one_or_none()
-        if cal_sync and cal_sync.status == "error":
-            cal_sync.status = "idle"
-            cal_sync.error_message = None
-        if cal_sync:
-            cal_sync.needs_reauth = False
+        account = result.scalar_one_or_none()
+        if not account:
+            return _account_oauth_redirect(state_data, error="account_not_found")
+        if account.email.casefold() != email.casefold():
+            return _account_oauth_redirect(state_data, error="account_mismatch")
     else:
-        # New connection -- associate with the logged-in user
-        account = GoogleAccount(
-            user_id=user_id,
-            email=email,
-            display_name=name,
-            encrypted_access_token=encrypt_value(credentials.token),
-            encrypted_refresh_token=encrypt_value(credentials.refresh_token or ""),
-            token_expiry=credentials.expiry,
-            scopes=json.dumps(GMAIL_SCOPES),
-            is_active=True,
+        # Check if this Gmail account is already connected to ANY user.
+        result = await db.execute(
+            select(GoogleAccount).where(GoogleAccount.email == email)
         )
-        db.add(account)
-        await db.flush()
+        account = result.scalar_one_or_none()
 
-        # Create sync status record
-        sync_status = SyncStatus(account_id=account.id)
-        db.add(sync_status)
+    try:
+        if account:
+            if account.user_id != user_id:
+                # This Gmail is connected to a different user
+                return _account_oauth_redirect(state_data, error="account_taken")
+            stored_refresh_available = False
+            if account.encrypted_refresh_token:
+                try:
+                    stored_refresh_available = bool(decrypt_value(account.encrypted_refresh_token))
+                except Exception:
+                    stored_refresh_available = False
+            if not credentials.refresh_token and not stored_refresh_available:
+                return _account_oauth_redirect(state_data, error="refresh_token_missing")
+            # Update tokens for existing connection
+            account.encrypted_access_token = encrypt_value(credentials.token)
+            # Google may omit refresh_token on a repeat consent callback. Keep the
+            # known-good token instead of replacing it with an encrypted empty value.
+            if credentials.refresh_token:
+                account.encrypted_refresh_token = encrypt_value(credentials.refresh_token)
+            account.token_expiry = credentials.expiry
+            account.scopes = json.dumps(actual_scopes)
+            account.is_active = True
 
-        # Create calendar sync status record
-        from backend.models.calendar import CalendarSyncStatus
-        cal_sync_status = CalendarSyncStatus(account_id=account.id)
-        db.add(cal_sync_status)
+            # Clear calendar sync error so it retries with the new token
+            from backend.models.calendar import CalendarSyncStatus
+            cal_result = await db.execute(
+                select(CalendarSyncStatus).where(CalendarSyncStatus.account_id == account.id)
+            )
+            cal_sync = cal_result.scalar_one_or_none()
+            if cal_sync and cal_sync.status == "error":
+                cal_sync.status = "idle"
+                cal_sync.error_message = None
+            if cal_sync:
+                cal_sync.needs_reauth = False
+        else:
+            if not credentials.refresh_token:
+                return _account_oauth_redirect(state_data, error="refresh_token_missing")
+            # New connection -- associate with the logged-in user
+            account = GoogleAccount(
+                user_id=user_id,
+                email=email,
+                display_name=name,
+                encrypted_access_token=encrypt_value(credentials.token),
+                encrypted_refresh_token=encrypt_value(credentials.refresh_token),
+                token_expiry=credentials.expiry,
+                scopes=json.dumps(actual_scopes),
+                is_active=True,
+            )
+            db.add(account)
+            await db.flush()
 
-    await db.commit()
+            # Create sync status records only after the account has an id.
+            db.add(SyncStatus(account_id=account.id))
+            from backend.models.calendar import CalendarSyncStatus
+            db.add(CalendarSyncStatus(account_id=account.id))
 
-    return RedirectResponse(url="/?page=admin&tab=accounts&connected=true")
+        await db.commit()
+    except Exception as exc:
+        try:
+            await db.rollback()
+        except Exception as rollback_exc:
+            logger.error(
+                "Google account OAuth rollback failed for user_id=%s error_type=%s",
+                user.id,
+                type(rollback_exc).__name__,
+            )
+        logger.error(
+            "Google account OAuth persistence failed for user_id=%s error_type=%s",
+            user.id,
+            type(exc).__name__,
+        )
+        return _account_oauth_redirect(state_data, error="account_update_failed")
+
+    oauth_result = "reauthorized" if expected_account_id is not None else "connected"
+    return _account_oauth_redirect(state_data, result=oauth_result)
 
 
 # ── Sync management ─────────────────────────────────────────────────

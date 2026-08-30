@@ -94,7 +94,8 @@
     // Check URL params for tab
     const params = new URLSearchParams(window.location.search);
     if (params.get('tab')) {
-      activeTab = params.get('tab');
+      const requestedTab = params.get('tab') === 'accounts' ? 'profile' : params.get('tab');
+      activeTab = allTabs.some(tab => tab.id === requestedTab) ? requestedTab : 'profile';
     }
     // Listen for navigation from the shortcuts help modal
     window.addEventListener('shortcut-settings-navigate', handleShortcutSettingsNavigate);

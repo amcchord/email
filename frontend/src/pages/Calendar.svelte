@@ -33,7 +33,7 @@
 
   async function reauthorize(accountId) {
     try {
-      const result = await api.reauthorizeAccount(accountId);
+      const result = await api.reauthorizeAccount(accountId, { returnPage: 'calendar' });
       window.location.href = result.auth_url;
     } catch (err) {
       showToast(err.message || 'Failed to start reauthorization', 'error');

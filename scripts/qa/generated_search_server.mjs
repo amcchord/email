@@ -672,6 +672,59 @@ function writeHtml(response, body, status = 200) {
   response.end(body);
 }
 
+function mobileOAuthQaFrame(response, url) {
+  const oauthCase = url.searchParams.get('case') === 'error' ? 'error' : 'success';
+  const frameQuery = oauthCase === 'error'
+    ? 'page=admin&tab=profile&oauth_error=account_mismatch'
+    : 'page=calendar&oauth=reauthorized';
+  const expectedMessage = oauthCase === 'error'
+    ? 'The selected Google account does not match the account being reconnected.'
+    : 'Google account reconnected successfully';
+  const body = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Generated mobile OAuth callback QA</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #111827; }
+    body { display: grid; min-height: 100vh; place-items: start center; padding: 12px; }
+    iframe { width: 375px; height: 812px; max-width: 100%; border: 0; border-radius: 14px; background: white; box-shadow: 0 22px 70px rgb(0 0 0 / .4); }
+  </style>
+</head>
+<body data-qa-ready="false">
+  <iframe id="mobile-oauth-app" src="/?${frameQuery}" title="Generated OAuth callback at 375 by 812 pixels"></iframe>
+  <script>
+    const frame = document.getElementById('mobile-oauth-app');
+    const expectedMessage = ${JSON.stringify(expectedMessage)};
+    const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+    frame.addEventListener('load', async () => {
+      const doc = frame.contentDocument;
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const notification = doc.querySelector('[aria-label="Notifications"]');
+        if (notification?.textContent?.includes(expectedMessage)) {
+          document.body.dataset.qaMetrics = JSON.stringify({
+            innerWidth: frame.contentWindow.innerWidth,
+            innerHeight: frame.contentWindow.innerHeight,
+            clientWidth: doc.documentElement.clientWidth,
+            scrollWidth: doc.documentElement.scrollWidth,
+            path: frame.contentWindow.location.pathname,
+            query: frame.contentWindow.location.search,
+            notification: notification.textContent.trim(),
+          });
+          document.body.dataset.qaReady = 'true';
+          break;
+        }
+        await delay(25);
+      }
+    });
+  </script>
+</body>
+</html>`;
+  return writeHtml(response, body);
+}
+
 function mobileRouteQaFrame(response, url) {
   const routeCase = ['slow', 'fail-once'].includes(url.searchParams.get('case'))
     ? url.searchParams.get('case')
@@ -1812,6 +1865,7 @@ async function handleGet(request, response, url) {
   if (pathname === '/__qa/editor-mobile') return mobileEditorQaFrame(response, url);
   if (pathname === '/__qa/email-sanitizer-mobile') return mobileEmailSanitizerQaFrame(response);
   if (pathname === '/__qa/chat-mobile') return mobileChatQaFrame(response);
+  if (pathname === '/__qa/oauth-mobile') return mobileOAuthQaFrame(response, url);
   if (pathname === '/api/test/editor-audit') {
     return writeJson(response, {
       fixture: 'generated-lazy-editor',

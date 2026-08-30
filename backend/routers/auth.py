@@ -27,8 +27,9 @@ from backend.services.ai_models import (
 )
 from backend.utils.security import (
     verify_password, hash_password, create_access_token,
-    create_refresh_token, decode_token,
+    create_refresh_token, decode_token, encrypt_value, decrypt_value,
 )
+from backend.services.google_oauth import build_google_flow, new_code_verifier
 from backend.config import get_settings
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -44,22 +45,15 @@ LOGIN_SCOPES = [
 ]
 
 
-def _build_google_flow(client_id: str, client_secret: str, redirect_uri: str, scopes: list):
-    from google_auth_oauthlib.flow import Flow
+GOOGLE_LOGIN_STATE_COOKIE = "oauth_state"
+GOOGLE_LOGIN_VERIFIER_COOKIE = "oauth_code_verifier"
 
-    return Flow.from_client_config(
-        {
-            "web": {
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [redirect_uri],
-            }
-        },
-        scopes=scopes,
-        redirect_uri=redirect_uri,
-    )
+
+def _google_login_redirect(error: str) -> RedirectResponse:
+    response = RedirectResponse(url=f"/?login_error={error}", status_code=303)
+    response.delete_cookie(GOOGLE_LOGIN_STATE_COOKIE)
+    response.delete_cookie(GOOGLE_LOGIN_VERIFIER_COOKIE)
+    return response
 
 
 def _set_auth_cookies(response: Response, access_token: str, refresh_token: str):
@@ -214,7 +208,14 @@ async def google_login_start(response: Response, db: AsyncSession = Depends(get_
         raise HTTPException(status_code=400, detail="Google OAuth not configured. Go to Settings > API Keys to add your Google Client ID and Secret.")
 
     redirect_uri = settings.google_redirect_uri
-    flow = _build_google_flow(client_id, client_secret, redirect_uri, LOGIN_SCOPES)
+    code_verifier = new_code_verifier()
+    flow = build_google_flow(
+        client_id,
+        client_secret,
+        redirect_uri,
+        LOGIN_SCOPES,
+        code_verifier=code_verifier,
+    )
 
     csrf_state = secrets.token_urlsafe(32)
     auth_url, _ = flow.authorization_url(
@@ -227,8 +228,16 @@ async def google_login_start(response: Response, db: AsyncSession = Depends(get_
     is_https = "https" in settings.allowed_origins
     response = JSONResponse(content={"auth_url": auth_url})
     response.set_cookie(
-        key="oauth_state",
+        key=GOOGLE_LOGIN_STATE_COOKIE,
         value=csrf_state,
+        httponly=True,
+        samesite="lax",
+        secure=is_https,
+        max_age=600,
+    )
+    response.set_cookie(
+        key=GOOGLE_LOGIN_VERIFIER_COOKIE,
+        value=encrypt_value(code_verifier),
         httponly=True,
         samesite="lax",
         secure=is_https,
@@ -239,29 +248,52 @@ async def google_login_start(response: Response, db: AsyncSession = Depends(get_
 
 @router.get("/google/callback")
 async def google_login_callback(
-    code: str,
+    code: str = "",
     state: str = "",
+    error: str = "",
     request: Request = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Handle Google OAuth login callback. Creates or finds user, issues JWT."""
-    cookie_state = request.cookies.get("oauth_state", "") if request else ""
+    cookie_state = request.cookies.get(GOOGLE_LOGIN_STATE_COOKIE, "") if request else ""
     if not state or not cookie_state or not secrets.compare_digest(state, cookie_state):
-        return RedirectResponse(url="/?login_error=invalid_state")
+        return _google_login_redirect("invalid_state")
+
+    if error or not code:
+        return _google_login_redirect(
+            "access_denied" if error == "access_denied" else "authorization_failed"
+        )
+
+    encrypted_verifier = request.cookies.get(GOOGLE_LOGIN_VERIFIER_COOKIE, "") if request else ""
+    try:
+        code_verifier = decrypt_value(encrypted_verifier)
+    except Exception:
+        code_verifier = ""
+    if not code_verifier:
+        return _google_login_redirect("invalid_state")
 
     from backend.services.credentials import get_google_credentials
     client_id, client_secret = await get_google_credentials(db)
 
     if not client_id or not client_secret:
-        raise HTTPException(status_code=400, detail="Google OAuth not configured")
+        return _google_login_redirect("configuration_error")
 
     import asyncio
     from googleapiclient.discovery import build
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     redirect_uri = settings.google_redirect_uri
-    flow = _build_google_flow(client_id, client_secret, redirect_uri, LOGIN_SCOPES)
-    await loop.run_in_executor(None, lambda: flow.fetch_token(code=code))
+    flow = build_google_flow(
+        client_id,
+        client_secret,
+        redirect_uri,
+        LOGIN_SCOPES,
+        code_verifier=code_verifier,
+    )
+    try:
+        await loop.run_in_executor(None, lambda: flow.fetch_token(code=code))
+    except Exception:
+        return _google_login_redirect("token_exchange_failed")
     credentials = flow.credentials
 
     # Get user info from Google (synchronous API, run in thread)
@@ -269,18 +301,21 @@ async def google_login_callback(
         service = build("oauth2", "v2", credentials=credentials)
         return service.userinfo().get().execute()
 
-    user_info = await loop.run_in_executor(None, _get_user_info)
+    try:
+        user_info = await loop.run_in_executor(None, _get_user_info)
+    except Exception:
+        return _google_login_redirect("profile_lookup_failed")
     email = user_info.get("email")
     name = user_info.get("name", email)
     avatar = user_info.get("picture")
 
     if not email:
-        return RedirectResponse(url="/?login_error=no_email")
+        return _google_login_redirect("no_email")
 
     # Check allowlist
     is_allowed = await _check_allowed(email, db)
     if not is_allowed:
-        return RedirectResponse(url="/?login_error=not_allowed")
+        return _google_login_redirect("not_allowed")
 
     # Find or create user by email
     result = await db.execute(select(User).where(User.email == email))
@@ -309,9 +344,10 @@ async def google_login_callback(
     refresh_token = create_refresh_token({"sub": str(user.id)})
 
     # Set cookies and redirect to app
-    redirect = RedirectResponse(url="/", status_code=302)
+    redirect = RedirectResponse(url="/", status_code=303)
     _set_auth_cookies(redirect, access_token, refresh_token)
-    redirect.delete_cookie("oauth_state")
+    redirect.delete_cookie(GOOGLE_LOGIN_STATE_COOKIE)
+    redirect.delete_cookie(GOOGLE_LOGIN_VERIFIER_COOKIE)
     return redirect
 
 
