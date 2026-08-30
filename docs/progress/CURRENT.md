@@ -6,13 +6,19 @@ Last updated: 2026-08-30
 
 Continue two coordinated tracks from the exact production baseline: build the
 next conversation-first Inbox triage milestone on the shipped durable Gmail
-label primitive, while qualifying physical E1001/E1002 enrollment, trusted TLS,
-A/B recovery, and browser-install recovery before enabling any terminal write
-path. Keep real mail/calendar QA read-only except for generated `.example.test`
-fixtures.
+label primitive, while executing candidate.6's physical E1001/E1002 enrollment,
+trusted TLS, A/B recovery, browser-install, and OTA recovery qualification before
+enabling any terminal write path. Keep real mail/calendar QA read-only except
+for generated `.example.test` fixtures.
 
 ## Baseline
 
+- The deployed At a Glance firmware protocol/installer runtime is
+  `84a854a5527c342b85bb2884ef43b89fea95a954`. The first-class page can select a
+  signed release and exact physical model/revision, but artifact preflight is
+  still server-qualification-gated and production device transport is
+  source-hard-disabled. The pure OTA1 application contract has no route,
+  persistence, scheduler, or device write.
 - The deployed Gmail Labels & Move application/runtime commit is
   `a440801c18c8377b50a225af71f3937caa78c7af`. Existing synchronized user labels
   are account-safe, conversation-scoped durable actions across list, table,
@@ -62,10 +68,11 @@ fixtures.
   enablement, online key, approved catalog, qualified release/model pair,
   durable OTA event ledger, or device update route.
 - Private firmware `main` is
-  `f23d6302ae4bc64326f385fe44593e2ec47febd0`
-  (`0.2.0-candidate.5`). Exact-main run `33338824057` passed its software gates;
-  generic bundles remain unkeyed, enrollment-disabled, OTA-disabled, and
-  physically unqualified.
+  `5db28243f8dc56309492ae926c0b5186a5fffeb7`
+  (`0.2.0-candidate.6`). Exact-SHA run `33341323506` passed the complete
+  software/reproducibility gate; the identical main-ref provenance run is
+  `33342394221`. Generic bundles remain unkeyed, enrollment-disabled,
+  OTA-disabled, and physically unqualified.
 
 This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
@@ -87,9 +94,10 @@ live state.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 
-- State: candidate.5 and both application-side policy foundations are complete;
-  production remains locked. No device write, enrollment key, OTA offer, or
-  firmware artifact has been enabled.
+- State: candidate.6, the executable HIL evidence harness, exact browser package
+  preflight, recovery workflow, and both OTA1 parsers are complete; production
+  remains locked. No E1001/E1002 was attached during this release, and no
+  device write, enrollment key, qualified catalog, or OTA offer was enabled.
 - Scope: physical RET1 enrollment, interrupted serial/config write, three-slot
   selection, same-owner pending continuity, rollback grace, revocation,
   preserve-config, trusted-time/CA failure, A/B partition migration, inactive
@@ -99,22 +107,40 @@ live state.
   enrollment, flash, or update cannot silently strand a terminal, disclose
   credentials, or replace the known-good slot. Only qualified exact
   release/model/hardware-revision tuples may enter either allowlist.
-- Next: identify dedicated E1001/E1002 HIL devices and execute the documented
-  physical matrix before importing Web Serial or adding a device OTA transport.
+- Next: attach dedicated E1001/E1002 devices and execute the 18-case HIL record
+  with bounded source evidence before importing Web Serial or adding a device
+  OTA transport.
 
 ### P2 — Durable device OTA control plane
 
-- State: policy core and read-only capability reporting are shipped locked;
-  schedule offers, artifact delivery, event ingestion, cohorts, and device
-  authentication are absent.
+- State: policy core, read-only capability reporting, and exact pure OTA1
+  offer/event/replay contracts are shipped locked. Firmware recognizes but
+  does not act on a valid offer; schedule transport, artifact delivery, event
+  ingestion, cohorts, durable state, and device authentication are absent.
 - Scope: one future additive event-ledger migration descending from the
   then-current head, authenticated device offer/artifact/event endpoints,
   idempotent attempt state, power gates, rollout cohorts, and rescue controls.
 - Acceptance: a restart or repeated request cannot duplicate or lose update
   truth, only exact HIL-qualified evidence is offerable, and no single flag can
   enable a write.
-- Next: defer schema allocation and implementation until physical candidate.5
+- Next: defer schema allocation and implementation until physical candidate.6
   HIL establishes the exact event and rollback evidence the ledger must retain.
+
+## Recent At a Glance Firmware Protocol & Installer Foundation Release
+
+- Candidate.6 exposes a reset-only bounded RET1 status-v2 recovery window,
+  recognizes a strict OTA1 offer without acting on it, and ships an executable
+  E1001/E1002 qualification plan that requires bounded hashed evidence for all
+  18 physical cases.
+- The first-class At a Glance page now presents exact signed package/model/
+  printed-revision gates, hashes all four preserve-config artifacts before any
+  future connection, re-hashes prepared bytes at the write boundary, and
+  distinguishes safe pre-write cancellation from recovery-required state.
+- Real Web Serial/esptool and device OTA transports remain absent. Consolidated
+  terminal checks passed 261 backend tests with 12 expected skips, 59 frontend
+  tests, a 541-module local build, and the exact firmware release gate. Full
+  evidence is in
+  `AT_A_GLANCE_FIRMWARE_PROTOCOL_INSTALLER_RELEASE_2026-08-30.md`.
 
 ## Recent Gmail Labels & Move Release
 
@@ -224,9 +250,9 @@ live state.
 
 ## Near-Term Terminal Queue
 
-- Run physical E1001/E1002 RET1, trusted TLS, A/B partition migration,
-  interruption, pending-image validation, rollback, preserve-config, and ROM
-  recovery HIL. E1004 remains blocked and single-slot.
+- Run the candidate.6 physical E1001/E1002 RET1, trusted TLS, A/B partition
+  migration, interruption, pending-image validation, rollback, preserve-config,
+  and ROM recovery HIL. E1004 remains blocked and single-slot.
 - Add production Web Serial only after HIL, with a source-pinned browser signing
   key and the existing serial/provisioning/recovery gates still independent.
 - After HIL, add the durable OTA event ledger and device-authenticated
@@ -240,9 +266,11 @@ live state.
 - Firmware release signing stays offline and independent from the future online
   enrollment key. Neither private key belongs in Git, browser code, artifacts,
   application logs, or progress documents.
-- The shipped browser fetches only catalog and exact signed metadata evidence.
-  It contains no serial request, Wi-Fi form, configuration write, firmware
-  artifact download, erase, esptool, or dynamic flashing path.
+- The shipped browser may fetch and hash firmware bytes only after exact
+  signature, schema, model, printed-revision, preservation, and server-side
+  qualification gates all pass. The current catalog cannot pass those gates,
+  and the build contains no serial request, Wi-Fi/configuration write, erase,
+  esptool, or dynamic flashing transport.
 - Physical cable observation is not hardware attestation. MAC, model, chip
   revision, and firmware version are self-reported inventory fields.
 - Real production mail and calendars remain read-only during terminal QA.

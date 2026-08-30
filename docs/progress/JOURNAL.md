@@ -3,6 +3,67 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — At a Glance firmware protocol and installer foundation
+
+### Scope
+
+Advance browser-install and OTA implementation to exact executable protocol,
+package, recovery, and physical-evidence boundaries without enabling a real
+device write.
+
+### Completed
+
+- Released private firmware candidate.6 at
+  `5db28243f8dc56309492ae926c0b5186a5fffeb7` with a strict reset-only bounded
+  RET1 status-request window, pure OTA1 offer/event/replay parsing, and no OTA
+  transport or persistent update action.
+- Added an executable E1001/E1002-only HIL planner/validator for the exact
+  preserve-config four-segment bundle and complete 18-case evidence record.
+  Every passing case must reference a real bounded file under the evidence root
+  whose SHA-256 is revalidated.
+- Added pure application OTA1 contracts and an exact browser install workflow.
+  The first-class At a Glance page now exposes signed release/model/printed-
+  revision selection, four-artifact byte/hash preflight, immutable prepared
+  package revalidation, workflow/recovery state, and explicit cleanup.
+- Kept device transport source-hard-disabled. No Web Serial request, esptool,
+  firmware write, OTA route, durable ledger, migration, online key, approved
+  catalog, or HIL allowlist was added.
+
+### Verification
+
+- The consolidated app gate passed 261 terminal backend tests with 12 expected
+  opt-in skips, 59 terminal frontend tests, a 541-module local production
+  build, and `git diff --check`.
+- Firmware passed 29 tooling tests, enrollment/RET1 and OTA1 host suites,
+  E1001/E1002/E1004 builds, two clean all-model reproducible release builds,
+  and exact manifest SHA-256
+  `fb1e7fb35a077356a6e36ed3a790e60ace2d5d5573ae3d23822d697e7b385ef7`.
+- Exact-SHA Actions run `33341323506` passed keyed protocol compiles, all-model
+  reproducibility, manifest verification, and immutable bundle publication.
+  Identical main-ref provenance run `33342394221` was queued after promotion.
+
+### Production Actions
+
+- Pushed and deployed exact application/runtime
+  `84a854a5527c342b85bb2884ef43b89fea95a954` and promoted private firmware
+  `main` to exact candidate.6 SHA
+  `5db28243f8dc56309492ae926c0b5186a5fffeb7`.
+- Production fast-forwarded cleanly from the Labels docs baseline, built 543
+  frontend modules, and remained at Alembic `b5c6d7e8f9a0 (head)`. No service
+  restart, dependency install, migration, database write, Caddy change, or
+  physical firmware installation occurred.
+- All seven services remained active, public health returned `ok`, and the
+  post-deploy warning-or-higher service log was empty. Read-only authenticated
+  browser QA showed first-class Terminal firmware, `Transport locked`, and
+  disabled Verify/Connect controls with zero console warnings/errors and no
+  download, serial prompt, mail action, or terminal mutation.
+
+### Next
+
+Attach dedicated E1001/E1002 devices and execute the candidate.6 18-case HIL
+record. Only exact passing release/model/revision tuples may unlock a future
+source-pinned Web Serial adapter or inform the post-b5 durable OTA ledger.
+
 ## 2026-08-30 — Gmail Labels & Move release
 
 ### Scope
