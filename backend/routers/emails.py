@@ -444,7 +444,8 @@ async def get_email(
             GoogleAccount.user_id == user.id,
         )
     )
-    if not acct.scalar_one_or_none():
+    account = acct.scalar_one_or_none()
+    if not account:
         raise HTTPException(status_code=404, detail="Email not found")
 
     attachments = []
@@ -486,6 +487,8 @@ async def get_email(
 
     return EmailDetail(
         id=email.id,
+        account_id=account.id,
+        account_email=account.email,
         gmail_message_id=email.gmail_message_id,
         gmail_thread_id=email.gmail_thread_id,
         subject=email.subject,
@@ -510,6 +513,7 @@ async def get_email(
         reply_to=email.reply_to,
         message_id_header=email.message_id_header,
         in_reply_to=email.in_reply_to,
+        references_header=email.references_header,
         attachments=attachments,
         ai_summary=ai_summary,
         ai_action_items=ai_actions,
@@ -649,14 +653,22 @@ async def preview_attachment(
 async def get_thread(
     thread_id: str,
     order: str = Query("asc", pattern="^(asc|desc)$"),
+    account_id: Optional[int] = Query(None, gt=0),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    # Get user's account IDs
-    acct_result = await db.execute(
-        select(GoogleAccount.id).where(GoogleAccount.user_id == user.id)
+    # Keep the account identity attached to every thread member. Reply clients
+    # must not guess a sending account when a user owns multiple mailboxes.
+    account_query = select(GoogleAccount.id, GoogleAccount.email).where(
+        GoogleAccount.user_id == user.id
     )
-    account_ids = [r[0] for r in acct_result.all()]
+    if account_id is not None:
+        account_query = account_query.where(GoogleAccount.id == account_id)
+    acct_result = await db.execute(account_query)
+    account_emails = {row[0]: row[1] for row in acct_result.all()}
+    account_ids = list(account_emails)
+    if not account_ids:
+        raise HTTPException(status_code=404, detail="Thread not found")
 
     order_clause = desc(Email.date) if order == "desc" else asc(Email.date)
     result = await db.execute(
@@ -698,6 +710,8 @@ async def get_thread(
 
         email_details.append(EmailDetail(
             id=e.id,
+            account_id=e.account_id,
+            account_email=account_emails[e.account_id],
             gmail_message_id=e.gmail_message_id,
             gmail_thread_id=e.gmail_thread_id,
             subject=e.subject,
@@ -722,6 +736,7 @@ async def get_thread(
             reply_to=e.reply_to,
             message_id_header=e.message_id_header,
             in_reply_to=e.in_reply_to,
+            references_header=e.references_header,
             attachments=attachments,
         ))
 

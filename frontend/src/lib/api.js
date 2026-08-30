@@ -170,9 +170,12 @@ export const api = {
     ),
   attachmentPreviewUrl: (emailId, attachmentId) =>
     `/api/emails/${encodeURIComponent(emailId)}/attachments/${encodeURIComponent(attachmentId)}/preview`,
-  getThread: (threadId, order = null) => {
-    const params = order ? `?order=${order}` : '';
-    return request('GET', `/emails/thread/${threadId}${params}`);
+  getThread: (threadId, order = null, accountId = null) => {
+    const params = new URLSearchParams();
+    if (order) params.set('order', order);
+    if (accountId) params.set('account_id', String(accountId));
+    const query = params.toString();
+    return request('GET', `/emails/thread/${threadId}${query ? `?${query}` : ''}`);
   },
   emailActions: (emailIds, action, idempotencyKey = null) =>
     request('POST', '/emails/actions', {

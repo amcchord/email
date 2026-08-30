@@ -657,6 +657,22 @@ fields let mixed-folder search results render recipients and expose safe
 Restore/Not Spam actions per message instead of inferring state from the outer
 mailbox parameter.
 
+Email detail and thread-member payloads also include the authoritative
+`account_id`, `account_email`, and optional `references_header`. Reply clients
+must use that identity instead of selecting the first configured account, and
+can extend the existing RFC References chain instead of replacing it.
+
+Thread reads accept an additive account scope:
+
+```text
+GET /api/emails/thread/{thread_id}?account_id={owned_account_id}&order=asc|desc
+```
+
+When `account_id` is supplied, the response contains only messages from that
+owned account. An unknown or foreign account returns the same 404 as a missing
+thread. Omitting the parameter preserves the legacy all-owned-accounts read
+contract for existing clients; reply surfaces always send the exact scope.
+
 ## Web session-only attachment preview and download
 
 The authenticated web application, not the `/api/v1` token surface, exposes:

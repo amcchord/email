@@ -24,6 +24,21 @@ export function newestThreadMessage(messages, order = 'newest_first') {
   return order === 'newest_first' ? list[0] : list[list.length - 1];
 }
 
+export function replyDraftAccountKey(email) {
+  const accountId = Number(email?.account_id);
+  if (Number.isSafeInteger(accountId) && accountId > 0) return `id:${accountId}`;
+  const accountEmail = typeof email?.account_email === 'string'
+    ? email.account_email.trim().toLowerCase()
+    : '';
+  return accountEmail ? `email:${accountEmail}` : '';
+}
+
+export function flowReplyDraftKey(email) {
+  if (!email) return null;
+  const accountKey = email.reply_draft_account_key || replyDraftAccountKey(email);
+  return [accountKey, email.gmail_thread_id || '', email.id || ''].join(':');
+}
+
 /**
  * Keep a delayed thread response scoped to the exact Flow reply that opened
  * it. Generation prevents same-id reopen races while identity/source checks

@@ -290,3 +290,21 @@ add a new entry that explicitly supersedes the old one.
   regressions, and centralized result copy. Callback URLs and logs must never
   reflect authorization codes, tokens, provider descriptions, raw state, or
   account identities.
+
+## D-018 — Reply envelopes require authoritative account provenance
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Build Reply and Reply All from an authoritative message detail or
+  account-scoped thread member. The visible From/To/Cc context and the eventual
+  send/compose payload must share one derived envelope. Missing, inactive,
+  unknown, mismatched, ambiguous, or stale account/thread identity fails
+  closed; there is no single-account or first-account fallback.
+- Reason: In a multi-account client, guessing the sending account or rebuilding
+  recipients separately can silently send from the wrong identity, omit
+  Reply-To/Cc participants, duplicate owned addresses, or disclose a message to
+  unintended recipients.
+- Consequence: Detail/thread APIs carry account identity and References state;
+  reply thread reads are account-scoped; all owned accounts and aliases are
+  removed from recipients; Bcc is never inherited; failed thread reads disable
+  editing, full compose, and send until authoritative data is restored.

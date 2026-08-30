@@ -3,6 +3,47 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Reply-envelope integrity candidate
+
+### Scope
+
+Remove wrong-account and recipient-envelope ambiguity from Inbox and Flow
+without touching the concurrent AI-provider worktree or mutating real mail.
+
+### Completed
+
+- Added authoritative account identity and References state to details/thread
+  members, plus optional owned-account thread scoping.
+- Centralized fail-closed Reply/Reply All derivation, removed first-account
+  fallbacks, preserved RFC recipient/threading semantics, and made visible
+  From/To/Cc values identical to send/full-compose payloads.
+- Added explicit Inbox Reply All, truthful Flow action labels, generation-
+  guarded delayed completion, stable hydrated draft keys, unavailable-editor
+  suppression, accessible icon controls, and an exact-375 Flow layout repair.
+- Added generated second-account/decoy, unknown-source, and Active Thread
+  fixtures plus a browser-readable read/mutation audit. Three independent
+  reviewers found sender, stale-state, thread-scope, parser, accessibility, and
+  mobile blockers; each was fixed before final gating.
+
+### Verification
+
+- `make check` passed: 325 backend tests, 4 opt-in PostgreSQL skips, 132
+  frontend tests, and a successful 504-module production build.
+- Generated in-app browser desktop/exact-375 QA passed for Inbox, Flow,
+  unavailable source, and Active Threads. Audit: zero mutation attempts, zero
+  accepted mutations, and zero unknown routes.
+- Final architecture, competitive UX, and QA rereviews found no release
+  blockers.
+
+### Production Actions
+
+- Pending commit, push, and authorized deployment.
+
+### Next
+
+Deploy the exact validated commit, verify health/services/logs/public UI, and
+record the release commit and production baseline.
+
 ## 2026-08-30 — Google OAuth callback reliability candidate
 
 ### Scope

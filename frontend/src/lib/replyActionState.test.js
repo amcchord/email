@@ -6,6 +6,8 @@ import {
   capturedReplyStillActive,
   isCurrentFlowThreadRequest,
   newestThreadMessage,
+  flowReplyDraftKey,
+  replyDraftAccountKey,
   reconcileNeedsReplyRemoval,
   removePendingReplyId,
 } from './flow/replyActionState.js';
@@ -21,6 +23,42 @@ test('newest thread message follows the configured thread order', () => {
   assert.equal(newestThreadMessage([...messages].reverse(), 'oldest_first')?.id, 'newest');
   assert.equal(newestThreadMessage([], 'newest_first'), null);
   assert.equal(newestThreadMessage(null, 'oldest_first'), null);
+});
+
+test('Flow draft keys stay stable when authoritative account email arrives after a digest', () => {
+  const digest = {
+    account_id: 22,
+    gmail_thread_id: 'generated-thread',
+    id: null,
+  };
+  const pinned = {
+    ...digest,
+    reply_draft_account_key: replyDraftAccountKey(digest),
+  };
+  const hydrated = {
+    ...pinned,
+    account_email: 'SECOND.Owner@Example.Test',
+  };
+
+  assert.equal(flowReplyDraftKey(pinned), 'id:22:generated-thread:');
+  assert.equal(flowReplyDraftKey(hydrated), flowReplyDraftKey(pinned));
+});
+
+test('Flow pins an email-only draft identity across later account-id hydration', () => {
+  const summary = {
+    account_email: 'SECOND.Owner@Example.Test',
+    gmail_thread_id: 'generated-thread',
+    id: 317,
+  };
+  const pinned = {
+    ...summary,
+    reply_draft_account_key: replyDraftAccountKey(summary),
+  };
+
+  assert.equal(
+    flowReplyDraftKey({ ...pinned, account_id: 22 }),
+    'email:second.owner@example.test:generated-thread:317',
+  );
 });
 
 test('Flow accepts thread data only for the newest matching reply identity', () => {

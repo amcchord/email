@@ -9,9 +9,16 @@
   import { lastEvent } from '../lib/realtime.js';
   import Icon from '../components/common/Icon.svelte';
   import DaySummaryStrip from '../lib/flow/DaySummaryStrip.svelte';
-  import { addPendingReplyId, capturedReplyStillActive, isCurrentFlowThreadRequest, newestThreadMessage, reconcileNeedsReplyRemoval, removePendingReplyId } from '../lib/flow/replyActionState.js';
+  import { addPendingReplyId, capturedReplyStillActive, flowReplyDraftKey, isCurrentFlowThreadRequest, newestThreadMessage, reconcileNeedsReplyRemoval, removePendingReplyId, replyDraftAccountKey } from '../lib/flow/replyActionState.js';
   import DeferredRichEditor from '../components/email/DeferredRichEditor.svelte';
   import { cleanEmailText } from '../lib/emailText.js';
+  import {
+    buildReplyEnvelope,
+    normalizeReplyAddress,
+    REPLY_ENVELOPE_MODES,
+    REPLY_ENVELOPE_UNAVAILABLE,
+    resolveReplySourceAccount,
+  } from '../lib/replyEnvelope.js';
   import EmailHtmlFrame from '../components/email/EmailHtmlFrame.svelte';
 
   // --- Day Summary State ---
@@ -69,6 +76,29 @@
   let writingSurfaceReady = $state(false);
   let threadLoadGeneration = 0;
   let replyDrafts = $state({});
+
+  function replyUnavailableMessage(reason) {
+    if (reason === REPLY_ENVELOPE_UNAVAILABLE.SOURCE_ACCOUNT_INACTIVE) {
+      return 'The source account is inactive. Reconnect it before replying.';
+    }
+    if (
+      reason === REPLY_ENVELOPE_UNAVAILABLE.SOURCE_ACCOUNT_IDENTITY_MISSING
+      || reason === REPLY_ENVELOPE_UNAVAILABLE.SOURCE_ACCOUNT_NOT_FOUND
+    ) {
+      return "This message's source account is unavailable. Refresh accounts or reconnect the matching account before replying.";
+    }
+    if (
+      reason === REPLY_ENVELOPE_UNAVAILABLE.SOURCE_ACCOUNT_MISMATCH
+      || reason === REPLY_ENVELOPE_UNAVAILABLE.SOURCE_ACCOUNT_AMBIGUOUS
+      || reason === REPLY_ENVELOPE_UNAVAILABLE.SOURCE_ACCOUNT_IDENTITY_INVALID
+    ) {
+      return 'The sending account could not be verified. Refresh accounts before replying.';
+    }
+    if (reason === REPLY_ENVELOPE_UNAVAILABLE.THREAD_DETAILS_UNAVAILABLE) {
+      return 'The full conversation could not be verified. Refresh the conversation before replying.';
+    }
+    return 'Reply recipients could not be verified. Refresh the conversation before sending.';
+  }
 
   // --- Keyboard navigation state for dashboard ---
   // Sections: 'needs_reply', 'awaiting', 'threads'
@@ -151,9 +181,9 @@
     if (focusedSection === 'needs_reply') {
       openReplyView(item, highlightedIndex, null);
     } else if (focusedSection === 'awaiting') {
-      openThreadInFlow(item.gmail_thread_id, { subject: item.subject, from_name: item.to_name, date: item.date, id: item.id, snippet: item.snippet, account_email: item.account_email }, 'awaiting');
+      openThreadInFlow(item.gmail_thread_id, { subject: item.subject, from_name: item.to_name, date: item.date, id: item.id, snippet: item.snippet, account_id: item.account_id, account_email: item.account_email }, 'awaiting');
     } else if (focusedSection === 'threads') {
-      openThreadInFlow(item.thread_id, { subject: item.subject, summary: item.summary, date: item.latest_date }, 'thread');
+      openThreadInFlow(item.thread_id, { subject: item.subject, summary: item.summary, date: item.latest_date, account_id: item.account_id }, 'thread');
     }
   }
 
@@ -326,7 +356,9 @@
             ? 'Conversation details are still loading'
             : !writingSurfaceReady
               ? 'Reply editor is still opening'
-          : 'Open a reply and enter a message first',
+              : replyContext && !replyContext.available
+                ? replyUnavailableMessage(replyContext.reason)
+                : 'Open a reply and enter a message first',
       },
       'flow.back': () => {
         if (replyViewOpen) {
@@ -803,19 +835,14 @@
 
   // ============ Reply View Logic ============
 
-  function replyDraftKey(email) {
-    if (!email) return null;
-    return [email.account_email || '', email.gmail_thread_id || '', email.id || ''].join(':');
-  }
-
   function rememberCurrentReplyDraft() {
-    const key = replyDraftKey(selectedReplyEmail);
+    const key = flowReplyDraftKey(selectedReplyEmail);
     if (!key || !replyBodyHtml) return;
     replyDrafts = { ...replyDrafts, [key]: replyBodyHtml };
   }
 
   function forgetReplyDraft(email = selectedReplyEmail) {
-    const key = replyDraftKey(email);
+    const key = flowReplyDraftKey(email);
     if (!key || !Object.hasOwn(replyDrafts, key)) return;
     const nextDrafts = { ...replyDrafts };
     delete nextDrafts[key];
@@ -845,7 +872,11 @@
     rememberCurrentReplyDraft();
     const requestGeneration = ++threadLoadGeneration;
     const emailId = email.id;
-    selectedReplyEmail = email;
+    selectedReplyEmail = {
+      ...email,
+      is_sent: email.is_sent ?? false,
+      reply_draft_account_key: replyDraftAccountKey(email),
+    };
     activeReplyIndex = index;
     viewSource = 'needs_reply';
     replyViewOpen = true;
@@ -870,7 +901,7 @@
         if (optIdx >= 0) selectedOptionIndex = optIdx;
       }
     } else {
-      initialReplyContent = replyDrafts[replyDraftKey(email)] || '';
+      initialReplyContent = replyDrafts[flowReplyDraftKey(selectedReplyEmail)] || '';
       replyBodyHtml = initialReplyContent;
     }
     remountReplyEditor();
@@ -878,7 +909,9 @@
     if (email.gmail_thread_id) {
       try {
         const orderParam = get(threadOrder) === 'newest_first' ? 'desc' : 'asc';
-        const data = await api.getThread(email.gmail_thread_id, orderParam);
+        const source = resolveReplySourceAccount({ message: email, accounts: get(accounts) });
+        if (!source.available) throw new Error(replyUnavailableMessage(source.reason));
+        const data = await api.getThread(email.gmail_thread_id, orderParam, source.sourceAccount.id);
         if (!threadRequestIsCurrent(requestGeneration, { emailId })) return;
         threadData = data;
         if (data.emails && data.emails.length > 1) {
@@ -929,19 +962,29 @@
       id: metadata.id || null,
       snippet: metadata.snippet || '',
       summary: metadata.summary || '',
+      account_id: metadata.account_id || null,
       account_email: metadata.account_email || null,
+      is_sent: metadata.is_sent ?? source === 'awaiting',
+      to_addresses: metadata.to_addresses || [],
+      cc_addresses: metadata.cc_addresses || [],
+      bcc_addresses: [],
+      reply_to: metadata.reply_to || null,
+      message_id_header: metadata.message_id_header || null,
       reply_options: null,
       suggested_reply: null,
       category: null,
+      reply_draft_account_key: replyDraftAccountKey(metadata),
     };
-    initialReplyContent = replyDrafts[replyDraftKey(selectedReplyEmail)] || '';
+    initialReplyContent = replyDrafts[flowReplyDraftKey(selectedReplyEmail)] || '';
     replyBodyHtml = initialReplyContent;
     remountReplyEditor();
 
     if (threadId) {
       try {
         const orderParam = get(threadOrder) === 'newest_first' ? 'desc' : 'asc';
-        const data = await api.getThread(threadId, orderParam);
+        const sourceResolution = resolveReplySourceAccount({ message: selectedReplyEmail, accounts: get(accounts) });
+        if (!sourceResolution.available) throw new Error(replyUnavailableMessage(sourceResolution.reason));
+        const data = await api.getThread(threadId, orderParam, sourceResolution.sourceAccount.id);
         if (!threadRequestIsCurrent(requestGeneration, { threadId, source })) return;
         threadData = data;
         if (data.emails && data.emails.length > 1) {
@@ -955,16 +998,34 @@
           collapsedMessages = collapsed;
         }
 
-        // Derive reply-to from the thread's latest inbound message
+        // Keep the reply header aligned to the true newest inbound message
+        // from this exact source account, regardless of display order.
         if (data.emails && data.emails.length > 0) {
-          const latestInbound = orderParam === 'desc'
-            ? data.emails.find(m => !m.is_sent)
-            : [...data.emails].reverse().find(m => !m.is_sent);
+          const sourceEmail = normalizeReplyAddress(selectedReplyEmail.account_email);
+          const sourceAccountId = Number(selectedReplyEmail.account_id) || null;
+          const sameSource = data.emails.filter(candidate => {
+            if (sourceAccountId && candidate.account_id) {
+              return Number(candidate.account_id) === sourceAccountId;
+            }
+            const candidateEmail = normalizeReplyAddress(candidate.account_email);
+            return Boolean(sourceEmail && candidateEmail && sourceEmail === candidateEmail);
+          });
+          const latestInbound = newestThreadMessage(
+            sameSource.filter(message => message.is_sent === false),
+            get(threadOrder),
+          );
           if (latestInbound) {
             selectedReplyEmail = {
               ...selectedReplyEmail,
+              account_id: latestInbound.account_id,
+              account_email: latestInbound.account_email,
+              is_sent: false,
               from_name: latestInbound.from_name || selectedReplyEmail.from_name,
               from_address: latestInbound.from_address || selectedReplyEmail.from_address,
+              reply_to: latestInbound.reply_to || null,
+              to_addresses: latestInbound.to_addresses || [],
+              cc_addresses: latestInbound.cc_addresses || [],
+              message_id_header: latestInbound.message_id_header || null,
               date: latestInbound.date || selectedReplyEmail.date,
             };
           }
@@ -1040,22 +1101,13 @@
         editingCustomPrompt = false;
         if (result.is_new_email) {
           const bodyHtml = '<p>' + result.body.replace(/\n/g, '</p><p>') + '</p>';
-          const acctList = get(accounts);
-          let acctId = null;
-          if (acctList.length === 1) {
-            acctId = acctList[0].id;
-          } else if (acctList.length > 1 && email.account_email) {
-            const matched = acctList.find(a => a.email === email.account_email);
-            if (matched) {
-              acctId = matched.id;
-            } else {
-              acctId = acctList[0].id;
-            }
-          } else if (acctList.length > 0) {
-            acctId = acctList[0].id;
+          const source = resolveReplySourceAccount({ message: email, accounts: get(accounts) });
+          if (!source.available) {
+            showToast(replyUnavailableMessage(source.reason), 'error');
+            return;
           }
           composeData.set({
-            account_id: acctId,
+            account_id: source.sourceAccount.id,
             to: result.to || [],
             cc: result.cc || [],
             subject: result.subject || '',
@@ -1088,7 +1140,7 @@
 
   function handleEditorUpdate(html) {
     replyBodyHtml = html;
-    const key = replyDraftKey(selectedReplyEmail);
+    const key = flowReplyDraftKey(selectedReplyEmail);
     if (key) replyDrafts = { ...replyDrafts, [key]: html };
   }
 
@@ -1249,38 +1301,16 @@
 
   function openInCompose() {
     if (!selectedReplyEmail || threadLoading) return;
-    const email = selectedReplyEmail;
-    const subject = email.subject && email.subject.startsWith('Re:') ? email.subject : 'Re: ' + (email.subject || '');
-
-    let messageIdHeader = null;
-    if (threadData && threadData.emails && threadData.emails.length > 0) {
-      const newestMessage = newestThreadMessage(threadData.emails, get(threadOrder));
-      messageIdHeader = newestMessage?.message_id_header || null;
-    }
-
-    const accountList = get(accounts);
-    let accountId = null;
-    if (accountList.length === 1) {
-      accountId = accountList[0].id;
-    } else if (accountList.length > 1 && email.account_email) {
-      const matched = accountList.find(a => a.email === email.account_email);
-      if (matched) {
-        accountId = matched.id;
-      } else {
-        accountId = accountList[0].id;
-      }
-    } else if (accountList.length > 0) {
-      accountId = accountList[0].id;
+    const context = replyContext;
+    if (!context?.available) {
+      showToast(replyUnavailableMessage(context?.reason), 'error');
+      return;
     }
 
     composeData.set({
-      account_id: accountId,
-      to: [email.from_address],
-      subject: subject,
+      draft_key: `reply:${context.envelope.account_id}:${context.message.id || context.envelope.thread_id || 'thread'}`,
+      ...context.envelope,
       body_html: replyBodyHtml || '',
-      in_reply_to: messageIdHeader || null,
-      references: messageIdHeader || null,
-      thread_id: email.gmail_thread_id || null,
     });
     currentPage.set('compose');
   }
@@ -1292,7 +1322,8 @@
       && Boolean(plainText)
       && writingSurfaceReady
       && !threadLoading
-      && !inlineReplySending;
+      && !inlineReplySending
+      && Boolean(replyContext?.available);
   }
 
   async function sendReply() {
@@ -1304,49 +1335,19 @@
     const requestGeneration = threadLoadGeneration;
     const sourceAtStart = viewSource;
     const archiveAtStart = archiveAfterSend;
-    const threadAtStart = threadData;
+    const contextAtStart = replyContext;
+    if (!contextAtStart?.available) {
+      showToast(replyUnavailableMessage(contextAtStart?.reason), 'error');
+      return false;
+    }
+    const envelopeAtStart = contextAtStart.envelope;
 
     inlineReplySending = true;
     try {
-      const accountList = get(accounts);
-      let accountId = null;
-      if (accountList.length === 1) {
-        accountId = accountList[0].id;
-      } else if (accountList.length > 1 && email.account_email) {
-        const matched = accountList.find(a => a.email === email.account_email);
-        if (matched) {
-          accountId = matched.id;
-        } else {
-          accountId = accountList[0].id;
-        }
-      } else if (accountList.length > 1) {
-        accountId = accountList[0].id;
-      }
-
-      if (!accountId) {
-        showToast('No account found to send from', 'error');
-        return false;
-      }
-
-      const subject = email.subject && email.subject.startsWith('Re:') ? email.subject : 'Re: ' + (email.subject || '');
-
-      let messageIdHeader = null;
-      if (threadAtStart && threadAtStart.emails && threadAtStart.emails.length > 0) {
-        const newestMessage = newestThreadMessage(threadAtStart.emails, get(threadOrder));
-        messageIdHeader = newestMessage?.message_id_header || null;
-      }
-
       await api.sendEmail({
-        account_id: accountId,
-        to: [email.from_address],
-        cc: [],
-        bcc: [],
-        subject: subject,
+        ...envelopeAtStart,
         body_text: plainText,
         body_html: bodyHtmlAtStart,
-        in_reply_to: messageIdHeader || null,
-        references: messageIdHeader || null,
-        thread_id: email.gmail_thread_id || null,
       });
       showToast('Reply sent!', 'success');
 
@@ -1414,82 +1415,86 @@
     }).join(', ');
   }
 
-  function getAddressString(addr) {
-    if (!addr) return '';
-    if (typeof addr === 'string') return addr;
-    if (addr.name) return addr.name;
-    return addr.address || '';
+  function sameReplySource(candidate, source) {
+    const sourceId = Number(source?.account_id) || null;
+    const candidateId = Number(candidate?.account_id) || null;
+    if (sourceId && candidateId) return sourceId === candidateId;
+    const sourceEmail = normalizeReplyAddress(source?.account_email);
+    const candidateEmail = normalizeReplyAddress(candidate?.account_email);
+    return Boolean(sourceEmail && candidateEmail && sourceEmail === candidateEmail);
   }
 
-  function getAddressEmail(addr) {
-    if (!addr) return '';
-    if (typeof addr === 'string') return addr;
-    return addr.address || '';
-  }
-
-  // Compute reply context: who we're replying to and from which account
-  let replyContext = $derived.by(() => {
+  // Choose from this exact account only. Needs Reply targets the newest inbound
+  // message; Awaiting Response follows up on the newest message, which is
+  // normally the user's sent message and therefore targets its recipients.
+  let replyMessage = $derived.by(() => {
     if (!selectedReplyEmail) return null;
-
-    // Resolve the sending account
-    const accountList = $accounts;
-    let sendingAccount = null;
-    if (accountList.length === 1) {
-      sendingAccount = accountList[0];
-    } else if (accountList.length > 1 && selectedReplyEmail.account_email) {
-      sendingAccount = accountList.find(a => a.email === selectedReplyEmail.account_email) || accountList[0];
-    } else if (accountList.length > 0) {
-      sendingAccount = accountList[0];
+    const source = {
+      ...selectedReplyEmail,
+      is_sent: selectedReplyEmail.is_sent ?? viewSource === 'awaiting',
+    };
+    const messages = Array.isArray(threadData?.emails)
+      ? threadData.emails.filter(message => sameReplySource(message, source))
+      : [];
+    // A summary is not authoritative enough to send: it may omit Reply-To,
+    // recipients, direction, or exact account identity. Thread fetch failures
+    // therefore keep every reply path unavailable.
+    if (messages.length === 0) return null;
+    if (viewSource === 'awaiting') {
+      return newestThreadMessage(messages, $threadOrder);
     }
+    const inbound = messages.filter(message => message.is_sent === false);
+    return newestThreadMessage(inbound, $threadOrder)
+      || newestThreadMessage(messages, $threadOrder);
+  });
 
-    // Determine the reply recipients from thread data
-    let toRecipient = selectedReplyEmail.from_name || selectedReplyEmail.from_address || '';
-    let toEmail = selectedReplyEmail.from_address || '';
-    let ccRecipients = [];
-    let isReplyAll = false;
-
-    // If we have thread data, look at the latest inbound message for participant info
-    let otherParticipantCount = 0;
-    if (threadData && threadData.emails && threadData.emails.length > 0) {
-      const latestInbound = threadData.emails.find(m => !m.is_sent);
-      if (latestInbound) {
-        toRecipient = latestInbound.from_name || latestInbound.from_address || toRecipient;
-        toEmail = latestInbound.from_address || toEmail;
-
-        // Count other TO recipients (excluding our own account)
-        if (latestInbound.to_addresses && latestInbound.to_addresses.length > 0) {
-          const otherTos = latestInbound.to_addresses.filter(a => {
-            const addr = getAddressEmail(a);
-            return addr && sendingAccount && addr !== sendingAccount.email;
-          });
-          otherParticipantCount += otherTos.length;
-        }
-
-        // Count CC recipients
-        if (latestInbound.cc_addresses && latestInbound.cc_addresses.length > 0) {
-          ccRecipients = latestInbound.cc_addresses;
-          otherParticipantCount += ccRecipients.length;
-        }
-
-        if (otherParticipantCount > 0) {
-          isReplyAll = true;
-        }
-      }
+  // One payload-ready envelope owns both the visible From/To/Cc context and
+  // the eventual send request, so they cannot drift apart.
+  let replyContext = $derived.by(() => {
+    if (threadLoading) return null;
+    if (!replyMessage) {
+      const source = resolveReplySourceAccount({
+        message: selectedReplyEmail,
+        accounts: $accounts,
+      });
+      if (!source.available) return { ...source, message: null };
+      return {
+        available: false,
+        reason: REPLY_ENVELOPE_UNAVAILABLE.THREAD_DETAILS_UNAVAILABLE,
+        sourceAccount: null,
+        envelope: null,
+        message: null,
+      };
     }
-
+    const result = buildReplyEnvelope({
+      message: replyMessage,
+      accounts: $accounts,
+      mode: REPLY_ENVELOPE_MODES.REPLY_ALL,
+    });
+    if (!result.available) return { ...result, message: replyMessage };
     return {
-      sendingAccount,
-      toRecipient,
-      toEmail,
-      ccRecipients,
-      isReplyAll,
-      otherParticipantCount,
-      accountColor: sendingAccount ? $accountColorMap[sendingAccount.email] : null,
+      ...result,
+      message: replyMessage,
+      sendingAccount: result.sourceAccount,
+      accountColor: $accountColorMap[result.sourceAccount.email] || null,
+      otherParticipantCount: Math.max(
+        0,
+        result.envelope.to.length + result.envelope.cc.length - 1,
+      ),
     };
   });
+  let replyActionLabel = $derived(
+    replyContext?.available && replyContext.otherParticipantCount > 0
+      ? 'Send Reply All'
+      : 'Send Reply',
+  );
 </script>
 
-<div class="flow-shell h-full flex relative" style="background: var(--bg-primary); {isDraggingSidebar ? 'user-select: none; cursor: col-resize' : ''}{isDraggingBottomCol ? 'user-select: none; cursor: col-resize' : ''}">
+<div
+  class="flow-shell h-full flex relative"
+  class:reply-view-open={replyViewOpen}
+  style="background: var(--bg-primary); {isDraggingSidebar ? 'user-select: none; cursor: col-resize' : ''}{isDraggingBottomCol ? 'user-select: none; cursor: col-resize' : ''}"
+>
 
   <!-- ============ LEFT SIDEBAR: CHAT ============ -->
   <div
@@ -1986,32 +1991,35 @@
         <div class="flex flex-col overflow-hidden" style="height: {100 - topPanePercent}%">
           <!-- Reply Context Bar: who we're replying to + sending account -->
           {#if replyContext}
-            <div class="px-5 py-2 border-b shrink-0 flex items-center justify-between" style="border-color: var(--border-color); background: var(--bg-secondary)">
-              <div class="flex items-center gap-2 min-w-0">
-                <Icon name="corner-up-left" size={13} />
-                <span class="text-xs font-medium truncate" style="color: var(--text-primary)">
-                  To: {replyContext.toRecipient}
-                  {#if replyContext.toRecipient !== replyContext.toEmail}
-                    <span style="color: var(--text-tertiary)">&lt;{replyContext.toEmail}&gt;</span>
-                  {/if}
-                </span>
-                {#if replyContext.isReplyAll}
-                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0" style="background: var(--bg-tertiary); color: var(--text-secondary)">
-                    +{replyContext.otherParticipantCount} other{replyContext.otherParticipantCount !== 1 ? 's' : ''} in thread
+            <div class="px-5 py-2 border-b shrink-0" style="border-color: var(--border-color); background: var(--bg-secondary)">
+              {#if replyContext.available}
+                <div
+                  class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-xs"
+                  style="color: var(--text-primary)"
+                  data-reply-envelope="flow"
+                >
+                  <span class="inline-flex items-center gap-1.5">
+                    {#if replyContext.accountColor}
+                      <span class="w-2 h-2 rounded-full shrink-0" style="background: {replyContext.accountColor.bg}"></span>
+                    {/if}
+                    <strong>From:</strong> {replyContext.sourceAccount.email}
                   </span>
-                {/if}
-              </div>
-              <div class="flex items-center gap-1.5 shrink-0 ml-3">
-                {#if replyContext.accountColor}
-                  <span
-                    class="w-2 h-2 rounded-full shrink-0"
-                    style="background: {replyContext.accountColor.bg}"
-                  ></span>
-                {/if}
-                {#if replyContext.sendingAccount}
-                  <span class="text-[11px]" style="color: var(--text-tertiary)">from {replyContext.sendingAccount.email}</span>
-                {/if}
-              </div>
+                  <span class="min-w-0 break-all"><strong>To:</strong> {replyContext.envelope.to.join(', ')}</span>
+                  {#if replyContext.envelope.cc.length > 0}
+                    <span class="min-w-0 break-all"><strong>Cc:</strong> {replyContext.envelope.cc.join(', ')}</span>
+                  {/if}
+                  {#if replyContext.otherParticipantCount > 0}
+                    <span class="rounded-full px-1.5 py-0.5 text-[10px] font-medium" style="background: var(--bg-tertiary); color: var(--text-secondary)">Reply All</span>
+                  {/if}
+                </div>
+              {:else}
+                <p
+                  class="text-xs font-medium"
+                  style="color: var(--status-error)"
+                  role="alert"
+                  data-reply-unavailable="flow"
+                >{replyUnavailableMessage(replyContext.reason)}</p>
+              {/if}
             </div>
           {/if}
 
@@ -2187,26 +2195,40 @@
           {/if}
 
           <!-- Rich Text Editor -->
-          <div class="flex flex-col">
-            {#key editorKey}
-              <DeferredRichEditor
-                content={initialReplyContent}
-                onUpdate={handleEditorUpdate}
-                onReady={() => { writingSurfaceReady = true; }}
-                placeholder="Write your reply..."
-                externalScroll={true}
-                autofocus={true}
-                ariaLabel="Reply body"
-                surface="flow-reply"
-              />
-            {/key}
-          </div>
+          {#if threadLoading}
+            <div class="m-5 rounded-lg border p-4 text-sm" style="border-color: var(--border-color); color: var(--text-secondary)" role="status">
+              Loading and verifying the full conversation…
+            </div>
+          {:else if replyContext?.available}
+            <div class="flex flex-col">
+              {#key editorKey}
+                <DeferredRichEditor
+                  content={initialReplyContent}
+                  onUpdate={handleEditorUpdate}
+                  onReady={() => { writingSurfaceReady = true; }}
+                  placeholder="Write your reply..."
+                  externalScroll={true}
+                  autofocus={true}
+                  ariaLabel="Reply body"
+                  surface="flow-reply"
+                />
+              {/key}
+            </div>
+          {:else}
+            <div
+              class="m-5 rounded-lg border p-4 text-sm"
+              style="border-color: color-mix(in srgb, var(--status-error) 35%, var(--border-color)); color: var(--text-secondary); background: var(--bg-secondary)"
+              role="status"
+            >
+              {replyUnavailableMessage(replyContext?.reason)} Reply editing stays disabled until verification succeeds.
+            </div>
+          {/if}
 
           </div><!-- end scrollable area -->
 
           <!-- Action Bar -->
-          <div class="px-4 py-2.5 border-t shrink-0 flex items-center justify-between" style="border-color: var(--border-color); background: var(--bg-secondary)">
-            <div class="flex items-center gap-2">
+          <div class="flow-reply-actions px-4 py-2.5 border-t shrink-0 flex items-center justify-between" style="border-color: var(--border-color); background: var(--bg-secondary)">
+            <div class="flow-triage-actions flex items-center gap-2">
               {#if viewSource === 'needs_reply'}
                 <!-- Archive after send toggle -->
                 <label class="flex items-center gap-1.5 cursor-pointer select-none">
@@ -2219,7 +2241,7 @@
                   <span class="text-xs font-medium" style="color: var(--text-secondary)">Archive after send</span>
                 </label>
 
-                <div class="w-px h-4 mx-1" style="background: var(--border-color)"></div>
+                <div class="triage-separator w-px h-4 mx-1" style="background: var(--border-color)"></div>
 
                 <!-- Triage Actions -->
                 <button
@@ -2304,7 +2326,7 @@
                   Back
                 </button>
 
-                <div class="w-px h-4 mx-1" style="background: var(--border-color)"></div>
+                <div class="triage-separator w-px h-4 mx-1" style="background: var(--border-color)"></div>
 
                 <button
                   onclick={ignoreCurrentEmail}
@@ -2354,13 +2376,17 @@
               {/if}
             </div>
 
-            <div class="flex items-center gap-2">
+            <div class="flow-send-actions flex items-center gap-2">
               <button
                 onclick={openInCompose}
-                disabled={threadLoading}
+                disabled={threadLoading || !replyContext?.available}
                 class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-fast border"
-                style="border-color: var(--border-color); color: var(--text-secondary); opacity: {threadLoading ? 0.5 : 1}"
-                title={threadLoading ? 'Wait for the thread to finish loading' : 'Open in full composer'}
+                style="border-color: var(--border-color); color: var(--text-secondary); opacity: {threadLoading || !replyContext?.available ? 0.5 : 1}"
+                title={threadLoading
+                  ? 'Wait for the thread to finish loading'
+                  : replyContext?.available
+                    ? 'Open in full composer'
+                    : replyUnavailableMessage(replyContext?.reason)}
               >
                 <Icon name="external-link" size={12} />
                 Full Compose
@@ -2370,13 +2396,16 @@
                 disabled={!canSendReply()}
                 class="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-medium transition-fast"
                 style="background: {!canSendReply() ? 'var(--border-color)' : 'var(--color-accent-500)'}; color: white"
+                title={replyContext?.available
+                  ? replyActionLabel
+                  : replyUnavailableMessage(replyContext?.reason)}
               >
                 {#if inlineReplySending}
                   <div class="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
                   Sending...
                 {:else}
                   <Icon name="send" size={12} />
-                  Send Reply
+                  {replyActionLabel}
                 {/if}
               </button>
             </div>
@@ -2570,7 +2599,7 @@
                   class="p-2.5 rounded-lg cursor-pointer transition-fast hover-bg-subtle"
                   style="background: var(--bg-primary); {focusedSection === 'awaiting' && highlightedIndex === awIdx ? 'outline: 2px solid var(--color-accent-500); outline-offset: -2px; background: var(--bg-tertiary)' : ''}"
                   data-flow-item="awaiting-{awIdx}"
-                  onclick={() => openThreadInFlow(email.gmail_thread_id, { subject: email.subject, from_name: email.to_name, date: email.date, id: email.id, snippet: email.snippet, account_email: email.account_email }, 'awaiting')}
+                  onclick={() => openThreadInFlow(email.gmail_thread_id, { subject: email.subject, from_name: email.to_name, date: email.date, id: email.id, snippet: email.snippet, account_id: email.account_id, account_email: email.account_email }, 'awaiting')}
                 >
                   <div class="text-xs font-medium truncate" style="color: var(--text-primary)">{email.subject || '(no subject)'}</div>
                   <div class="flex items-center gap-2 mt-0.5">
@@ -2621,7 +2650,7 @@
                   class="p-2.5 rounded-lg cursor-pointer transition-fast hover-bg-subtle"
                   style="background: var(--bg-primary); {focusedSection === 'threads' && highlightedIndex === thIdx ? 'outline: 2px solid var(--color-accent-500); outline-offset: -2px; background: var(--bg-tertiary)' : ''}"
                   data-flow-item="threads-{thIdx}"
-                  onclick={() => openThreadInFlow(thread.thread_id, { subject: thread.subject, summary: thread.summary, date: thread.latest_date }, 'thread')}
+                  onclick={() => openThreadInFlow(thread.thread_id, { subject: thread.subject, summary: thread.summary, date: thread.latest_date, account_id: thread.account_id }, 'thread')}
                 >
                   <div class="flex items-center gap-2 mb-0.5">
                     {#if thread.conversation_type}
@@ -2819,6 +2848,40 @@
       border-radius: 0.75rem;
       overflow: hidden;
       box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+    }
+    .flow-shell.reply-view-open .chat-pane {
+      display: none;
+    }
+    .flow-reply-actions {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.5rem;
+      padding: 0.5rem;
+    }
+    .flow-send-actions {
+      order: -1;
+      width: 100%;
+    }
+    .flow-send-actions > button {
+      min-height: 2.75rem;
+      flex: 1 1 0;
+      justify-content: center;
+    }
+    .flow-triage-actions {
+      width: 100%;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.25rem;
+    }
+    .flow-triage-actions label {
+      min-height: 2.75rem;
+      white-space: nowrap;
+    }
+    .flow-triage-actions button {
+      min-height: 2.75rem;
+    }
+    .flow-triage-actions .triage-separator {
+      display: none;
     }
     .col-resize-handle {
       display: none !important;

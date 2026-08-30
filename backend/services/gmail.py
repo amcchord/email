@@ -11,6 +11,7 @@ from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.utils import getaddresses, parseaddr
 from typing import Optional
 
 from google.oauth2.credentials import Credentials
@@ -693,27 +694,16 @@ class GmailService:
         extract_attachments(payload)
 
         # Parse addresses
-        from_addr = headers.get("from", "")
-        from_name = ""
-        if "<" in from_addr:
-            parts = from_addr.split("<")
-            from_name = parts[0].strip().strip('"')
-            from_addr = parts[1].rstrip(">").strip()
+        from_name, from_addr = parseaddr(headers.get("from", ""))
 
         def parse_addr_list(raw):
             if not raw:
                 return []
-            result = []
-            for part in raw.split(","):
-                part = part.strip()
-                if "<" in part:
-                    parts = part.split("<")
-                    name = parts[0].strip().strip('"')
-                    addr = parts[1].rstrip(">").strip()
-                    result.append({"name": name, "address": addr})
-                else:
-                    result.append({"name": "", "address": part})
-            return result
+            return [
+                {"name": name, "address": address}
+                for name, address in getaddresses([raw])
+                if address
+            ]
 
         date_str = headers.get("date", "")
         email_date = None

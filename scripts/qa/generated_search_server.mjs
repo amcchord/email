@@ -22,6 +22,7 @@ const forcedRouteCase = ['slow', 'fail-once'].includes(process.env.QA_ROUTE_CASE
 const forcedRouteTarget = process.env.QA_ROUTE_TARGET || null;
 const forcedRouteRun = process.env.QA_ROUTE_RUN || null;
 const editorFixtureEnabled = process.env.QA_EDITOR_FIXTURE === '1';
+const replyEnvelopeFixtureEnabled = process.env.QA_REPLY_ENVELOPE_FIXTURE === '1';
 const forcedEditorCase = ['slow', 'fail-once'].includes(process.env.QA_EDITOR_CASE)
   ? process.env.QA_EDITOR_CASE
   : null;
@@ -98,7 +99,9 @@ function generatedEmail(overrides) {
   return {
     id,
     account_id: accountId,
-    account_email: accountEmail,
+    account_email: Object.hasOwn(overrides, 'account_email')
+      ? overrides.account_email
+      : accountEmail,
     gmail_message_id: `generated-search-message-${id}`,
     gmail_thread_id: `generated-search-thread-${id}`,
     message_id_header: `<generated-search-${id}@example.test>`,
@@ -382,6 +385,45 @@ const generatedEmails = deepFreeze([
       size_bytes: 45,
     }],
   }),
+  ...(replyEnvelopeFixtureEnabled ? [
+    generatedEmail({
+      id: 317,
+      account_id: 2,
+      from_name: 'Generated Envelope Sender',
+      from_address: 'envelope.sender@example.test',
+      reply_to: 'envelope.reply@example.test',
+      subject: 'Generated reply-all envelope target',
+      snippet: 'Owned by the second generated account while the decoy account is listed first.',
+      date: '2026-08-30T13:59:00Z',
+      labels: ['INBOX'],
+      is_read: true,
+      to_addresses: [
+        { name: 'Generated Secondary Owner', address: 'search.secondary@example.test' },
+        { name: 'Generated Teammate', address: 'teammate@example.test' },
+        { name: 'Duplicate Reply Target', address: 'envelope.reply@example.test' },
+      ],
+      cc_addresses: [
+        { name: 'Generated Observer', address: 'observer@example.test' },
+        { name: 'Generated Primary Decoy', address: 'search.primary@example.test' },
+        { name: 'Duplicate Observer', address: 'observer@example.test' },
+      ],
+    }),
+    generatedEmail({
+      id: 318,
+      account_id: 999,
+      account_email: 'missing.source@example.test',
+      from_name: 'Generated Missing Source',
+      from_address: 'missing.sender@example.test',
+      reply_to: 'missing.reply@example.test',
+      subject: 'Generated reply source unavailable',
+      snippet: 'No generated account owns this immutable message source.',
+      date: '2026-08-30T13:58:30Z',
+      labels: ['INBOX'],
+      is_read: true,
+      to_addresses: [{ name: 'Unavailable Source', address: 'missing.source@example.test' }],
+      cc_addresses: [{ name: 'Generated Missing Observer', address: 'missing.observer@example.test' }],
+    }),
+  ] : []),
 ]);
 
 function generatedEditorEmail(overrides) {
@@ -449,11 +491,31 @@ const generatedEditorNeedsReply = deepFreeze([
   }),
 ]);
 
+const generatedReplyEnvelopeNeedsReply = deepFreeze(
+  replyEnvelopeFixtureEnabled
+    ? [317, 318].map(id => generatedEditorEmail({
+      ...generatedEmails.find(email => email.id === id),
+      needs_reply: true,
+      category: id === 317 ? 'urgent' : 'awaiting_reply',
+      summary: id === 317
+        ? 'Generated reply-all target owned by the second account.'
+        : 'Generated source-account failure must keep reply actions disabled.',
+      suggested_reply: null,
+      reply_options: null,
+    }))
+    : [],
+);
+
+const generatedThreadEmails = [
+  ...generatedEditorNeedsReply,
+  ...generatedReplyEnvelopeNeedsReply,
+];
+
 const generatedEditorEmailsById = new Map(
-  generatedEditorNeedsReply.map(email => [email.id, email]),
+  generatedThreadEmails.map(email => [email.id, email]),
 );
 const generatedEditorThreads = deepFreeze(Object.fromEntries(
-  generatedEditorNeedsReply.map(email => [
+  generatedThreadEmails.map(email => [
     email.gmail_thread_id,
     {
       thread_id: email.gmail_thread_id,
@@ -547,7 +609,12 @@ const emailsById = new Map(generatedEmails.map(email => [email.id, email]));
 
 const scenarios = deepFreeze({
   // Baseline order is newest first; the equal-timestamp pair remains stable.
-  '': { result_ids: [316, 313, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 302, 301] },
+  '': {
+    result_ids: [
+      ...(replyEnvelopeFixtureEnabled ? [317, 318] : []),
+      316, 313, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 302, 301,
+    ],
+  },
   [compoundQuery]: { result_ids: [301] },
   [removalQuery]: { result_ids: [301, 304] },
   'no-match': { result_ids: [] },
@@ -579,6 +646,7 @@ const generatedAccounts = deepFreeze([
     display_name: 'Generated Search Primary',
     description: 'Generated Search Primary',
     short_label: 'Primary',
+    is_active: true,
     has_calendar_scope: true,
     sync_status: { status: 'idle', last_incremental_sync: fixtureNow.toISOString() },
     calendar_sync_status: { status: 'idle' },
@@ -589,6 +657,7 @@ const generatedAccounts = deepFreeze([
     display_name: 'Generated Search Secondary',
     description: 'Generated Search Secondary',
     short_label: 'Secondary',
+    is_active: true,
     has_calendar_scope: true,
     sync_status: { status: 'idle', last_incremental_sync: fixtureNow.toISOString() },
     calendar_sync_status: { status: 'idle' },
@@ -618,6 +687,7 @@ const audit = {
   attachment_reads: [],
   attachment_preview_reads: [],
   chat_reads: [],
+  reply_envelope_reads: [],
   mutation_attempts: [],
   unknown_routes: [],
 };
@@ -670,6 +740,45 @@ function writeHtml(response, body, status = 200) {
     'Cache-Control': 'no-store',
   });
   response.end(body);
+}
+
+function replyEnvelopeAuditPayload() {
+  return {
+    fixture: 'generated-reply-envelope',
+    fixture_enabled: replyEnvelopeFixtureEnabled,
+    fixture_domains: ['example.test'],
+    account_order: generatedAccounts.map(account => ({ id: account.id, email: account.email })),
+    decoy_account: { id: 1, email: 'search.primary@example.test' },
+    source_account: { id: 2, email: 'search.secondary@example.test' },
+    target_message_id: 317,
+    missing_source_message_id: 318,
+    expected_reply: {
+      from: 'search.secondary@example.test',
+      to: ['envelope.reply@example.test'],
+      cc: [],
+    },
+    expected_reply_all: {
+      from: 'search.secondary@example.test',
+      to: ['envelope.reply@example.test', 'teammate@example.test'],
+      cc: ['observer@example.test'],
+    },
+    reads: audit.reply_envelope_reads,
+    mutation_attempts: audit.mutation_attempts,
+    accepted_mutation_count: audit.mutation_attempts.filter(entry => (
+      Number.isInteger(entry.status) && entry.status >= 200 && entry.status < 300
+    )).length,
+    unknown_routes: audit.unknown_routes,
+  };
+}
+
+function replyEnvelopeAuditFrame(response) {
+  const escapedAudit = JSON.stringify(replyEnvelopeAuditPayload(), null, 2)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+  return writeHtml(response, `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Generated reply-envelope audit</title></head>
+<body><main><h1>Generated reply-envelope audit</h1><pre>${escapedAudit}</pre></main></body></html>`);
 }
 
 function mobileOAuthQaFrame(response, url) {
@@ -1866,6 +1975,7 @@ async function handleGet(request, response, url) {
   if (pathname === '/__qa/email-sanitizer-mobile') return mobileEmailSanitizerQaFrame(response);
   if (pathname === '/__qa/chat-mobile') return mobileChatQaFrame(response);
   if (pathname === '/__qa/oauth-mobile') return mobileOAuthQaFrame(response, url);
+  if (pathname === '/__qa/reply-envelope-audit') return replyEnvelopeAuditFrame(response);
   if (pathname === '/api/test/editor-audit') {
     return writeJson(response, {
       fixture: 'generated-lazy-editor',
@@ -1899,6 +2009,9 @@ async function handleGet(request, response, url) {
       mutation_attempts: audit.mutation_attempts,
       unknown_routes: audit.unknown_routes,
     });
+  }
+  if (pathname === '/api/test/reply-envelope-audit') {
+    return writeJson(response, replyEnvelopeAuditPayload());
   }
   if (pathname === '/api/test/audit') {
     return writeJson(response, {
@@ -2010,7 +2123,9 @@ async function handleGet(request, response, url) {
   if (pathname === '/api/calendar/upcoming') return writeJson(response, { events: [] });
   if (pathname === '/api/todos/') return writeJson(response, { todos: generatedTodos });
   if (pathname === '/api/ai/needs-reply') {
-    const emails = editorFixtureEnabled ? generatedEditorNeedsReply : [];
+    const emails = replyEnvelopeFixtureEnabled
+      ? generatedReplyEnvelopeNeedsReply
+      : (editorFixtureEnabled ? generatedEditorNeedsReply : []);
     return writeJson(response, { emails, total: emails.length });
   }
   if (pathname === '/api/ai/trends') {
@@ -2031,7 +2146,22 @@ async function handleGet(request, response, url) {
     return writeJson(response, { emails: [], total: 0 });
   }
   if (pathname === '/api/ai/digests') {
-    return writeJson(response, { digests: [], total: 0 });
+    const digests = replyEnvelopeFixtureEnabled ? [{
+      id: 9317,
+      thread_id: 'generated-search-thread-317',
+      account_id: 2,
+      conversation_type: 'discussion',
+      summary: 'Generated active-thread account provenance fixture.',
+      resolved_outcome: null,
+      is_resolved: false,
+      key_topics: ['generated QA'],
+      message_count: 1,
+      participants: ['Generated Envelope Sender'],
+      subject: 'Generated active thread provenance',
+      latest_date: '2026-08-30T13:59:00Z',
+      updated_at: '2026-08-30T14:00:00Z',
+    }] : [];
+    return writeJson(response, { digests, total: digests.length });
   }
   if (pathname === '/api/chat/conversations') {
     const entry = beginAudit(request, url, { kind: 'conversation-list' });
@@ -2058,7 +2188,17 @@ async function handleGet(request, response, url) {
     } catch {
       return writeJson(response, { detail: 'Malformed generated thread ID' }, 400);
     }
-    const thread = editorFixtureEnabled ? generatedEditorThreads[threadId] : null;
+    const thread = (editorFixtureEnabled || replyEnvelopeFixtureEnabled)
+      ? generatedEditorThreads[threadId]
+      : null;
+    if (replyEnvelopeFixtureEnabled && thread?.emails?.some(email => [317, 318].includes(email.id))) {
+      const entry = beginAudit(request, url, {
+        kind: 'thread',
+        thread_id: threadId,
+      });
+      audit.reply_envelope_reads.push(entry);
+      completeAudit(entry, 200, thread.emails.map(email => email.id));
+    }
     return writeJson(response, thread || { detail: 'Generated thread not found' }, thread ? 200 : 404);
   }
 
@@ -2066,7 +2206,17 @@ async function handleGet(request, response, url) {
   if (emailMatch) {
     const emailId = Number(emailMatch[1]);
     const email = emailsById.get(emailId)
-      || (editorFixtureEnabled ? generatedEditorEmailsById.get(emailId) : null);
+      || ((editorFixtureEnabled || replyEnvelopeFixtureEnabled)
+        ? generatedEditorEmailsById.get(emailId)
+        : null);
+    if (replyEnvelopeFixtureEnabled && email && [317, 318].includes(emailId)) {
+      const entry = beginAudit(request, url, {
+        kind: 'email',
+        email_id: emailId,
+      });
+      audit.reply_envelope_reads.push(entry);
+      completeAudit(entry, 200, [emailId]);
+    }
     return writeJson(response, email || { detail: 'Generated email not found' }, email ? 200 : 404);
   }
 

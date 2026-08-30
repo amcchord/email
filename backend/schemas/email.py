@@ -47,6 +47,7 @@ class EmailSummary(BaseModel):
 
 
 class EmailDetail(EmailSummary):
+    account_id: int
     cc_addresses: list = []
     bcc_addresses: list = []
     body_text: Optional[str] = None
@@ -55,6 +56,7 @@ class EmailDetail(EmailSummary):
     reply_to: Optional[str] = None
     message_id_header: Optional[str] = None
     in_reply_to: Optional[str] = None
+    references_header: Optional[str] = None
     attachments: list["AttachmentResponse"] = []
     ai_summary: Optional[str] = None
     ai_action_items: Optional[list] = None

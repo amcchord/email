@@ -4,10 +4,11 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-User-test the deployed Google OAuth callback reliability fix with a fresh
-Calendar reauthorization. Preserve the clean, separately owned AI-provider
-worktree, do not replay the reported authorization code, and do not open or
-change real mail during follow-up verification.
+Eliminate wrong-sender and recipient-envelope ambiguity across Inbox and Flow
+reply workflows. Resolve the exact active source account without first-account
+fallback, derive Reply/Reply All recipients once, and make the visible
+From/To/Cc envelope identical to the send payload. Use generated two-account
+fixtures only and preserve the separately owned AI-provider worktree.
 
 ## Baseline
 
@@ -19,6 +20,9 @@ change real mail during follow-up verification.
   `z7a8b9c0d1e2 (head)`; this release contains no schema change.
 - The original AI worktree remains clean at `41d2898` on
   `codex/openai-anthropic-model-support` and has not been edited by this work.
+- The reply-envelope slice is isolated in
+  `/Users/austinmcchord/Development/Email-reply-envelope-integrity` on
+  `codex/reply-envelope-integrity`, based on GitHub `main` at `2b534f3`.
 - The deployed remote-content release was developed in the isolated worktree
   `/Users/austinmcchord/Development/Email-remote-content-controls` on
   `codex/remote-content-controls`.
@@ -54,6 +58,19 @@ live state.
   375 px layouts without accessing real mail.
 
 ## Verification State
+
+- The reply-envelope candidate passes `make check`: 325 backend tests passed,
+  4 opt-in PostgreSQL tests skipped, 132 frontend tests passed, and the
+  504-module production frontend built.
+- Generated two-account browser QA verifies distinct Reply/Reply All, exact
+  second-account From identity behind a first-account decoy, deduplicated
+  external To/Cc recipients, Active Thread provenance, actionable unknown-
+  source failure, stable draft identity, and a fully visible exact-375 action
+  layout.
+- The final browser-readable audit contains only exact account-scoped GETs,
+  zero mutation attempts, zero accepted mutations, and zero unknown routes.
+- Independent architecture, competitive UX, and QA rereviews report no
+  remaining release blockers.
 
 - The OAuth release candidate passes `make check`: 318 backend tests, 4 opt-in
   PostgreSQL skips, 117 frontend tests, and a successful 503-module production
@@ -105,6 +122,8 @@ live state.
 
 ## Next Safe Action
 
-Ask the user to start a fresh Calendar reauthorization and approve all requested
-Google access. Confirm that it returns to Calendar with the green reconnection
-notice. The failed one-time authorization code must not be reused.
+Commit and push the validated reply-envelope release, deploy the exact commit
+with a frontend rebuild and only the required `mailapp` restart, then verify
+health, service state, logs, and the public UI. The prior OAuth release still
+awaits a fresh user reauthorization; its failed one-time authorization code
+must not be reused.

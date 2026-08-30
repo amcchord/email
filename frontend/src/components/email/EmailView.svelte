@@ -20,6 +20,13 @@
     releaseAttachmentPreview,
   } from '../../lib/attachmentPreview.js';
   import { sanitizeComposeHtml } from '../../lib/sanitize.js';
+  import {
+    buildReplyEnvelope,
+    REPLY_ENVELOPE_MODES,
+    REPLY_ENVELOPE_UNAVAILABLE,
+    replyCompletionStillCurrent,
+    resolveReplySourceAccount,
+  } from '../../lib/replyEnvelope.js';
   import { get } from 'svelte/store';
   import Button from '../common/Button.svelte';
   import Icon from '../common/Icon.svelte';
@@ -40,17 +47,69 @@
   let attachmentAbortControllers = new Map();
   let attachmentPreview = $state(null);
   let attachmentPreviewReturnFocus = $state(null);
+  let inlineReplyMode = $state(REPLY_ENVELOPE_MODES.REPLY);
+
+  let replyEnvelopeResult = $derived(buildReplyEnvelope({
+    message: email,
+    accounts: $accounts,
+    mode: REPLY_ENVELOPE_MODES.REPLY,
+  }));
+  let replyAllEnvelopeResult = $derived(buildReplyEnvelope({
+    message: email,
+    accounts: $accounts,
+    mode: REPLY_ENVELOPE_MODES.REPLY_ALL,
+  }));
+  let activeReplyEnvelopeResult = $derived(
+    inlineReplyMode === REPLY_ENVELOPE_MODES.REPLY_ALL
+      ? replyAllEnvelopeResult
+      : replyEnvelopeResult,
+  );
+  let showReplyAll = $derived(
+    replyAllEnvelopeResult.available
+      && replyAllEnvelopeResult.envelope.to.length + replyAllEnvelopeResult.envelope.cc.length > 1,
+  );
+  let inlineReplyActionLabel = $derived(
+    inlineReplyMode === REPLY_ENVELOPE_MODES.REPLY_ALL ? 'Send Reply All' : 'Send Reply',
+  );
+  let replySourceResult = $derived(resolveReplySourceAccount({
+    message: email,
+    accounts: $accounts,
+  }));
+
+  function replyUnavailableMessage(reason) {
+    if (reason === REPLY_ENVELOPE_UNAVAILABLE.SOURCE_ACCOUNT_INACTIVE) {
+      return 'The source account is inactive. Reconnect it before replying.';
+    }
+    if (
+      reason === REPLY_ENVELOPE_UNAVAILABLE.SOURCE_ACCOUNT_IDENTITY_MISSING
+      || reason === REPLY_ENVELOPE_UNAVAILABLE.SOURCE_ACCOUNT_NOT_FOUND
+    ) {
+      return "This message's source account is unavailable. Refresh accounts or reconnect the matching account before replying.";
+    }
+    if (
+      reason === REPLY_ENVELOPE_UNAVAILABLE.SOURCE_ACCOUNT_MISMATCH
+      || reason === REPLY_ENVELOPE_UNAVAILABLE.SOURCE_ACCOUNT_AMBIGUOUS
+      || reason === REPLY_ENVELOPE_UNAVAILABLE.SOURCE_ACCOUNT_IDENTITY_INVALID
+    ) {
+      return 'The sending account could not be verified. Refresh accounts before replying.';
+    }
+    return 'Reply recipients could not be verified. Refresh the message before sending.';
+  }
 
   onMount(() => registerActions({
     'inbox.reply': {
       run: handleReply,
-      isEnabled: () => Boolean(email) && !loading,
-      disabledReason: 'Wait for the selected email to load',
+      isEnabled: () => Boolean(email) && !loading && replyEnvelopeResult.available,
+      disabledReason: () => loading
+        ? 'Wait for the selected email to load'
+        : replyUnavailableMessage(replyEnvelopeResult.reason),
     },
     'inbox.forward': {
       run: handleForward,
-      isEnabled: () => Boolean(email) && !loading,
-      disabledReason: 'Wait for the selected email to load',
+      isEnabled: () => Boolean(email) && !loading && replySourceResult.available,
+      disabledReason: () => loading
+        ? 'Wait for the selected email to load'
+        : replyUnavailableMessage(replySourceResult.reason),
     },
   }));
 
@@ -415,15 +474,22 @@
   let lastDraftEmailId = $state(null);
   let replyFromSuggestion = $state(false);
   let replyIntent = $state(null); // tracks which reply option intent was selected
+  let inlineReplyGeneration = 0;
+
+  function advanceInlineReplyGeneration() {
+    inlineReplyGeneration += 1;
+  }
 
   // When the email changes, check if there's a pending reply draft for it
   $effect(() => {
+    advanceInlineReplyGeneration();
     if (!email) {
       inlineReplyOpen = false;
       inlineReplyBody = '';
       lastDraftEmailId = null;
       replyFromSuggestion = false;
       replyIntent = null;
+      inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
       return;
     }
 
@@ -432,6 +498,7 @@
       inlineReplyOpen = true;
       inlineReplyBody = draft.body || '';
       replyFromSuggestion = !!draft.body;
+      inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
       lastDraftEmailId = email.id;
       // Clear the pending draft so it doesn't re-trigger
       pendingReplyDraft.set(null);
@@ -442,68 +509,65 @@
       lastDraftEmailId = null;
       replyFromSuggestion = false;
       replyIntent = null;
+      inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
     }
   });
 
   function openInlineReply() {
+    advanceInlineReplyGeneration();
+    inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
+    if (!replyEnvelopeResult.available) {
+      showToast(replyUnavailableMessage(replyEnvelopeResult.reason), 'error');
+      return;
+    }
     inlineReplyOpen = true;
     lastDraftEmailId = email.id;
     // If empty and there's no text yet, don't pre-fill (user is manually replying)
   }
 
   function closeInlineReply() {
+    advanceInlineReplyGeneration();
     inlineReplyOpen = false;
     inlineReplyBody = '';
     lastDraftEmailId = null;
     replyFromSuggestion = false;
     replyIntent = null;
+    inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
   }
 
   async function sendInlineReply() {
     if (!email || !inlineReplyBody.trim()) return;
+    const replyAtStart = activeReplyEnvelopeResult;
+    if (!replyAtStart.available) {
+      showToast(replyUnavailableMessage(replyAtStart.reason), 'error');
+      return;
+    }
+    const emailAtStart = email;
+    const emailIdAtStart = email.id;
+    const bodyAtStart = inlineReplyBody;
+    const generationAtStart = inlineReplyGeneration;
     inlineReplySending = true;
     try {
-      // Find the account id for this email
-      const accountList = get(accounts);
-      let accountId = null;
-      if (accountList.length === 1) {
-        accountId = accountList[0].id;
-      } else if (accountList.length > 1 && email.account_email) {
-        // Match by account_email field to send from the correct account
-        const matched = accountList.find(a => a.email === email.account_email);
-        if (matched) {
-          accountId = matched.id;
-        } else {
-          accountId = accountList[0].id;
-        }
-      } else if (accountList.length > 1) {
-        accountId = accountList[0].id;
-      }
-
-      if (!accountId) {
-        showToast('No account found to send from', 'error');
-        inlineReplySending = false;
-        return;
-      }
-
-      const subject = email.subject && email.subject.startsWith('Re:') ? email.subject : `Re: ${email.subject || ''}`;
       await api.sendEmail({
-        account_id: accountId,
-        to: [email.reply_to || email.from_address],
-        cc: [],
-        bcc: [],
-        subject: subject,
-        body_text: inlineReplyBody,
-        body_html: `<p>${inlineReplyBody.replace(/\n/g, '<br>')}</p>`,
-        in_reply_to: email.message_id_header || null,
-        references: email.message_id_header || null,
-        thread_id: email.gmail_thread_id || null,
+        ...replyAtStart.envelope,
+        body_text: bodyAtStart,
+        body_html: `<p>${bodyAtStart.replace(/\n/g, '<br>')}</p>`,
       });
       showToast('Reply sent!', 'success');
-      closeInlineReply();
-      // If this email has action items, prompt to add to todos
-      if (email.ai_action_items && email.ai_action_items.length > 0) {
-        showTodoPrompt = true;
+      const sentDraftStillActive = replyCompletionStillCurrent({
+        capturedGeneration: generationAtStart,
+        currentGeneration: inlineReplyGeneration,
+        capturedEmailId: emailIdAtStart,
+        currentEmailId: email?.id,
+        capturedBody: bodyAtStart,
+        currentBody: inlineReplyBody,
+      });
+      if (sentDraftStillActive) {
+        closeInlineReply();
+        // Prompt only for the message that was actually sent, never a newer selection.
+        if (emailAtStart.ai_action_items && emailAtStart.ai_action_items.length > 0) {
+          showTodoPrompt = true;
+        }
       }
     } catch (err) {
       showToast(err.message, 'error');
@@ -535,6 +599,12 @@
 
   function handleReply() {
     if (!email) return;
+    advanceInlineReplyGeneration();
+    inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
+    if (!replyEnvelopeResult.available) {
+      showToast(replyUnavailableMessage(replyEnvelopeResult.reason), 'error');
+      return;
+    }
     inlineReplyOpen = true;
     lastDraftEmailId = email.id;
     // If user hasn't typed anything yet, pre-fill with suggested reply if available
@@ -544,8 +614,30 @@
     }
   }
 
+  function handleReplyAll() {
+    if (!email) return;
+    advanceInlineReplyGeneration();
+    inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY_ALL;
+    if (!replyAllEnvelopeResult.available) {
+      showToast(replyUnavailableMessage(replyAllEnvelopeResult.reason), 'error');
+      return;
+    }
+    inlineReplyOpen = true;
+    lastDraftEmailId = email.id;
+    if (!inlineReplyBody.trim() && email.suggested_reply) {
+      inlineReplyBody = email.suggested_reply;
+      replyFromSuggestion = true;
+    }
+  }
+
   function handleReplyOption(option) {
     if (!email || !option) return;
+    advanceInlineReplyGeneration();
+    inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
+    if (!replyEnvelopeResult.available) {
+      showToast(replyUnavailableMessage(replyEnvelopeResult.reason), 'error');
+      return;
+    }
     inlineReplyOpen = true;
     lastDraftEmailId = email.id;
     inlineReplyBody = option.body || '';
@@ -571,33 +663,16 @@
     custom: 'bg-blue-50 dark:bg-blue-500/20 border-blue-200 dark:border-blue-500/30 text-blue-700 dark:text-blue-300',
   };
 
-  function resolveAccountId() {
-    const accountList = get(accounts);
-    if (accountList.length === 1) {
-      return accountList[0].id;
-    }
-    if (accountList.length > 1 && email && email.account_email) {
-      const matched = accountList.find(a => a.email === email.account_email);
-      if (matched) {
-        return matched.id;
-      }
-    }
-    if (accountList.length > 0) {
-      return accountList[0].id;
-    }
-    return null;
-  }
-
   function handleFullCompose() {
     if (!email) return;
+    const reply = activeReplyEnvelopeResult;
+    if (!reply.available) {
+      showToast(replyUnavailableMessage(reply.reason), 'error');
+      return;
+    }
     composeData.set({
       draft_key: `reply:${email.account_id || 'account'}:${email.id}`,
-      account_id: resolveAccountId(),
-      to: [email.reply_to || email.from_address],
-      cc: [],
-      subject: email.subject?.startsWith('Re:') ? email.subject : `Re: ${email.subject || ''}`,
-      in_reply_to: email.message_id_header,
-      thread_id: email.gmail_thread_id,
+      ...reply.envelope,
       body_html: inlineReplyBody ? `<p>${inlineReplyBody.replace(/\n/g, '<br>')}</p>` : '',
     });
     closeInlineReply();
@@ -606,6 +681,11 @@
 
   function handleForward() {
     if (!email) return;
+    const source = replySourceResult;
+    if (!source.available) {
+      showToast(replyUnavailableMessage(source.reason), 'error');
+      return;
+    }
     const forwardedBody = email.body_html
       ? sanitizeComposeHtml(email.body_html)
       : String(email.body_text || '')
@@ -621,7 +701,7 @@
       .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     composeData.set({
       draft_key: `forward:${email.account_id || 'account'}:${email.id}`,
-      account_id: resolveAccountId(),
+      account_id: source.sourceAccount.id,
       to: [],
       cc: [],
       subject: email.subject?.startsWith('Fwd:') ? email.subject : `Fwd: ${email.subject || ''}`,
@@ -1100,26 +1180,54 @@
     <!-- Inline Reply Composer -->
     {#if inlineReplyOpen}
       <div class="px-6 py-4 border-t shrink-0" style="border-color: var(--border-color); background: var(--bg-tertiary)">
-        <div class="flex items-center justify-between mb-2">
+        <div class="flex items-start justify-between gap-3 mb-2">
           <div class="flex items-center gap-2">
             <span style="color: var(--color-accent-500)">
               <Icon name="corner-up-left" size={16} />
             </span>
-            <span class="text-xs font-semibold" style="color: var(--text-primary)">Reply to {email.from_name || email.from_address}</span>
+            {#if activeReplyEnvelopeResult.available}
+              <div
+                class="text-xs leading-relaxed"
+                style="color: var(--text-primary)"
+                data-reply-envelope="inbox"
+              >
+                <div><strong>From:</strong> {activeReplyEnvelopeResult.sourceAccount.email}</div>
+                <div><strong>To:</strong> {activeReplyEnvelopeResult.envelope.to.join(', ')}</div>
+                {#if activeReplyEnvelopeResult.envelope.cc.length > 0}
+                  <div><strong>Cc:</strong> {activeReplyEnvelopeResult.envelope.cc.join(', ')}</div>
+                {/if}
+                {#if inlineReplyMode === REPLY_ENVELOPE_MODES.REPLY_ALL}
+                  <div class="mt-0.5 font-semibold" style="color: var(--color-accent-600)">Reply All</div>
+                {/if}
+              </div>
+            {:else}
+              <p
+                class="text-xs font-medium"
+                style="color: var(--status-error)"
+                role="alert"
+                data-reply-unavailable="inbox"
+              >{replyUnavailableMessage(activeReplyEnvelopeResult.reason)}</p>
+            {/if}
           </div>
           <div class="flex items-center gap-1">
             <button
               onclick={handleFullCompose}
-              class="p-1 rounded transition-fast"
+              disabled={!activeReplyEnvelopeResult.available}
+              class="inline-flex min-h-11 min-w-11 items-center justify-center rounded transition-fast"
+              class:opacity-50={!activeReplyEnvelopeResult.available}
               style="color: var(--text-tertiary)"
-              title="Open in full composer"
+              aria-label="Open reply in full composer"
+              title={activeReplyEnvelopeResult.available
+                ? 'Open in full composer'
+                : replyUnavailableMessage(activeReplyEnvelopeResult.reason)}
             >
               <Icon name="external-link" size={16} />
             </button>
             <button
               onclick={closeInlineReply}
-              class="p-1 rounded transition-fast"
+              class="inline-flex min-h-11 min-w-11 items-center justify-center rounded transition-fast"
               style="color: var(--text-tertiary)"
+              aria-label="Close reply composer"
               title="Close reply"
             >
               <Icon name="x" size={16} />
@@ -1142,7 +1250,10 @@
         {/if}
         <textarea
           bind:value={inlineReplyBody}
+          oninput={advanceInlineReplyGeneration}
           placeholder="Write your reply..."
+          aria-label="Reply message"
+          disabled={!activeReplyEnvelopeResult.available}
           class="w-full rounded-lg border p-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-accent-500/40"
           style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary); min-height: 100px; max-height: 200px"
           rows="4"
@@ -1150,7 +1261,7 @@
         <div class="flex items-center gap-2 mt-2">
           <button
             onclick={sendInlineReply}
-            disabled={inlineReplySending || !inlineReplyBody.trim()}
+            disabled={inlineReplySending || !inlineReplyBody.trim() || !activeReplyEnvelopeResult.available}
             class="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-medium transition-fast disabled:opacity-50"
             style="background: var(--color-accent-500); color: white"
           >
@@ -1159,26 +1270,37 @@
               Sending...
             {:else}
               <Icon name="send" size={14} />
-              Send Reply
+              {inlineReplyActionLabel}
             {/if}
           </button>
-          <span class="text-[10px]" style="color: var(--text-tertiary)">
-            To: {email.reply_to || email.from_address}
-          </span>
         </div>
       </div>
     {/if}
 
     <!-- Reply actions -->
     <div class="px-6 py-3 border-t shrink-0 flex gap-2" style="border-color: var(--border-color)">
-      <Button size="sm" class="min-h-11" onclick={handleReply}>
+      <Button size="sm" class="min-h-11" onclick={handleReply} disabled={!replyEnvelopeResult.available}>
         <Icon name="corner-up-left" size={16} />
         Reply
       </Button>
-      <Button size="sm" class="min-h-11" onclick={handleForward}>
+      {#if showReplyAll}
+        <Button size="sm" class="min-h-11" onclick={handleReplyAll} disabled={!replyAllEnvelopeResult.available}>
+          <Icon name="users" size={16} />
+          Reply All
+        </Button>
+      {/if}
+      <Button size="sm" class="min-h-11" onclick={handleForward} disabled={!replySourceResult.available}>
         <Icon name="corner-up-right" size={16} />
         Forward
       </Button>
+      {#if !replyEnvelopeResult.available}
+        <p
+          class="min-w-0 self-center text-xs"
+          style="color: var(--status-error)"
+          role="status"
+          data-reply-unavailable="inbox"
+        >{replyUnavailableMessage(replyEnvelopeResult.reason)}</p>
+      {/if}
       {#if email.is_subscription && email.unsubscribe_info}
         <button
           onclick={handleUnsubscribe}
