@@ -3,7 +3,7 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
-## 2026-08-30 — At a Glance platform candidate
+## 2026-08-30 — At a Glance platform release
 
 ### Scope
 
@@ -42,14 +42,31 @@ release.
 
 ### Production Actions
 
-- None yet. Calendar is clean and healthy on production at `a2c02bf`; this
-  candidate has not been pushed, migrated, or deployed.
+- Pushed application `4c5a1fe`, firmware roadmap `1359a24`, and release record
+  `c76cb5e` to the feature branch and GitHub `main`, then fast-forwarded clean
+  production from Calendar closeout `a2c02bf` to exact `c76cb5e`.
+- Created and validated a 1,383,479,646-byte PostgreSQL custom-format backup at
+  `/var/backups/mailapp/maildb-pre-at-a-glance-20260830T1503Z.dump`, mode
+  `0600`, owner `postgres:postgres`.
+- The initial deploy precondition stopped before mutation when root Git lacked
+  the required safe-directory flag. The corrected gate reconfirmed the exact
+  prior commit and clean tree, then applied both additive Alembic revisions,
+  built 506 frontend modules as `mailapp`, and restarted only `mailapp`.
+- Post-deploy verification passed: Git is exact and clean, Alembic is
+  `b9c0d1e2f3a4 (head)`, both tables and scoped-token indexes exist, public
+  health is `ok`, all seven services are active, `mailapp` reports zero
+  restarts and zero warning-or-higher entries, and expected public auth/404
+  boundaries respond correctly.
+- Signed-in production QA showed five individually rotatable browser cards and
+  live battery collection/stale states. A 1280×720 Clock page had exact image,
+  stage, viewport, and overflow geometry; a query view override could not
+  change its token-bound content. No display URL was rotated.
 
 ### Next
 
-Push the reviewed candidate, take a protected database backup, deploy the exact
-release, apply the additive migrations, rebuild the frontend, restart only
-`mailapp`, and record post-deploy evidence.
+Close out the docs-only release evidence, then begin the clean firmware
+artifact and browser-installer milestone. OTA remains gated on A/B layout,
+trusted transport, device authentication, signed manifests, and rollback.
 
 ## 2026-08-30 — Calendar state-integrity candidate
 
