@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
     attachment_storage_path: str = "/opt/mail/data/attachments"
+    terminal_firmware_storage_path: str = "/opt/mail/data/terminal-firmware"
+    terminal_firmware_trusted_signing_keys: str = "{}"
+    terminal_firmware_minimum_catalog_generation: int = 0
+    terminal_firmware_browser_flash_enabled: bool = False
     brave_search_api_key: str = ""
     sync_interval_seconds: int = 60
 

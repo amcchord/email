@@ -11,7 +11,22 @@ from backend.database import engine, Base
 from backend.middleware.compose_body_limit import ComposeSendBodyLimitMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from backend.routers import auth, admin, emails, compose, accounts, ai, todos, chat, calendar, events, public_api, terminal, terminal_admin
+from backend.routers import (
+    accounts,
+    admin,
+    ai,
+    auth,
+    calendar,
+    chat,
+    compose,
+    emails,
+    events,
+    public_api,
+    terminal,
+    terminal_admin,
+    terminal_firmware,
+    todos,
+)
 from backend.services.attachment_cache_maintenance import attachment_cache_maintenance_loop
 
 # Import all models so they register with Base
@@ -86,6 +101,7 @@ app.include_router(calendar.router)
 app.include_router(events.router)
 app.include_router(public_api.router)
 app.include_router(terminal_admin.router)
+app.include_router(terminal_firmware.router)
 app.include_router(terminal.router)
 
 

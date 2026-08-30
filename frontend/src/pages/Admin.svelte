@@ -25,6 +25,7 @@
   import { getCategories } from '../lib/shortcutDefaults.js';
   import Button from '../components/common/Button.svelte';
   import AIModelsPanel from '../lib/admin/AIModelsPanel.svelte';
+  import FirmwareInstaller from '../lib/admin/FirmwareInstaller.svelte';
   import Input from '../components/common/Input.svelte';
   import Icon from '../components/common/Icon.svelte';
 
@@ -1552,6 +1553,8 @@
             See <code style="color: var(--text-secondary)">docs/terminal/</code> for the terminal protocol.
           </p>
         </div>
+
+        <FirmwareInstaller />
 
         {#if !terminalSettingsLoaded}
           <div class="rounded-xl border p-5 text-xs" style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-tertiary)">Loading...</div>
