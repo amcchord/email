@@ -441,8 +441,16 @@
 
 <div class="h-full overflow-y-auto" style="background: var(--bg-primary)">
   {#if loading}
-    <div class="flex items-center justify-center h-full">
-      <div class="w-6 h-6 border-2 rounded-full animate-spin" style="border-color: var(--border-color); border-top-color: var(--color-accent-500)"></div>
+    <div class="max-w-6xl mx-auto p-6 space-y-5" aria-live="polite" aria-label="Loading AI insights">
+      <div class="flex justify-between gap-4">
+        <div class="h-8 w-40 rounded animate-pulse" style="background: var(--bg-tertiary)"></div>
+        <div class="h-9 w-52 rounded animate-pulse" style="background: var(--bg-tertiary)"></div>
+      </div>
+      <div class="h-11 rounded animate-pulse" style="background: var(--bg-secondary)"></div>
+      <div class="h-24 rounded-xl animate-pulse" style="background: var(--bg-secondary)"></div>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {#each Array(4) as _}<div class="h-52 rounded-xl animate-pulse" style="background: var(--bg-secondary)"></div>{/each}
+      </div>
     </div>
   {:else}
     <div class="max-w-6xl mx-auto p-6 space-y-6">
@@ -620,11 +628,11 @@
       {/if}
 
       <!-- Tab Navigation -->
-      <div class="flex gap-1 border-b" style="border-color: var(--border-color)">
+      <div class="insights-tabs flex gap-1 border-b overflow-x-auto" style="border-color: var(--border-color)">
         {#each tabs as tab}
           <button
             onclick={() => switchTab(tab.id)}
-            class="px-4 py-2 text-sm font-medium transition-fast border-b-2 -mb-px"
+            class="px-4 py-2 text-sm font-medium whitespace-nowrap transition-fast border-b-2 -mb-px"
             style="color: {activeTab === tab.id ? 'var(--color-accent-500)' : 'var(--text-secondary)'}; border-color: {activeTab === tab.id ? 'var(--color-accent-500)' : 'transparent'}"
           >
             {tab.label}

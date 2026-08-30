@@ -4,7 +4,10 @@ import json
 import logging
 import random
 import re
+import mimetypes
 from datetime import datetime, timezone
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional
@@ -25,6 +28,7 @@ settings = get_settings()
 # messages.list = 5 units, messages.get = 5 units, batch = 1 unit + per-item.
 # Gmail batch requests support up to 100 items.
 MAX_RETRIES = 8
+MAX_COMPOSE_ATTACHMENT_BYTES = 18 * 1024 * 1024
 BASE_BACKOFF = 5.0        # seconds
 MAX_BACKOFF = 300.0       # seconds (5 min cap)
 BATCH_INTERNAL_SIZE = 20  # messages per batch HTTP request
@@ -381,6 +385,72 @@ class GmailService:
             context=f"modify_labels({message_id})",
         )
 
+    def _build_compose_message(
+        self,
+        *,
+        to: list[str],
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
+        subject: str = "",
+        body_html: str = "",
+        body_text: str = "",
+        in_reply_to: str | None = None,
+        references: str | None = None,
+        attachments: list | None = None,
+    ) -> MIMEMultipart:
+        """Build a safe multipart message shared by send and draft paths."""
+        attachments = attachments or []
+        if len(attachments) > 10:
+            raise ValueError("A message can include at most 10 attachments")
+
+        decoded = []
+        total_size = 0
+        for attachment in attachments:
+            item = attachment.model_dump() if hasattr(attachment, "model_dump") else attachment
+            filename = str(item.get("filename") or "attachment").replace("\r", "").replace("\n", "")
+            try:
+                content = base64.b64decode(item.get("data_base64", ""), validate=True)
+            except (ValueError, TypeError) as exc:
+                raise ValueError(f"Attachment {filename} is not valid base64") from exc
+            total_size += len(content)
+            if total_size > MAX_COMPOSE_ATTACHMENT_BYTES:
+                raise ValueError("Attachments exceed the 18 MB message limit")
+            content_type = item.get("content_type") or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+            maintype, _, subtype = content_type.partition("/")
+            if not subtype:
+                maintype, subtype = "application", "octet-stream"
+            decoded.append((filename, maintype, subtype, content))
+
+        alternative = MIMEMultipart("alternative")
+        if body_text:
+            alternative.attach(MIMEText(body_text, "plain", "utf-8"))
+        if body_html:
+            alternative.attach(MIMEText(body_html, "html", "utf-8"))
+
+        msg = MIMEMultipart("mixed") if decoded else alternative
+        if decoded:
+            msg.attach(alternative)
+
+        msg["To"] = ", ".join(to)
+        if cc:
+            msg["Cc"] = ", ".join(cc)
+        if bcc:
+            msg["Bcc"] = ", ".join(bcc)
+        msg["Subject"] = subject.replace("\r", "").replace("\n", "")
+        msg["From"] = self.account.email
+        if in_reply_to:
+            msg["In-Reply-To"] = in_reply_to
+        if references:
+            msg["References"] = references
+
+        for filename, maintype, subtype, content in decoded:
+            part = MIMEBase(maintype, subtype)
+            part.set_payload(content)
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", "attachment", filename=filename)
+            msg.attach(part)
+        return msg
+
     async def send_email(
         self,
         to: list[str],
@@ -392,28 +462,17 @@ class GmailService:
         in_reply_to: Optional[str] = None,
         references: Optional[str] = None,
         thread_id: Optional[str] = None,
+        attachments: list = None,
     ) -> str:
         """Send an email."""
         service = self._get_service()
 
-        msg = MIMEMultipart("alternative")
-        msg["To"] = ", ".join(to)
-        if cc:
-            msg["Cc"] = ", ".join(cc)
-        if bcc:
-            msg["Bcc"] = ", ".join(bcc)
-        msg["Subject"] = subject
-        msg["From"] = self.account.email
-
-        if in_reply_to:
-            msg["In-Reply-To"] = in_reply_to
-        if references:
-            msg["References"] = references
-
-        if body_text:
-            msg.attach(MIMEText(body_text, "plain"))
-        if body_html:
-            msg.attach(MIMEText(body_html, "html"))
+        msg = self._build_compose_message(
+            to=to, cc=cc, bcc=bcc, subject=subject,
+            body_html=body_html, body_text=body_text,
+            in_reply_to=in_reply_to, references=references,
+            attachments=attachments,
+        )
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         body = {"raw": raw}
@@ -450,23 +509,16 @@ class GmailService:
         body_html: str = "",
         body_text: str = "",
         thread_id: Optional[str] = None,
+        attachments: list = None,
     ) -> str:
         """Create a draft."""
         service = self._get_service()
 
-        msg = MIMEMultipart("alternative")
-        msg["To"] = ", ".join(to)
-        if cc:
-            msg["Cc"] = ", ".join(cc)
-        if bcc:
-            msg["Bcc"] = ", ".join(bcc)
-        msg["Subject"] = subject
-        msg["From"] = self.account.email
-
-        if body_text:
-            msg.attach(MIMEText(body_text, "plain"))
-        if body_html:
-            msg.attach(MIMEText(body_html, "html"))
+        msg = self._build_compose_message(
+            to=to, cc=cc, bcc=bcc, subject=subject,
+            body_html=body_html, body_text=body_text,
+            attachments=attachments,
+        )
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         draft_body = {"message": {"raw": raw}}

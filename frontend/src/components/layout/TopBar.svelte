@@ -7,6 +7,7 @@
 
   let searchValue = $state('');
   let syncDropdownOpen = $state(false);
+  let moreMenuOpen = $state(false);
 
   let selectedAccount = $derived(
     $selectedAccountId ? $accounts.find(a => a.id === $selectedAccountId) : null
@@ -22,6 +23,16 @@
     { id: 'inbox', label: 'Email', icon: 'inbox' },
     { id: 'calendar', label: 'Calendar', icon: 'calendar' },
   ];
+
+  const secondaryTabs = [
+    { id: 'ai-insights', label: 'AI Insights', icon: 'activity' },
+    { id: 'chat', label: 'Chat', icon: 'message-square' },
+    { id: 'subscriptions', label: 'Subscriptions', icon: 'bell-off' },
+    { id: 'todos', label: 'Todos', icon: 'check-circle' },
+    { id: 'stats', label: 'Stats', icon: 'bar-chart-2' },
+  ];
+
+  let secondaryPageActive = $derived(secondaryTabs.some(tab => tab.id === $currentPage));
 
   function updateCountdown() {
     const ra = $overallSyncState.retryAfter;
@@ -86,6 +97,8 @@
 
   function switchTab(tabId) {
     currentPage.set(tabId);
+    moreMenuOpen = false;
+    syncDropdownOpen = false;
   }
 
   function toggleViewMode() {
@@ -155,8 +168,30 @@
   }
 
   function getAccountSyncState(acct) {
-    if (!acct.sync_status) return 'idle';
-    return acct.sync_status.status || 'idle';
+    const mailState = acct.sync_status?.status || 'idle';
+    if (mailState !== 'idle' && mailState !== 'completed') return mailState;
+    if (calendarNeedsAttention(acct)) return 'warning';
+    return mailState;
+  }
+
+  function calendarNeedsAttention(acct) {
+    return !acct.has_calendar_scope || acct.calendar_sync_status?.needs_reauth || acct.calendar_sync_status?.status === 'error';
+  }
+
+  function getCalendarHealthText(acct) {
+    if (!acct.has_calendar_scope) return 'Calendar access not granted';
+    if (acct.calendar_sync_status?.needs_reauth) return 'Calendar needs reconnection';
+    if (acct.calendar_sync_status?.status === 'error') return acct.calendar_sync_status.error_message || 'Calendar sync error';
+    return '';
+  }
+
+  async function reauthorizeAccount(accountId) {
+    try {
+      const result = await api.reauthorizeAccount(accountId);
+      window.location.href = result.auth_url;
+    } catch (err) {
+      showToast(err.message || 'Could not start reconnection', 'error');
+    }
   }
 
   function getAccountCountdown(acct) {
@@ -173,9 +208,9 @@
   }
 </script>
 
-<header class="h-14 flex items-center gap-2 px-4 border-b shrink-0" style="background: var(--bg-secondary); border-color: var(--border-color)">
+<header class="app-topbar min-h-14 flex items-center gap-2 px-4 border-b shrink-0" style="background: var(--bg-secondary); border-color: var(--border-color)">
   <!-- Left: Tab navigation -->
-  <nav class="flex items-center gap-1 mr-2">
+  <nav class="primary-nav relative flex items-center gap-1 mr-2" aria-label="Primary navigation">
     {#each tabs as tab}
       <button
         onclick={() => switchTab(tab.id)}
@@ -192,15 +227,54 @@
         {:else}
           <Icon name={tab.icon} size={16} />
         {/if}
-        {tab.label}
+        <span class="primary-tab-label">{tab.label}</span>
       </button>
     {/each}
+    <button
+      onclick={() => moreMenuOpen = !moreMenuOpen}
+      class="more-button flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-150"
+      class:tab-active={secondaryPageActive}
+      class:tab-inactive={!secondaryPageActive}
+      aria-label="More app sections"
+      aria-expanded={moreMenuOpen}
+    >
+      <Icon name="more-horizontal" size={16} />
+      <span class="primary-tab-label">More</span>
+    </button>
+    {#if moreMenuOpen}
+      <button class="fixed inset-0 z-40 cursor-default" onclick={() => moreMenuOpen = false} aria-label="Close navigation menu"></button>
+      <div class="more-menu absolute left-0 top-full mt-2 z-50 w-56 rounded-xl border p-1.5 shadow-xl" style="background: var(--bg-secondary); border-color: var(--border-color)">
+        {#each secondaryTabs as tab}
+          <button
+            onclick={() => switchTab(tab.id)}
+            class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left"
+            class:menu-item-active={$currentPage === tab.id}
+            aria-current={$currentPage === tab.id ? 'page' : undefined}
+          >
+            <Icon name={tab.icon} size={16} />
+            {tab.label}
+          </button>
+        {/each}
+        <div class="mobile-menu-utilities border-t mt-1 pt-1" style="border-color: var(--border-color)">
+          <button onclick={() => switchTab('admin')} class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left">
+            <Icon name="settings" size={16} /> Settings
+          </button>
+          <button onclick={() => { theme.toggle(); moreMenuOpen = false; }} class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left">
+            <Icon name={getEffectiveMode($theme) === 'dark' ? 'sun' : 'moon'} size={16} />
+            {getEffectiveMode($theme) === 'dark' ? 'Light theme' : 'Dark theme'}
+          </button>
+          <button onclick={handleLogout} class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left">
+            <Icon name="log-out" size={16} /> Log out
+          </button>
+        </div>
+      </div>
+    {/if}
   </nav>
 
   <!-- Center: Contextual content -->
   {#if $currentPage === 'inbox'}
     <!-- Email tab: Focused toggle + search + view mode -->
-    <div class="flex items-center gap-2 flex-1 min-w-0">
+    <div class="inbox-tools flex items-center gap-2 flex-1 min-w-0">
       <!-- Sidebar toggle (only on email tab) -->
       <button
         onclick={() => sidebarCollapsed.update(v => !v)}
@@ -220,13 +294,13 @@
         aria-label="Toggle hide low priority emails"
       >
         <Icon name="filter" size={14} />
-        Focused
+        <span class="focused-label">Focused</span>
       </button>
 
       <!-- Active account filter chip -->
       {#if selectedAccount}
         <div
-          class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium shrink-0"
+          class="active-account-chip flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium shrink-0"
           style="background: {selectedAccountColor ? selectedAccountColor.light : 'var(--bg-tertiary)'}; color: {selectedAccountColor ? selectedAccountColor.bg : 'var(--text-secondary)'}"
         >
           <span
@@ -294,11 +368,11 @@
   {/if}
 
   <!-- Right section: sync, theme, settings gear, user -->
-  <div class="flex items-center gap-1.5 shrink-0">
+  <div class="topbar-utilities flex items-center gap-1.5 shrink-0">
     <!-- Active account filter chip (non-email tabs) -->
     {#if selectedAccount && $currentPage !== 'inbox'}
       <div
-        class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
+        class="active-account-chip flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium"
         style="background: {selectedAccountColor ? selectedAccountColor.light : 'var(--bg-tertiary)'}; color: {selectedAccountColor ? selectedAccountColor.bg : 'var(--text-secondary)'}"
       >
         <span
@@ -337,8 +411,8 @@
           </span>
           <span class="hidden sm:inline" style="color: var(--status-warning)">{countdownText || 'Rate limited'}</span>
         {:else if $overallSyncState.state === 'partial'}
-          <span class="w-2 h-2 rounded-full shrink-0" style="background: var(--status-success)"></span>
-          <span class="hidden sm:inline">{$overallSyncState.message}</span>
+          <span class="w-2 h-2 rounded-full shrink-0" style="background: var(--status-warning)"></span>
+          <span class="hidden sm:inline" style="color: var(--status-warning)">{$overallSyncState.message}</span>
           {#if $overallSyncState.rateLimitedCount > 0}
             <span class="hidden sm:inline text-[10px] px-1 rounded" style="color: var(--status-warning)">{countdownText}</span>
           {/if}
@@ -353,10 +427,11 @@
 
       {#if syncDropdownOpen}
         <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-        <div
+        <button
           class="fixed inset-0 z-40"
           onclick={closeSyncDropdown}
-        ></div>
+          aria-label="Close sync status"
+        ></button>
         <div
           class="absolute right-0 top-full mt-1 z-50 w-72 rounded-lg border shadow-lg overflow-hidden"
           style="background: var(--bg-secondary); border-color: var(--border-color)"
@@ -373,6 +448,8 @@
                   <span class="w-2 h-2 rounded-full shrink-0" style="background: var(--status-warning)"></span>
                 {:else if getAccountSyncState(acct) === 'error'}
                   <span class="w-2 h-2 rounded-full shrink-0" style="background: var(--status-error)"></span>
+                {:else if getAccountSyncState(acct) === 'warning'}
+                  <span class="w-2 h-2 rounded-full shrink-0" style="background: var(--status-warning)"></span>
                 {:else}
                   <span class="w-2 h-2 rounded-full shrink-0" style="background: var(--status-success)"></span>
                 {/if}
@@ -394,6 +471,16 @@
                     <div class="text-[10px] truncate" style="color: var(--status-error)" title={acct.sync_status.error_message}>{acct.sync_status.error_message}</div>
                   {:else}
                     <div class="text-[10px]" style="color: var(--text-tertiary)">{formatSyncTime(acct)}{#if acct.sync_status && acct.sync_status.messages_synced} -- {acct.sync_status.messages_synced.toLocaleString()} emails{/if}</div>
+                  {/if}
+                  {#if calendarNeedsAttention(acct)}
+                    <button
+                      onclick={() => reauthorizeAccount(acct.id)}
+                      class="mt-1 text-[10px] font-medium text-left"
+                      style="color: var(--status-warning)"
+                      title={getCalendarHealthText(acct)}
+                    >
+                      {getCalendarHealthText(acct)} · Reconnect
+                    </button>
                   {/if}
                 </div>
                 <button
@@ -418,7 +505,7 @@
     <!-- Theme toggle -->
     <button
       onclick={() => theme.toggle()}
-      class="p-1.5 rounded-md transition-fast"
+      class="desktop-utility p-1.5 rounded-md transition-fast"
       style="color: var(--text-secondary)"
       aria-label="Toggle theme"
       data-shortcut="nav.theme"
@@ -433,7 +520,7 @@
     <!-- Settings gear -->
     <button
       onclick={() => currentPage.set('admin')}
-      class="p-1.5 rounded-md transition-fast"
+      class="desktop-utility p-1.5 rounded-md transition-fast"
       style="color: {$currentPage === 'admin' ? 'var(--color-accent-500)' : 'var(--text-secondary)'}"
       aria-label="Settings"
       title="Settings"
@@ -443,7 +530,7 @@
     </button>
 
     <!-- User menu -->
-    <div class="flex items-center gap-1.5 pl-2 border-l" style="border-color: var(--border-color)">
+    <div class="desktop-utility flex items-center gap-1.5 pl-2 border-l" style="border-color: var(--border-color)">
       <div class="w-6 h-6 rounded-full bg-accent-500/20 flex items-center justify-center text-[10px] font-bold" style="color: var(--color-accent-600)">
         {($user?.display_name || $user?.username || 'U')[0].toUpperCase()}
       </div>
@@ -481,5 +568,54 @@
   header button:not(.tab-active):not(.tab-inactive):hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+  }
+  .menu-item-active {
+    color: var(--color-accent-600);
+    background: color-mix(in srgb, var(--color-accent-500) 14%, transparent);
+  }
+  .mobile-menu-utilities {
+    display: none;
+  }
+
+  @media (max-width: 767px) {
+    .app-topbar {
+      padding: 0.5rem;
+      gap: 0.25rem;
+      flex-wrap: wrap;
+    }
+    .primary-nav {
+      margin-right: 0;
+      flex: 1 1 auto;
+    }
+    .primary-nav > button:not(.fixed) {
+      padding-left: 0.65rem;
+      padding-right: 0.65rem;
+    }
+    .primary-tab-label,
+    .desktop-utility,
+    .active-account-chip,
+    .focused-label {
+      display: none;
+    }
+    .mobile-menu-utilities {
+      display: block;
+    }
+    .more-menu {
+      position: fixed;
+      top: 3.25rem;
+      left: 0.5rem;
+      right: 0.5rem;
+      width: auto;
+    }
+    .topbar-utilities {
+      margin-left: auto;
+    }
+    .inbox-tools {
+      order: 3;
+      flex-basis: 100%;
+    }
+    .app-topbar:has(.inbox-tools) {
+      min-height: 6.25rem;
+    }
   }
 </style>

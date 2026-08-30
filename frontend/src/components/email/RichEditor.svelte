@@ -48,7 +48,7 @@
   });
 
   // Sync content prop changes into TipTap after mount
-  let lastSetContent = $state(content);
+  let lastSetContent = $state('');
   $effect(() => {
     if (editor && content !== lastSetContent) {
       lastSetContent = content;

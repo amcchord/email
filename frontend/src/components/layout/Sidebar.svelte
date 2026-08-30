@@ -97,7 +97,8 @@
 </script>
 
 <aside
-  class="h-full flex flex-col border-r shrink-0 transition-all duration-200"
+  class="mail-sidebar h-full flex flex-col border-r shrink-0 transition-all duration-200"
+  class:sidebar-collapsed={$sidebarCollapsed}
   style="background: var(--bg-secondary); border-color: var(--border-color); width: {$sidebarCollapsed ? '60px' : '240px'}"
 >
   <!-- Logo -->
@@ -402,3 +403,23 @@
     </button>
   </div>
 </aside>
+
+<style>
+  @media (max-width: 767px) {
+    .mail-sidebar {
+      position: fixed;
+      top: 6.25rem;
+      bottom: 0;
+      left: 0;
+      z-index: 40;
+      width: min(86vw, 300px) !important;
+      box-shadow: var(--shadow-lg);
+      transform: translateX(0);
+    }
+
+    .mail-sidebar.sidebar-collapsed {
+      transform: translateX(-105%);
+      pointer-events: none;
+    }
+  }
+</style>

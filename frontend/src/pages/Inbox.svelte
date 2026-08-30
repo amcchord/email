@@ -287,7 +287,7 @@
   }
 </script>
 
-<div class="h-full flex flex-col" class:select-none={panelDragging}>
+<div class="inbox-page h-full flex flex-col" class:select-none={panelDragging}>
   {#if $smartFilter?.type === 'needs_reply_ignored' || $smartFilter?.type === 'needs_reply_snoozed'}
     <div class="flex items-center gap-2 px-4 py-2 border-b" style="background: var(--bg-tertiary); border-color: var(--border-color)">
       <Icon name={$smartFilter.type === 'needs_reply_ignored' ? 'eye-off' : 'clock'} size={14} />
@@ -312,11 +312,11 @@
       {/if}
     </div>
   {/if}
-  <div class="flex-1 min-h-0 flex">
+  <div class="inbox-split flex-1 min-h-0 flex">
   {#if $viewMode === 'table'}
     <!-- Table view: vertical split (table on top, preview below) -->
     <div class="flex flex-col w-full h-full overflow-hidden" bind:this={containerEl}>
-      <div class="overflow-hidden" style="flex: {$selectedEmailId ? '0 0 ' + tableTopPct + '%' : '1 1 auto'}; min-height: 150px">
+      <div class="email-list-pane overflow-hidden" class:mobile-hidden={Boolean($selectedEmailId)} style="flex: {$selectedEmailId ? '0 0 ' + tableTopPct + '%' : '1 1 auto'}; min-height: 150px">
         <EmailTable
           emails={$emails}
           loading={$emailsLoading}
@@ -336,13 +336,13 @@
         <!-- Vertical drag handle -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div
-          class="shrink-0 flex items-center justify-center cursor-row-resize group"
+          class="email-resize-handle shrink-0 flex items-center justify-center cursor-row-resize group"
           style="height: 7px; background: var(--bg-secondary); border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color)"
           onmousedown={startVResize}
         >
           <div class="w-10 h-1 rounded-full transition-colors group-hover:bg-accent-500" style="background: var(--border-color)"></div>
         </div>
-        <div class="flex-1 min-h-0 overflow-hidden">
+        <div class="email-preview-pane flex-1 min-h-0 overflow-hidden">
           <EmailView
             email={selectedEmail}
             loading={emailLoading}
@@ -355,7 +355,8 @@
   {:else}
     <!-- Column view: horizontal split (list on left, preview on right) -->
     <div
-      class="flex flex-col overflow-hidden shrink-0"
+      class="email-list-pane flex flex-col overflow-hidden shrink-0"
+      class:mobile-hidden={Boolean($selectedEmailId)}
       style="border-right: 1px solid var(--border-color); width: {$selectedEmailId ? columnListWidth + 'px' : '100%'}; min-width: {$selectedEmailId ? '280px' : 'auto'}"
     >
       <EmailList
@@ -377,13 +378,13 @@
       <!-- Horizontal drag handle -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
-        class="shrink-0 flex items-center justify-center cursor-col-resize group"
+        class="email-resize-handle shrink-0 flex items-center justify-center cursor-col-resize group"
         style="width: 7px; background: var(--bg-secondary); border-left: 1px solid var(--border-color); border-right: 1px solid var(--border-color)"
         onmousedown={startHResize}
       >
         <div class="h-10 w-1 rounded-full transition-colors group-hover:bg-accent-500" style="background: var(--border-color)"></div>
       </div>
-      <div class="flex-1 min-w-0 overflow-hidden">
+      <div class="email-preview-pane flex-1 min-w-0 overflow-hidden">
         <EmailView
           email={selectedEmail}
           loading={emailLoading}
@@ -395,3 +396,23 @@
   {/if}
   </div>
 </div>
+
+<style>
+  @media (max-width: 767px) {
+    .email-list-pane {
+      width: 100% !important;
+      min-width: 0 !important;
+      min-height: 0 !important;
+      border-right: 0 !important;
+      flex: 1 1 auto !important;
+    }
+    .email-preview-pane {
+      width: 100%;
+      flex: 1 1 auto;
+    }
+    .email-resize-handle,
+    .mobile-hidden {
+      display: none !important;
+    }
+  }
+</style>

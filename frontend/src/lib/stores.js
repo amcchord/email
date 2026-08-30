@@ -108,17 +108,23 @@ export function forceSyncPoll() {
 // Derived sync state -- multi-account aware
 export const overallSyncState = derived(syncStatus, ($syncStatus) => {
   const empty = { state: 'idle', message: 'No accounts', accounts: [],
-    retryAfter: null, syncingCount: 0, rateLimitedCount: 0, errorCount: 0, idleCount: 0, totalCount: 0 };
+    retryAfter: null, syncingCount: 0, rateLimitedCount: 0, errorCount: 0,
+    calendarIssueCount: 0, idleCount: 0, totalCount: 0 };
   if (!$syncStatus || $syncStatus.length === 0) return empty;
 
   const total = $syncStatus.length;
   let syncingCount = 0;
   let rateLimitedCount = 0;
   let errorCount = 0;
+  let calendarIssueCount = 0;
   let idleCount = 0;
   let soonestRetry = null;
 
   for (const a of $syncStatus) {
+    const calendar = a.calendar_sync_status;
+    if (!a.has_calendar_scope || calendar?.needs_reauth || calendar?.status === 'error') {
+      calendarIssueCount++;
+    }
     const s = a.sync_status;
     if (!s) { idleCount++; continue; }
     if (s.status === 'syncing') { syncingCount++; }
@@ -133,7 +139,7 @@ export const overallSyncState = derived(syncStatus, ($syncStatus) => {
     else { idleCount++; }
   }
 
-  const counts = { syncingCount, rateLimitedCount, errorCount, idleCount, totalCount: total };
+  const counts = { syncingCount, rateLimitedCount, errorCount, calendarIssueCount, idleCount, totalCount: total };
 
   // Determine the overall state and message.
   // Priority: syncing > mixed issues > rate_limited > error > idle
@@ -148,7 +154,7 @@ export const overallSyncState = derived(syncStatus, ($syncStatus) => {
   }
 
   // All accounts healthy
-  if (rateLimitedCount === 0 && errorCount === 0) {
+  if (rateLimitedCount === 0 && errorCount === 0 && calendarIssueCount === 0) {
     let lastSync = null;
     for (const a of $syncStatus) {
       if (!a.sync_status) continue;
@@ -168,6 +174,15 @@ export const overallSyncState = derived(syncStatus, ($syncStatus) => {
       else { message = `Synced ${Math.round(ago / 3600)}h ago`; }
     }
     return { state: 'idle', message, accounts: $syncStatus, retryAfter: null, ...counts };
+  }
+
+  // Mail can be current while Calendar is disconnected. Surface that as a
+  // partial state instead of claiming that the whole app is healthy.
+  if (rateLimitedCount === 0 && errorCount === 0 && calendarIssueCount > 0) {
+    const message = calendarIssueCount === 1
+      ? 'Email synced · Calendar needs attention'
+      : `Email synced · ${calendarIssueCount} calendar issues`;
+    return { state: 'partial', message, accounts: $syncStatus, retryAfter: null, ...counts };
   }
 
   // Some accounts have issues but others are fine
@@ -204,7 +219,12 @@ export const overallSyncState = derived(syncStatus, ($syncStatus) => {
 });
 
 // UI state
-export const sidebarCollapsed = writable(false);
+// Start with the mail navigation closed on narrow screens. The sidebar becomes
+// an overlay drawer there; keeping the desktop default would leave almost no
+// room for the message list on first load.
+export const sidebarCollapsed = writable(
+  typeof window !== 'undefined' ? window.matchMedia('(max-width: 767px)').matches : false
+);
 export const composeOpen = writable(false);
 export const composeData = writable(null);
 export const searchQuery = writable('');

@@ -49,10 +49,36 @@
   <TopBar />
   <div class="flex-1 flex overflow-hidden">
     {#if showSidebar}
+      {#if !$sidebarCollapsed}
+        <button
+          class="mail-sidebar-backdrop"
+          aria-label="Close mail navigation"
+          onclick={() => sidebarCollapsed.set(true)}
+        ></button>
+      {/if}
       <Sidebar />
     {/if}
-    <main class="flex-1 overflow-hidden">
+    <main class="flex-1 min-w-0 overflow-hidden">
       {@render children()}
     </main>
   </div>
 </div>
+
+<style>
+  .mail-sidebar-backdrop {
+    display: none;
+  }
+
+  @media (max-width: 767px) {
+    .mail-sidebar-backdrop {
+      display: block;
+      position: fixed;
+      inset: 0;
+      top: 6.25rem;
+      z-index: 35;
+      border: 0;
+      background: rgb(0 0 0 / 0.35);
+      backdrop-filter: blur(2px);
+    }
+  }
+</style>

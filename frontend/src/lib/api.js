@@ -164,7 +164,14 @@ export const api = {
   // Admin
   getFeatureFlags: () => request('GET', '/admin/feature-flags'),
   getDashboard: () => request('GET', '/admin/dashboard'),
-  getStats: () => request('GET', '/admin/stats'),
+  getStats: (params = {}) => {
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== null && value !== undefined && value !== '') searchParams.set(key, value);
+    }
+    const query = searchParams.toString();
+    return request('GET', `/admin/stats${query ? `?${query}` : ''}`);
+  },
   getSettings: () => request('GET', '/admin/settings'),
   updateSetting: (data) => request('PUT', '/admin/settings', data),
   deleteSetting: (key) => request('DELETE', `/admin/settings/${key}`),

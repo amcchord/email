@@ -3,6 +3,7 @@
   import { slide } from 'svelte/transition';
   import { accountColorMap, selectedAccountId } from '../../lib/stores.js';
   import Icon from '../common/Icon.svelte';
+  import { cleanEmailText, categoryLabel, typeLabel } from '../../lib/emailText.js';
 
   let {
     emails = [],
@@ -84,6 +85,13 @@
       next.add(id);
     }
     selectedIds = next;
+  }
+
+  function activateRow(event, callback) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      callback();
+    }
   }
 
   function handleBulkAction(action) {
@@ -295,6 +303,11 @@
             class="flex items-start gap-3 px-4 py-3 border-b cursor-pointer transition-fast"
             style="border-color: var(--border-subtle); background: {isExpanded ? 'var(--bg-tertiary)' : 'var(--bg-secondary)'}; border-left: 3px solid {borderColor};"
             onclick={(e) => toggleThread(email.gmail_thread_id, e)}
+            onkeydown={(e) => activateRow(e, () => toggleThread(email.gmail_thread_id, e))}
+            role="button"
+            tabindex="0"
+            aria-expanded={isExpanded}
+            aria-label="{cleanEmailText(email.subject) || 'No subject'} conversation"
           >
             <!-- Chevron -->
             <div class="mt-1 shrink-0 transition-transform" style="color: var(--text-tertiary); transform: rotate({isExpanded ? '90' : '0'}deg)">
@@ -329,13 +342,13 @@
                 {/if}
                 <span class="text-xs ml-auto shrink-0" style="color: var(--text-tertiary)">{formatDate(email.date)}</span>
               </div>
-              <div class="text-sm truncate mb-0.5" style="color: var(--text-primary)">{email.subject || '(no subject)'}</div>
+              <div class="text-sm truncate mb-0.5" style="color: var(--text-primary)">{cleanEmailText(email.subject) || '(no subject)'}</div>
               {#if email.thread_digest_type === 'scheduling' && email.thread_digest_outcome}
                 <div class="text-xs truncate font-medium" style="color: rgb(168, 85, 247)">{email.thread_digest_outcome}</div>
               {:else if email.thread_digest_summary}
                 <div class="text-xs truncate" style="color: var(--text-secondary)">{email.thread_digest_summary}</div>
               {:else}
-                <div class="text-xs truncate" style="color: var(--text-tertiary)">{email.snippet || ''}</div>
+                <div class="text-xs truncate" style="color: var(--text-tertiary)">{cleanEmailText(email.snippet)}</div>
               {/if}
             </div>
           </div>
@@ -351,6 +364,10 @@
                   class:font-medium={!child.is_read}
                   style="border-color: var(--border-subtle); background: {selectedId === child.id ? 'var(--bg-hover)' : 'var(--bg-primary)'}; padding-left: 2.5rem; padding-right: 1rem; border-left: 3px solid {borderColor};"
                   onclick={() => onSelect && onSelect(child.id)}
+                  onkeydown={(e) => activateRow(e, () => onSelect && onSelect(child.id))}
+                  role="button"
+                  tabindex="0"
+                  aria-label="Open message from {cleanEmailText(child.from_name || child.from_address || 'Unknown')}"
                 >
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2 mb-0.5">
@@ -362,7 +379,7 @@
                       {/if}
                       <span class="text-xs ml-auto shrink-0" style="color: var(--text-tertiary)">{formatDate(child.date)}</span>
                     </div>
-                    <div class="text-xs truncate" style="color: var(--text-tertiary)">{child.snippet || ''}</div>
+                    <div class="text-xs truncate" style="color: var(--text-tertiary)">{cleanEmailText(child.snippet)}</div>
                   </div>
                 </div>
               {/each}
@@ -377,12 +394,17 @@
             class:font-medium={!email.is_read}
             style="border-color: var(--border-subtle); background: {selectedId === email.id ? 'var(--bg-hover)' : 'var(--bg-secondary)'};"
             onclick={() => onSelect && onSelect(email.id)}
+            onkeydown={(e) => activateRow(e, () => onSelect && onSelect(email.id))}
+            role="button"
+            tabindex="0"
+            aria-label="Open email: {cleanEmailText(email.subject) || 'No subject'}"
           >
             <!-- Checkbox -->
             <button
               onclick={(e) => toggleSelect(email.id, e)}
               class="mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-fast"
               style="border-color: var(--border-color); background: {selectedIds.has(email.id) ? 'var(--color-accent-500)' : 'transparent'}"
+              aria-label="{selectedIds.has(email.id) ? 'Deselect' : 'Select'} {cleanEmailText(email.subject) || 'email'}"
             >
               {#if selectedIds.has(email.id)}
                 <Icon name="check" size={12} class="text-white" strokeWidth={3} />
@@ -394,6 +416,7 @@
               onclick={(e) => { e.stopPropagation(); onAction && onAction(email.is_starred ? 'unstar' : 'star', [email.id]); }}
               class="mt-0.5 shrink-0"
               style="color: {email.is_starred ? 'var(--color-accent-500)' : 'var(--text-tertiary)'}"
+              aria-label="{email.is_starred ? 'Unstar' : 'Star'} {cleanEmailText(email.subject) || 'email'}"
             >
               <Icon name="star" size={16} />
             </button>
@@ -418,26 +441,26 @@
                 <span class="text-xs ml-auto shrink-0" style="color: var(--text-tertiary)">{formatDate(email.date)}</span>
               </div>
               <div class="text-sm truncate mb-0.5" style="color: var(--text-primary); opacity: {email.is_read ? 0.8 : 1}">
-                {email.subject || '(no subject)'}
+                {cleanEmailText(email.subject) || '(no subject)'}
               </div>
               <div class="flex items-center gap-2">
-                <span class="text-xs truncate" style="color: var(--text-tertiary)">{email.snippet || ''}</span>
+                <span class="text-xs truncate" style="color: var(--text-tertiary)">{cleanEmailText(email.snippet)}</span>
                 {#if email.gmail_thread_id && seenThreadIds[email.id] && threadCounts[email.gmail_thread_id] > 1}
                   <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0" style="background: var(--bg-tertiary); color: var(--text-secondary)" title="Thread with {threadCounts[email.gmail_thread_id]} messages">
                     {threadCounts[email.gmail_thread_id]}
                   </span>
                 {/if}
                 {#if email.needs_reply}
-                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300">reply</span>
+                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300">Needs reply</span>
                 {/if}
                 {#if email.is_subscription}
-                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300">sub</span>
+                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300">Subscription</span>
                 {/if}
                 {#if email.ai_category}
-                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 {categoryColors[email.ai_category] || ''}">{email.ai_category.replace('_', ' ')}</span>
+                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 {categoryColors[email.ai_category] || ''}">{categoryLabel(email.ai_category)}</span>
                 {/if}
                 {#if email.ai_email_type}
-                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 {emailTypeColors[email.ai_email_type] || ''}">{email.ai_email_type}</span>
+                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 {emailTypeColors[email.ai_email_type] || ''}">{typeLabel(email.ai_email_type)}</span>
                 {/if}
               </div>
             </div>

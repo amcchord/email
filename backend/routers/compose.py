@@ -41,8 +41,11 @@ async def send_email(
             in_reply_to=request.in_reply_to,
             references=request.references,
             thread_id=request.thread_id,
+            attachments=request.attachments,
         )
         return {"message": "Email sent", "gmail_message_id": message_id}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to send: {str(e)}")
 
@@ -74,7 +77,10 @@ async def save_draft(
             body_html=request.body_html,
             body_text=request.body_text,
             thread_id=request.thread_id,
+            attachments=request.attachments,
         )
         return {"message": "Draft saved", "draft_id": draft_id}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save draft: {str(e)}")

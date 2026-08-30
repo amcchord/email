@@ -1057,13 +1057,13 @@
 </script>
 
 <div class="h-full overflow-y-auto" style="background: var(--bg-primary)">
-  <div class="max-w-4xl mx-auto p-6">
+  <div class="admin-content max-w-4xl mx-auto p-6">
     <!-- Tabs -->
-    <div class="flex gap-1 mb-6 border-b" style="border-color: var(--border-color)">
+    <div class="flex gap-1 mb-6 border-b overflow-x-auto" style="border-color: var(--border-color)" aria-label="Settings sections">
       {#each tabs as tab}
         <button
           onclick={() => activeTab = tab.id}
-          class="px-4 py-2.5 text-sm font-medium transition-fast border-b-2 -mb-px"
+          class="px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-fast border-b-2 -mb-px"
           style="color: {activeTab === tab.id ? 'var(--color-accent-600)' : 'var(--text-secondary)'}; border-color: {activeTab === tab.id ? 'var(--color-accent-500)' : 'transparent'}"
         >
           {tab.label}
@@ -1265,12 +1265,13 @@
 
                 <!-- Account description -->
                 <div class="mt-3 pt-3" style="border-top: 1px solid var(--border-color)">
-                  <label class="block text-[10px] font-semibold uppercase tracking-wider mb-1" style="color: var(--text-tertiary)">
+                  <label for="account-purpose-{acct.id}" class="block text-[10px] font-semibold uppercase tracking-wider mb-1" style="color: var(--text-tertiary)">
                     Account Purpose
                   </label>
                   <div class="flex gap-2">
                     <input
                       type="text"
+                      id="account-purpose-{acct.id}"
                       bind:value={accountDescriptions[acct.id]}
                       placeholder="e.g., Work email, Personal, Side project, Junk..."
                       class="flex-1 h-8 px-3 rounded-lg text-xs outline-none border"
@@ -1286,18 +1287,22 @@
                 </div>
 
                 <!-- Calendar scope notice -->
-                {#if acct.has_calendar_scope === false}
-                  <div class="mt-3 px-3 py-2.5 rounded-lg text-xs flex items-center gap-2.5" style="background: var(--status-info-bg); color: var(--status-info-text); border: 1px solid var(--status-info-border)">
-                    <span class="shrink-0" style="color: var(--status-info)">
+                {#if acct.has_calendar_scope === false || acct.calendar_sync_status?.needs_reauth || acct.calendar_sync_status?.status === 'error'}
+                  <div class="mt-3 px-3 py-2.5 rounded-lg text-xs flex items-center gap-2.5" style="background: var(--status-warning-bg); color: var(--status-warning-text); border: 1px solid var(--status-warning-border)">
+                    <span class="shrink-0" style="color: var(--status-warning)">
                       <Icon name="calendar" size={16} />
                     </span>
-                    <span class="flex-1">Calendar access not granted. Reauthorize to enable calendar sync.</span>
+                    <span class="flex-1">
+                      {acct.has_calendar_scope === false
+                        ? 'Calendar access is not granted.'
+                        : acct.calendar_sync_status?.error_message || 'Calendar authorization needs attention.'}
+                    </span>
                     <button
                       onclick={() => reauthorizeAccount(acct.id)}
                       class="shrink-0 px-2.5 py-1 rounded-md text-[11px] font-medium transition-fast"
-                      style="background: var(--status-info-bg); color: var(--status-info)"
+                      style="background: var(--status-warning-bg); color: var(--status-warning)"
                     >
-                      Reauthorize
+                      Reconnect
                     </button>
                   </div>
                 {/if}
@@ -1516,9 +1521,10 @@
             </p>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
               <div>
-                <label class="block text-[11px] mb-1" style="color: var(--text-tertiary)">Base URL</label>
+                <label for="ha-base-url" class="block text-[11px] mb-1" style="color: var(--text-tertiary)">Base URL</label>
                 <input
                   type="url"
+                  id="ha-base-url"
                   bind:value={haUrlInput}
                   placeholder="https://homeassistant.local:8123"
                   class="w-full h-9 px-3 rounded-lg text-sm outline-none border"
@@ -1526,7 +1532,7 @@
                 />
               </div>
               <div>
-                <label class="block text-[11px] mb-1" style="color: var(--text-tertiary)">
+                <label for="ha-access-token" class="block text-[11px] mb-1" style="color: var(--text-tertiary)">
                   Long-lived access token
                   {#if terminalSettings.home_assistant_token_set}
                     <span style="color: var(--status-success, #10b981)">· saved</span>
@@ -1534,6 +1540,7 @@
                 </label>
                 <input
                   type="password"
+                  id="ha-access-token"
                   bind:value={haTokenInput}
                   placeholder={terminalSettings.home_assistant_token_set ? '(token saved · enter new to replace)' : 'eyJ…'}
                   class="w-full h-9 px-3 rounded-lg text-sm outline-none border"
@@ -1625,8 +1632,9 @@
                   <!-- Editable fields -->
                   <div class="grid grid-cols-1 {fieldsGridCols} gap-3">
                     <div>
-                      <label class="block text-[11px] mb-1" style="color: var(--text-tertiary)">Content</label>
+                      <label for="terminal-content-{d.id}" class="block text-[11px] mb-1" style="color: var(--text-tertiary)">Content</label>
                       <select
+                        id="terminal-content-{d.id}"
                         value={d.content_type}
                         onchange={(e) => setTerminalContentType(d, e.target.value)}
                         disabled={saving || !terminalSettings}
@@ -1642,8 +1650,9 @@
                     </div>
                     {#if isEink}
                       <div>
-                        <label class="block text-[11px] mb-1" style="color: var(--text-tertiary)">Design</label>
+                        <label for="terminal-design-{d.id}" class="block text-[11px] mb-1" style="color: var(--text-tertiary)">Design</label>
                         <select
+                          id="terminal-design-{d.id}"
                           value={designKey}
                           onchange={(e) => setTerminalDesign(d, e.target.value)}
                           disabled={saving || !terminalSettings}
@@ -1657,11 +1666,12 @@
                       </div>
                     {/if}
                     <div>
-                      <label class="block text-[11px] mb-1" style="color: var(--text-tertiary)">
+                      <label for="terminal-refresh-{d.id}" class="block text-[11px] mb-1" style="color: var(--text-tertiary)">
                         Refresh rate
                         <span style="color: var(--text-tertiary)">· now {formatIntervalSec(d.effective_refresh_interval_sec)}</span>
                       </label>
                       <select
+                        id="terminal-refresh-{d.id}"
                         value={d.refresh_interval_sec == null ? '' : String(d.refresh_interval_sec)}
                         onchange={(e) => setTerminalRefreshInterval(d, e.target.value)}
                         disabled={saving || !terminalSettings}
@@ -1973,7 +1983,7 @@
 
           <div class="space-y-4">
             <div>
-              <label class="text-xs font-medium mb-1.5 block" style="color: var(--text-secondary)">Message Order</label>
+              <div class="text-xs font-medium mb-1.5" style="color: var(--text-secondary)">Message Order</div>
               <p class="text-[11px] mb-2" style="color: var(--text-tertiary)">Choose whether to show the newest or oldest message first when viewing a thread.</p>
               <div class="flex gap-2">
                 <button
@@ -2007,7 +2017,7 @@
 
         <!-- Keyboard Shortcuts -->
         <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_no_static_element_interactions -->
-        <div class="space-y-4" onkeydown={handleShortcutKeydown}>
+        <div class="space-y-4" onkeydown={handleShortcutKeydown} role="group" aria-label="Keyboard shortcut settings">
           <div class="flex items-center justify-between gap-4">
             <h3 class="text-sm font-semibold" style="color: var(--text-primary)">Keyboard Shortcuts</h3>
             <button
@@ -2507,3 +2517,11 @@
     {/if}
   </div>
 </div>
+
+<style>
+  @media (max-width: 767px) {
+    .admin-content {
+      padding: 0.75rem;
+    }
+  }
+</style>

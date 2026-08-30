@@ -1,19 +1,32 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { showToast } from '../lib/stores.js';
+  import { accounts, currentPage, searchQuery, showToast } from '../lib/stores.js';
 
   let stats = $state(null);
   let loading = $state(true);
+  let selectedDays = $state(30);
+  let statAccountId = $state('');
 
-  onMount(async () => {
+  onMount(() => loadStats());
+
+  async function loadStats() {
+    loading = true;
     try {
-      stats = await api.getStats();
+      stats = await api.getStats({
+        days: selectedDays,
+        account_id: statAccountId || undefined,
+      });
     } catch (err) {
       showToast(err.message, 'error');
     }
     loading = false;
-  });
+  }
+
+  function openSender(sender) {
+    searchQuery.set(`from:${sender.address}`);
+    currentPage.set('inbox');
+  }
 
   function maxCount(data, key) {
     if (!data || data.length === 0) return 1;
@@ -35,18 +48,50 @@
 
 <div class="h-full overflow-y-auto" style="background: var(--bg-primary)">
   {#if loading}
-    <div class="flex items-center justify-center h-full">
-      <div class="w-6 h-6 border-2 rounded-full animate-spin" style="border-color: var(--border-color); border-top-color: var(--color-accent-500)"></div>
+    <div class="max-w-6xl mx-auto p-6 space-y-5" aria-live="polite" aria-label="Loading email statistics">
+      <div class="h-8 w-52 rounded animate-pulse" style="background: var(--bg-tertiary)"></div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {#each Array(4) as _}<div class="h-24 rounded-xl animate-pulse" style="background: var(--bg-secondary)"></div>{/each}
+      </div>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {#each Array(4) as _}<div class="h-56 rounded-xl animate-pulse" style="background: var(--bg-secondary)"></div>{/each}
+      </div>
     </div>
   {:else if stats}
     <div class="max-w-6xl mx-auto p-6 space-y-6">
-      <h2 class="text-xl font-bold" style="color: var(--text-primary)">Email Statistics</h2>
+      <div class="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 class="text-xl font-bold" style="color: var(--text-primary)">Email Statistics</h2>
+          <p class="text-xs mt-1" style="color: var(--text-tertiary)">
+            Valid message dates from {stats.filters?.start || 'the selected period'} through {stats.filters?.end || 'today'}.
+          </p>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          <label class="text-xs" style="color: var(--text-secondary)">
+            <span class="sr-only">Reporting period</span>
+            <select bind:value={selectedDays} onchange={loadStats} class="h-9 px-3 rounded-lg border" style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary)">
+              <option value={7}>Last 7 days</option>
+              <option value={30}>Last 30 days</option>
+              <option value={90}>Last 90 days</option>
+            </select>
+          </label>
+          {#if $accounts.length > 1}
+            <label class="text-xs" style="color: var(--text-secondary)">
+              <span class="sr-only">Email account</span>
+              <select bind:value={statAccountId} onchange={loadStats} class="h-9 max-w-[220px] px-3 rounded-lg border" style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary)">
+                <option value="">All accounts</option>
+                {#each $accounts as account}<option value={account.id}>{account.description || account.email}</option>{/each}
+              </select>
+            </label>
+          {/if}
+        </div>
+      </div>
 
       <!-- Summary Cards -->
       <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div class="rounded-xl border p-4" style="background: var(--bg-secondary); border-color: var(--border-color)">
           <div class="text-2xl font-bold" style="color: var(--text-primary)">{(stats.total_emails || 0).toLocaleString()}</div>
-          <div class="text-xs mt-1" style="color: var(--text-secondary)">Total Emails</div>
+          <div class="text-xs mt-1" style="color: var(--text-secondary)">Emails in period</div>
         </div>
         <div class="rounded-xl border p-4" style="background: var(--bg-secondary); border-color: var(--border-color)">
           <div class="text-2xl font-bold" style="color: var(--text-primary)">{(stats.total_unread || 0).toLocaleString()}</div>
@@ -58,14 +103,14 @@
         </div>
         <div class="rounded-xl border p-4" style="background: var(--bg-secondary); border-color: var(--border-color)">
           <div class="text-2xl font-bold" style="color: var(--text-primary)">{stats.emails_per_day_avg || 0}</div>
-          <div class="text-xs mt-1" style="color: var(--text-secondary)">Avg/Day (30d)</div>
+          <div class="text-xs mt-1" style="color: var(--text-secondary)">Avg/Day ({selectedDays}d)</div>
         </div>
       </div>
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <!-- Volume Chart (Bar) -->
         <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
-          <h3 class="text-sm font-semibold mb-4" style="color: var(--text-primary)">Email Volume (Last 30 Days)</h3>
+          <h3 class="text-sm font-semibold mb-4" style="color: var(--text-primary)">Email Volume (Last {selectedDays} Days)</h3>
           {#if stats.volume_by_day && stats.volume_by_day.length > 0}
             <div class="flex items-end gap-px h-40">
               {#each stats.volume_by_day as day}
@@ -106,7 +151,7 @@
               {#each stats.top_senders as sender, i}
                 {@const max = stats.top_senders[0].count}
                 {@const width = Math.max((sender.count / max) * 100, 5)}
-                <div class="flex items-center gap-3">
+                <button class="w-full flex items-center gap-3 text-left rounded-md focus:outline-none focus:ring-2" onclick={() => openSender(sender)} title="Show email from {sender.address}">
                   <span class="text-xs w-5 text-right font-medium" style="color: var(--text-tertiary)">{i + 1}</span>
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2 mb-0.5">
@@ -117,7 +162,7 @@
                       <div class="h-full rounded-full" style="width: {width}%; background: var(--color-accent-500); opacity: {1 - i * 0.07}"></div>
                     </div>
                   </div>
-                </div>
+                </button>
               {/each}
             </div>
           {:else}

@@ -11,6 +11,7 @@
   import Icon from '../components/common/Icon.svelte';
   import DaySummaryStrip from '../lib/flow/DaySummaryStrip.svelte';
   import RichEditor from '../components/email/RichEditor.svelte';
+  import { cleanEmailText } from '../lib/emailText.js';
 
   // --- Day Summary State ---
   let summaryLoading = $state(true);
@@ -28,7 +29,10 @@
   let activeThreads = $state([]);
 
   // --- Chat State ---
-  let chatCollapsed = $state(localStorage.getItem('flowChatCollapsed') === 'true');
+  let chatCollapsed = $state(
+    localStorage.getItem('flowChatCollapsed') === 'true' ||
+    (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches)
+  );
   let messageInput = $state('');
   let isProcessing = $state(false);
   let conversations = $state([]);
@@ -382,7 +386,11 @@
       pendingTodos = (results[1].value.todos || results[1].value || []).slice(0, 10);
     }
     if (results[2].status === 'fulfilled') {
-      needsReplyEmails = results[2].value.emails || [];
+      const priority = { urgent: 0, awaiting_reply: 1, fyi: 3, can_ignore: 4 };
+      needsReplyEmails = [...(results[2].value.emails || [])].sort((a, b) => {
+        const categoryDelta = (priority[a.category] ?? 2) - (priority[b.category] ?? 2);
+        return categoryDelta || new Date(b.date || 0) - new Date(a.date || 0);
+      });
       needsReplyTotal = results[2].value.total || 0;
     }
     if (results[3].status === 'fulfilled') {
@@ -1375,11 +1383,12 @@
   });
 </script>
 
-<div class="h-full flex" style="background: var(--bg-primary); {isDraggingSidebar ? 'user-select: none; cursor: col-resize' : ''}{isDraggingBottomCol ? 'user-select: none; cursor: col-resize' : ''}">
+<div class="flow-shell h-full flex relative" style="background: var(--bg-primary); {isDraggingSidebar ? 'user-select: none; cursor: col-resize' : ''}{isDraggingBottomCol ? 'user-select: none; cursor: col-resize' : ''}">
 
   <!-- ============ LEFT SIDEBAR: CHAT ============ -->
   <div
-    class="h-full shrink-0 flex flex-col border-r {isDraggingSidebar ? '' : 'transition-all duration-300'}"
+    class="chat-pane h-full shrink-0 flex flex-col border-r {isDraggingSidebar ? '' : 'transition-all duration-300'}"
+    class:chat-collapsed={chatCollapsed}
     style="border-color: var(--border-color); background: var(--bg-secondary); width: {chatCollapsed ? '48px' : chatWidthPx + 'px'}"
   >
     {#if chatCollapsed}
@@ -1390,6 +1399,7 @@
           class="w-9 h-9 rounded-lg flex items-center justify-center transition-fast"
           style="background: var(--color-accent-500)/10; color: var(--color-accent-500)"
           title="Open chat"
+          aria-label="Open email assistant"
         >
           <Icon name="message-square" size={18} />
         </button>
@@ -1417,6 +1427,7 @@
             class="p-1 rounded-md transition-fast"
             style="color: var(--text-tertiary)"
             title="Collapse chat"
+            aria-label="Close email assistant"
           >
             <Icon name="chevrons-left" size={14} />
           </button>
@@ -1791,10 +1802,14 @@
                 {@const isNewest = $threadOrder === 'newest_first' ? msgIdx === 0 : msgIdx === threadData.emails.length - 1}
                 <div class="rounded-lg border overflow-hidden" style="border-color: var(--border-color)">
                   <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-                  <div
+                  <button
                     class="px-4 py-2 flex items-center gap-2 cursor-pointer transition-fast"
+                    class:w-full={true}
+                    class:text-left={true}
                     style="background: {isNewest ? 'var(--bg-secondary)' : 'var(--bg-tertiary)'}"
                     onclick={() => toggleMessageCollapse(msg.id)}
+                    aria-expanded={!isCollapsed}
+                    aria-label="{isCollapsed ? 'Expand' : 'Collapse'} message from {msg.from_name || msg.from_address}"
                   >
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-2">
@@ -1819,7 +1834,7 @@
                       {/if}
                     </div>
                     <span style="color: var(--text-tertiary)"><Icon name={isCollapsed ? 'chevron-down' : 'chevron-up'} size={14} /></span>
-                  </div>
+                  </button>
 
                   {#if !isCollapsed}
                     <div class="px-4 py-3 text-sm" style="background: var(--bg-secondary)">
@@ -1909,10 +1924,10 @@
                   {@const isSelected = selectedOptionIndex === optIdx}
                   {@const intentStyle = intentCardStyles[option.intent] || intentCardStyles.custom}
                   <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-                  <div
+                  <button
                     onclick={() => selectReplyOption(option, optIdx)}
                     data-shortcut="flow.replyOption{optIdx + 1}"
-                    class="rounded-lg border p-3 cursor-pointer transition-fast shrink-0 {intentStyle.bg} {intentStyle.border}"
+                    class="rounded-lg border p-3 cursor-pointer text-left transition-fast shrink-0 {intentStyle.bg} {intentStyle.border}"
                     style="width: 260px; {isSelected ? 'box-shadow: 0 0 0 2px var(--color-accent-500)' : ''}"
                   >
                     <div class="flex items-center justify-between mb-1">
@@ -1925,11 +1940,11 @@
                       {/if}
                     </div>
                     <p class="text-xs leading-relaxed line-clamp-3 {intentStyle.text}">{option.body}</p>
-                  </div>
+                  </button>
                 {/each}
                 <!-- Custom prompt card -->
                 <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-                <div
+                <button
                   onclick={() => { customPromptOpen = !customPromptOpen; }}
                   data-shortcut="flow.customReply"
                   class="rounded-lg border-2 border-dashed p-3 cursor-pointer transition-fast shrink-0 flex flex-col items-center justify-center gap-1.5"
@@ -1937,7 +1952,7 @@
                 >
                   <Icon name="edit-3" size={16} />
                   <span class="text-[11px] font-medium" style="color: var(--text-secondary)">Custom...</span>
-                </div>
+                </button>
               </div>
               {#if customPromptOpen}
                 <div class="mt-2 flex items-center gap-2">
@@ -2045,12 +2060,12 @@
                     </button>
                   {:else}
                     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions a11y_no_noninteractive_element_interactions -->
-                    <p
-                      class="flex-1 text-xs italic leading-relaxed cursor-pointer rounded px-1 -mx-1 transition-fast hover-bg-subtle"
+                    <button
+                      class="flex-1 text-left text-xs italic leading-relaxed cursor-pointer rounded px-1 -mx-1 transition-fast hover-bg-subtle"
                       style="color: var(--text-secondary)"
                       onclick={() => { editingCustomPrompt = true; }}
                       title="Click to edit prompt"
-                    >"{lastCustomPrompt}"</p>
+                    >"{lastCustomPrompt}"</button>
                     <button
                       onclick={() => { editingCustomPrompt = true; }}
                       class="text-[10px] font-medium px-2 py-1 rounded-md border transition-fast shrink-0 flex items-center gap-1"
@@ -2132,7 +2147,6 @@
                     <div
                       class="absolute top-full left-0 mt-1 py-1 rounded-lg border shadow-lg z-50 min-w-[160px]"
                       style="background: var(--bg-secondary); border-color: var(--border-color)"
-                      onclick={(e) => e.stopPropagation()}
                     >
                       {#each [
                         { key: '1h', label: '1 hour' },
@@ -2207,7 +2221,6 @@
                     <div
                       class="absolute top-full left-0 mt-1 py-1 rounded-lg border shadow-lg z-50 min-w-[160px]"
                       style="background: var(--bg-secondary); border-color: var(--border-color)"
-                      onclick={(e) => e.stopPropagation()}
                     >
                       {#each [
                         { key: '1h', label: '1 hour' },
@@ -2258,8 +2271,8 @@
       </div>
     </div>
   {:else}
-  <div class="flex-1 h-full overflow-y-auto">
-    <div class="max-w-5xl mx-auto px-4 py-5 space-y-5">
+  <div class="flow-main flex-1 h-full overflow-y-auto min-w-0">
+    <div class="flow-dashboard max-w-5xl mx-auto px-4 py-5 space-y-5">
 
       <!-- ============ DAY SUMMARY STRIP ============ -->
       <DaySummaryStrip
@@ -2296,6 +2309,9 @@
         </div>
 
         {#if needsReplyEmails.length > 0}
+          <div class="px-4 py-2 text-[11px] border-b" style="border-color: var(--border-color); color: var(--text-tertiary); background: var(--bg-primary)">
+            Showing the {needsReplyEmails.length} highest-priority conversations, ranked by urgency and freshness.
+          </div>
           <div class="px-2 py-2 space-y-1">
             {#each needsReplyEmails as email, idx}
               <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
@@ -2304,6 +2320,10 @@
                 style="border-color: color-mix(in srgb, var(--border-color) 50%, transparent); {focusedSection === 'needs_reply' && highlightedIndex === idx ? 'outline: 2px solid var(--color-accent-500); outline-offset: -2px; background: var(--bg-tertiary)' : ''}"
                 data-flow-item="needs_reply-{idx}"
                 onclick={() => openReplyView(email, idx)}
+                onkeydown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openReplyView(email, idx); } }}
+                role="button"
+                tabindex="0"
+                aria-label="Open {cleanEmailText(email.subject) || 'no subject'} from {email.from_name || email.from_address}"
               >
                 <div class="flex items-start gap-3">
                   <div class="flex-1 min-w-0">
@@ -2314,7 +2334,7 @@
                           {categoryLabel(email.category)}
                         </span>
                       {/if}
-                      <span class="text-sm font-medium truncate" style="color: var(--text-primary)">{email.subject || '(no subject)'}</span>
+                      <span class="text-sm font-medium truncate" style="color: var(--text-primary)">{cleanEmailText(email.subject) || '(no subject)'}</span>
                     </div>
 
                     <!-- From + date -->
@@ -2327,16 +2347,16 @@
                     {#if email.summary}
                       <p class="text-xs mb-2 line-clamp-2" style="color: var(--text-secondary)">{email.summary}</p>
                     {:else if email.snippet}
-                      <p class="text-xs mb-2 line-clamp-2" style="color: var(--text-tertiary)">{email.snippet}</p>
+                      <p class="text-xs mb-2 line-clamp-2" style="color: var(--text-tertiary)">{cleanEmailText(email.snippet)}</p>
                     {/if}
 
                     <!-- Reply options -->
                     {#if email.reply_options && email.reply_options.length > 0}
                       <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-                      <div class="flex flex-wrap gap-1.5" onclick={(e) => e.stopPropagation()}>
+                      <div class="flex flex-wrap gap-1.5">
                         {#each email.reply_options as option}
                           <button
-                            onclick={() => openReplyView(email, idx, option)}
+                            onclick={(event) => { event.stopPropagation(); openReplyView(email, idx, option); }}
                             class="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-medium border transition-fast cursor-pointer {intentColors[option.intent] || intentColors.custom}"
                             title={option.body}
                           >
@@ -2352,9 +2372,9 @@
                   </div>
 
                   <!-- Quick actions -->
-                  <div class="shrink-0 flex flex-col gap-1" onclick={(e) => e.stopPropagation()}>
+                  <div class="shrink-0 flex flex-col gap-1">
                     <button
-                      onclick={() => ignoreEmailFromList(email.id)}
+                      onclick={(event) => { event.stopPropagation(); ignoreEmailFromList(email.id); }}
                       class="flex items-center justify-center w-7 h-7 rounded-lg text-[10px] font-medium transition-fast hover-bg-subtle border"
                       style="border-color: var(--border-color); color: var(--text-tertiary)"
                       title="Ignore"
@@ -2363,7 +2383,7 @@
                     </button>
                     <div class="relative">
                       <button
-                        onclick={() => openSnoozePopover(email.id)}
+                        onclick={(event) => { event.stopPropagation(); openSnoozePopover(email.id); }}
                         class="flex items-center justify-center w-7 h-7 rounded-lg text-[10px] font-medium transition-fast hover-bg-subtle border"
                         style="border-color: var(--border-color); color: var(--text-tertiary)"
                         title="Snooze"
@@ -2375,7 +2395,6 @@
                         <div
                           class="absolute top-0 right-full mr-1 py-1 rounded-lg border shadow-lg z-50 min-w-[160px]"
                           style="background: var(--bg-secondary); border-color: var(--border-color)"
-                          onclick={(e) => e.stopPropagation()}
                         >
                           {#each [
                             { key: '1h', label: '1 hour' },
@@ -2384,7 +2403,7 @@
                             { key: 'next_week', label: 'Next week' },
                           ] as option}
                             <button
-                              onclick={() => snoozeEmail(email.id, option.key, false)}
+                              onclick={(event) => { event.stopPropagation(); snoozeEmail(email.id, option.key, false); }}
                               class="w-full text-left px-3 py-1.5 text-xs transition-fast hover-bg-subtle"
                               style="color: var(--text-primary)"
                             >
@@ -2395,7 +2414,7 @@
                       {/if}
                     </div>
                     <button
-                      onclick={() => goToEmail(email.id)}
+                      onclick={(event) => { event.stopPropagation(); goToEmail(email.id); }}
                       class="flex items-center justify-center w-7 h-7 rounded-lg text-[10px] font-medium transition-fast hover-bg-subtle border"
                       style="border-color: var(--border-color); color: var(--text-tertiary)"
                       title="Open in inbox"
@@ -2667,6 +2686,35 @@
 
   .last-child-no-border:last-child {
     border-bottom: none;
+  }
+
+  @media (max-width: 767px) {
+    .chat-pane {
+      position: absolute;
+      inset: 0;
+      z-index: 30;
+      width: 100% !important;
+      border-right: 0;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.24);
+    }
+    .chat-pane.chat-collapsed {
+      inset: 0.5rem auto auto 0.5rem;
+      width: 44px !important;
+      height: 44px;
+      border: 1px solid var(--border-color);
+      border-radius: 0.75rem;
+      overflow: hidden;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+    }
+    .col-resize-handle {
+      display: none !important;
+    }
+    .flow-dashboard {
+      padding: 4rem 0.75rem 1rem;
+    }
+    .flow-main {
+      width: 100%;
+    }
   }
 
 </style>

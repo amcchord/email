@@ -19,6 +19,13 @@
 
   let bgColor = $derived(color ? color.bg : 'var(--color-accent-500)');
   let lightColor = $derived(color ? color.light : 'var(--color-accent-100)');
+
+  function handleKeydown(event) {
+    if ((event.key === 'Enter' || event.key === ' ') && onclick) {
+      event.preventDefault();
+      onclick(event);
+    }
+  }
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
@@ -30,6 +37,10 @@
   class:leading-tight={compact}
   style="background: {lightColor}; color: {bgColor}"
   onclick={onclick}
+  onkeydown={handleKeydown}
+  role="button"
+  tabindex="0"
+  aria-label="Open {event.summary || 'untitled'} event{timeStr ? ` at ${timeStr}` : ''}"
   title={event.summary || '(No title)'}
 >
   {#if hasMerged}

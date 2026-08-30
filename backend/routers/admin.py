@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, status
+import json
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, text, cast, Date, case
 from backend.database import get_db
@@ -9,8 +10,8 @@ from backend.models.account import GoogleAccount, SyncStatus
 from backend.models.email import Email
 from backend.models.ai import AIAnalysis
 from backend.schemas.admin import (
-    SettingResponse, SettingUpdate, GoogleAccountResponse,
-    SyncStatusResponse, DashboardStats,
+    SettingResponse, SettingUpdate, CalendarSyncHealthResponse,
+    GoogleAccountResponse, SyncStatusResponse, DashboardStats,
 )
 from backend.routers.auth import require_admin, get_current_user
 from backend.utils.security import encrypt_value, decrypt_value
@@ -167,7 +168,10 @@ async def list_accounts(
     from sqlalchemy.orm import selectinload
     result = await db.execute(
         select(GoogleAccount)
-        .options(selectinload(GoogleAccount.sync_status))
+        .options(
+            selectinload(GoogleAccount.sync_status),
+            selectinload(GoogleAccount.calendar_sync_status),
+        )
         .order_by(GoogleAccount.email)
     )
     accounts = result.scalars().all()
@@ -176,6 +180,13 @@ async def list_accounts(
         sync = None
         if acct.sync_status:
             sync = SyncStatusResponse.model_validate(acct.sync_status)
+        calendar_sync = None
+        if acct.calendar_sync_status:
+            calendar_sync = CalendarSyncHealthResponse.model_validate(acct.calendar_sync_status)
+        try:
+            scopes = json.loads(acct.scopes or "[]")
+        except (json.JSONDecodeError, TypeError):
+            scopes = []
         response.append(GoogleAccountResponse(
             id=acct.id,
             email=acct.email,
@@ -183,6 +194,8 @@ async def list_accounts(
             is_active=acct.is_active,
             created_at=acct.created_at,
             sync_status=sync,
+            calendar_sync_status=calendar_sync,
+            has_calendar_scope="https://www.googleapis.com/auth/calendar.readonly" in scopes,
         ))
     return response
 
@@ -206,6 +219,8 @@ async def remove_account(
 
 @router.get("/stats")
 async def get_stats(
+    days: int = Query(30, ge=7, le=365),
+    account_id: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -215,6 +230,10 @@ async def get_stats(
         select(GoogleAccount.id).where(GoogleAccount.user_id == user.id)
     )
     account_ids = [r[0] for r in acct_result.all()]
+    if account_id is not None:
+        if account_id not in account_ids:
+            raise HTTPException(status_code=404, detail="Account not found")
+        account_ids = [account_id]
 
     if not account_ids:
         return {
@@ -229,30 +248,39 @@ async def get_stats(
             "total_with_attachments": 0,
         }
 
+    now = datetime.now(timezone.utc)
+    period_start = now - timedelta(days=days)
+    # Exclude malformed future message dates while allowing a small timezone
+    # tolerance for messages received near midnight.
+    period_end = now + timedelta(days=1)
     account_filter = Email.account_id.in_(account_ids)
+    reporting_filter = (
+        account_filter,
+        Email.date >= period_start,
+        Email.date < period_end,
+    )
 
     # Total counts
     total_emails = await db.scalar(
-        select(func.count(Email.id)).where(account_filter)
+        select(func.count(Email.id)).where(*reporting_filter)
     ) or 0
     total_unread = await db.scalar(
-        select(func.count(Email.id)).where(account_filter, Email.is_read == False)
+        select(func.count(Email.id)).where(*reporting_filter, Email.is_read == False)
     ) or 0
     total_starred = await db.scalar(
-        select(func.count(Email.id)).where(account_filter, Email.is_starred == True)
+        select(func.count(Email.id)).where(*reporting_filter, Email.is_starred == True)
     ) or 0
     total_attachments = await db.scalar(
-        select(func.count(Email.id)).where(account_filter, Email.has_attachments == True)
+        select(func.count(Email.id)).where(*reporting_filter, Email.has_attachments == True)
     ) or 0
 
-    # Volume by day (last 30 days)
-    thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+    # Volume by day for the requested reporting window.
     volume_result = await db.execute(
         select(
             cast(Email.date, Date).label("day"),
             func.count(Email.id).label("count"),
         )
-        .where(account_filter, Email.date >= thirty_days_ago)
+        .where(*reporting_filter)
         .group_by("day")
         .order_by("day")
     )
@@ -265,24 +293,26 @@ async def get_stats(
     emails_per_day_avg = 0
     if volume_by_day:
         total_in_period = sum(d["count"] for d in volume_by_day)
-        days_count = len(volume_by_day)
-        if days_count > 0:
-            emails_per_day_avg = round(total_in_period / days_count, 1)
+        emails_per_day_avg = round(total_in_period / days, 1)
 
     # Top 10 senders
     senders_result = await db.execute(
         select(
-            Email.from_address,
-            Email.from_name,
+            func.lower(func.trim(Email.from_address)).label("address"),
+            func.max(Email.from_name).label("name"),
             func.count(Email.id).label("count"),
         )
-        .where(account_filter, Email.from_address.isnot(None))
-        .group_by(Email.from_address, Email.from_name)
+        .where(
+            *reporting_filter,
+            Email.from_address.isnot(None),
+            func.trim(Email.from_address) != "",
+        )
+        .group_by(func.lower(func.trim(Email.from_address)))
         .order_by(func.count(Email.id).desc())
         .limit(10)
     )
     top_senders = [
-        {"address": row.from_address, "name": row.from_name or row.from_address, "count": row.count}
+        {"address": row.address, "name": row.name or row.address, "count": row.count}
         for row in senders_result.all()
     ]
 
@@ -296,7 +326,11 @@ async def get_stats(
             func.count(AIAnalysis.id).label("count"),
         )
         .join(Email, Email.id == AIAnalysis.email_id)
-        .where(Email.account_id.in_(account_ids))
+        .where(
+            Email.account_id.in_(account_ids),
+            Email.date >= period_start,
+            Email.date < period_end,
+        )
         .group_by(AIAnalysis.category)
         .order_by(func.count(AIAnalysis.id).desc())
     )
@@ -315,4 +349,10 @@ async def get_stats(
         "total_unread": total_unread,
         "total_starred": total_starred,
         "total_with_attachments": total_attachments,
+        "filters": {
+            "days": days,
+            "account_id": account_id,
+            "start": period_start.date().isoformat(),
+            "end": now.date().isoformat(),
+        },
     }

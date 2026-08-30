@@ -8,6 +8,7 @@
   let loading = $state(true);
   let newTodoText = $state('');
   let addingTodo = $state(false);
+  let newTodoInput = $state(null);
   let draftingId = $state(null);
   let approvingId = $state(null);
   let expandedDraftId = $state(null);
@@ -177,8 +178,10 @@
 
 <div class="h-full overflow-y-auto" style="background: var(--bg-primary)">
   {#if loading}
-    <div class="flex items-center justify-center h-full">
-      <div class="w-6 h-6 border-2 rounded-full animate-spin" style="border-color: var(--border-color); border-top-color: var(--color-accent-500)"></div>
+    <div class="max-w-3xl mx-auto p-6 space-y-4" aria-live="polite" aria-label="Loading todos">
+      <div class="h-8 w-32 rounded animate-pulse" style="background: var(--bg-tertiary)"></div>
+      <div class="h-10 rounded-lg animate-pulse" style="background: var(--bg-secondary)"></div>
+      {#each Array(4) as _}<div class="h-20 rounded-xl animate-pulse" style="background: var(--bg-secondary)"></div>{/each}
     </div>
   {:else}
     <div class="max-w-3xl mx-auto p-6 space-y-6">
@@ -187,6 +190,7 @@
       <!-- Add new todo -->
       <div class="flex gap-2">
         <input
+          bind:this={newTodoInput}
           type="text"
           bind:value={newTodoText}
           placeholder="Add a new todo..."
@@ -217,6 +221,7 @@
                     onclick={() => toggleTodo(todo)}
                     class="mt-0.5 w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition-fast"
                     style="border-color: var(--border-color)"
+                    aria-label="Mark {todo.title} complete"
                   >
                   </button>
                   <div class="flex-1 min-w-0">
@@ -355,6 +360,7 @@
         <div class="rounded-xl border p-8 text-center" style="background: var(--bg-secondary); border-color: var(--border-color)">
           <div class="text-3xl mb-2 opacity-40">&#10003;</div>
           <p class="text-sm" style="color: var(--text-tertiary)">No pending todos. Add one above or create from email action items.</p>
+          <button onclick={() => newTodoInput?.focus()} class="mt-3 px-3 py-1.5 rounded-lg text-xs font-medium" style="background: var(--color-accent-500); color: white">Create a todo</button>
         </div>
       {/if}
 

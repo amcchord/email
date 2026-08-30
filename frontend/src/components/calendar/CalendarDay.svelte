@@ -2,6 +2,7 @@
   import { accountColorMap } from '../../lib/stores.js';
   import { mergeEvents, layoutEvents } from '../../lib/calendarLayout.js';
   import { onMount } from 'svelte';
+  import { locationLabel } from '../../lib/calendarDisplay.js';
 
   let { events = [], currentDate = new Date(), onEventClick = null } = $props();
 
@@ -50,6 +51,13 @@
     return `${h - 12} PM`;
   }
 
+  function activateEvent(event, calendarEvent) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onEventClick?.(calendarEvent);
+    }
+  }
+
   let currentTimeTop = $state(0);
   let isCurrentDay = $derived.by(() => {
     const now = new Date();
@@ -94,6 +102,10 @@
           class="rounded px-2 py-1 text-sm cursor-pointer transition-opacity hover:opacity-80 flex items-center gap-1.5"
           style="background: {color ? color.light : 'var(--bg-tertiary)'}; color: {color ? color.bg : 'var(--text-primary)'}"
           onclick={() => onEventClick?.(event)}
+          onkeydown={(keyEvent) => activateEvent(keyEvent, event)}
+          role="button"
+          tabindex="0"
+          aria-label="Open {event.summary || 'untitled'} all-day event"
         >
           {#if event._mergedAccounts && event._mergedAccounts.length > 1}
             <div class="flex flex-col gap-0.5 shrink-0">
@@ -155,6 +167,10 @@
               class="absolute px-3 py-1.5 overflow-hidden cursor-pointer pointer-events-auto"
               style="top: {item.top}px; height: {item.height}px; left: {item.left}; width: {item.width}; background: {color ? color.light : 'var(--bg-tertiary)'}; opacity: 0.3; z-index: {item.zIndex}; border-left: 4px solid {color ? color.bg : 'var(--color-accent-500)'}"
               onclick={() => onEventClick?.(item.event)}
+              onkeydown={(event) => activateEvent(event, item.event)}
+              role="button"
+              tabindex="0"
+              aria-label="Open {item.event.summary || 'untitled'} event"
             >
               <div class="text-sm font-medium leading-tight truncate" style="color: {color ? color.bg : 'var(--text-primary)'}">{item.event.summary || '(No title)'}</div>
             </div>
@@ -163,6 +179,10 @@
               class="absolute rounded-lg px-3 py-1.5 overflow-hidden cursor-pointer transition-opacity hover:opacity-80 hover:!z-40"
               style="top: {item.top}px; height: {item.height}px; left: {item.left}; width: {item.width}; z-index: {item.zIndex}; background: {color ? color.light : 'var(--bg-tertiary)'}; color: {color ? color.bg : 'var(--text-primary)'}"
               onclick={() => onEventClick?.(item.event)}
+              onkeydown={(event) => activateEvent(event, item.event)}
+              role="button"
+              tabindex="0"
+              aria-label="Open {item.event.summary || 'untitled'} event at {formatEventTime(item.event)}"
             >
               <div class="flex gap-1.5 h-full">
                 {#if item.isMerged}
@@ -179,7 +199,7 @@
                   <div class="text-sm font-medium leading-tight truncate">{item.event.summary || '(No title)'}</div>
                   <div class="text-xs leading-tight opacity-75 mt-0.5">{formatEventTime(item.event)}</div>
                   {#if item.height > 50 && item.event.location}
-                    <div class="text-xs leading-tight opacity-60 mt-0.5 truncate">{item.event.location}</div>
+                    <div class="text-xs leading-tight opacity-75 mt-0.5 truncate">{locationLabel(item.event)}</div>
                   {/if}
                 </div>
               </div>

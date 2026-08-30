@@ -100,11 +100,12 @@
     {:else}
       <div class="space-y-4">
         <div>
-          <label class="block text-sm font-medium mb-1" style="color: var(--text-secondary)">
+          <label for="device-code" class="block text-sm font-medium mb-1" style="color: var(--text-secondary)">
             Device Code
           </label>
           <input
             bind:this={inputEl}
+            id="device-code"
             type="text"
             value={userCode}
             oninput={handleInput}

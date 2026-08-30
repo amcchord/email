@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
 
@@ -105,6 +105,12 @@ class EmailActionRequest(BaseModel):
     label: Optional[str] = None
 
 
+class ComposeAttachment(BaseModel):
+    filename: str
+    content_type: str = "application/octet-stream"
+    data_base64: str
+
+
 class ComposeRequest(BaseModel):
     account_id: int
     to: list[str]
@@ -117,6 +123,7 @@ class ComposeRequest(BaseModel):
     references: Optional[str] = None
     thread_id: Optional[str] = None
     is_draft: bool = False
+    attachments: list[ComposeAttachment] = Field(default_factory=list)
 
 
 class LabelResponse(BaseModel):

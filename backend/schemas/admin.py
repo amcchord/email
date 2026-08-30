@@ -21,6 +21,17 @@ class SettingUpdate(BaseModel):
     description: Optional[str] = None
 
 
+class CalendarSyncHealthResponse(BaseModel):
+    status: str = "idle"
+    error_message: Optional[str] = None
+    last_full_sync: Optional[datetime] = None
+    last_incremental_sync: Optional[datetime] = None
+    events_synced: int = 0
+    needs_reauth: bool = False
+
+    model_config = {"from_attributes": True}
+
+
 class GoogleAccountResponse(BaseModel):
     id: int
     email: str
@@ -30,6 +41,7 @@ class GoogleAccountResponse(BaseModel):
     is_active: bool = True
     created_at: Optional[datetime] = None
     sync_status: Optional["SyncStatusResponse"] = None
+    calendar_sync_status: Optional[CalendarSyncHealthResponse] = None
     has_calendar_scope: bool = False
 
     model_config = {"from_attributes": True}

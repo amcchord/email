@@ -41,6 +41,9 @@
   }
 
   onMount(() => {
+    if (window.matchMedia('(max-width: 767px)').matches && $calendarView === 'week') {
+      calendarView.set('day');
+    }
     const cleanupShortcuts = registerActions({
       'cal.today': () => goToday(),
       'cal.prev': () => navigatePrev(),
@@ -185,8 +188,8 @@
 
 <div class="flex flex-col h-full overflow-hidden" style="background: var(--bg-primary)">
   <!-- Navigation bar -->
-  <div class="flex items-center justify-between px-4 py-2 border-b shrink-0" style="border-color: var(--border-color)">
-    <div class="flex items-center gap-2">
+  <div class="calendar-toolbar flex items-center justify-between px-4 py-2 border-b shrink-0" style="border-color: var(--border-color)">
+    <div class="calendar-date-nav flex items-center gap-2 min-w-0">
       <button
         onclick={navigatePrev}
         class="p-1.5 rounded-md transition-fast hover:bg-black/5"
@@ -214,21 +217,21 @@
         Today
       </button>
 
-      <h2 class="text-lg font-semibold ml-2" style="color: var(--text-primary)">
+      <h2 class="calendar-heading text-lg font-semibold ml-2 truncate" style="color: var(--text-primary)">
         {getHeaderLabel()}
       </h2>
 
       {#if hasLoaded}
-        <span class="text-xs ml-2" style="color: var(--text-tertiary)">
+        <span class="event-count text-xs ml-2 shrink-0" style="color: var(--text-tertiary)">
           {eventCount} event{eventCount !== 1 ? 's' : ''}
         </span>
       {/if}
     </div>
 
-    <div class="flex items-center gap-2">
+    <div class="calendar-controls flex items-center gap-2 min-w-0">
       <!-- Account filter chips -->
       {#if $accounts.length > 1}
-        <div class="flex items-center gap-1 mr-1">
+        <div class="account-filter flex items-center gap-1 mr-1 overflow-x-auto">
           <button
             onclick={() => selectedAccountId.set(null)}
             class="px-2 py-1 rounded-md text-xs font-medium transition-fast"
@@ -303,7 +306,7 @@
             class="px-3 py-1 rounded-md text-xs font-medium border shrink-0 transition-fast hover:bg-black/5"
             style="color: var(--text-primary); border-color: var(--border-color); background: var(--bg-primary)"
           >
-            Reauthorize
+            Reconnect
           </button>
         </div>
       {/each}
@@ -365,3 +368,35 @@
     onclose={() => selectedEvent = null}
   />
 {/if}
+
+<style>
+  @media (max-width: 767px) {
+    .calendar-toolbar {
+      align-items: stretch;
+      flex-direction: column;
+      gap: 0.5rem;
+      padding: 0.5rem;
+    }
+    .calendar-date-nav {
+      width: 100%;
+    }
+    .calendar-heading {
+      font-size: 0.95rem;
+      margin-left: 0.25rem;
+    }
+    .event-count {
+      display: none;
+    }
+    .calendar-controls {
+      width: 100%;
+      overflow-x: auto;
+      padding-bottom: 0.125rem;
+    }
+    .account-filter {
+      min-width: max-content;
+    }
+    .calendar-controls button {
+      white-space: nowrap;
+    }
+  }
+</style>

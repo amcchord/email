@@ -15,6 +15,7 @@
   let statusFilter = $state('all');
   let searchQuery = $state('');
   let sortBy = $state('count');
+  let confidenceFilter = $state('all');
   let searchTimeout = $state(null);
 
   let selected = $state(new Set());
@@ -30,7 +31,7 @@
   // Unsubscribe modal state
   let showUnsubModal = $state(false);
   let unsubTarget = $state(null);
-  let unsubMarkSpam = $state(true);
+  let unsubMarkSpam = $state(false);
   let unsubInProgress = $state(false);
   let unsubStreamEmailId = $state(null);
 
@@ -91,6 +92,11 @@
 
   function toggleSelect(e, emailId) {
     e.stopPropagation();
+    const sender = senders.find(item => item.sample_email_id === emailId);
+    if (!sender || getConfidence(sender).level !== 'high') {
+      showToast('Preview lower-confidence detections before taking action', 'error');
+      return;
+    }
     const next = new Set(selected);
     if (next.has(emailId)) {
       next.delete(emailId);
@@ -98,7 +104,7 @@
       next.add(emailId);
     }
     selected = next;
-    selectAll = next.size === senders.length;
+    selectAll = next.size === visibleSenders.filter(item => getConfidence(item).level === 'high' && !item.unsubscribed_at).length;
   }
 
   function toggleSelectAll() {
@@ -106,8 +112,11 @@
       selected = new Set();
       selectAll = false;
     } else {
-      selected = new Set(senders.map(s => s.sample_email_id));
-      selectAll = true;
+      const eligible = visibleSenders
+        .filter(sender => getConfidence(sender).level === 'high' && !sender.unsubscribed_at)
+        .map(sender => sender.sample_email_id);
+      selected = new Set(eligible);
+      selectAll = eligible.length > 0;
     }
   }
 
@@ -131,8 +140,13 @@
 
   function openUnsubscribe(e, sender) {
     e.stopPropagation();
+    if (getConfidence(sender).level !== 'high') {
+      showToast('This detection needs review before unsubscribe actions are enabled', 'error');
+      selectSender(sender);
+      return;
+    }
     unsubTarget = sender;
-    unsubMarkSpam = true;
+    unsubMarkSpam = false;
     unsubInProgress = false;
     unsubStreamEmailId = null;
     showUnsubModal = true;
@@ -218,11 +232,16 @@
 
   async function bulkUnsubscribe() {
     if (selected.size === 0) return;
+    const unsafeSelection = senders.some(sender => selected.has(sender.sample_email_id) && getConfidence(sender).level !== 'high');
+    if (unsafeSelection) {
+      showToast('Bulk actions are limited to high-confidence subscriptions', 'error');
+      return;
+    }
     bulkInProgress = true;
     bulkResults = null;
 
     try {
-      const result = await api.bulkUnsubscribe([...selected], { markSpam: true });
+      const result = await api.bulkUnsubscribe([...selected], { markSpam: false });
       bulkResults = result;
 
       if (result.successful > 0) {
@@ -236,7 +255,7 @@
         showUnsubModal = true;
         unsubTarget = senders.find(s => s.sample_email_id === bulkUrlQueue[0]) || { from_name: 'Sender' };
         unsubStreamEmailId = bulkUrlQueue[0];
-        unsubMarkSpam = true;
+        unsubMarkSpam = false;
       } else {
         bulkInProgress = false;
         selected = new Set();
@@ -290,6 +309,7 @@
     const d = new Date(dateStr);
     const now = new Date();
     const diff = now - d;
+    if (!Number.isFinite(d.getTime()) || diff < -86400000) return 'Date unavailable';
     const days = Math.floor(diff / 86400000);
     if (days === 0) return 'Today';
     if (days === 1) return 'Yesterday';
@@ -297,6 +317,17 @@
     if (days < 30) return `${Math.floor(days / 7)}w ago`;
     if (days < 365) return `${Math.floor(days / 30)}mo ago`;
     return d.toLocaleDateString();
+  }
+
+  function getConfidence(sender) {
+    const info = sender.unsubscribe_info || {};
+    if (info.email || info.url) {
+      return { level: 'high', label: 'High confidence', reason: 'A List-Unsubscribe method was found in a message.' };
+    }
+    if (sender.count >= 5) {
+      return { level: 'review', label: 'Review', reason: 'Detected from repeated marketing-like messages; no unsubscribe method was found.' };
+    }
+    return { level: 'review', label: 'Review', reason: 'AI-only detection with limited supporting evidence.' };
   }
 
   function faviconUrl(domain) {
@@ -327,12 +358,17 @@
 
   let totalPages = $derived(Math.ceil(totalSenders / pageSize));
   let listHeight = $derived(previewSender ? (dividerY || 400) : null);
+  let visibleSenders = $derived(
+    confidenceFilter === 'all' ? senders : senders.filter(sender => getConfidence(sender).level === confidenceFilter)
+  );
 </script>
 
 <div class="subs-split h-full flex flex-col" style="background: var(--bg-primary)">
   {#if loading && senders.length === 0}
-    <div class="flex items-center justify-center h-full">
-      <div class="w-6 h-6 border-2 rounded-full animate-spin" style="border-color: var(--border-color); border-top-color: var(--color-accent-500)"></div>
+    <div class="max-w-5xl w-full mx-auto p-6 space-y-3" aria-live="polite" aria-label="Loading subscription detections">
+      <div class="h-9 w-56 rounded animate-pulse" style="background: var(--bg-tertiary)"></div>
+      <div class="h-10 rounded-lg animate-pulse" style="background: var(--bg-secondary)"></div>
+      {#each Array(7) as _}<div class="h-16 rounded-xl animate-pulse" style="background: var(--bg-secondary)"></div>{/each}
     </div>
   {:else}
     <!-- Sender List -->
@@ -346,7 +382,7 @@
           <div>
             <h2 class="text-xl font-bold" style="color: var(--text-primary)">Subscriptions</h2>
             <p class="text-sm mt-0.5" style="color: var(--text-tertiary)">
-              {totalSenders} subscription{totalSenders !== 1 ? 's' : ''} detected
+              {totalSenders} possible subscription{totalSenders !== 1 ? 's' : ''} detected · bulk actions require high confidence
             </p>
           </div>
           {#if selected.size > 0}
@@ -406,6 +442,15 @@
               <option value="name">Name A-Z</option>
             </select>
           </div>
+
+          <label class="flex items-center gap-1.5 text-xs" style="color: var(--text-tertiary)">
+            Confidence:
+            <select bind:value={confidenceFilter} class="text-xs px-2 py-1.5 rounded-lg border outline-none" style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-secondary)">
+              <option value="all">All detections</option>
+              <option value="high">High confidence</option>
+              <option value="review">Needs review</option>
+            </select>
+          </label>
         </div>
 
         <!-- Select All -->
@@ -423,15 +468,20 @@
 
         <!-- Sender Cards -->
         <div class="space-y-1.5">
-          {#each senders as sender (sender.domain)}
+          {#each visibleSenders as sender (sender.domain)}
             {@const isSelected = selected.has(sender.sample_email_id)}
             {@const isUnsubscribed = sender.unsubscribed_at != null}
             {@const isActive = previewSender?.domain === sender.domain}
+            {@const confidence = getConfidence(sender)}
             <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
             <div
               class="group rounded-xl border transition-all duration-150 cursor-pointer"
               style="background: {isActive ? 'var(--bg-tertiary)' : 'var(--bg-secondary)'}; border-color: {isActive ? 'var(--color-accent-400)' : isSelected ? 'var(--color-accent-400)' : 'var(--border-color)'}; {isActive ? 'box-shadow: 0 0 0 1px var(--color-accent-400)' : isSelected ? 'box-shadow: 0 0 0 1px var(--color-accent-400)' : ''}"
               onclick={() => selectSender(sender)}
+              onkeydown={(event) => { if (event.key === 'Enter') selectSender(sender); }}
+              role="button"
+              tabindex="0"
+              aria-label="Review subscription detection for {sender.from_name || sender.domain}"
             >
               <div class="flex items-center gap-3 px-4 py-2.5">
                 <!-- Checkbox -->
@@ -440,8 +490,9 @@
                   checked={isSelected}
                   onchange={(e) => toggleSelect(e, sender.sample_email_id)}
                   class="w-4 h-4 rounded accent-amber-500 shrink-0 cursor-pointer"
-                  disabled={isUnsubscribed}
+                  disabled={isUnsubscribed || confidence.level !== 'high'}
                   onclick={(e) => e.stopPropagation()}
+                  aria-label="Select {sender.from_name || sender.domain} for bulk unsubscribe"
                 />
 
                 <!-- Favicon -->
@@ -474,6 +525,13 @@
                         Spam
                       </span>
                     {/if}
+                    <span
+                      class="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
+                      style="background: {confidence.level === 'high' ? 'color-mix(in srgb, var(--status-success) 12%, transparent)' : 'var(--status-warning-bg)'}; color: {confidence.level === 'high' ? 'var(--status-success)' : 'var(--status-warning)'}"
+                      title={confidence.reason}
+                    >
+                      {confidence.label}
+                    </span>
                   </div>
                   <div class="flex items-center gap-2 mt-0.5">
                     <span class="text-xs truncate" style="color: var(--text-tertiary)">{sender.domain}</span>
@@ -501,7 +559,7 @@
                     {getMethodLabel(sender.unsubscribe_info)}
                   </div>
 
-                  {#if !isUnsubscribed}
+                  {#if !isUnsubscribed && confidence.level === 'high'}
                     <button
                       onclick={(e) => openUnsubscribe(e, sender)}
                       class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all hover:opacity-90"
@@ -510,10 +568,18 @@
                       <Icon name="bell-off" size={13} />
                       <span class="hidden sm:inline">Unsubscribe</span>
                     </button>
-                  {:else}
+                  {:else if isUnsubscribed}
                     <div class="flex items-center gap-1 px-2 py-1.5 text-xs" style="color: var(--status-success)">
                       <Icon name="check" size={13} />
                     </div>
+                  {:else}
+                    <button
+                      onclick={(e) => { e.stopPropagation(); selectSender(sender); }}
+                      class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border"
+                      style="border-color: var(--border-color); color: var(--text-secondary)"
+                    >
+                      <Icon name="eye" size={13} /> Review
+                    </button>
                   {/if}
                 </div>
               </div>
@@ -609,7 +675,7 @@
 {#if showUnsubModal && unsubTarget}
   <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
     <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-    <div class="absolute inset-0" style="background: rgba(0,0,0,0.5); backdrop-filter: blur(4px)" onclick={closeModal}></div>
+    <button class="absolute inset-0" style="background: rgba(0,0,0,0.5); backdrop-filter: blur(4px)" onclick={closeModal} aria-label="Close unsubscribe dialog"></button>
 
     <div
       class="relative w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden"

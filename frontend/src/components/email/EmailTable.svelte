@@ -3,6 +3,7 @@
   import { slide } from 'svelte/transition';
   import { accountColorMap, selectedAccountId } from '../../lib/stores.js';
   import Icon from '../common/Icon.svelte';
+  import { cleanEmailText, categoryLabel, typeLabel } from '../../lib/emailText.js';
 
   let {
     emails = [],
@@ -316,6 +317,7 @@
                 onclick={toggleSelectAll}
                 class="w-4 h-4 rounded border flex items-center justify-center transition-fast"
                 style="border-color: var(--border-color); background: {selectAll ? 'var(--color-accent-500)' : 'transparent'}"
+                aria-label={selectAll ? 'Deselect all emails' : 'Select all emails'}
               >
                 {#if selectAll}
                   <Icon name="check" size={12} class="text-white" strokeWidth={3} />
@@ -391,7 +393,7 @@
                 </td>
                 <td class="px-3 py-2 overflow-hidden">
                   <div class="flex items-center gap-2 min-w-0">
-                    <span class="truncate font-medium" style="color: var(--text-primary)">{email.subject || '(no subject)'}</span>
+                    <span class="truncate font-medium" style="color: var(--text-primary)">{cleanEmailText(email.subject) || '(no subject)'}</span>
                     {#if email.thread_digest_type === 'scheduling' && email.thread_digest_outcome}
                       <span class="text-xs truncate hidden xl:inline font-medium" style="color: rgb(168, 85, 247)">— {email.thread_digest_outcome}</span>
                     {:else if email.thread_digest_summary}
@@ -432,7 +434,7 @@
                       </div>
                     </td>
                     <td class="px-3 py-2 overflow-hidden">
-                      <span class="text-xs truncate" style="color: var(--text-tertiary)">{child.snippet || ''}</span>
+                      <span class="text-xs truncate" style="color: var(--text-tertiary)">{cleanEmailText(child.snippet)}</span>
                     </td>
                     <td class="px-3 py-2 overflow-hidden" style="{colStyle('category')}"></td>
                     <td class="px-3 py-2 text-right whitespace-nowrap overflow-hidden" style="{colStyle('date')}">
@@ -454,6 +456,7 @@
                     onclick={(e) => toggleSelect(email.id, e)}
                     class="w-4 h-4 rounded border flex items-center justify-center transition-fast"
                     style="border-color: var(--border-color); background: {selectedIds.has(email.id) ? 'var(--color-accent-500)' : 'transparent'}"
+                    aria-label="{selectedIds.has(email.id) ? 'Deselect' : 'Select'} {cleanEmailText(email.subject) || 'email'}"
                   >
                     {#if selectedIds.has(email.id)}
                       <Icon name="check" size={12} class="text-white" strokeWidth={3} />
@@ -464,6 +467,7 @@
                   <button
                     onclick={(e) => { e.stopPropagation(); onAction && onAction(email.is_starred ? 'unstar' : 'star', [email.id]); }}
                     style="color: {email.is_starred ? 'var(--color-accent-500)' : 'var(--text-tertiary)'}"
+                    aria-label="{email.is_starred ? 'Unstar' : 'Star'} {cleanEmailText(email.subject) || 'email'}"
                   >
                     <Icon name="star" size={16} />
                   </button>
@@ -492,7 +496,7 @@
                 <td class="px-3 py-2 overflow-hidden">
                   <div class="flex items-center gap-2 min-w-0">
                     <span class="truncate" class:font-semibold={!email.is_read} style="color: var(--text-primary)">
-                      {email.subject || '(no subject)'}
+                      {cleanEmailText(email.subject) || '(no subject)'}
                     </span>
                     {#if email.has_attachments}
                       <span class="shrink-0" style="color: var(--text-tertiary)">
@@ -500,7 +504,7 @@
                       </span>
                     {/if}
                     <span class="text-xs truncate hidden xl:inline" style="color: var(--text-tertiary)">
-                      — {email.snippet || ''}
+                      — {cleanEmailText(email.snippet)}
                     </span>
                   </div>
                 </td>
@@ -513,22 +517,22 @@
                     {/if}
                     {#if email.needs_reply}
                       <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300">
-                        reply
+                        Needs reply
                       </span>
                     {/if}
                     {#if email.is_subscription}
                       <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300">
-                        sub
+                        Subscription
                       </span>
                     {/if}
                     {#if email.ai_category}
                       <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap {categoryColors[email.ai_category] || ''}">
-                        {email.ai_category.replace('_', ' ')}
+                        {categoryLabel(email.ai_category)}
                       </span>
                     {/if}
                     {#if email.ai_email_type}
                       <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap {emailTypeColors[email.ai_email_type] || ''}">
-                        {email.ai_email_type}
+                        {typeLabel(email.ai_email_type)}
                       </span>
                     {/if}
                   </div>

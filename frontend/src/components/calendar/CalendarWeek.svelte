@@ -2,6 +2,14 @@
   import { accountColorMap } from '../../lib/stores.js';
   import { mergeEvents, layoutEvents } from '../../lib/calendarLayout.js';
   import { onMount } from 'svelte';
+  import { locationLabel } from '../../lib/calendarDisplay.js';
+
+  function activateEvent(event, calendarEvent) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      onEventClick?.(calendarEvent);
+    }
+  }
 
   let { events = [], currentDate = new Date(), onEventClick = null } = $props();
 
@@ -124,6 +132,10 @@
               class="rounded px-1 py-0.5 text-[10px] leading-tight truncate cursor-pointer flex items-center gap-0.5"
               style="background: {color ? color.light : 'var(--bg-tertiary)'}; color: {color ? color.bg : 'var(--text-secondary)'}"
               onclick={() => onEventClick?.(event)}
+              onkeydown={(keyEvent) => activateEvent(keyEvent, event)}
+              role="button"
+              tabindex="0"
+              aria-label="Open {event.summary || 'untitled'} all-day event"
             >
               {#if event._mergedAccounts && event._mergedAccounts.length > 1}
                 <div class="flex flex-col gap-px shrink-0">
@@ -208,6 +220,10 @@
                 class="absolute px-1 py-0.5 overflow-hidden cursor-pointer"
                 style="top: {item.top}px; height: {item.height}px; left: {item.left}; width: {item.width}; background: {color ? color.light : 'var(--bg-tertiary)'}; opacity: 0.3; z-index: {item.zIndex}; border-left: 3px solid {color ? color.bg : 'var(--color-accent-500)'}"
                 onclick={() => onEventClick?.(item.event)}
+                onkeydown={(event) => activateEvent(event, item.event)}
+                role="button"
+                tabindex="0"
+                aria-label="Open {item.event.summary || 'untitled'} event"
               >
                 <div class="text-[10px] font-medium leading-tight truncate" style="color: {color ? color.bg : 'var(--text-primary)'}">{item.event.summary || '(No title)'}</div>
               </div>
@@ -216,6 +232,10 @@
                 class="absolute rounded px-1 py-0.5 overflow-hidden cursor-pointer transition-opacity hover:opacity-80 hover:!z-40"
                 style="top: {item.top}px; height: {item.height}px; left: {item.left}; width: {item.width}; z-index: {item.zIndex}; background: {color ? color.light : 'var(--bg-tertiary)'}; color: {color ? color.bg : 'var(--text-primary)'}"
                 onclick={() => onEventClick?.(item.event)}
+                onkeydown={(event) => activateEvent(event, item.event)}
+                role="button"
+                tabindex="0"
+                aria-label="Open {item.event.summary || 'untitled'} event at {formatEventTime(item.event)}"
               >
                 <div class="flex gap-0.5 h-full">
                   {#if item.isMerged}
@@ -234,7 +254,7 @@
                       <div class="text-[9px] leading-tight truncate opacity-75">{formatEventTime(item.event)}</div>
                     {/if}
                     {#if item.height > 40 && item.event.location}
-                      <div class="text-[9px] leading-tight truncate opacity-60">{item.event.location}</div>
+                      <div class="text-[9px] leading-tight truncate opacity-75">{locationLabel(item.event)}</div>
                     {/if}
                   </div>
                 </div>

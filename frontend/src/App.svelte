@@ -73,6 +73,7 @@
     if (params.get('page')) {
       currentPage.set(params.get('page'));
     }
+
     if (params.get('connected') === 'true') {
       showToast('Google account connected successfully', 'success');
       window.history.replaceState({}, '', '/');
@@ -84,6 +85,28 @@
         currentPage.set(e.detail?.page);
       });
     }
+  });
+
+  onMount(() => {
+    const handlePopState = () => {
+      const nextParams = new URLSearchParams(window.location.search);
+      currentPage.set(nextParams.get('page') || 'flow');
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  });
+
+  // Keep feature navigation deep-linkable and shareable without forcing a
+  // full reload.
+  $effect(() => {
+    const page = $currentPage;
+    if (typeof window === 'undefined' || loading || !$user) return;
+    const url = new URL(window.location.href);
+    if (page === 'flow') url.searchParams.delete('page');
+    else url.searchParams.set('page', page);
+    const next = `${url.pathname}${url.search}${url.hash}`;
+    const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (next !== current) window.history.replaceState({}, '', next);
   });
 </script>
 

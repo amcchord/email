@@ -1,6 +1,7 @@
 <script>
   import { accountColorMap } from '../../lib/stores.js';
   import Icon from '../common/Icon.svelte';
+  import { isWebLocation, videoCallUrl } from '../../lib/calendarDisplay.js';
 
   let { event, onclose = null } = $props();
 
@@ -55,13 +56,11 @@
   let acctColor = $derived($accountColorMap[event.account_email] || null);
 </script>
 
-<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-<div class="fixed inset-0 z-50 flex items-center justify-center" onclick={onclose}>
-  <div class="absolute inset-0 bg-black/40"></div>
+<div class="fixed inset-0 z-50 flex items-center justify-center">
+  <button class="absolute inset-0 bg-black/40" onclick={onclose} aria-label="Close event details"></button>
   <div
     class="relative z-10 w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-xl border shadow-2xl"
     style="background: var(--bg-primary); border-color: var(--border-color)"
-    onclick={(e) => e.stopPropagation()}
   >
     <!-- Header -->
     <div class="flex items-start justify-between p-5 border-b" style="border-color: var(--border-color)">
@@ -118,7 +117,7 @@
       </div>
 
       <!-- Location -->
-      {#if event.location}
+      {#if event.location && !isWebLocation(event.location)}
         <div class="flex items-start gap-3">
           <span class="shrink-0 mt-0.5" style="color: var(--text-tertiary)">
             <Icon name="map-pin" size={20} />
@@ -128,13 +127,13 @@
       {/if}
 
       <!-- Video call link -->
-      {#if event.hangout_link}
+      {#if videoCallUrl(event)}
         <div class="flex items-center gap-3">
           <span class="shrink-0" style="color: var(--text-tertiary)">
             <Icon name="video" size={20} />
           </span>
           <a
-            href={event.hangout_link}
+            href={videoCallUrl(event)}
             target="_blank"
             rel="noopener noreferrer"
             class="text-sm font-medium underline"

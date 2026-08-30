@@ -6,7 +6,7 @@ from backend.database import get_db
 from backend.models.user import User
 from backend.models.account import GoogleAccount, SyncStatus
 from backend.models.settings import Setting
-from backend.schemas.admin import GoogleAccountResponse, SyncStatusResponse, GoogleOAuthStart
+from backend.schemas.admin import CalendarSyncHealthResponse, GoogleAccountResponse, SyncStatusResponse, GoogleOAuthStart
 from backend.schemas.auth import AccountDescriptionUpdate
 from backend.routers.auth import get_current_user
 from backend.utils.security import encrypt_value, decrypt_value, sign_oauth_state, verify_oauth_state
@@ -90,7 +90,10 @@ async def list_accounts(
     from sqlalchemy.orm import selectinload
     result = await db.execute(
         select(GoogleAccount)
-        .options(selectinload(GoogleAccount.sync_status))
+        .options(
+            selectinload(GoogleAccount.sync_status),
+            selectinload(GoogleAccount.calendar_sync_status),
+        )
         .where(GoogleAccount.user_id == user.id)
         .order_by(GoogleAccount.email)
     )
@@ -100,6 +103,9 @@ async def list_accounts(
         sync = None
         if acct.sync_status:
             sync = SyncStatusResponse.model_validate(acct.sync_status)
+        calendar_sync = None
+        if acct.calendar_sync_status:
+            calendar_sync = CalendarSyncHealthResponse.model_validate(acct.calendar_sync_status)
         # Check if the account has calendar.readonly scope
         has_cal = False
         if acct.scopes:
@@ -117,6 +123,7 @@ async def list_accounts(
             is_active=acct.is_active,
             created_at=acct.created_at,
             sync_status=sync,
+            calendar_sync_status=calendar_sync,
             has_calendar_scope=has_cal,
         ))
     return response
@@ -291,7 +298,10 @@ async def oauth_callback(
             )
         # Update tokens for existing connection
         account.encrypted_access_token = encrypt_value(credentials.token)
-        account.encrypted_refresh_token = encrypt_value(credentials.refresh_token or "")
+        # Google may omit refresh_token on a repeat consent callback. Keep the
+        # known-good token instead of replacing it with an encrypted empty value.
+        if credentials.refresh_token:
+            account.encrypted_refresh_token = encrypt_value(credentials.refresh_token)
         account.token_expiry = credentials.expiry
         account.scopes = json.dumps(GMAIL_SCOPES)
         account.is_active = True
@@ -305,6 +315,8 @@ async def oauth_callback(
         if cal_sync and cal_sync.status == "error":
             cal_sync.status = "idle"
             cal_sync.error_message = None
+        if cal_sync:
+            cal_sync.needs_reauth = False
     else:
         # New connection -- associate with the logged-in user
         account = GoogleAccount(
