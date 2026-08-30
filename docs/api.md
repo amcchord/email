@@ -977,6 +977,7 @@ draft.
 POST /api/compose/draft
 GET  /api/compose/drafts/recent?limit=20
 GET  /api/compose/drafts/by-client-id/{client_draft_id}
+GET  /api/compose/drafts/by-source-email/{source_email_id}?account_id=3
 GET  /api/compose/drafts/by-email/{email_id}
 POST /api/compose/drafts/{client_draft_id}/discard
 POST /api/compose/drafts/{client_draft_id}/undo-discard
@@ -1046,9 +1047,28 @@ failure returns safe 503 `draft_unavailable` with `Retry-After: 5`.
 States are `pending`, `syncing`, `reconciling`, `synced`, `failed`,
 `discard_pending`, `discarded`, and `sending`. The detail lookups also return
 the owned content and attachment bytes needed to reopen a draft. Recent list
-responses remain metadata-only. `by-email` resolves only a provider draft that
-this application manages for the current user; a foreign or externally created
-Gmail draft remains read-only and returns the same safe 404.
+responses remain metadata-only and are loaded without recipient, subject, body,
+provider identifier, reply-header, or attachment-byte columns. The
+`by-source-email` lookup requires the exact owned account and source message;
+it returns the one active reply session for that source or a non-disclosing
+404. A legacy duplicate returns 409 rather than choosing content silently.
+Concurrent first saves with different client UUIDs converge on the source
+winner: the losing create returns 409 `draft_source_exists`, and the browser
+then resolves the exact owned-source session instead of creating a second Gmail
+draft. `by-email` resolves only a provider draft that this application manages
+for the current user; a foreign or externally created Gmail draft remains
+read-only and returns the same safe 404.
+
+Reader, Flow, and full Compose replies share the stable intent
+`reply:{account_id}:{source_email_id}`. The authenticated browser first checks
+its owner-scoped IndexedDB record, then uses `by-source-email` for cross-device
+discovery. Every editor update is written locally before remote debounce. A
+session or account transition invalidates an in-flight open before either
+browser storage or UI can accept its result. Navigation is blocked while local
+storage has failed, discard is pending, or send reconciliation owns the reply.
+Reply-to-Reply-All changes rebase only the verified recipient envelope while
+preserving the saved body and attachment state. Sending, discard-pending,
+discarded, or conflicted source winners never replace an unrelated local UUID.
 
 The worker assigns one stable RFC Message-ID before provider work. It attempts
 the initial Gmail draft create at most once. If that result is ambiguous, the

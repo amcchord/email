@@ -505,3 +505,27 @@ add a new entry that explicitly supersedes the old one.
   and integrate with lazy routes and primary navigation. It will land after the
   coordinated Durable Replies release clears shared shell files; the secure
   enrollment migration does not opportunistically modify those files.
+
+## D-028 — One source message owns one durable reply session
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Identify a reply writing session by the authenticated user, exact
+  owned sending account, and exact source email. Reader, Flow, and full Compose
+  use the same stable reply intent and durable draft controller. Enforce at
+  most one active server reply for that source, serialize competing first
+  saves, and let a loser discover and adopt only an editable exact-source
+  winner. Never adopt a sending, discard-pending, discarded, conflicted, or
+  ambiguous winner.
+- Reason: Surface-specific draft keys can fork one reply into multiple Gmail
+  drafts, while choosing by thread, sender, subject, or provider draft is too
+  weak to prove ownership or the intended reply. Cross-device recovery also
+  needs a server lookup that cannot disclose whether another user's source or
+  draft exists.
+- Consequence: The browser writes every edit to owner-scoped IndexedDB before
+  remote debounce, discovers a missing local reply through the exact
+  account/source endpoint, and blocks navigation when local durability, send,
+  or discard truth is unresolved. Reply and Reply All may rebase only the
+  verified recipient envelope while preserving content. Recent Drafts is a
+  metadata-only Continue Writing surface; opening a row still re-enters the
+  exact durable session and compares any newer server revision.
