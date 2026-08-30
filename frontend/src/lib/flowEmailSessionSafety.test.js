@@ -33,16 +33,13 @@ test('Flow rejects stale thread and action completions after an identity change'
     text,
     /async function sendReply[\s\S]*await submitOutboundSend\(payload,[\s\S]*onAccepted: \(\) => \{\}[\s\S]*onRestore: \(operation, reason\) => restoreOutboundComposeDraft\(restoreDraft, operation, reason\)[\s\S]*await controllerAtStart\.markSendUncertain\(operation\);\s*releaseEditor\(\)/,
   );
-  assert.match(
-    text,
-    /onSent:[\s\S]*isAuthenticatedSessionCurrent\(sendSession\)[\s\S]*archiveSentReply\(email\.id, archiveIdempotencyKey\)/,
-  );
-  assert.match(text, /await api\.getMailActionByIdempotency\(archiveIdempotencyKey\)/);
+  assert.match(text, /archiveAtStart[\s\S]*payload\.archive_source_after_send = true;[\s\S]*submitOutboundSend\(payload/);
+  assert.doesNotMatch(text, /archiveSentReply|archiveIdempotencyKey/);
   assert.match(text, /selectedReplyEmail = \{[\s\S]*id: latestInbound\.id,[\s\S]*references_header: latestInbound\.references_header \|\| null/);
   assert.doesNotMatch(text, /async function sendReply[\s\S]*await api\.sendEmail/);
   assert.match(
     text,
-    /async function sendReply[\s\S]*finally \{\s*if \(sessionIsCurrent\(\)\) \{\s*inlineReplySending = false;\s*await controllerAtStart\?\.markSending\(false\)/,
+    /async function sendReply[\s\S]*finally \{\s*if \(sessionIsCurrent\(\)\) \{\s*inlineReplySending = false;\s*(?:inlineReplySendMode = 'send';\s*)?await controllerAtStart\?\.markSending\(false\)/,
   );
   assert.match(
     text,
@@ -72,7 +69,7 @@ test('EmailView gates attachment and message action continuations to its capture
   assert.doesNotMatch(text, /async function sendInlineReply[\s\S]*await api\.sendEmail/);
   assert.match(
     text,
-    /async function sendInlineReply[\s\S]*finally \{\s*if \(sessionIsCurrent\(\)\) \{\s*inlineReplySending = false;\s*await controllerAtStart\?\.markSending\(false\)/,
+    /async function sendInlineReply[\s\S]*finally \{\s*if \(sessionIsCurrent\(\)\) \{\s*inlineReplySending = false;\s*(?:inlineReplySendMode = 'send';\s*)?await controllerAtStart\?\.markSending\(false\)/,
   );
   assert.match(
     text,

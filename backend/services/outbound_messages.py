@@ -15,7 +15,7 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from arq import create_pool
 from arq.connections import RedisSettings
@@ -38,6 +38,9 @@ logger = logging.getLogger(__name__)
 
 OUTBOUND_QUEUE_NAME = "arq:cron"
 OUTBOUND_UNDO_SECONDS = 10
+OUTBOUND_SCHEDULE_MIN_SECONDS = 60
+OUTBOUND_SCHEDULE_MAX_DAYS = 365
+OUTBOUND_LINKED_DRAFT_HOLD_DAYS = 7
 OUTBOUND_LEASE_SECONDS = 120
 OUTBOUND_MAX_ATTEMPTS = 8
 OUTBOUND_RECONCILE_MAX_CHECKS = 8
@@ -104,6 +107,77 @@ def outbound_payload_hash(request: ComposeRequest) -> str:
         ensure_ascii=False,
     )
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def outbound_scheduled_for(outbound: OutboundMessage) -> datetime | None:
+    payload = outbound.payload if isinstance(outbound.payload, dict) else {}
+    value = payload.get("scheduled_for")
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is not None and parsed.utcoffset() is not None:
+                return parsed.astimezone(timezone.utc)
+        except ValueError:
+            pass
+    if outbound.execute_after > outbound.undo_until:
+        return outbound.execute_after
+    return None
+
+
+def outbound_schedule_timezone(outbound: OutboundMessage) -> str | None:
+    payload = outbound.payload if isinstance(outbound.payload, dict) else {}
+    value = payload.get("schedule_timezone")
+    return value if isinstance(value, str) and value else None
+
+
+def outbound_is_scheduled(outbound: OutboundMessage) -> bool:
+    return outbound_scheduled_for(outbound) is not None
+
+
+async def _ensure_post_send_archive(outbound: OutboundMessage) -> bool:
+    """Durably stage Flow's archive-after-send intent before terminal send truth.
+
+    The deterministic mail-action key makes a crash between staging the action
+    and marking the outbound sent harmless: provider reconciliation repeats
+    this lookup without creating a second mailbox mutation.
+    """
+    payload = outbound.payload if isinstance(outbound.payload, dict) else {}
+    if payload.get("archive_source_after_send") is not True:
+        return True
+    source_email_id = outbound.source_email_id
+    if not isinstance(source_email_id, int) or source_email_id <= 0:
+        logger.error("Outbound post-send archive is missing a validated source email")
+        return False
+
+    from backend.services.mail_actions import (
+        MailActionNotFound,
+        stage_mail_actions,
+        try_enqueue_mail_action_drain,
+    )
+
+    action_key = uuid5(NAMESPACE_URL, f"mail-outbound:{outbound.send_id}:archive-source")
+    try:
+        async with async_session() as db:
+            _actions, created = await stage_mail_actions(
+                db,
+                user_id=outbound.user_id,
+                email_ids=[source_email_id],
+                action="archive",
+                idempotency_key=action_key,
+            )
+    except MailActionNotFound:
+        # The exact source was validated at send admission. If it has since
+        # been removed, there is no remaining local inbox row to archive.
+        return True
+    except Exception:
+        logger.warning(
+            "Could not durably stage post-send archive; outbound reconciliation will retry",
+            exc_info=True,
+        )
+        return False
+    if created:
+        await try_enqueue_mail_action_drain()
+    return True
 
 
 def _idempotency_advisory_key(user_id: int, idempotency_key: UUID) -> int:
@@ -435,6 +509,20 @@ async def _stage_outbound_message(
     )
 
     accepted_at = now or utcnow()
+    undo_until = accepted_at + timedelta(seconds=OUTBOUND_UNDO_SECONDS)
+    execute_after = undo_until
+    if request.scheduled_for is not None:
+        earliest = accepted_at + timedelta(seconds=OUTBOUND_SCHEDULE_MIN_SECONDS)
+        latest = accepted_at + timedelta(days=OUTBOUND_SCHEDULE_MAX_DAYS)
+        if request.scheduled_for < earliest:
+            raise OutboundMessageValidationError(
+                "Scheduled delivery must be at least one minute in the future"
+            )
+        if request.scheduled_for > latest:
+            raise OutboundMessageValidationError(
+                "Scheduled delivery cannot be more than one year in the future"
+            )
+        execute_after = request.scheduled_for
     expired_notifications = await _scrub_expired_retry_payloads(
         db,
         now=accepted_at,
@@ -446,7 +534,6 @@ async def _stage_outbound_message(
         account_id=account.id,
         accepted_at=accepted_at,
     )
-    undo_until = accepted_at + timedelta(seconds=OUTBOUND_UNDO_SECONDS)
     send_id = uuid4()
     linked_draft = None
     if request.client_draft_id is not None:
@@ -463,7 +550,11 @@ async def _stage_outbound_message(
                 user_id=user_id,
                 request=request,
                 send_id=send_id,
-                discard_at=undo_until,
+                discard_at=(
+                    execute_after + timedelta(days=OUTBOUND_LINKED_DRAFT_HOLD_DAYS)
+                    if request.scheduled_for is not None
+                    else undo_until
+                ),
             )
         except DraftNotFound as error:
             raise OutboundMessageNotFound(str(error)) from error
@@ -489,9 +580,9 @@ async def _stage_outbound_message(
             else f"<mail-{send_id}@{OUTBOUND_RFC_MESSAGE_ID_DOMAIN}>"
         ),
         state="staged",
-        execute_after=undo_until,
+        execute_after=execute_after,
         undo_until=undo_until,
-        next_attempt_at=undo_until,
+        next_attempt_at=execute_after,
         attempt_count=0,
         max_attempts=OUTBOUND_MAX_ATTEMPTS,
         reconcile_count=0,
@@ -557,9 +648,37 @@ async def recent_outbound_messages(
     return list(result.scalars().all())
 
 
+async def scheduled_outbound_messages(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    limit: int = 60,
+) -> list[OutboundMessage]:
+    result = await db.execute(
+        select(OutboundMessage)
+        .where(
+            OutboundMessage.user_id == user_id,
+            OutboundMessage.state == "staged",
+            OutboundMessage.execute_after > OutboundMessage.undo_until,
+        )
+        .order_by(OutboundMessage.execute_after, OutboundMessage.id)
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
 def outbound_can_undo(outbound: OutboundMessage, *, now: datetime | None = None) -> bool:
     current = now or utcnow()
     return outbound.state == "staged" and current <= outbound.undo_until
+
+
+def outbound_can_cancel(outbound: OutboundMessage, *, now: datetime | None = None) -> bool:
+    current = now or utcnow()
+    return bool(
+        outbound.state == "staged"
+        and outbound_is_scheduled(outbound)
+        and current < outbound.execute_after
+    )
 
 
 def outbound_can_retry(
@@ -603,6 +722,104 @@ async def undo_outbound_message(
     outbound.updated_at = current
     outbound.error_code = None
     outbound.error_message = None
+    linked_draft = None
+    draft_session_id = getattr(outbound, "draft_session_id", None)
+    if draft_session_id is not None:
+        from backend.services.drafts import restore_linked_draft_after_outbound_cancel
+
+        linked_draft = await restore_linked_draft_after_outbound_cancel(
+            db,
+            user_id=user_id,
+            draft_session_id=draft_session_id,
+            send_id=outbound.send_id,
+            now=current,
+        )
+        if linked_draft is not None:
+            # Release the unique draft-session reservation so the restored
+            # writing session can own a later logical send.
+            outbound.draft_session_id = None
+    await db.commit()
+    await _publish_outbound_event(outbound.user_id, outbound.send_id)
+    if linked_draft is not None:
+        from backend.services.drafts import publish_draft_session_event
+
+        await publish_draft_session_event(linked_draft)
+    return outbound
+
+
+async def cancel_scheduled_outbound_message(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    send_id: UUID,
+    now: datetime | None = None,
+) -> OutboundMessage:
+    current = now or utcnow()
+    outbound = await get_outbound_message(
+        db,
+        user_id=user_id,
+        send_id=send_id,
+        for_update=True,
+    )
+    if outbound.state == "cancelled" and outbound_is_scheduled(outbound):
+        await db.commit()
+        return outbound
+    if not outbound_can_cancel(outbound, now=current):
+        raise OutboundMessageConflict("Scheduled send can no longer be cancelled")
+    outbound.state = "cancelled"
+    outbound.payload = None
+    outbound.retry_authorized = False
+    outbound.retry_expires_at = None
+    outbound.next_attempt_at = None
+    outbound.cancelled_at = current
+    outbound.updated_at = current
+    outbound.error_code = None
+    outbound.error_message = None
+    linked_draft = None
+    draft_session_id = getattr(outbound, "draft_session_id", None)
+    if draft_session_id is not None:
+        from backend.services.drafts import restore_linked_draft_after_outbound_cancel
+
+        linked_draft = await restore_linked_draft_after_outbound_cancel(
+            db,
+            user_id=user_id,
+            draft_session_id=draft_session_id,
+            send_id=outbound.send_id,
+            now=current,
+        )
+        if linked_draft is not None:
+            outbound.draft_session_id = None
+    await db.commit()
+    await _publish_outbound_event(outbound.user_id, outbound.send_id)
+    if linked_draft is not None:
+        from backend.services.drafts import publish_draft_session_event
+
+        await publish_draft_session_event(linked_draft)
+    return outbound
+
+
+async def send_scheduled_outbound_now(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    send_id: UUID,
+    now: datetime | None = None,
+) -> OutboundMessage:
+    current = now or utcnow()
+    outbound = await get_outbound_message(
+        db,
+        user_id=user_id,
+        send_id=send_id,
+        for_update=True,
+    )
+    if not outbound_can_cancel(outbound, now=current):
+        raise OutboundMessageConflict("Scheduled send can no longer be sent now")
+    outbound.execute_after = current
+    # Closing the Undo deadline at the same instant removes this operation
+    # from the future-scheduled query without changing its staged/due state.
+    outbound.undo_until = current
+    outbound.next_attempt_at = current
+    outbound.updated_at = current
     await db.commit()
     await _publish_outbound_event(outbound.user_id, outbound.send_id)
     return outbound
@@ -746,7 +963,7 @@ async def _claim_due_outbound(
     result = await db.execute(
         select(OutboundMessage)
         .where(OutboundMessage.account_id == account_id, due)
-        .order_by(OutboundMessage.created_at, OutboundMessage.id)
+        .order_by(OutboundMessage.execute_after, OutboundMessage.id)
         .limit(limit)
         .with_for_update(skip_locked=True)
     )
@@ -822,9 +1039,26 @@ async def _record_outbound_sent(
         outbound.error_message = None
         outbound.sent_at = now
         outbound.updated_at = now
+        linked_draft = None
+        draft_session_id = getattr(outbound, "draft_session_id", None)
+        if draft_session_id is not None:
+            from backend.services.drafts import prepare_linked_draft_for_outbound_discard
+
+            linked_draft = await prepare_linked_draft_for_outbound_discard(
+                db,
+                user_id=outbound.user_id,
+                draft_session_id=draft_session_id,
+                send_id=outbound.send_id,
+                now=now,
+            )
         await db.commit()
         user_id, send_id = outbound.user_id, outbound.send_id
     await _publish_outbound_event(user_id, send_id)
+    if linked_draft is not None:
+        from backend.services.drafts import publish_draft_session_event, try_enqueue_draft_drain
+
+        await publish_draft_session_event(linked_draft)
+        await try_enqueue_draft_drain()
     return True
 
 
@@ -856,6 +1090,8 @@ async def _record_preflight_failure(
         outbound.error_code = disposition.code
         outbound.error_message = disposition.message
         outbound.updated_at = now
+        linked_draft = None
+        was_scheduled = outbound_is_scheduled(outbound)
         if disposition.retryable and outbound.attempt_count < outbound.max_attempts:
             outbound.state = "retry_wait"
             outbound.retry_authorized = False
@@ -865,11 +1101,29 @@ async def _record_preflight_failure(
             _fail_outbound(
                 outbound,
                 now=now,
-                retry_authorized=disposition.retryable,
+                retry_authorized=(disposition.retryable and not was_scheduled),
             )
+            draft_session_id = getattr(outbound, "draft_session_id", None)
+            if draft_session_id is not None and was_scheduled:
+                from backend.services.drafts import restore_linked_draft_after_outbound_cancel
+
+                linked_draft = await restore_linked_draft_after_outbound_cancel(
+                    db,
+                    user_id=outbound.user_id,
+                    draft_session_id=draft_session_id,
+                    send_id=outbound.send_id,
+                    now=now,
+                )
+                if linked_draft is not None:
+                    outbound.draft_session_id = None
         await db.commit()
         user_id, send_id = outbound.user_id, outbound.send_id
     await _publish_outbound_event(user_id, send_id)
+    if linked_draft is not None:
+        from backend.services.drafts import publish_draft_session_event, try_enqueue_draft_drain
+
+        await publish_draft_session_event(linked_draft)
+        await try_enqueue_draft_drain()
     return True
 
 
@@ -886,8 +1140,20 @@ async def _record_reconciling_locked(
     outbound.updated_at = now
     outbound.error_code = "send_outcome_unknown"
     outbound.error_message = "Delivery could not be confirmed automatically"
+    linked_draft = None
     if provider_confirmed_absent and outbound.reconcile_count >= OUTBOUND_RECONCILE_MAX_CHECKS:
         _fail_outbound(outbound, now=now, retry_authorized=False)
+        draft_session_id = getattr(outbound, "draft_session_id", None)
+        if draft_session_id is not None:
+            from backend.services.drafts import prepare_linked_draft_for_outbound_discard
+
+            linked_draft = await prepare_linked_draft_for_outbound_discard(
+                db,
+                user_id=outbound.user_id,
+                draft_session_id=draft_session_id,
+                send_id=outbound.send_id,
+                now=now,
+            )
     else:
         outbound.state = "reconciling"
         outbound.retry_authorized = False
@@ -896,6 +1162,11 @@ async def _record_reconciling_locked(
     await db.commit()
     user_id, send_id = outbound.user_id, outbound.send_id
     await _publish_outbound_event(user_id, send_id)
+    if linked_draft is not None:
+        from backend.services.drafts import publish_draft_session_event, try_enqueue_draft_drain
+
+        await publish_draft_session_event(linked_draft)
+        await try_enqueue_draft_drain()
     return True
 
 
@@ -976,6 +1247,13 @@ async def _process_claimed_outbound(
         return
 
     if provider_message_id:
+        if not await _ensure_post_send_archive(outbound):
+            await _record_reconciling(
+                outbound_id=outbound.id,
+                lease_token=lease_token,
+                now=utcnow(),
+            )
+            return
         await _record_outbound_sent(
             outbound_id=outbound.id,
             lease_token=lease_token,
@@ -1045,6 +1323,13 @@ async def _process_claimed_outbound(
         )
         return
 
+    if not await _ensure_post_send_archive(outbound):
+        await _record_reconciling(
+            outbound_id=outbound.id,
+            lease_token=lease_token,
+            now=utcnow(),
+        )
+        return
     await _record_outbound_sent(
         outbound_id=outbound.id,
         lease_token=lease_token,
@@ -1171,24 +1456,25 @@ async def _publish_outbound_event(user_id: int, send_id: UUID) -> None:
         logger.warning("Could not publish outbound send update", exc_info=True)
 
 
-async def try_enqueue_outbound_drain() -> None:
+async def try_enqueue_outbound_drain(execute_after: datetime | None = None) -> None:
     try:
         await asyncio.wait_for(
-            _enqueue_outbound_drain(),
+            _enqueue_outbound_drain(execute_after=execute_after),
             timeout=OUTBOUND_REDIS_IO_TIMEOUT_SECONDS,
         )
     except Exception:
         logger.warning("Could not enqueue outbound drain; cron will recover it", exc_info=True)
 
 
-async def _enqueue_outbound_drain() -> None:
+async def _enqueue_outbound_drain(*, execute_after: datetime | None = None) -> None:
     settings = get_settings()
     redis = await create_pool(RedisSettings.from_dsn(settings.redis_url))
     try:
+        defer_until = execute_after or (utcnow() + timedelta(seconds=OUTBOUND_UNDO_SECONDS))
         await redis.enqueue_job(
             "drain_outbound_messages_task",
             _queue_name=OUTBOUND_QUEUE_NAME,
-            _defer_by=timedelta(seconds=OUTBOUND_UNDO_SECONDS),
+            _defer_until=defer_until,
         )
     finally:
         await redis.close()

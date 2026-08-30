@@ -331,12 +331,18 @@ export const api = {
   },
   listRecentOutboundSends: (limit = 20) =>
     request('GET', `/compose/sends/recent?limit=${encodeURIComponent(limit)}`),
+  listScheduledOutboundSends: (limit = 60) =>
+    request('GET', `/compose/sends/scheduled?limit=${encodeURIComponent(limit)}`),
   getOutboundSendByIdempotency: (idempotencyKey) =>
     request('GET', `/compose/sends/by-idempotency/${encodeURIComponent(idempotencyKey)}`),
   getOutboundSend: (sendId) =>
     request('GET', `/compose/sends/${encodeURIComponent(sendId)}`),
   undoOutboundSend: (sendId) =>
     request('POST', `/compose/sends/${encodeURIComponent(sendId)}/undo`, {}),
+  cancelScheduledOutboundSend: (sendId) =>
+    request('POST', `/compose/sends/${encodeURIComponent(sendId)}/cancel`, {}),
+  sendScheduledOutboundNow: (sendId) =>
+    request('POST', `/compose/sends/${encodeURIComponent(sendId)}/send-now`, {}),
   retryOutboundSend: (sendId) =>
     request('POST', `/compose/sends/${encodeURIComponent(sendId)}/retry`, {}),
   saveDraft: (data) => {

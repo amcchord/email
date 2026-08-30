@@ -41,6 +41,7 @@
   import AttachmentPreview from './AttachmentPreview.svelte';
   import DraftStatus from './DraftStatus.svelte';
   import EmailHtmlFrame from './EmailHtmlFrame.svelte';
+  import SendSplitButton from '../common/SendSplitButton.svelte';
 
   let {
     email = null,
@@ -103,6 +104,7 @@
   let durableReplyState = $state({ status: 'pristine', canSend: false, snapshot: {} });
   let durableReplyOpening = $state(false);
   let durableReplyError = $state('');
+  let inlineReplySendMode = $state('send');
   let durableReplyEmailId = null;
   let durableReplyMode = null;
   let replyReturnFocus = null;
@@ -774,7 +776,7 @@
     return true;
   }
 
-  async function sendInlineReply() {
+  async function sendInlineReply(schedule = null) {
     if (!email || !inlineReplyBody.trim() || !sessionIsCurrent() || !durableReplyController) return;
     const replyAtStart = activeReplyEnvelopeResult;
     if (!replyAtStart.available) {
@@ -800,6 +802,10 @@
       draft_key: `client:${payload.client_draft_id}`,
       ...payload,
     };
+    if (schedule?.scheduledFor) {
+      payload.scheduled_for = schedule.scheduledFor;
+      payload.schedule_timezone = schedule.scheduleTimezone;
+    }
     let editorReleased = false;
     const releaseEditor = () => {
       if (editorReleased || !sessionIsCurrent()) return;
@@ -824,6 +830,7 @@
       }
     };
     inlineReplySending = true;
+    inlineReplySendMode = schedule ? 'schedule' : 'send';
     try {
       const operation = await submitOutboundSend(payload, {
         onAccepted: () => {},
@@ -849,6 +856,7 @@
     } finally {
       if (sessionIsCurrent()) {
         inlineReplySending = false;
+        inlineReplySendMode = 'send';
         await controllerAtStart?.markSending(false);
       }
     }
@@ -1653,21 +1661,14 @@
           rows="4"
         ></textarea>
         <div class="reply-actions flex items-center gap-2 mt-2">
-          <button
-            onclick={sendInlineReply}
-            disabled={inlineReplySending || !inlineReplyBody.trim() || !activeReplyEnvelopeResult.available || !durableReplyState.canSend || Boolean(durableReplyError)}
-            class="flex min-h-11 items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium transition-fast disabled:opacity-50"
-            style="background: var(--color-accent-500); color: white"
-            title="Send reply · Command or Control Enter"
-          >
-            {#if inlineReplySending}
-              <div class="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-              Sending...
-            {:else}
-              <Icon name="send" size={14} />
-              {inlineReplyActionLabel}
-            {/if}
-          </button>
+          <SendSplitButton
+            label={inlineReplyActionLabel}
+            disabled={!inlineReplyBody.trim() || !activeReplyEnvelopeResult.available || !durableReplyState.canSend || Boolean(durableReplyError)}
+            busy={inlineReplySending}
+            busyLabel={inlineReplySendMode === 'schedule' ? 'Scheduling…' : 'Sending…'}
+            onsend={() => sendInlineReply()}
+            onschedule={schedule => sendInlineReply(schedule)}
+          />
           <span class="text-[11px]" style="color: var(--text-tertiary)">⌘↵ Send · Esc Close and keep</span>
         </div>
       </div>

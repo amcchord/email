@@ -16,14 +16,21 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 import backend.services.outbound_messages as outbound_module
 from backend.models.account import GoogleAccount
 from backend.models.email import Email
+from backend.models.draft import DraftSession
+from backend.models.mail_action import MailAction
 from backend.models.outbound_message import OutboundMessage
 from backend.models.user import User
-from backend.schemas.email import ComposeRequest
+from backend.schemas.email import ComposeDraftRequest, ComposeRequest
+from backend.services.drafts import stage_draft_upsert
 from backend.services.outbound_messages import (
     OutboundMessageConflict,
     OutboundMessageNotFound,
     OutboundMessageQuotaExceeded,
     _claim_due_outbound,
+    _ensure_post_send_archive,
+    cancel_scheduled_outbound_message,
+    scheduled_outbound_messages,
+    send_scheduled_outbound_now,
     stage_outbound_message,
     undo_outbound_message,
 )
@@ -118,6 +125,43 @@ def _request(account_id: int, *, key=None, source_id=None):
             ),
         })
     return ComposeRequest(**values)
+
+
+async def _scheduled_request(
+    sessions,
+    *,
+    user_id: int,
+    account_id: int,
+    scheduled_for: datetime,
+) -> ComposeRequest:
+    client_draft_id = uuid4()
+    message = {
+        "account_id": account_id,
+        "to": ["recipient@example.test"],
+        "subject": "Generated scheduled message",
+        "body_text": "Generated scheduled body",
+    }
+    async with sessions() as db:
+        await stage_draft_upsert(
+            db,
+            user_id=user_id,
+            request=ComposeDraftRequest(
+                **message,
+                is_draft=True,
+                client_draft_id=client_draft_id,
+                revision=1,
+                mutation_id=uuid4(),
+            ),
+            now=NOW,
+        )
+    return ComposeRequest(
+        **message,
+        idempotency_key=uuid4(),
+        client_draft_id=client_draft_id,
+        draft_revision=1,
+        scheduled_for=scheduled_for,
+        schedule_timezone="America/New_York",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -473,6 +517,213 @@ async def test_expired_retry_payload_is_scrubbed_during_admission(monkeypatch):
                 {"id": expired_id},
             )
             assert payload_is_sql_null is True
+    finally:
+        await engine.dispose()
+
+
+async def test_scheduled_send_is_durable_not_due_early_and_cancel_restores_its_draft():
+    engine, sessions = _session_factory()
+    try:
+        await _reset_database(engine)
+        user_id, account_id, _source_id = await _seed_account(sessions, suffix="scheduled")
+        delivery_time = NOW + timedelta(hours=3)
+        request = await _scheduled_request(
+            sessions,
+            user_id=user_id,
+            account_id=account_id,
+            scheduled_for=delivery_time,
+        )
+        async with sessions() as db:
+            outbound, created = await stage_outbound_message(
+                db,
+                user_id=user_id,
+                request=request,
+                now=NOW,
+            )
+            assert created is True
+            assert outbound.execute_after == delivery_time
+            assert outbound.undo_until == NOW + timedelta(seconds=10)
+            assert datetime.fromisoformat(
+                outbound.payload["scheduled_for"].replace("Z", "+00:00")
+            ) == delivery_time
+            send_id = outbound.send_id
+
+        async with sessions() as db:
+            assert await _claim_due_outbound(
+                db,
+                account_id=account_id,
+                now=delivery_time - timedelta(microseconds=1),
+                limit=1,
+            ) == []
+
+        async with sessions() as db:
+            cancelled = await cancel_scheduled_outbound_message(
+                db,
+                user_id=user_id,
+                send_id=send_id,
+                now=delivery_time - timedelta(seconds=1),
+            )
+            assert cancelled.state == "cancelled"
+            assert cancelled.payload is None
+
+        async with sessions() as db:
+            linked = await db.scalar(
+                select(DraftSession).where(DraftSession.client_draft_id == request.client_draft_id)
+            )
+            assert linked.state in {"pending", "synced", "reconciling"}
+            assert linked.linked_send_id is None
+            assert linked.payload is not None
+            cancelled = await db.scalar(
+                select(OutboundMessage).where(OutboundMessage.send_id == send_id)
+            )
+            assert cancelled.draft_session_id is None
+            assert await _claim_due_outbound(
+                db,
+                account_id=account_id,
+                now=delivery_time + timedelta(minutes=1),
+                limit=1,
+            ) == []
+
+        # The cancelled row retains content-free client identity but releases
+        # its unique internal draft reservation, so the restored exact draft
+        # can safely own a new logical scheduled send.
+        rescheduled_request = request.model_copy(update={
+            "idempotency_key": uuid4(),
+            "scheduled_for": delivery_time + timedelta(hours=1),
+        })
+        async with sessions() as db:
+            rescheduled, created = await stage_outbound_message(
+                db,
+                user_id=user_id,
+                request=rescheduled_request,
+                now=NOW + timedelta(minutes=1),
+            )
+            assert created is True
+            assert rescheduled.client_draft_id == request.client_draft_id
+            assert rescheduled.draft_session_id is not None
+    finally:
+        await engine.dispose()
+
+
+async def test_scheduled_send_claims_exactly_at_its_not_before_boundary():
+    engine, sessions = _session_factory()
+    try:
+        await _reset_database(engine)
+        user_id, account_id, _source_id = await _seed_account(sessions, suffix="due")
+        delivery_time = NOW + timedelta(minutes=5)
+        request = await _scheduled_request(
+            sessions,
+            user_id=user_id,
+            account_id=account_id,
+            scheduled_for=delivery_time,
+        )
+        async with sessions() as db:
+            outbound, _created = await stage_outbound_message(
+                db,
+                user_id=user_id,
+                request=request,
+                now=NOW,
+            )
+
+        async with sessions() as db:
+            replayed, created = await stage_outbound_message(
+                db,
+                user_id=user_id,
+                request=request,
+                now=delivery_time + timedelta(minutes=1),
+            )
+            assert created is False
+            assert replayed.send_id == outbound.send_id
+
+        async with sessions() as db:
+            claimed = await _claim_due_outbound(
+                db,
+                account_id=account_id,
+                now=delivery_time,
+                limit=1,
+            )
+            assert [item.send_id for item in claimed] == [outbound.send_id]
+            assert claimed[0].provider_attempted_at is None
+    finally:
+        await engine.dispose()
+
+
+async def test_send_now_closes_future_management_and_is_immediately_due():
+    engine, sessions = _session_factory()
+    try:
+        await _reset_database(engine)
+        user_id, account_id, _source_id = await _seed_account(sessions, suffix="send-now")
+        request = await _scheduled_request(
+            sessions,
+            user_id=user_id,
+            account_id=account_id,
+            scheduled_for=NOW + timedelta(hours=2),
+        )
+        async with sessions() as db:
+            outbound, _created = await stage_outbound_message(
+                db,
+                user_id=user_id,
+                request=request,
+                now=NOW,
+            )
+            due_at = NOW + timedelta(seconds=5)
+            advanced = await send_scheduled_outbound_now(
+                db,
+                user_id=user_id,
+                send_id=outbound.send_id,
+                now=due_at,
+            )
+            assert advanced.execute_after == due_at
+            assert advanced.undo_until == due_at
+            assert await scheduled_outbound_messages(db, user_id=user_id) == []
+            claimed = await _claim_due_outbound(
+                db,
+                account_id=account_id,
+                now=due_at,
+                limit=1,
+            )
+            assert [item.send_id for item in claimed] == [outbound.send_id]
+    finally:
+        await engine.dispose()
+
+
+async def test_post_send_archive_is_durable_and_idempotent(monkeypatch):
+    engine, sessions = _session_factory()
+    try:
+        await _reset_database(engine)
+        user_id, account_id, source_id = await _seed_account(
+            sessions,
+            suffix="one",
+            with_source=True,
+        )
+        request = _request(account_id, source_id=source_id).model_copy(update={
+            "archive_source_after_send": True,
+        })
+        async with sessions() as db:
+            outbound, _created = await stage_outbound_message(
+                db,
+                user_id=user_id,
+                request=request,
+                now=NOW,
+            )
+
+        monkeypatch.setattr(outbound_module, "async_session", sessions)
+
+        async def no_enqueue():
+            return None
+
+        import backend.services.mail_actions as mail_actions_module
+
+        monkeypatch.setattr(mail_actions_module, "try_enqueue_mail_action_drain", no_enqueue)
+        assert await _ensure_post_send_archive(outbound) is True
+        assert await _ensure_post_send_archive(outbound) is True
+
+        async with sessions() as db:
+            actions = list((await db.execute(select(MailAction))).scalars().all())
+            assert len(actions) == 1
+            assert actions[0].action == "archive"
+            assert actions[0].email_id == source_id
+            assert actions[0].user_id == user_id
     finally:
         await engine.dispose()
 

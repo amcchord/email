@@ -206,6 +206,11 @@ function newCounters() {
     provider_delete_attempts: 0,
     provider_draft_deletes: 0,
     provider_delete_failures: 0,
+    outbound_accepts: 0,
+    outbound_cancels: 0,
+    outbound_send_now: 0,
+    provider_send_lookups: 0,
+    provider_sends: 0,
     same_mutation_replays: 0,
     same_revision_replays: 0,
     immutable_revision_conflicts: 0,
@@ -273,10 +278,13 @@ export function createGeneratedProviderDraftFixture({
   let firstLostResponseUsed = false;
   let firstHeldResponseUsed = false;
   const drafts = new Map();
+  const outbounds = new Map();
+  const outboundIdempotency = new Map();
   const mutations = new Map();
   const offlineMutationIds = new Set();
   const events = [];
   const heldResponses = [];
+  let clockNowMs = Date.parse('2026-08-30T16:00:00.000Z');
 
   function logicalKey(userId, clientDraftId) {
     return `${userId}:${clientDraftId}`;
@@ -284,6 +292,18 @@ export function createGeneratedProviderDraftFixture({
 
   function mutationKey(userId, mutationId) {
     return `${userId}:${mutationId}`;
+  }
+
+  function outboundKey(userId, sendId) {
+    return `${userId}:${sendId}`;
+  }
+
+  function outboundIdempotencyKey(userId, idempotencyKey) {
+    return `${userId}:${idempotencyKey}`;
+  }
+
+  function clockIso() {
+    return new Date(clockNowMs).toISOString();
   }
 
   function recordEvent(kind, request, pathname, extra = {}) {
@@ -514,7 +534,7 @@ export function createGeneratedProviderDraftFixture({
       can_undo_discard: record.can_undo_discard,
       discard_at: record.discard_at,
       discard_undo_until: record.discard_undo_until,
-      linked_send_id: null,
+      linked_send_id: record.linked_send_id || null,
       error_code: record.error_code,
       error_message: record.error_message,
       attachment_count: record.payload.attachments.length,
@@ -829,6 +849,7 @@ export function createGeneratedProviderDraftFixture({
         synced_at: timestamp,
         updated_at: timestamp,
         discarded_at: null,
+        linked_send_id: null,
         provider_create_count: 1,
         provider_update_count: 0,
         provider_delete_count: 0,
@@ -1077,6 +1098,217 @@ export function createGeneratedProviderDraftFixture({
     return writeJson(response, draftResponse(record));
   }
 
+  function outboundResponse(record) {
+    return {
+      send_id: record.send_id,
+      idempotency_key: record.idempotency_key,
+      account_id: record.account_id,
+      source_email_id: record.source_email_id,
+      client_draft_id: record.client_draft_id,
+      state: record.state,
+      scheduled_for: record.scheduled_for,
+      schedule_timezone: record.schedule_timezone,
+      execute_after: record.execute_after,
+      undo_until: record.undo_until,
+      next_attempt_at: record.next_attempt_at,
+      attempt_count: record.attempt_count,
+      max_attempts: 8,
+      can_undo: record.state === 'staged' && clockNowMs <= Date.parse(record.undo_until),
+      can_cancel: record.state === 'staged' && Boolean(record.scheduled_for)
+        && clockNowMs < Date.parse(record.execute_after),
+      can_send_now: record.state === 'staged' && Boolean(record.scheduled_for)
+        && clockNowMs < Date.parse(record.execute_after),
+      can_retry: false,
+      provider_message_id: record.provider_message_id,
+      error_code: null,
+      error_message: null,
+      created_at: record.created_at,
+      updated_at: record.updated_at,
+      sent_at: record.sent_at,
+      failed_at: null,
+      cancelled_at: record.cancelled_at,
+    };
+  }
+
+  function advanceOutbound(request, pathname, record) {
+    if (record.state !== 'staged' || clockNowMs < Date.parse(record.execute_after)) return;
+    counters.provider_send_lookups += 1;
+    record.attempt_count += 1;
+    record.state = 'sent';
+    record.next_attempt_at = null;
+    record.provider_message_id = `generated-sent-${record.send_id}`;
+    record.sent_at = clockIso();
+    record.updated_at = record.sent_at;
+    record.payload = null;
+    counters.provider_sends += 1;
+    const draft = drafts.get(logicalKey(record.owner_user_id, record.client_draft_id));
+    if (draft?.linked_send_id === record.send_id) {
+      draft.state = 'discarded';
+      draft.linked_send_id = record.send_id;
+      draft.discarded_at = clockIso();
+      draft.updated_at = draft.discarded_at;
+    }
+    recordEvent('provider_send_committed', request, pathname, {
+      send_id: record.send_id,
+      scheduled_for: record.scheduled_for,
+    });
+  }
+
+  function ownedOutbound(sendId) {
+    return outbounds.get(outboundKey(currentUser.id, sendId)) || null;
+  }
+
+  async function handleOutboundSend(request, response, pathname) {
+    markExpectedMutation(request, pathname, 'outbound_accept');
+    let body;
+    try {
+      body = await readJson(request);
+      if (!isUuid(body.idempotency_key)) throw new Error('idempotency_key must be a UUID');
+      if (!isUuid(body.client_draft_id) || !Number.isSafeInteger(body.draft_revision)) {
+        throw new Error('A durable generated draft is required');
+      }
+      if (!accountForUser(currentUser.id, body.account_id)) {
+        throw new Error('Generated account is not owned by this user');
+      }
+      for (const field of ['to', 'cc', 'bcc']) {
+        if (!Array.isArray(body[field] || []) || !(body[field] || []).every(isGeneratedAddress)) {
+          counters.non_example_test_rejections += 1;
+          throw new Error(`${field} accepts only .example.test addresses`);
+        }
+      }
+    } catch (error) {
+      counters.rejected_payloads += 1;
+      return writeError(response, 422, 'outbound_invalid', error.message);
+    }
+
+    const draft = drafts.get(logicalKey(currentUser.id, body.client_draft_id));
+    if (
+      !draft
+      || draft.account_id !== body.account_id
+      || draft.revision !== body.draft_revision
+      || draft.state !== 'synced'
+    ) {
+      return writeError(response, 409, 'outbound_conflict', 'Generated draft is not ready to send');
+    }
+    const scheduleMs = body.scheduled_for ? Date.parse(body.scheduled_for) : null;
+    if (body.scheduled_for && (!Number.isFinite(scheduleMs) || scheduleMs < clockNowMs + 60_000)) {
+      return writeError(response, 422, 'outbound_invalid', 'Schedule must be at least one minute ahead');
+    }
+    const immutable = {
+      account_id: body.account_id,
+      to: body.to || [],
+      cc: body.cc || [],
+      bcc: body.bcc || [],
+      subject: body.subject || '',
+      body_html: body.body_html || '',
+      body_text: body.body_text || '',
+      source_email_id: body.source_email_id || null,
+      client_draft_id: body.client_draft_id,
+      draft_revision: body.draft_revision,
+      scheduled_for: body.scheduled_for || null,
+      schedule_timezone: body.schedule_timezone || null,
+    };
+    const payloadHash = sha256(immutable);
+    const existingId = outboundIdempotency.get(
+      outboundIdempotencyKey(currentUser.id, body.idempotency_key),
+    );
+    if (existingId) {
+      const existing = ownedOutbound(existingId);
+      if (existing?.payload_hash !== payloadHash) {
+        return writeError(response, 409, 'outbound_conflict', 'Idempotency key changed payload');
+      }
+      return writeJson(response, outboundResponse(existing), 202);
+    }
+
+    const sendId = randomUUID();
+    const undoUntil = new Date(clockNowMs + DEFAULT_DISCARD_WINDOW_MS).toISOString();
+    const executeAfter = body.scheduled_for
+      ? new Date(scheduleMs).toISOString()
+      : undoUntil;
+    const record = {
+      send_id: sendId,
+      idempotency_key: body.idempotency_key,
+      owner_user_id: currentUser.id,
+      account_id: body.account_id,
+      source_email_id: body.source_email_id || null,
+      client_draft_id: body.client_draft_id,
+      payload_hash: payloadHash,
+      payload: immutable,
+      state: 'staged',
+      scheduled_for: body.scheduled_for ? new Date(scheduleMs).toISOString() : null,
+      schedule_timezone: body.schedule_timezone || null,
+      execute_after: executeAfter,
+      undo_until: undoUntil,
+      next_attempt_at: executeAfter,
+      attempt_count: 0,
+      provider_message_id: null,
+      created_at: clockIso(),
+      updated_at: clockIso(),
+      sent_at: null,
+      cancelled_at: null,
+    };
+    outbounds.set(outboundKey(currentUser.id, sendId), record);
+    outboundIdempotency.set(
+      outboundIdempotencyKey(currentUser.id, body.idempotency_key),
+      sendId,
+    );
+    draft.state = 'sending';
+    draft.linked_send_id = sendId;
+    draft.updated_at = clockIso();
+    counters.outbound_accepts += 1;
+    recordEvent('outbound_accepted', request, pathname, {
+      send_id: sendId,
+      scheduled_for: record.scheduled_for,
+    });
+    return writeJson(response, outboundResponse(record), 202);
+  }
+
+  function handleOutboundGet(request, response, pathname, record) {
+    if (!record) return writeError(response, 404, 'outbound_not_found', 'Generated send not found');
+    advanceOutbound(request, pathname, record);
+    return writeJson(response, outboundResponse(record));
+  }
+
+  function cancelOutbound(request, response, pathname, record) {
+    markExpectedMutation(request, pathname, 'outbound_cancel');
+    if (!record) return writeError(response, 404, 'outbound_not_found', 'Generated send not found');
+    if (record.state === 'cancelled') return writeJson(response, outboundResponse(record));
+    const undoRequest = pathname.endsWith('/undo');
+    const canUndo = undoRequest && clockNowMs <= Date.parse(record.undo_until);
+    const canCancelSchedule = !undoRequest && record.scheduled_for
+      && clockNowMs < Date.parse(record.execute_after);
+    if (record.state !== 'staged' || (!canUndo && !canCancelSchedule)) {
+      return writeError(response, 409, 'outbound_conflict', 'Generated schedule can no longer be cancelled');
+    }
+    record.state = 'cancelled';
+    record.payload = null;
+    record.next_attempt_at = null;
+    record.cancelled_at = clockIso();
+    record.updated_at = record.cancelled_at;
+    const draft = drafts.get(logicalKey(currentUser.id, record.client_draft_id));
+    if (draft?.linked_send_id === record.send_id) {
+      draft.state = 'synced';
+      draft.linked_send_id = null;
+      draft.updated_at = clockIso();
+    }
+    counters.outbound_cancels += 1;
+    return writeJson(response, outboundResponse(record));
+  }
+
+  function sendOutboundNow(request, response, pathname, record) {
+    markExpectedMutation(request, pathname, 'outbound_send_now');
+    if (!record) return writeError(response, 404, 'outbound_not_found', 'Generated send not found');
+    if (record.state !== 'staged' || !record.scheduled_for || clockNowMs >= Date.parse(record.execute_after)) {
+      return writeError(response, 409, 'outbound_conflict', 'Generated schedule can no longer send early');
+    }
+    counters.outbound_send_now += 1;
+    record.execute_after = clockIso();
+    record.undo_until = record.execute_after;
+    record.next_attempt_at = record.execute_after;
+    advanceOutbound(request, pathname, record);
+    return writeJson(response, outboundResponse(record));
+  }
+
   function mailboxEmails() {
     const sources = Object.values(SOURCE_MESSAGES)
       .filter(source => source.owner_user_id === currentUser.id)
@@ -1122,6 +1354,16 @@ export function createGeneratedProviderDraftFixture({
 
   function auditPayload() {
     const logicalDrafts = [...drafts.values()].map(draftSummary);
+    const logicalOutbounds = [...outbounds.values()].map(record => ({
+      send_id: record.send_id,
+      owner_user_id: record.owner_user_id,
+      account_id: record.account_id,
+      state: record.state,
+      scheduled_for: record.scheduled_for,
+      execute_after: record.execute_after,
+      attempt_count: record.attempt_count,
+      payload_retained: Boolean(record.payload),
+    }));
     return {
       fixture: 'generated-provider-draft-sessions',
       fixture_domains: ['example.test'],
@@ -1130,12 +1372,14 @@ export function createGeneratedProviderDraftFixture({
       connectivity,
       current_user_id: currentUser?.id || null,
       discard_window_ms: activeDiscardWindowMs,
+      clock_now: clockIso(),
       counters: {
         ...counters,
         logical_drafts: logicalDrafts.length,
         live_provider_drafts: logicalDrafts.filter(item => item.state !== 'discarded').length,
       },
       logical_drafts: logicalDrafts,
+      logical_outbounds: logicalOutbounds,
       events: clone(events),
     };
   }
@@ -1191,12 +1435,18 @@ export function createGeneratedProviderDraftFixture({
     firstLostResponseUsed = false;
     firstHeldResponseUsed = false;
     drafts.clear();
+    outbounds.clear();
+    outboundIdempotency.clear();
     mutations.clear();
     offlineMutationIds.clear();
     events.length = 0;
+    clockNowMs = Number.isFinite(Date.parse(body.clock_now))
+      ? Date.parse(body.clock_now)
+      : Date.parse('2026-08-30T16:00:00.000Z');
     recordEvent('qa_reset', request, '/api/qa/reset', {
       scenario,
       discard_window_ms: activeDiscardWindowMs,
+      clock_now: clockIso(),
     });
     return writeJson(response, {
       reset: true,
@@ -1233,6 +1483,16 @@ export function createGeneratedProviderDraftFixture({
       let body = {};
       try { body = await readJson(request); } catch { body = {}; }
       return resetFixture(request, response, body);
+    }
+    if (request.method === 'POST' && pathname === '/api/qa/clock') {
+      const body = await readJson(request);
+      const explicit = Date.parse(body.now);
+      if (Number.isFinite(explicit)) clockNowMs = explicit;
+      else if (Number.isFinite(Number(body.advance_ms))) clockNowMs += Number(body.advance_ms);
+      else return writeError(response, 422, 'qa_invalid', 'Provide now or advance_ms');
+      counters.qa_control_mutations += 1;
+      recordEvent('qa_clock', request, pathname, { clock_now: clockIso() });
+      return writeJson(response, { clock_now: clockIso() });
     }
     if (request.method === 'POST' && pathname === '/api/qa/connectivity') {
       const body = await readJson(request);
@@ -1314,8 +1574,37 @@ export function createGeneratedProviderDraftFixture({
     if (request.method === 'GET' && pathname === '/api/emails/actions/recent') {
       return writeJson(response, []);
     }
-    if (request.method === 'GET' && pathname === '/api/compose/sends/recent') {
+    if (request.method === 'GET' && pathname === '/api/calendar/upcoming') {
       return writeJson(response, []);
+    }
+    if (request.method === 'GET' && pathname === '/api/todos/') {
+      return writeJson(response, []);
+    }
+    if (request.method === 'GET' && pathname === '/api/ai/trends') {
+      return writeJson(response, { summary: '', urgent_count: 0 });
+    }
+    if (
+      request.method === 'GET'
+      && ['/api/ai/needs-reply', '/api/ai/awaiting-response', '/api/ai/digests'].includes(pathname)
+    ) {
+      return writeJson(response, { emails: [], digests: [], total: 0 });
+    }
+    if (request.method === 'GET' && pathname === '/api/chat/conversations') {
+      return writeJson(response, []);
+    }
+    if (request.method === 'GET' && pathname === '/api/compose/sends/recent') {
+      const records = [...outbounds.values()]
+        .filter(record => record.owner_user_id === currentUser.id)
+        .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at));
+      records.forEach(record => advanceOutbound(request, pathname, record));
+      return writeJson(response, records.map(outboundResponse));
+    }
+    if (request.method === 'GET' && pathname === '/api/compose/sends/scheduled') {
+      const records = [...outbounds.values()]
+        .filter(record => record.owner_user_id === currentUser.id && record.state === 'staged' && record.scheduled_for)
+        .sort((left, right) => Date.parse(left.execute_after) - Date.parse(right.execute_after));
+      records.forEach(record => advanceOutbound(request, pathname, record));
+      return writeJson(response, records.filter(record => record.state === 'staged').map(outboundResponse));
     }
     if (request.method === 'GET' && pathname === '/api/compose/drafts/recent') {
       const records = [...drafts.values()]
@@ -1345,6 +1634,51 @@ export function createGeneratedProviderDraftFixture({
 
     if (request.method === 'POST' && pathname === '/api/compose/draft') {
       return handleDraftUpsert(request, response, pathname);
+    }
+    if (request.method === 'POST' && pathname === '/api/compose/send') {
+      return handleOutboundSend(request, response, pathname);
+    }
+    const outboundByKeyMatch = pathname.match(
+      /^\/api\/compose\/sends\/by-idempotency\/([^/]+)$/,
+    );
+    if (request.method === 'GET' && outboundByKeyMatch) {
+      const sendId = outboundIdempotency.get(outboundIdempotencyKey(
+        currentUser.id,
+        decodeURIComponent(outboundByKeyMatch[1]),
+      ));
+      return handleOutboundGet(request, response, pathname, sendId ? ownedOutbound(sendId) : null);
+    }
+    const outboundCancelMatch = pathname.match(/^\/api\/compose\/sends\/([^/]+)\/cancel$/);
+    if (request.method === 'POST' && outboundCancelMatch) {
+      return cancelOutbound(
+        request,
+        response,
+        pathname,
+        ownedOutbound(decodeURIComponent(outboundCancelMatch[1])),
+      );
+    }
+    const outboundSendNowMatch = pathname.match(/^\/api\/compose\/sends\/([^/]+)\/send-now$/);
+    if (request.method === 'POST' && outboundSendNowMatch) {
+      return sendOutboundNow(
+        request,
+        response,
+        pathname,
+        ownedOutbound(decodeURIComponent(outboundSendNowMatch[1])),
+      );
+    }
+    const outboundUndoMatch = pathname.match(/^\/api\/compose\/sends\/([^/]+)\/undo$/);
+    if (request.method === 'POST' && outboundUndoMatch) {
+      const record = ownedOutbound(decodeURIComponent(outboundUndoMatch[1]));
+      return cancelOutbound(request, response, pathname, record);
+    }
+    const outboundGetMatch = pathname.match(/^\/api\/compose\/sends\/([^/]+)$/);
+    if (request.method === 'GET' && outboundGetMatch) {
+      return handleOutboundGet(
+        request,
+        response,
+        pathname,
+        ownedOutbound(decodeURIComponent(outboundGetMatch[1])),
+      );
     }
     const detailMatch = pathname.match(
       /^\/api\/compose\/drafts\/by-client-id\/([^/]+)$/,

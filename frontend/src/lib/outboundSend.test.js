@@ -163,6 +163,47 @@ test('one logical submit creates one key, offers deadline-bound Undo, and restor
   assert.equal(get(controller)[0].state, 'cancelled');
 });
 
+test('scheduled acceptance uses a short truthful confirmation and persistent cancellation authority', async () => {
+  const notices = [];
+  const restored = [];
+  const scheduled = serverOperation({
+    scheduled_for: '2026-08-31T13:00:00.000Z',
+    schedule_timezone: 'America/New_York',
+    execute_after: '2026-08-31T13:00:00.000Z',
+    can_cancel: true,
+    can_send_now: true,
+  });
+  const transport = {
+    create: async () => scheduled,
+    lookupByIdempotency: async () => { throw missingError(); },
+    get: async () => scheduled,
+    cancelScheduled: async () => ({
+      ...scheduled,
+      state: 'cancelled',
+      can_undo: false,
+      can_cancel: false,
+      can_send_now: false,
+      cancelled_at: '2026-08-30T16:00:02.000Z',
+      updated_at: '2026-08-30T16:00:02.000Z',
+    }),
+  };
+  const controller = testController(transport, { notify: (...args) => notices.push(args) });
+
+  const operation = await controller.submit({ scheduled_for: scheduled.scheduled_for }, {
+    onRestore: (item, reason) => restored.push([item.state, reason]),
+  });
+
+  assert.equal(operation.scheduled_for, scheduled.scheduled_for);
+  assert.equal(operation.can_cancel, true);
+  assert.match(notices[0][0], /^Email scheduled for /);
+  assert.equal(notices[0][2], 6_000);
+  assert.equal(notices[0][3].actionLabel, 'Cancel');
+
+  await notices[0][3].onAction();
+  assert.deepEqual(restored, [['cancelled', 'cancelled']]);
+  assert.equal(get(controller)[0].state, 'cancelled');
+});
+
 test('a lost POST is looked up and replayed only with the same key', async () => {
   const createKeys = [];
   let createCalls = 0;
@@ -365,6 +406,27 @@ test('recent unexpired staged send rehydrates actionable Undo with truthful canc
 
   assert.equal(notices.at(-1)[0], 'Send cancelled');
   assert.equal(notices.some(([message]) => /draft restored/i.test(message)), false);
+});
+
+test('recent scheduled acceptance never rehydrates the immediate-send Undo toast', async () => {
+  const notices = [];
+  const scheduled = serverOperation({
+    scheduled_for: '2026-08-31T13:00:00.000Z',
+    schedule_timezone: 'America/New_York',
+    execute_after: '2026-08-31T13:00:00.000Z',
+    can_cancel: true,
+    can_send_now: true,
+  });
+  const controller = testController({
+    create: async () => scheduled,
+    lookupByIdempotency: async () => scheduled,
+    get: async () => scheduled,
+    listRecent: async () => [scheduled],
+  }, { notify: (...args) => notices.push(args) });
+
+  await controller.loadRecent();
+
+  assert.deepEqual(notices, []);
 });
 
 test('recent staged send can attach reload recovery before Undo', async () => {

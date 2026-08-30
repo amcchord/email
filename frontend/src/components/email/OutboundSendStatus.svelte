@@ -3,6 +3,7 @@
   import { api } from '../../lib/api.js';
   import {
     authenticatedSessionGeneration,
+    accounts,
     captureAuthenticatedSession,
     currentPage,
     isAuthenticatedSessionCurrent,
@@ -20,6 +21,7 @@
     restoreOutboundComposeDraft,
   } from '../../lib/outboundDraftRecovery.js';
   import Icon from '../common/Icon.svelte';
+  import { formatScheduledDelivery } from '../../lib/sendLater.js';
 
   let mounted = false;
   let intervalId = null;
@@ -28,6 +30,8 @@
   let dismissedFailures = $state(new Set());
   let durableStorage = null;
   let recoveredRetainedDraftIds = new Set();
+  let scheduledExpanded = $state(false);
+  let scheduledActionId = $state(null);
 
   let reconciling = $derived(
     $outboundSendOperations.filter(operation => operation.state === 'reconciling'),
@@ -37,6 +41,12 @@
       operation.state === 'failed' && !dismissedFailures.has(failureIdentity(operation))
     )),
   );
+  let scheduled = $derived(
+    $outboundSendOperations
+      .filter(operation => operation.state === 'staged' && operation.scheduled_for)
+      .sort((left, right) => Date.parse(left.scheduled_for) - Date.parse(right.scheduled_for)),
+  );
+  let visibleScheduled = $derived(scheduledExpanded ? scheduled : scheduled.slice(0, 3));
   let composeOpen = $derived($currentPage === 'compose');
 
   function failureIdentity(operation) {
@@ -56,7 +66,11 @@
   async function loadOperations() {
     if (!mounted) return;
     try {
-      const operations = await outboundSends.loadRecent(20);
+      const recent = await outboundSends.loadRecent(20);
+      const activeScheduled = await outboundSends.loadScheduled(60);
+      const operations = [...recent, ...activeScheduled].filter((operation, index, all) => (
+        all.findIndex(candidate => String(candidate.send_id) === String(operation.send_id)) === index
+      ));
       for (const operation of operations) {
         if (!operation.client_draft_id) continue;
         if (operation.state === 'sent') {
@@ -156,18 +170,45 @@
     ]);
   }
 
+  function scheduledAccountLabel(operation) {
+    return $accounts.find(account => account.id === operation.account_id)?.email || 'Scheduled email';
+  }
+
+  async function runScheduledAction(operation, action) {
+    if (scheduledActionId) return;
+    scheduledActionId = operation.send_id;
+    try {
+      if (action === 'send-now') await outboundSends.sendScheduledNow(operation.send_id);
+      else await outboundSends.cancelScheduled(operation.send_id);
+      await loadOperations();
+    } catch (error) {
+      showToast(
+        error?.message || (action === 'send-now'
+          ? 'Could not send this scheduled email now'
+          : 'Could not cancel this scheduled email'),
+        'error',
+      );
+    } finally {
+      scheduledActionId = null;
+    }
+  }
+
   onMount(() => {
     mounted = true;
     unsubscribeGeneration = authenticatedSessionGeneration.subscribe(() => {
       if (!mounted) return;
       checking = false;
       dismissedFailures = new Set();
+      scheduledExpanded = false;
+      scheduledActionId = null;
       recoveredRetainedDraftIds = new Set();
       resetOutboundDraftRecoveries();
       outboundSends.resetForCurrentSession();
       void loadOperations();
     });
-    intervalId = window.setInterval(loadOperations, 15_000);
+    // Realtime/controller updates handle active work. This sparse list refresh
+    // is only cross-device and lost-event recovery for long-lived tabs.
+    intervalId = window.setInterval(loadOperations, 5 * 60_000);
   });
 
   onDestroy(() => {
@@ -179,6 +220,66 @@
     durableStorage = null;
   });
 </script>
+
+{#if scheduled.length > 0}
+  <section
+    class="border-b bg-violet-50/90 px-4 py-2.5 dark:bg-violet-950/25"
+    style="border-color: var(--border-color); color: var(--text-primary)"
+    aria-labelledby="scheduled-mail-heading"
+  >
+    <div class="flex flex-wrap items-center gap-3">
+      <span class="shrink-0 text-violet-600 dark:text-violet-400" aria-hidden="true">
+        <Icon name="clock" size={17} />
+      </span>
+      <div class="min-w-44 flex-1">
+        <p id="scheduled-mail-heading" class="text-xs font-semibold">
+          {scheduled.length === 1 ? '1 email scheduled' : `${scheduled.length} emails scheduled`}
+        </p>
+        <p class="mt-0.5 text-xs" style="color: var(--text-secondary)">
+          Delivery is held safely until the time shown. You can cancel and edit, or send early.
+        </p>
+      </div>
+      {#if scheduled.length > 3}
+        <button
+          type="button"
+          class="min-h-11 rounded-lg border px-3 text-xs font-semibold"
+          style="border-color: var(--border-color); background: var(--bg-primary)"
+          onclick={() => { scheduledExpanded = !scheduledExpanded; }}
+          aria-expanded={scheduledExpanded}
+        >{scheduledExpanded ? 'Show less' : `Show all ${scheduled.length}`}</button>
+      {/if}
+    </div>
+    <div class="mt-2 grid gap-2 lg:grid-cols-2">
+      {#each visibleScheduled as operation (operation.send_id)}
+        <div
+          class="flex flex-wrap items-center gap-2 rounded-xl border px-3 py-2"
+          style="border-color: var(--border-color); background: var(--bg-primary)"
+        >
+          <div class="min-w-48 flex-1">
+            <p class="truncate text-xs font-medium">{scheduledAccountLabel(operation)}</p>
+            <p class="text-[11px]" style="color: var(--text-secondary)">
+              {formatScheduledDelivery(operation.scheduled_for, operation.schedule_timezone || undefined)}
+            </p>
+          </div>
+          <button
+            type="button"
+            class="min-h-11 rounded-lg border px-3 text-xs font-semibold disabled:opacity-50"
+            style="border-color: var(--border-color); color: var(--color-accent-600)"
+            disabled={!operation.can_send_now || scheduledActionId === operation.send_id}
+            onclick={() => runScheduledAction(operation, 'send-now')}
+          >Send now</button>
+          <button
+            type="button"
+            class="min-h-11 rounded-lg border px-3 text-xs font-semibold disabled:opacity-50"
+            style="border-color: var(--border-color); color: var(--text-secondary)"
+            disabled={!operation.can_cancel || scheduledActionId === operation.send_id}
+            onclick={() => runScheduledAction(operation, 'cancel')}
+          >Cancel &amp; edit</button>
+        </div>
+      {/each}
+    </div>
+  </section>
+{/if}
 
 {#if reconciling.length > 0}
   <section

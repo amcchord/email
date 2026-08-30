@@ -29,6 +29,8 @@ from backend.services.outbound_messages import (
     _record_reconciling_locked,
     drain_due_outbound_messages,
     outbound_can_retry,
+    outbound_can_cancel,
+    outbound_scheduled_for,
     outbound_payload_hash,
     stage_outbound_message,
     undo_outbound_message,
@@ -61,6 +63,9 @@ def _outbound(*, attempted=False, payload=None):
         lease_token=uuid4(),
         rfc_message_id=f"<mail-{send_id}@email.mcchord.net>",
         provider_attempted_at=NOW if attempted else None,
+        execute_after=NOW + timedelta(seconds=OUTBOUND_UNDO_SECONDS),
+        undo_until=NOW + timedelta(seconds=OUTBOUND_UNDO_SECONDS),
+        draft_session_id=None,
         retry_authorized=False,
         retry_expires_at=None,
         payload=payload if payload is not None else {
@@ -96,6 +101,30 @@ def test_compose_request_normalizes_and_bounds_sensitive_payload():
         }])
 
 
+def test_compose_request_normalizes_an_absolute_schedule_and_requires_a_durable_draft():
+    client_draft_id = uuid4()
+    request = _request(
+        client_draft_id=client_draft_id,
+        draft_revision=3,
+        scheduled_for="2026-08-31T09:00:00-04:00",
+        schedule_timezone="America/New_York",
+    )
+    assert request.scheduled_for == datetime(2026, 8, 31, 13, 0, tzinfo=timezone.utc)
+
+    with pytest.raises(ValidationError, match="timezone-aware"):
+        _request(
+            client_draft_id=client_draft_id,
+            draft_revision=3,
+            scheduled_for="2026-08-31T09:00:00",
+        )
+    with pytest.raises(ValidationError, match="safely saved draft"):
+        _request(scheduled_for="2026-08-31T13:00:00Z")
+    with pytest.raises(ValidationError, match="Schedule timezone requires"):
+        _request(schedule_timezone="America/New_York")
+    with pytest.raises(ValidationError, match="exact source email"):
+        _request(archive_source_after_send=True)
+
+
 def test_payload_hash_ignores_idempotency_key_but_covers_content():
     first = _request(idempotency_key=uuid4())
     same = _request(idempotency_key=uuid4())
@@ -103,6 +132,17 @@ def test_payload_hash_ignores_idempotency_key_but_covers_content():
 
     assert outbound_payload_hash(first) == outbound_payload_hash(same)
     assert outbound_payload_hash(first) != outbound_payload_hash(changed)
+    scheduled = _request(
+        client_draft_id=uuid4(),
+        draft_revision=1,
+        scheduled_for="2026-08-31T13:00:00Z",
+        schedule_timezone="America/New_York",
+    )
+    rescheduled = scheduled.model_copy(update={
+        "idempotency_key": uuid4(),
+        "scheduled_for": datetime(2026, 9, 1, 13, 0, tzinfo=timezone.utc),
+    })
+    assert outbound_payload_hash(scheduled) != outbound_payload_hash(rescheduled)
 
 
 def test_outbound_model_and_routes_expose_complete_state_contract():
@@ -121,13 +161,30 @@ def test_outbound_model_and_routes_expose_complete_state_contract():
     }
     assert ("/api/compose/send", "POST") in route_contract
     assert ("/api/compose/sends/recent", "GET") in route_contract
+    assert ("/api/compose/sends/scheduled", "GET") in route_contract
     assert ("/api/compose/sends/by-idempotency/{idempotency_key}", "GET") in route_contract
     assert ("/api/compose/sends/{send_id}", "GET") in route_contract
     assert ("/api/compose/sends/{send_id}/undo", "POST") in route_contract
+    assert ("/api/compose/sends/{send_id}/cancel", "POST") in route_contract
+    assert ("/api/compose/sends/{send_id}/send-now", "POST") in route_contract
     assert ("/api/compose/sends/{send_id}/retry", "POST") in route_contract
     send_route = next(route for route in router.routes if route.path == "/api/compose/send")
     assert send_route.status_code == 202
     assert "payload" not in OutboundSendResponse.model_fields
+
+
+def test_scheduled_send_metadata_and_actionability_are_deadline_bound():
+    outbound = _outbound()
+    outbound.state = "staged"
+    outbound.created_at = NOW
+    outbound.undo_until = NOW + timedelta(seconds=OUTBOUND_UNDO_SECONDS)
+    outbound.execute_after = NOW + timedelta(hours=2)
+    outbound.payload["scheduled_for"] = outbound.execute_after.isoformat()
+    outbound.payload["schedule_timezone"] = "America/New_York"
+
+    assert outbound_scheduled_for(outbound) == outbound.execute_after
+    assert outbound_can_cancel(outbound, now=NOW + timedelta(hours=1)) is True
+    assert outbound_can_cancel(outbound, now=outbound.execute_after) is False
     assert "retry_authorized" not in OutboundSendResponse.model_fields
     index_names = {index.name for index in OutboundMessage.__table__.indexes}
     assert {
@@ -306,6 +363,63 @@ async def test_non_retryable_preflight_and_exhausted_reconciliation_scrub_payloa
     assert preflight.state == "failed"
     assert preflight.payload is None
     assert preflight.retry_authorized is False
+
+    restored_draft = SimpleNamespace(user_id=5, client_draft_id=uuid4())
+    restore_calls = []
+
+    async def restore_scheduled_draft(*_args, **kwargs):
+        restore_calls.append(kwargs)
+        return restored_draft
+
+    async def no_draft_publish(*_args, **_kwargs):
+        return None
+
+    import backend.services.drafts as drafts_module
+
+    monkeypatch.setattr(
+        drafts_module,
+        "restore_linked_draft_after_outbound_cancel",
+        restore_scheduled_draft,
+    )
+    monkeypatch.setattr(drafts_module, "publish_draft_session_event", no_draft_publish)
+    monkeypatch.setattr(drafts_module, "try_enqueue_draft_drain", no_draft_publish)
+
+    scheduled = _outbound()
+    scheduled.state = "processing"
+    scheduled.attempt_count = 1
+    scheduled.max_attempts = 8
+    scheduled.next_attempt_at = None
+    scheduled.failed_at = None
+    scheduled.error_code = None
+    scheduled.error_message = None
+    scheduled.updated_at = NOW
+    scheduled.lease_expires_at = NOW
+    scheduled.draft_session_id = 81
+    scheduled.execute_after = NOW
+    scheduled.undo_until = NOW + timedelta(seconds=OUTBOUND_UNDO_SECONDS)
+    scheduled.payload["scheduled_for"] = (NOW + timedelta(hours=1)).isoformat()
+    scheduled.payload["schedule_timezone"] = "America/New_York"
+    preflight = scheduled
+
+    await _record_preflight_failure(
+        outbound_id=scheduled.id,
+        lease_token=scheduled.lease_token,
+        disposition=OutboundErrorDisposition(
+            False,
+            "gmail_authorization",
+            "The sending account needs attention",
+        ),
+        now=NOW,
+    )
+    assert scheduled.state == "failed"
+    assert scheduled.payload is None
+    assert scheduled.draft_session_id is None
+    assert restore_calls == [{
+        "user_id": scheduled.user_id,
+        "draft_session_id": 81,
+        "send_id": scheduled.send_id,
+        "now": NOW,
+    }]
 
     reconciling = _outbound(attempted=True)
     reconciling.state = "processing"

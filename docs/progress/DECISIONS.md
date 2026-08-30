@@ -529,3 +529,27 @@ add a new entry that explicitly supersedes the old one.
   verified recipient envelope while preserving content. Recent Drafts is a
   metadata-only Continue Writing surface; opening a row still re-enters the
   exact durable session and compares any newer server revision.
+
+## D-029 — Scheduled delivery is one durable outbound operation
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Represent an immediate or future delivery as the same immutable,
+  user/account-owned outbound operation. Store the requested instant in UTC,
+  retain the IANA zone only as presentation context, require an exact linked
+  durable draft for future delivery, and let PostgreSQL due-time ownership
+  decide every cancel/send race. Redis is only an exact deferred wake; cron
+  remains the recovery authority.
+- Reason: A browser timer, long-lived Undo toast, provider draft schedule, or
+  repeated create request cannot guarantee delivery across reload, device
+  changes, worker restarts, daylight-saving transitions, or a lost response.
+  Creating a replacement operation for Send now or retry would also weaken the
+  established idempotency and ambiguity boundary.
+- Consequence: Scheduled operations share the existing Message-ID preflight,
+  provider-attempt marker, bounded retry, and lookup-only reconciliation.
+  Cancel is idempotent, scrubs payload content, and restores the linked draft;
+  Send now advances the same operation. Post-send Flow actions use a
+  deterministic durable mail-action key before terminal send truth, so reload
+  cannot drop Archive after send. The UI displays explicit zone/offset choices,
+  restores a metadata-only pending list across sessions, and reduces polling
+  while the due time is distant.

@@ -36,6 +36,7 @@
   import Icon from '../components/common/Icon.svelte';
   import DeferredRichEditor from '../components/email/DeferredRichEditor.svelte';
   import DraftStatus from '../components/email/DraftStatus.svelte';
+  import SendSplitButton from '../components/common/SendSplitButton.svelte';
 
   let to = $state('');
   let cc = $state('');
@@ -44,6 +45,7 @@
   let bodyHtml = $state('');
   let showCcBcc = $state(false);
   let sending = $state(false);
+  let sendMode = $state('send');
   let selectedAccountId = $state(null);
   let accountList = $state([]);
   let initialContent = $state('');
@@ -585,7 +587,7 @@
     }
   }
 
-  async function handleSend() {
+  async function handleSend(schedule = null) {
     if (sending || !writingSurfaceReady || !draftState.canSend || !sessionGuard?.isCurrent()) return false;
     if (!to.trim()) {
       showToast('Please add recipients', 'error');
@@ -598,6 +600,7 @@
 
     persistLocalDraft();
     sending = true;
+    sendMode = schedule ? 'schedule' : 'send';
     try {
       await draftController?.markSending(true);
     } catch (err) {
@@ -657,6 +660,10 @@
         client_draft_id: capturedDraftKey,
         attachments: attachments.map(item => ({ ...item })),
       };
+      if (schedule?.scheduledFor) {
+        data.scheduled_for = schedule.scheduledFor;
+        data.schedule_timezone = schedule.scheduleTimezone;
+      }
       const restoreEditor = async (operation, reason) => {
         return restoreOutboundComposeDraft(restoreDraft, operation, reason);
       };
@@ -682,6 +689,7 @@
     } finally {
       if (sessionGuard?.isCurrent()) {
         sending = false;
+        sendMode = 'send';
         await draftController?.markSending(false);
       }
     }
@@ -753,13 +761,14 @@
       >
         {savingDraft ? 'Saving…' : 'Save Draft'}
       </Button>
-      <Button variant="primary" size="sm" onclick={handleSend} disabled={sending || !writingSurfaceReady || !draftState.canSend}>
-        {#if sending}
-          Sending...
-        {:else}
-          Send
-        {/if}
-      </Button>
+      <SendSplitButton
+        compact={true}
+        disabled={!writingSurfaceReady || !draftState.canSend}
+        busy={sending}
+        busyLabel={sendMode === 'schedule' ? 'Scheduling…' : 'Sending…'}
+        onsend={() => handleSend()}
+        onschedule={schedule => handleSend(schedule)}
+      />
     </div>
   </div>
 

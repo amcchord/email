@@ -41,12 +41,18 @@ from backend.services.outbound_messages import (
     OutboundMessagePersistenceError,
     OutboundMessageQuotaExceeded,
     OutboundMessageValidationError,
+    cancel_scheduled_outbound_message,
     get_outbound_message,
     get_outbound_message_by_idempotency,
+    outbound_can_cancel,
     outbound_can_retry,
     outbound_can_undo,
+    outbound_schedule_timezone,
+    outbound_scheduled_for,
     recent_outbound_messages,
     retry_outbound_message,
+    scheduled_outbound_messages,
+    send_scheduled_outbound_now,
     stage_outbound_message,
     try_enqueue_outbound_drain,
     undo_outbound_message,
@@ -64,12 +70,16 @@ def _outbound_response(outbound: OutboundMessage) -> OutboundSendResponse:
         source_email_id=outbound.source_email_id,
         client_draft_id=outbound.client_draft_id,
         state=outbound.state,
+        scheduled_for=outbound_scheduled_for(outbound),
+        schedule_timezone=outbound_schedule_timezone(outbound),
         execute_after=outbound.execute_after,
         undo_until=outbound.undo_until,
         next_attempt_at=outbound.next_attempt_at,
         attempt_count=outbound.attempt_count,
         max_attempts=outbound.max_attempts,
         can_undo=outbound_can_undo(outbound),
+        can_cancel=outbound_can_cancel(outbound),
+        can_send_now=outbound_can_cancel(outbound),
         can_retry=outbound_can_retry(outbound),
         provider_message_id=outbound.provider_message_id,
         error_code=outbound.error_code,
@@ -231,7 +241,7 @@ async def send_email(
     ) as error:
         _raise_outbound_http_error(error)
     if created:
-        background_tasks.add_task(try_enqueue_outbound_drain)
+        background_tasks.add_task(try_enqueue_outbound_drain, outbound.execute_after)
         if outbound.draft_session_id is not None:
             background_tasks.add_task(try_enqueue_draft_drain)
     return _outbound_response(outbound)
@@ -244,6 +254,16 @@ async def recent_sends(
     user: User = Depends(get_current_user),
 ):
     sends = await recent_outbound_messages(db, user_id=user.id, limit=limit)
+    return [_outbound_response(outbound) for outbound in sends]
+
+
+@router.get("/sends/scheduled", response_model=list[OutboundSendResponse])
+async def scheduled_sends(
+    limit: int = Query(60, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    sends = await scheduled_outbound_messages(db, user_id=user.id, limit=limit)
     return [_outbound_response(outbound) for outbound in sends]
 
 
@@ -290,6 +310,45 @@ async def undo_send(
         outbound = await undo_outbound_message(db, user_id=user.id, send_id=send_id)
     except (OutboundMessageNotFound, OutboundMessageConflict) as error:
         _raise_outbound_http_error(error)
+    return _outbound_response(outbound)
+
+
+@router.post("/sends/{send_id}/cancel", response_model=OutboundSendResponse)
+async def cancel_scheduled_send(
+    send_id: UUID,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        outbound = await cancel_scheduled_outbound_message(
+            db,
+            user_id=user.id,
+            send_id=send_id,
+        )
+    except (OutboundMessageNotFound, OutboundMessageConflict) as error:
+        _raise_outbound_http_error(error)
+    if outbound.draft_session_id is not None:
+        background_tasks.add_task(try_enqueue_draft_drain)
+    return _outbound_response(outbound)
+
+
+@router.post("/sends/{send_id}/send-now", response_model=OutboundSendResponse)
+async def send_scheduled_now(
+    send_id: UUID,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        outbound = await send_scheduled_outbound_now(
+            db,
+            user_id=user.id,
+            send_id=send_id,
+        )
+    except (OutboundMessageNotFound, OutboundMessageConflict) as error:
+        _raise_outbound_http_error(error)
+    background_tasks.add_task(try_enqueue_outbound_drain, outbound.execute_after)
     return _outbound_response(outbound)
 
 

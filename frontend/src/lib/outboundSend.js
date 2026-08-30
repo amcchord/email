@@ -2,6 +2,7 @@ import { writable } from 'svelte/store';
 import { api } from './api.js';
 import { captureAuthEpoch, isAuthEpochCurrent } from './authSession.js';
 import { showToast } from './toasts.js';
+import { formatScheduledDelivery } from './sendLater.js';
 
 export const OUTBOUND_SEND_STATES = Object.freeze([
   'staged',
@@ -95,6 +96,10 @@ export function canUndoOutboundSend(operation, now = Date.now()) {
     && remainingOutboundUndoMs(operation, now) > 0;
 }
 
+export function isScheduledOutboundSend(operation) {
+  return Boolean(operation?.scheduled_for);
+}
+
 export function normalizeOutboundSendOperation(raw, { fallbackKey = null } = {}) {
   const source = raw && typeof raw === 'object' ? raw : {};
   const sendId = source.send_id ?? source.id ?? null;
@@ -114,6 +119,8 @@ export function normalizeOutboundSendOperation(raw, { fallbackKey = null } = {})
     source_email_id: safePositiveInteger(source.source_email_id),
     client_draft_id: safeUuid(source.client_draft_id),
     state,
+    scheduled_for: safeDate(source.scheduled_for),
+    schedule_timezone: safeText(source.schedule_timezone, 64),
     execute_after: safeDate(source.execute_after),
     undo_until: safeDate(source.undo_until),
     next_attempt_at: safeDate(source.next_attempt_at),
@@ -131,6 +138,8 @@ export function normalizeOutboundSendOperation(raw, { fallbackKey = null } = {})
     can_undo: typeof source.can_undo === 'boolean'
       ? source.can_undo
       : state === 'staged',
+    can_cancel: typeof source.can_cancel === 'boolean' ? source.can_cancel : false,
+    can_send_now: typeof source.can_send_now === 'boolean' ? source.can_send_now : false,
     can_retry: typeof source.can_retry === 'boolean'
       ? source.can_retry
       : false,
@@ -181,7 +190,7 @@ export function createOutboundSendController({
   cancel = globalThis.clearTimeout,
   pollIntervalMs = 2_500,
   maxCreateReplays = 2,
-  operationLimit = 50,
+  operationLimit = 120,
 } = {}) {
   if (!transport?.create || !transport?.lookupByIdempotency || !transport?.get) {
     throw new Error('Outbound send transport is incomplete');
@@ -290,6 +299,31 @@ export function createOutboundSendController({
     });
   }
 
+  function announceScheduled(operation, record) {
+    if (!operation.send_id || !operation.scheduled_for) return;
+    const session = record?.session || ensureSession();
+    announceOnce(operation, 'scheduled', () => {
+      notify(
+        `Email scheduled for ${formatScheduledDelivery(operation.scheduled_for, operation.schedule_timezone || undefined)}`,
+        'success',
+        6_000,
+        operation.can_cancel ? {
+          actionLabel: 'Cancel',
+          onAction: async () => {
+            try {
+              await cancelScheduled(operation.send_id);
+            } catch (error) {
+              if (!isSessionChangeError(error) && isSessionCurrent(session)) {
+                notify(error?.message || 'Could not cancel this scheduled email', 'error');
+              }
+            }
+          },
+          dismissLabel: 'Dismiss schedule confirmation',
+        } : undefined,
+      );
+    });
+  }
+
   function notifyReconciling(operation) {
     announceOnce(operation, 'reconciling', () => {
       notify('Confirming send status — do not resend this email', 'info', 6_000);
@@ -315,7 +349,8 @@ export function createOutboundSendController({
     }
 
     if (announceLifecycle && record && operation.state === 'staged') {
-      announceUndo(operation, record);
+      if (isScheduledOutboundSend(operation)) announceScheduled(operation, record);
+      else announceUndo(operation, record);
     } else if (announceLifecycle && operation.state === 'reconciling') {
       notifyReconciling(operation);
     }
@@ -357,20 +392,32 @@ export function createOutboundSendController({
     return operation;
   }
 
+  function operationPollDelay(operation) {
+    if (!POLLED_STATES.has(operation.state)) return Number.POSITIVE_INFINITY;
+    if (operation.state === 'staged' && isScheduledOutboundSend(operation)) {
+      const untilDue = Date.parse(operation.execute_after || '') - now();
+      if (Number.isFinite(untilDue) && untilDue > 10_000) {
+        return Math.max(pollIntervalMs, Math.min(15 * 60_000, untilDue - 5_000));
+      }
+    }
+    return pollIntervalMs;
+  }
+
   function hasPollableOperation() {
-    return operations.some(operation => POLLED_STATES.has(operation.state));
+    return operations.some(operation => Number.isFinite(operationPollDelay(operation)));
   }
 
   function schedulePollIfNeeded() {
     if (destroyed || pollTimer !== null || !hasPollableOperation()) return;
     const session = ensureSession();
+    const delay = Math.min(...operations.map(operationPollDelay));
     pollTimer = schedule(() => {
       pollTimer = null;
       void poll(session).catch(() => {
         // Session changes and transient poll failures are intentionally quiet.
         // The current session's monitor will schedule its own authoritative read.
       });
-    }, pollIntervalMs);
+    }, delay);
   }
 
   async function lookupOwnedOperation(idempotencyKey, session) {
@@ -491,12 +538,26 @@ export function createOutboundSendController({
       handleOperation(operation, { announceLifecycle: false });
       // Rehydrate only the still-actionable server deadline. Historical
       // terminal states remain silent when the global monitor mounts.
-      if (canUndoOutboundSend(operation, now())) {
+      if (canUndoOutboundSend(operation, now()) && !isScheduledOutboundSend(operation)) {
         announceUndo(operation, recordFor(operation));
       }
     }
     schedulePollIfNeeded();
     return operations;
+  }
+
+  async function loadScheduled(limit = 60) {
+    const session = ensureSession();
+    assertCurrent(session);
+    if (!transport.listScheduled) return [];
+    const result = await transport.listScheduled(limit);
+    assertCurrent(session);
+    const rawOperations = Array.isArray(result) ? result : [];
+    for (const raw of rawOperations) {
+      handleOperation(normalizeOutboundSendOperation(raw), { announceLifecycle: false });
+    }
+    schedulePollIfNeeded();
+    return rawOperations.map(raw => normalizeOutboundSendOperation(raw));
   }
 
   async function undo(sendId) {
@@ -540,6 +601,42 @@ export function createOutboundSendController({
     return next;
   }
 
+  async function cancelScheduled(sendId) {
+    const session = ensureSession();
+    assertCurrent(session);
+    const operation = findOperation(sendId);
+    if (!operation?.send_id || !operation.can_cancel || !isScheduledOutboundSend(operation)) {
+      notify('This scheduled email can no longer be cancelled', 'info');
+      return null;
+    }
+    if (!transport.cancelScheduled) throw new Error('Scheduled-send cancellation is unavailable');
+    const raw = await transport.cancelScheduled(operation.send_id);
+    assertCurrent(session);
+    return handleOperation(
+      normalizeOutboundSendOperation(raw, { fallbackKey: operation.idempotency_key }),
+      { announceLifecycle: true },
+    );
+  }
+
+  async function sendScheduledNow(sendId) {
+    const session = ensureSession();
+    assertCurrent(session);
+    const operation = findOperation(sendId);
+    if (!operation?.send_id || !operation.can_send_now || !isScheduledOutboundSend(operation)) {
+      notify('This scheduled email can no longer be sent early', 'info');
+      return null;
+    }
+    if (!transport.sendScheduledNow) throw new Error('Send now is unavailable');
+    const raw = await transport.sendScheduledNow(operation.send_id);
+    assertCurrent(session);
+    const next = handleOperation(
+      normalizeOutboundSendOperation(raw, { fallbackKey: operation.idempotency_key }),
+      { announceLifecycle: false },
+    );
+    notify('Sending scheduled email now', 'info', 4_000);
+    return next;
+  }
+
   function getLatestReversible() {
     ensureSession();
     return operations.find(operation => canUndoOutboundSend(operation, now())) || null;
@@ -576,9 +673,12 @@ export function createOutboundSendController({
     subscribe: stateStore.subscribe,
     submit,
     loadRecent,
+    loadScheduled,
     refreshOperation,
     poll,
     undo,
+    cancelScheduled,
+    sendScheduledNow,
     retry,
     getLatestReversible,
     attachCallbacks,
@@ -590,10 +690,13 @@ export function createOutboundSendController({
 const singletonTransport = {
   create: (payload, idempotencyKey) => api.sendEmail(payload, idempotencyKey),
   listRecent: (limit) => api.listRecentOutboundSends(limit),
+  listScheduled: (limit) => api.listScheduledOutboundSends(limit),
   lookupByIdempotency: (idempotencyKey) =>
     api.getOutboundSendByIdempotency(idempotencyKey),
   get: (sendId) => api.getOutboundSend(sendId),
   undo: (sendId) => api.undoOutboundSend(sendId),
+  cancelScheduled: (sendId) => api.cancelScheduledOutboundSend(sendId),
+  sendScheduledNow: (sendId) => api.sendScheduledOutboundNow(sendId),
   retry: (sendId) => api.retryOutboundSend(sendId),
 };
 

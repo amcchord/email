@@ -4,8 +4,9 @@ from email.utils import formataddr, getaddresses
 
 from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
 from typing import Literal, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 class EmailAddress(BaseModel):
@@ -269,6 +270,32 @@ class ComposeRequest(ComposeMessageBase):
     idempotency_key: UUID
     client_draft_id: Optional[UUID] = None
     draft_revision: Optional[StrictInt] = Field(default=None, gt=0)
+    scheduled_for: Optional[datetime] = None
+    schedule_timezone: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    archive_source_after_send: bool = False
+
+    @field_validator("scheduled_for")
+    @classmethod
+    def normalize_scheduled_for(cls, value: Optional[datetime]) -> Optional[datetime]:
+        if value is None:
+            return None
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("Scheduled delivery requires a timezone-aware date and time")
+        return value.astimezone(timezone.utc).replace(microsecond=0)
+
+    @field_validator("schedule_timezone")
+    @classmethod
+    def validate_schedule_timezone(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        candidate = value.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_+./-]+", candidate):
+            raise ValueError("Schedule timezone is invalid")
+        try:
+            ZoneInfo(candidate)
+        except ZoneInfoNotFoundError as error:
+            raise ValueError("Schedule timezone is invalid") from error
+        return candidate
 
     @model_validator(mode="after")
     def require_primary_recipient(self):
@@ -278,6 +305,12 @@ class ComposeRequest(ComposeMessageBase):
             raise ValueError("The send endpoint does not accept draft payloads")
         if (self.client_draft_id is None) != (self.draft_revision is None):
             raise ValueError("A linked draft requires both client_draft_id and draft_revision")
+        if self.schedule_timezone is not None and self.scheduled_for is None:
+            raise ValueError("Schedule timezone requires a scheduled delivery time")
+        if self.scheduled_for is not None and self.client_draft_id is None:
+            raise ValueError("Scheduled delivery requires a safely saved draft")
+        if self.archive_source_after_send and self.source_email_id is None:
+            raise ValueError("Archiving after send requires an exact source email")
         return self
 
 
@@ -366,12 +399,16 @@ class OutboundSendResponse(BaseModel):
     source_email_id: Optional[int] = None
     client_draft_id: Optional[UUID] = None
     state: OutboundSendState
+    scheduled_for: Optional[datetime] = None
+    schedule_timezone: Optional[str] = None
     execute_after: datetime
     undo_until: datetime
     next_attempt_at: Optional[datetime] = None
     attempt_count: int
     max_attempts: int
     can_undo: bool
+    can_cancel: bool
+    can_send_now: bool
     can_retry: bool
     provider_message_id: Optional[str] = None
     error_code: Optional[str] = None

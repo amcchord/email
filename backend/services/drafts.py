@@ -916,6 +916,81 @@ async def link_draft_for_outbound_send(
     return draft
 
 
+async def restore_linked_draft_after_outbound_cancel(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    draft_session_id: int,
+    send_id: UUID,
+    now: datetime,
+) -> DraftSession | None:
+    """Atomically return a pre-provider cancelled send to an editable draft."""
+    draft = (
+        await db.execute(
+            select(DraftSession)
+            .where(
+                DraftSession.id == draft_session_id,
+                DraftSession.user_id == user_id,
+                DraftSession.linked_send_id == send_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if draft is None or draft.state != "sending":
+        return None
+    draft.linked_send_id = None
+    draft.discard_at = None
+    draft.discard_undo_until = None
+    draft.error_code = None
+    draft.error_message = None
+    draft.updated_at = now
+    if draft.provider_draft_id is not None and draft.synced_revision == draft.revision:
+        draft.state = "synced"
+        draft.next_attempt_at = None
+    elif draft.provider_create_attempted_at is not None and draft.provider_draft_id is None:
+        draft.state = "reconciling"
+        draft.next_attempt_at = now
+    else:
+        draft.state = "pending"
+        draft.next_attempt_at = now
+    return draft
+
+
+async def prepare_linked_draft_for_outbound_discard(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    draft_session_id: int,
+    send_id: UUID,
+    now: datetime,
+) -> DraftSession | None:
+    """Make a sent operation's linked Gmail draft immediately discardable."""
+    draft = (
+        await db.execute(
+            select(DraftSession)
+            .where(
+                DraftSession.id == draft_session_id,
+                DraftSession.user_id == user_id,
+                DraftSession.linked_send_id == send_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if draft is None or draft.state != "sending":
+        return None
+    draft.discard_at = now
+    draft.discard_undo_until = now
+    draft.next_attempt_at = now
+    draft.error_code = None
+    draft.error_message = None
+    draft.updated_at = now
+    return draft
+
+
+async def publish_draft_session_event(draft: DraftSession) -> None:
+    await _publish_draft_event(draft.user_id, draft.client_draft_id)
+
+
 def classify_draft_error(exc: Exception) -> DraftErrorDisposition:
     status = getattr(getattr(exc, "resp", None), "status", None)
     if status is None:

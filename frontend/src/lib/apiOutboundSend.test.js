@@ -49,16 +49,22 @@ test('outbound lifecycle helpers use encoded operation-scoped routes', async t =
   };
 
   await api.listRecentOutboundSends(7);
+  await api.listScheduledOutboundSends(9);
   await api.getOutboundSendByIdempotency('key/with spaces');
   await api.getOutboundSend('send/with spaces');
   await api.undoOutboundSend('send/with spaces');
+  await api.cancelScheduledOutboundSend('send/with spaces');
+  await api.sendScheduledOutboundNow('send/with spaces');
   await api.retryOutboundSend('send/with spaces');
 
   assert.deepEqual(calls, [
     { url: '/api/compose/sends/recent?limit=7', method: 'GET' },
+    { url: '/api/compose/sends/scheduled?limit=9', method: 'GET' },
     { url: '/api/compose/sends/by-idempotency/key%2Fwith%20spaces', method: 'GET' },
     { url: '/api/compose/sends/send%2Fwith%20spaces', method: 'GET' },
     { url: '/api/compose/sends/send%2Fwith%20spaces/undo', method: 'POST' },
+    { url: '/api/compose/sends/send%2Fwith%20spaces/cancel', method: 'POST' },
+    { url: '/api/compose/sends/send%2Fwith%20spaces/send-now', method: 'POST' },
     { url: '/api/compose/sends/send%2Fwith%20spaces/retry', method: 'POST' },
   ]);
 });

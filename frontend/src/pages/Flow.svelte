@@ -20,12 +20,12 @@
     resolveReplySourceAccount,
   } from '../lib/replyEnvelope.js';
   import EmailHtmlFrame from '../components/email/EmailHtmlFrame.svelte';
-  import { secureOutboundSendKey, submitOutboundSend } from '../lib/outboundSend.js';
+  import { submitOutboundSend } from '../lib/outboundSend.js';
   import { restoreOutboundComposeDraft } from '../lib/outboundDraftRecovery.js';
-  import { isMailActionNetworkError } from '../lib/mailActionUX.js';
   import { createIndexedDbDraftStorage } from '../lib/draftStorage.js';
   import { createDurableReplyController } from '../lib/durableReply.js';
   import DraftStatus from '../components/email/DraftStatus.svelte';
+  import SendSplitButton from '../components/common/SendSplitButton.svelte';
 
   // --- Day Summary State ---
   let summaryLoading = $state(true);
@@ -79,6 +79,7 @@
   let threadLoading = $state(false);
   let replyBodyHtml = $state('');
   let inlineReplySending = $state(false);
+  let inlineReplySendMode = $state('send');
   let ignoringReplyEmailIds = $state([]);
   let replyIntent = $state(null);
   let collapsedMessages = $state({});
@@ -1601,30 +1602,7 @@
       && !durableReplyError;
   }
 
-  function archiveOutcomeCouldBeAmbiguous(error) {
-    const status = Number(error?.status);
-    return isMailActionNetworkError(error)
-      || status === 408
-      || status === 425
-      || status === 429
-      || status >= 500;
-  }
-
-  async function archiveSentReply(emailId, archiveIdempotencyKey) {
-    try {
-      await api.emailActions([emailId], 'archive', archiveIdempotencyKey);
-      return true;
-    } catch (error) {
-      if (!archiveOutcomeCouldBeAmbiguous(error)) throw error;
-      // The action request is idempotent. A read-only lookup distinguishes a
-      // lost response from a request that never reached the server without
-      // issuing a second mailbox mutation.
-      await api.getMailActionByIdempotency(archiveIdempotencyKey);
-      return true;
-    }
-  }
-
-  async function sendReply() {
+  async function sendReply(schedule = null) {
     if (!canSendReply() || !sessionIsCurrent()) return false;
     const email = selectedReplyEmail;
     const bodyHtmlAtStart = replyBodyHtml;
@@ -1652,10 +1630,13 @@
       draft_key: `client:${payload.client_draft_id}`,
       ...payload,
     };
-    const sendSession = captureAuthenticatedSession();
-    const archiveIdempotencyKey = archiveAtStart && sourceAtStart === 'needs_reply' && email.id
-      ? secureOutboundSendKey()
-      : null;
+    if (schedule?.scheduledFor) {
+      payload.scheduled_for = schedule.scheduledFor;
+      payload.schedule_timezone = schedule.scheduleTimezone;
+    }
+    if (archiveAtStart && sourceAtStart === 'needs_reply' && email.id) {
+      payload.archive_source_after_send = true;
+    }
     let editorReleased = false;
     const releaseEditor = () => {
       if (editorReleased || !sessionIsCurrent()) return;
@@ -1677,20 +1658,12 @@
     };
 
     inlineReplySending = true;
+    inlineReplySendMode = schedule ? 'schedule' : 'send';
     try {
       const operation = await submitOutboundSend(payload, {
         onAccepted: () => {},
         onSent: () => {
           void durableReplyStorage?.delete?.(sessionGuard.userId, payload.client_draft_id);
-          if (!archiveIdempotencyKey || !isAuthenticatedSessionCurrent(sendSession)) return;
-          void archiveSentReply(email.id, archiveIdempotencyKey).catch(error => {
-            if (isAuthenticatedSessionCurrent(sendSession)) {
-              showToast(
-                error?.message || 'Reply sent, but the original email archive status is not confirmed',
-                'error',
-              );
-            }
-          });
         },
         onRestore: (operation, reason) => restoreOutboundComposeDraft(restoreDraft, operation, reason),
       });
@@ -1706,6 +1679,7 @@
     } finally {
       if (sessionIsCurrent()) {
         inlineReplySending = false;
+        inlineReplySendMode = 'send';
         await controllerAtStart?.markSending(false);
       }
     }
@@ -2781,23 +2755,14 @@
                 <Icon name="external-link" size={12} />
                 Full Compose
               </button>
-              <button
-                onclick={sendReply}
+              <SendSplitButton
+                label={replyActionLabel}
                 disabled={!canSendReply()}
-                class="flex min-h-11 items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium transition-fast"
-                style="background: {!canSendReply() ? 'var(--border-color)' : 'var(--color-accent-500)'}; color: white"
-                title={replyContext?.available
-                  ? replyActionLabel
-                  : replyUnavailableMessage(replyContext?.reason)}
-              >
-                {#if inlineReplySending}
-                  <div class="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                  Sending...
-                {:else}
-                  <Icon name="send" size={12} />
-                  {replyActionLabel}
-                {/if}
-              </button>
+                busy={inlineReplySending}
+                busyLabel={inlineReplySendMode === 'schedule' ? 'Scheduling…' : 'Sending…'}
+                onsend={() => sendReply()}
+                onschedule={schedule => sendReply(schedule)}
+              />
             </div>
           </div>
         </div>

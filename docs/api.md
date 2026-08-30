@@ -851,9 +851,12 @@ does not mean Gmail has confirmed delivery.
 
 ```text
 POST /api/compose/send
+GET  /api/compose/sends/scheduled?limit=60
 GET  /api/compose/sends/recent?limit=20
 GET  /api/compose/sends/by-idempotency/{idempotency_key}
 GET  /api/compose/sends/{send_id}
+POST /api/compose/sends/{send_id}/cancel
+POST /api/compose/sends/{send_id}/send-now
 POST /api/compose/sends/{send_id}/undo
 POST /api/compose/sends/{send_id}/retry
 ```
@@ -872,6 +875,9 @@ Create requires one client-generated UUID for one immutable logical payload:
   "body_html": "<p>Generated fixture content</p>",
   "client_draft_id": "ca309a94-c45d-430c-a707-af10376124b1",
   "draft_revision": 7,
+  "scheduled_for": "2026-08-31T13:00:00Z",
+  "schedule_timezone": "America/New_York",
+  "archive_source_after_send": false,
   "source_email_id": null,
   "in_reply_to": null,
   "references": null,
@@ -880,6 +886,14 @@ Create requires one client-generated UUID for one immutable logical payload:
 }
 ```
 
+Omit `scheduled_for` for an immediate send. A scheduled send must be at least
+60 seconds and at most 365 days in the future, must include a valid IANA
+`schedule_timezone`, and must link the exact current durable draft revision.
+The server stores the instant in UTC; the timezone is presentation context for
+the browser and does not alter the delivery instant. Ambiguous fall-back local
+times are shown as two explicit offset choices, while nonexistent spring-forward
+times are rejected before admission.
+
 The account must be active and owned by the current user. A message requires a
 To recipient; the server accepts at most 100 unique RFC mailboxes, ten
 attachments, 18 MiB of decoded attachment bytes, and bounded headers/bodies.
@@ -887,6 +901,13 @@ Header newlines, invalid base64, duplicates across To/Cc/Bcc, foreign accounts,
 and inactive accounts fail before persistence. A pure-ASGI guard rejects a
 declared or streamed request body above 50 MiB with 413 before FastAPI parses
 the message JSON.
+
+Flow may set `archive_source_after_send=true` only with an exact validated
+`source_email_id`. The outbound worker durably stages one deterministic archive
+mail action after provider delivery is confirmed and before publishing terminal
+`sent` truth. Reconciliation repeats that same idempotent action if a process
+stops between those commits, so a scheduled reply does not lose Flow's
+archive-after-send preference after reload.
 
 Admission is serialized transactionally per user. At most 30 active sends may
 consume one account's capacity and 60 may consume one user's capacity; the
@@ -914,12 +935,16 @@ logical send.
   "source_email_id": null,
   "client_draft_id": "ca309a94-c45d-430c-a707-af10376124b1",
   "state": "staged",
-  "execute_after": "2026-08-30T12:00:10Z",
+  "execute_after": "2026-08-31T13:00:00Z",
   "undo_until": "2026-08-30T12:00:10Z",
-  "next_attempt_at": "2026-08-30T12:00:10Z",
+  "next_attempt_at": "2026-08-31T13:00:00Z",
+  "scheduled_for": "2026-08-31T13:00:00Z",
+  "schedule_timezone": "America/New_York",
   "attempt_count": 0,
   "max_attempts": 8,
-  "can_undo": true,
+  "can_undo": false,
+  "can_cancel": true,
+  "can_send_now": true,
   "can_retry": false,
   "provider_message_id": null,
   "error_code": null,
@@ -935,6 +960,14 @@ logical send.
 States are `staged`, `processing`, `retry_wait`, `reconciling`, `sent`,
 `failed`, and `cancelled`. Undo succeeds only while the operation remains
 staged and the server's ten-second deadline is open; otherwise it returns 409.
+For a scheduled operation, the same ten-second Undo window protects admission,
+then `cancel` remains authoritative until a worker owns the due send. Cancel is
+idempotent, scrubs the outbox payload, and restores the linked durable draft.
+`send-now` advances a cancellable scheduled operation to the durable delivery
+queue; it never bypasses the normal provider preflight, Message-ID lookup, or
+ambiguity policy. The bounded `scheduled` list returns only active future
+operations, ordered by delivery time, so browsers can restore the manager after
+reload or on another device.
 `can_retry` is authoritative. A failure after any possible Gmail attempt is
 never retryable. A rare pre-provider failure may expose `can_retry=true` for an
 internal one-hour recovery window; the deadline itself is deliberately not
@@ -949,7 +982,10 @@ one Gmail send request. A response, timeout, worker interruption, or lease loss
 after that boundary which cannot prove the Gmail result enters `reconciling`.
 Reconciliation performs only Sent lookups; it never replays the message.
 Expired pre-attempt work may follow bounded retry policy. Redis only wakes the
-drainer; PostgreSQL and the periodic cron sweep provide recovery.
+drainer; PostgreSQL and the periodic cron sweep provide recovery. Future work
+uses an exact deferred wake time rather than frequent status polling; the
+browser uses sparse list recovery and delays per-operation reads while a
+schedule is far away.
 
 `client_draft_id` and `draft_revision` are optional only as a pair. When
 present, they must identify the current user's exact durable draft revision;
