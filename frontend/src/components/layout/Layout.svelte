@@ -63,6 +63,7 @@
       'nav.flow':     () => navigateByShortcut('flow'),
       'nav.inbox':    () => navigateByShortcut('inbox'),
       'nav.calendar': () => navigateByShortcut('calendar'),
+      'nav.glance':   () => navigateByShortcut('at-a-glance'),
       'nav.todos':    () => navigateByShortcut('todos'),
       'nav.stats':    () => navigateByShortcut('stats'),
       'nav.insights': () => navigateByShortcut('ai-insights'),

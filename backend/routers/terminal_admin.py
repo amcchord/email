@@ -36,9 +36,13 @@ from backend.services.eink.ha_client import (
 )
 from backend.services.terminal.battery import BatteryReading, estimate_battery_health
 from backend.services.terminal.catalog import (
+    CatalogError,
     content_type_options,
     design_options,
     display_profile_options,
+    resolve_design,
+    resolve_profile,
+    resolve_view,
     view_options,
     web_display_definitions,
     web_display_options,
@@ -48,6 +52,7 @@ from backend.services.terminal.renderer import (
     render_day_ahead_bmp,
 )
 from backend.services.terminal.variants import VARIANTS
+from backend.services.terminal.web_display import render_web_frame
 from backend.utils.security import decrypt_value, encrypt_value
 
 logger = logging.getLogger(__name__)
@@ -180,6 +185,16 @@ class TerminalDeviceUpdate(BaseModel):
     #   - integer in [30, 21600] -> set override
     refresh_interval_sec: Optional[int] = Field(default=None)
     refresh_interval_clear: bool = False
+
+
+class AtAGlanceExperienceResponse(BaseModel):
+    """Credential-free data needed by the first-class At a Glance page."""
+
+    views: list[dict]
+    designs: list[dict]
+    display_profiles: list[dict]
+    combinations: list[dict]
+    devices: list[TerminalDeviceResponse]
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -349,6 +364,63 @@ def _serialize_device(
     )
 
 
+async def _list_owned_device_summaries(
+    db: AsyncSession,
+    *,
+    user_id: int,
+) -> list[TerminalDeviceResponse]:
+    """Return owner-scoped terminal summaries with bounded battery history."""
+    result = await db.execute(
+        select(TerminalDevice)
+        .where(TerminalDevice.user_id == user_id)
+        .order_by(TerminalDevice.last_seen_at.desc().nullslast(), TerminalDevice.id.desc())
+    )
+    devices = list(result.scalars().all())
+    if not devices:
+        return []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=45)
+    samples_result = await db.execute(
+        select(TerminalBatterySample)
+        .where(
+            TerminalBatterySample.device_id.in_([device.id for device in devices]),
+            TerminalBatterySample.observed_at >= cutoff,
+        )
+        .order_by(
+            TerminalBatterySample.device_id.asc(),
+            TerminalBatterySample.observed_at.asc(),
+        )
+    )
+    samples_by_device: dict[int, list[TerminalBatterySample]] = defaultdict(list)
+    for sample in samples_result.scalars().all():
+        samples_by_device[sample.device_id].append(sample)
+    return [_serialize_device(d, samples_by_device[d.id]) for d in devices]
+
+
+async def _read_experience_settings(
+    db: AsyncSession,
+    *,
+    user_id: int,
+) -> TerminalSettings:
+    """Read rendering settings without provisioning terminal credentials.
+
+    Users who have never configured At a Glance can still preview the catalog.
+    The transient settings object is deliberately never added or committed.
+    """
+    result = await db.execute(
+        select(TerminalSettings).where(TerminalSettings.user_id == user_id)
+    )
+    settings = result.scalar_one_or_none()
+    if settings is not None:
+        return settings
+    return TerminalSettings(
+        user_id=user_id,
+        code="",
+        timezone="UTC",
+        home_assistant_url=None,
+        home_assistant_token_encrypted=None,
+    )
+
+
 # ── Routes ──────────────────────────────────────────────────────────
 
 
@@ -359,6 +431,60 @@ async def get_settings(
 ):
     settings = await _get_or_create_settings(db, user)
     return await _settings_response(db, settings)
+
+
+@router.get("/experience", response_model=AtAGlanceExperienceResponse)
+async def get_experience(
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return the read-only, credential-free At a Glance experience catalog."""
+    response.headers["Cache-Control"] = "private, no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+    return AtAGlanceExperienceResponse(
+        views=view_options(),
+        designs=design_options(),
+        display_profiles=display_profile_options(),
+        combinations=web_display_definitions(),
+        devices=await _list_owned_device_summaries(db, user_id=user.id),
+    )
+
+
+@router.get("/experience/preview.png")
+async def preview_experience_png(
+    view: Optional[str] = None,
+    design: Optional[str] = None,
+    profile: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Render one authenticated catalog combination as a canonical web PNG."""
+    try:
+        resolved_profile = resolve_profile(profile)
+        resolved_view = resolve_view(view, profile=resolved_profile)
+        resolved_design = resolve_design(resolved_view, design)
+    except CatalogError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    settings = await _read_experience_settings(db, user_id=user.id)
+    frame = await render_web_frame(
+        settings=settings,
+        view=resolved_view,
+        design=resolved_design,
+        profile=resolved_profile,
+    )
+    return Response(
+        content=frame.body,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Cross-Origin-Resource-Policy": "same-origin",
+            "ETag": frame.etag,
+        },
+    )
 
 
 @router.post("/settings/regenerate", response_model=TerminalSettingsResponse)
@@ -472,30 +598,7 @@ async def list_devices(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(TerminalDevice)
-        .where(TerminalDevice.user_id == user.id)
-        .order_by(TerminalDevice.last_seen_at.desc().nullslast(), TerminalDevice.id.desc())
-    )
-    devices = list(result.scalars().all())
-    if not devices:
-        return []
-    cutoff = datetime.now(timezone.utc) - timedelta(days=45)
-    samples_result = await db.execute(
-        select(TerminalBatterySample)
-        .where(
-            TerminalBatterySample.device_id.in_([device.id for device in devices]),
-            TerminalBatterySample.observed_at >= cutoff,
-        )
-        .order_by(
-            TerminalBatterySample.device_id.asc(),
-            TerminalBatterySample.observed_at.asc(),
-        )
-    )
-    samples_by_device: dict[int, list[TerminalBatterySample]] = defaultdict(list)
-    for sample in samples_result.scalars().all():
-        samples_by_device[sample.device_id].append(sample)
-    return [_serialize_device(d, samples_by_device[d.id]) for d in devices]
+    return await _list_owned_device_summaries(db, user_id=user.id)
 
 
 @router.patch("/devices/{device_id}", response_model=TerminalDeviceResponse)

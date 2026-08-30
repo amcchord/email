@@ -6,6 +6,10 @@ const topBarSource = await readFile(
   new URL('../components/layout/TopBar.svelte', import.meta.url),
   'utf8',
 );
+const layoutSource = await readFile(
+  new URL('../components/layout/Layout.svelte', import.meta.url),
+  'utf8',
+);
 
 test('full-viewport TopBar backdrops stay transparent on hover', () => {
   assert.equal(
@@ -35,4 +39,20 @@ test('More menu is positioned by its trigger instead of the full primary navigat
     topBarSource,
     /\.more-menu\s*\{\s*position:\s*fixed;\s*top:\s*3\.25rem;\s*left:\s*0\.5rem;\s*right:\s*0\.5rem;/s,
   );
+});
+
+test('At a Glance is a preloadable primary tab with responsive tablet labels', () => {
+  assert.match(
+    topBarSource,
+    /\{ id: 'at-a-glance', label: 'At a Glance', icon: 'monitor', shortcut: 'nav\.glance' \}/,
+  );
+  assert.match(topBarSource, /onpointerenter=\{\(\) => warmRoute\(tab\.id\)\}/);
+  assert.match(topBarSource, /onfocus=\{\(\) => warmRoute\(tab\.id\)\}/);
+  assert.match(topBarSource, /aria-current=\{\$currentPage === tab\.id \? 'page' : undefined\}/);
+  assert.match(topBarSource, /data-shortcut=\{tab\.shortcut\}/);
+  assert.match(
+    topBarSource,
+    /@media \(min-width: 768px\) and \(max-width: 1023px\)\s*\{[\s\S]*?\.primary-tab-label\s*\{\s*display:\s*none;/,
+  );
+  assert.match(layoutSource, /'nav\.glance':\s*\(\) => navigateByShortcut\('at-a-glance'\)/);
 });

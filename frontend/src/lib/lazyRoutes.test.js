@@ -11,7 +11,9 @@ import {
 test('authenticated page normalization accepts known pages and safely falls back to Flow', () => {
   assert.ok(AUTHENTICATED_PAGES.includes('flow'));
   assert.ok(AUTHENTICATED_PAGES.includes('inbox'));
+  assert.ok(AUTHENTICATED_PAGES.includes('at-a-glance'));
   assert.equal(normalizeAuthenticatedPage('calendar'), 'calendar');
+  assert.equal(normalizeAuthenticatedPage('at-a-glance'), 'at-a-glance');
   assert.equal(normalizeAuthenticatedPage('standalone-email'), 'flow');
   assert.equal(normalizeAuthenticatedPage('unknown'), 'flow');
   assert.equal(normalizeAuthenticatedPage(null), 'flow');

@@ -1174,12 +1174,28 @@ revalidated by clients.
 The authenticated Settings UI uses the normal browser-session API:
 
 ```text
+GET    /api/terminal/experience
+GET    /api/terminal/experience/preview.png?view={view}&design={design}&profile={profile}
 GET    /api/terminal/settings
 GET    /api/terminal/devices
 PATCH  /api/terminal/devices/{device_id}
 DELETE /api/terminal/devices/{device_id}
 POST   /api/terminal/displays/{display_id}/regenerate
 ```
+
+`GET /api/terminal/experience` is the read-only contract for the first-class
+At a Glance page. It returns `{views, designs, display_profiles, combinations,
+devices}`. `combinations` contains only catalog metadata (`key`, `label`,
+`view`, `design`, `profile`, `orientation`, and `aspect_ratio`); the response
+contains no shared terminal code, browser display token or URL, Home Assistant
+value, or credential-minting side effect. `devices` uses the same owner-scoped
+summaries and battery-health shape as `GET /api/terminal/devices`.
+
+The authenticated preview endpoint accepts only a catalog-compatible
+view/design/profile combination and returns the canonical 16:9 or 9:16 web
+frame as a private, no-store PNG. Unknown views or profiles and incompatible
+combinations return `400`. It does not expose or create a public display URL;
+scoped display-link management remains in Settings.
 
 `GET /api/terminal/settings` now includes the shared `views`, `designs`,
 `display_profiles`, and ready-to-open `web_displays` catalogs in addition to

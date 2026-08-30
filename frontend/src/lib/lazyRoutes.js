@@ -4,6 +4,7 @@ const lazyRouteDefinitions = Object.freeze({
   flow: Object.freeze({ label: 'Flow', load: () => import('../pages/Flow.svelte') }),
   inbox: Object.freeze({ label: 'Email', load: () => import('../pages/Inbox.svelte') }),
   calendar: Object.freeze({ label: 'Calendar', load: () => import('../pages/Calendar.svelte') }),
+  'at-a-glance': Object.freeze({ label: 'At a Glance', load: () => import('../pages/AtAGlance.svelte') }),
   compose: Object.freeze({ label: 'Compose', load: () => import('../pages/Compose.svelte') }),
   stats: Object.freeze({ label: 'Stats', load: () => import('../pages/Stats.svelte') }),
   'ai-insights': Object.freeze({ label: 'AI Insights', load: () => import('../pages/AIInsights.svelte') }),

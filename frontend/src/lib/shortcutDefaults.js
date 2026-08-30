@@ -27,6 +27,7 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'nav.flow',     key: 'g f', label: 'Go to Flow',              context: 'global', category: 'Navigation' },
   { id: 'nav.inbox',    key: 'g i', label: 'Go to Inbox',             context: 'global', category: 'Navigation' },
   { id: 'nav.calendar', key: 'g l', label: 'Go to Calendar',          context: 'global', category: 'Navigation' },
+  { id: 'nav.glance',   key: 'g g', label: 'Go to At a Glance',       context: 'global', category: 'Navigation' },
   { id: 'nav.todos',    key: 'g t', label: 'Go to Todos',             context: 'global', category: 'Navigation' },
   { id: 'nav.stats',    key: 'g s', label: 'Go to Stats',             context: 'global', category: 'Navigation' },
   { id: 'nav.insights', key: 'g a', label: 'Go to AI Insights',       context: 'global', category: 'Navigation' },

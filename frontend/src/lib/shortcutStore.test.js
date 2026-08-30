@@ -130,3 +130,18 @@ test('compose separates safe close from destructive discard', () => {
   assert.equal(byId['compose.deleteDraft'].key, 'Ctrl+Shift+,');
   assert.match(byId['compose.deleteDraft'].label, /discard draft/i);
 });
+
+test('At a Glance has a unique global navigation shortcut', () => {
+  const shortcut = SHORTCUT_DEFAULTS.find(item => item.id === 'nav.glance');
+  assert.deepEqual(shortcut, {
+    id: 'nav.glance',
+    key: 'g g',
+    label: 'Go to At a Glance',
+    context: 'global',
+    category: 'Navigation',
+  });
+  assert.equal(
+    SHORTCUT_DEFAULTS.filter(item => item.key === shortcut.key && item.context === 'global').length,
+    1,
+  );
+});

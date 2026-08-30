@@ -29,9 +29,10 @@
   let logoutInProgress = $state(false);
 
   const tabs = [
-    { id: 'flow', label: 'Flow', icon: 'sparkles' },
-    { id: 'inbox', label: 'Email', icon: 'inbox' },
-    { id: 'calendar', label: 'Calendar', icon: 'calendar' },
+    { id: 'flow', label: 'Flow', icon: 'sparkles', shortcut: 'nav.flow' },
+    { id: 'inbox', label: 'Email', icon: 'inbox', shortcut: 'nav.inbox' },
+    { id: 'calendar', label: 'Calendar', icon: 'calendar', shortcut: 'nav.calendar' },
+    { id: 'at-a-glance', label: 'At a Glance', icon: 'monitor', shortcut: 'nav.glance' },
   ];
 
   const secondaryTabs = [
@@ -264,7 +265,7 @@
         class:tab-inactive={$currentPage !== tab.id}
         aria-label="{tab.label} tab"
         aria-current={$currentPage === tab.id ? 'page' : undefined}
-        data-shortcut={tab.id === 'flow' ? 'nav.flow' : tab.id === 'inbox' ? 'nav.inbox' : tab.id === 'calendar' ? 'nav.calendar' : undefined}
+        data-shortcut={tab.shortcut}
       >
         {#if tab.icon === 'sparkles'}
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -700,6 +701,17 @@
     }
     .app-topbar:has(.inbox-tools) {
       min-height: 6.75rem;
+    }
+  }
+
+  @media (min-width: 768px) and (max-width: 1023px) {
+    .primary-tab-label {
+      display: none;
+    }
+    .primary-nav > button:not(.fixed),
+    .primary-nav > .more-trigger > .more-button {
+      padding-left: 0.65rem;
+      padding-right: 0.65rem;
     }
   }
 

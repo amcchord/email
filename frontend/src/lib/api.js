@@ -242,6 +242,7 @@ export const api = {
   setHomeAssistant: (payload) => request('PUT', '/terminal/settings/home-assistant', payload),
   setTerminalTimezone: (timezone) => request('PUT', '/terminal/settings/timezone', { timezone }),
   listTerminals: () => request('GET', '/terminal/devices'),
+  getAtAGlanceExperience: () => request('GET', '/terminal/experience'),
   updateTerminal: (id, payload) => request('PATCH', `/terminal/devices/${id}`, payload),
   deleteTerminal: (id) => request('DELETE', `/terminal/devices/${id}`),
   testHomeAssistant: () => request('POST', '/terminal/ha/test', {}),
@@ -254,6 +255,16 @@ export const api = {
     let q = '';
     if (qs) q = `?${qs}`;
     return `/api/terminal/devices/${id}/preview.png${q}`;
+  },
+  // Credential-free authenticated preview for the first-class At a Glance
+  // gallery. The server resolves and validates the catalog combination.
+  atAGlancePreviewPngUrl: (view, design, profile, cacheBuster = null) => {
+    const params = new URLSearchParams();
+    if (view) params.set('view', view);
+    if (design) params.set('design', design);
+    if (profile) params.set('profile', profile);
+    if (cacheBuster) params.set('t', String(cacheBuster));
+    return `/api/terminal/experience/preview.png?${params.toString()}`;
   },
 
   // Emails
