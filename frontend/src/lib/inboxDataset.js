@@ -36,6 +36,74 @@ export function inboxDatasetKey({
   ]);
 }
 
+export function normalizeInboxDatasetSnapshot({
+  mailbox = 'INBOX',
+  accountId = null,
+  search = '',
+  smartFilter = null,
+  hideIgnored = false,
+  pageSize = null,
+  page = 1,
+} = {}) {
+  const normalizedSearch = String(search || '').trim();
+  const searching = normalizedSearch.length > 0;
+  const snapshot = {
+    mailbox: searching ? 'ALL' : mailbox,
+    accountId,
+    search: normalizedSearch,
+    smartFilter: searching ? null : smartFilter,
+    hideIgnored: searching ? false : Boolean(hideIgnored),
+    pageSize,
+    page,
+  };
+  snapshot.key = inboxDatasetKey(snapshot);
+  return snapshot;
+}
+
+export function createDatasetActionReconciler({ isCurrent, refresh }) {
+  let requestedVersion = 0;
+  let completedVersion = 0;
+  let targetKey = null;
+  let running = null;
+  let disposed = false;
+
+  async function drain() {
+    while (!disposed && completedVersion < requestedVersion) {
+      const version = requestedVersion;
+      const key = targetKey;
+      if (isCurrent(key)) await refresh(key);
+      completedVersion = version;
+    }
+  }
+
+  return {
+    request(key) {
+      if (disposed || !isCurrent(key)) return Promise.resolve(false);
+      requestedVersion += 1;
+      targetKey = key;
+      if (!running) {
+        running = Promise.resolve()
+          .then(drain)
+          .finally(() => { running = null; });
+      }
+      return running;
+    },
+
+    dispose() {
+      disposed = true;
+    },
+  };
+}
+
+export function selectedBooleanState(items, selectedIds, field) {
+  const ids = selectedIds instanceof Set ? selectedIds : new Set(selectedIds || []);
+  if (ids.size === 0) return null;
+  const selected = items.filter(item => ids.has(item.id));
+  if (selected.length !== ids.size) return null;
+  const state = Boolean(selected[0]?.[field]);
+  return selected.every(item => Boolean(item[field]) === state) ? state : null;
+}
+
 export function canActOnInboxEmails({
   authoritative = false,
   emailIds = [],

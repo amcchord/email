@@ -115,3 +115,23 @@ add a new entry that explicitly supersedes the old one.
   discoverable but Enter-inert; async completion is scoped to its originating
   palette session and captured entity; and new irreversible palette commands
   require deterministic lost-response coverage before exposure.
+
+## D-009 — Email search is composable inside an immutable ownership boundary
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Parse structured search into AND clauses and OR groups, compile all
+  user values as bound parameters, and apply the resulting predicate only
+  inside a separately enforced set of accounts owned by the current user.
+  Browser search covers regular mail by default, preserves explicit account
+  scope, suspends Focused/smart filters, and lets a positive `in:` clause own
+  mailbox scope without broadening other OR branches into Spam or Trash.
+- Reason: Modern-client search needs quotes, exclusions, fields, dates, and
+  mailbox composition, but malformed syntax, foreign account IDs, interpolated
+  JSONB values, or ambiguous filter inheritance must never broaden private-mail
+  access or misrepresent result scope.
+- Consequence: Unknown/foreign outer accounts fail closed; `account:` and
+  `label:` only narrow owned mail; date boundaries use an explicit IANA zone;
+  parser errors return stable 422 details; plain search retains complete
+  literal fallbacks when full-text vectors are stale; and clearing browser
+  search restores the unchanged mailbox and filter stores.

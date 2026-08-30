@@ -5,6 +5,7 @@
   import Icon from '../common/Icon.svelte';
   import { cleanEmailText, categoryLabel, typeLabel } from '../../lib/emailText.js';
   import { focusEmailRow, shouldFocusAdjacentRow } from '../../lib/emailRowFocus.js';
+  import { selectedBooleanState } from '../../lib/inboxDataset.js';
 
   let {
     emails = [],
@@ -15,7 +16,6 @@
     selectedId = null,
     mailbox = 'INBOX',
     searchActive = false,
-    searchTerm = '',
     loadFailed = false,
     actionsDisabled = false,
     selectionEpoch = 0,
@@ -35,6 +35,11 @@
   let observer = null;
   let previousSelectedId = null;
   let previousEmailIds = new Set();
+  let selectedSpamState = $derived(selectedBooleanState(emails, selectedIds, 'is_spam'));
+  let selectedTrashState = $derived(selectedBooleanState(emails, selectedIds, 'is_trash'));
+  let selectedInProtectedMailbox = $derived(
+    emails.some(email => selectedIds.has(email.id) && (email.is_spam || email.is_trash))
+  );
 
   $effect(() => {
     void selectionEpoch;
@@ -201,8 +206,10 @@
   }
 
   // Helper to determine if we should show recipient instead of sender
-  function shouldShowRecipient(mailbox) {
-    return mailbox === 'SENT' || mailbox === 'DRAFTS';
+  function shouldShowRecipient(mailbox, email = null) {
+    return mailbox === 'SENT'
+      || mailbox === 'DRAFTS'
+      || (searchActive && Boolean(email?.is_sent || email?.is_draft));
   }
 
   // Build a map of thread_id -> count of emails in that thread
@@ -301,17 +308,6 @@
 </script>
 
 <div class="flex flex-col h-full" class:select-none={resizing}>
-  <!-- Search indicator -->
-  {#if searchActive}
-    <div class="px-4 py-2 border-b shrink-0 flex items-center gap-2" style="border-color: var(--border-color); background: var(--bg-tertiary)">
-      <span class="shrink-0" style="color: var(--color-accent-500)">
-        <Icon name="search" size={16} />
-      </span>
-      <span class="text-xs" style="color: var(--text-secondary)">Results for "<strong style="color: var(--text-primary)">{searchTerm}</strong>"</span>
-      <span class="text-xs ml-auto" style="color: var(--text-tertiary)">{total.toLocaleString()} found</span>
-    </div>
-  {/if}
-
   <!-- Bulk actions toolbar -->
   {#if selectedIds.size > 0}
     <div class="flex flex-col items-stretch gap-1 px-3 py-2 border-b shrink-0 sm:flex-row sm:items-center sm:gap-2" style="border-color: var(--border-color); background: var(--bg-tertiary)" aria-busy={bulkActionPending}>
@@ -319,17 +315,21 @@
       <div class="grid grid-cols-3 gap-1 sm:ml-auto sm:flex sm:min-w-0 sm:flex-1 sm:flex-wrap sm:justify-end">
         <button onclick={() => handleBulkAction('mark_read')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Read</button>
         <button onclick={() => handleBulkAction('mark_unread')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Unread</button>
-        <button onclick={() => handleBulkAction('archive')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Archive</button>
+        <button onclick={() => handleBulkAction('archive')} disabled={actionsDisabled || bulkActionPending || selectedInProtectedMailbox} title={selectedInProtectedMailbox ? 'Restore spam or trash results before archiving' : 'Archive selected email'} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Archive</button>
         <button onclick={() => handleBulkAction('star')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Star</button>
-        {#if mailbox === 'SPAM'}
+        {#if selectedSpamState === true}
           <button onclick={() => handleBulkAction('unspam')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Not Spam</button>
-        {:else}
+        {:else if selectedSpamState === false}
           <button onclick={() => handleBulkAction('spam')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded text-red-500 disabled:opacity-50">Spam</button>
-        {/if}
-        {#if mailbox === 'TRASH'}
-          <button onclick={() => handleBulkAction('untrash')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Restore</button>
         {:else}
+          <button disabled title="Selected results have mixed spam states" class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Spam varies</button>
+        {/if}
+        {#if selectedTrashState === true}
+          <button onclick={() => handleBulkAction('untrash')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Restore</button>
+        {:else if selectedTrashState === false}
           <button onclick={() => handleBulkAction('trash')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded text-red-500 disabled:opacity-50">Trash</button>
+        {:else}
+          <button disabled title="Selected results have mixed trash states" class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Trash varies</button>
         {/if}
       </div>
     </div>
@@ -359,8 +359,11 @@
           {#if searchActive}🔍{:else}📭{/if}
         </div>
         <p class="text-sm font-medium" style="color: var(--text-primary)">
-          {#if searchActive}No results found{:else}No emails{/if}
+          {#if searchActive}No mail matches this search{:else}No emails{/if}
         </p>
+        {#if searchActive}
+          <p class="text-xs mt-1" style="color: var(--text-secondary)">Edit a filter above or clear the search</p>
+        {/if}
       </div>
     {:else}
       <table class="w-full text-sm table-fixed">
@@ -389,7 +392,7 @@
             {/if}
             <!-- From / To -->
             <th class="relative px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider" style="color: var(--text-tertiary); {colStyle('from')}">
-              {shouldShowRecipient(mailbox) ? 'To' : 'From'}
+              {searchActive ? 'People' : (shouldShowRecipient(mailbox) ? 'To' : 'From')}
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <div class="col-resize-handle" onmousedown={(e) => startResize('from', e)}></div>
             </th>
@@ -557,7 +560,7 @@
                       <span class="w-2 h-2 rounded-full bg-accent-500 shrink-0"></span>
                     {/if}
                     <span class="truncate" class:font-semibold={!email.is_read} style="color: var(--text-primary)">
-                      {getPrimaryDisplayInfo(email, shouldShowRecipient(mailbox))}
+                      {getPrimaryDisplayInfo(email, shouldShowRecipient(mailbox, email))}
                     </span>
                   </div>
                 </td>

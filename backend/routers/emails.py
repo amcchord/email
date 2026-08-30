@@ -1,15 +1,10 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from sqlalchemy import select, func, desc, asc, or_, text, literal_column, literal
+from sqlalchemy import select, func, desc, asc, or_, literal
 from typing import Optional
 from uuid import UUID
 from backend.database import get_db
-
-
-def jsonb_contains(column, value: str):
-    """JSONB @> operator with proper PostgreSQL casting."""
-    return column.op("@>")(literal_column(f"'{value}'::jsonb"))
 from backend.models.user import User
 from backend.models.email import Email, Attachment, EmailLabel
 from backend.models.account import GoogleAccount
@@ -40,6 +35,18 @@ from backend.services.mail_actions import (
     try_enqueue_mail_action_drain,
     undo_mail_action_operation,
 )
+from backend.services.email_search_query import (
+    SearchAccount,
+    SearchLabel,
+    SearchQueryError,
+    build_email_search_clause,
+    parse_email_search,
+)
+
+
+def jsonb_contains(column, value: str):
+    """Safely test whether a JSONB array contains one literal value."""
+    return column.contains([value])
 
 router = APIRouter(prefix="/api/emails", tags=["emails"])
 
@@ -87,6 +94,7 @@ async def list_emails(
     sort_by: str = "date",
     sort_order: str = "desc",
     search: Optional[str] = None,
+    tz: Optional[str] = None,
     is_read: Optional[bool] = None,
     is_starred: Optional[bool] = None,
     ai_category: Optional[str] = None,
@@ -98,46 +106,68 @@ async def list_emails(
 ):
     # Get user's accounts
     acct_result = await db.execute(
-        select(GoogleAccount.id, GoogleAccount.email).where(GoogleAccount.user_id == user.id)
+        select(
+            GoogleAccount.id,
+            GoogleAccount.email,
+            GoogleAccount.display_name,
+            GoogleAccount.description,
+            GoogleAccount.short_label,
+        ).where(GoogleAccount.user_id == user.id)
     )
-    user_accounts = {row[0]: row[1] for row in acct_result.all()}
+    account_rows = acct_result.all()
+    user_accounts = {row.id: row.email for row in account_rows}
 
     if not user_accounts:
         return EmailListResponse(emails=[], total=0, page=page, page_size=page_size, total_pages=0)
 
     query = select(Email).options(selectinload(Email.ai_analysis))
 
-    # Filter by account
-    if account_id and account_id in user_accounts:
+    # An invalid account scope must never broaden into every owned account.
+    if account_id is not None and account_id not in user_accounts:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    search_plan = None
+    search_stripped = search.strip() if search else ""
+    if search_stripped:
+        try:
+            search_plan = parse_email_search(search)
+        except SearchQueryError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # Filter by account. Search operators are compiled inside this immutable
+    # ownership boundary and can only narrow it.
+    if account_id is not None:
         query = query.where(Email.account_id == account_id)
     else:
         query = query.where(Email.account_id.in_(user_accounts.keys()))
 
-    # Filter by mailbox
-    if mailbox == "STARRED":
-        query = query.where(Email.is_starred == True)
-    elif mailbox == "TRASH":
-        query = query.where(Email.is_trash == True)
-    elif mailbox == "SPAM":
-        query = query.where(Email.is_spam == True)
-    elif mailbox == "DRAFTS":
-        query = query.where(Email.is_draft == True)
-    elif mailbox == "SENT":
-        query = query.where(Email.is_sent == True)
-        query = query.where(Email.is_trash == False)
-    elif mailbox == "ALL":
-        query = query.where(Email.is_trash == False)
-        query = query.where(Email.is_spam == False)
-    else:
-        # INBOX or custom label/category: has the label, not trash/spam
-        gmail_label = MAILBOX_LABEL_MAP.get(mailbox, mailbox)
-        if gmail_label:
-            query = query.where(jsonb_contains(Email.labels, f'["{gmail_label}"]'))
-        query = query.where(Email.is_trash == False)
-        query = query.where(Email.is_spam == False)
+    # A positive in: operator supplies the mailbox scope. Otherwise preserve
+    # the route's backward-compatible outer mailbox behavior.
+    if not search_plan or not search_plan.has_positive_in:
+        if mailbox == "STARRED":
+            query = query.where(Email.is_starred == True)
+        elif mailbox == "TRASH":
+            query = query.where(Email.is_trash == True)
+        elif mailbox == "SPAM":
+            query = query.where(Email.is_spam == True)
+        elif mailbox == "DRAFTS":
+            query = query.where(Email.is_draft == True)
+        elif mailbox == "SENT":
+            query = query.where(Email.is_sent == True)
+            query = query.where(Email.is_trash == False)
+        elif mailbox == "ALL":
+            query = query.where(Email.is_trash == False)
+            query = query.where(Email.is_spam == False)
+        else:
+            # INBOX or custom label/category: has the label, not trash/spam
+            gmail_label = MAILBOX_LABEL_MAP.get(mailbox, mailbox)
+            if gmail_label:
+                query = query.where(jsonb_contains(Email.labels, gmail_label))
+            query = query.where(Email.is_trash == False)
+            query = query.where(Email.is_spam == False)
 
     if label:
-        query = query.where(jsonb_contains(Email.labels, f'["{label}"]'))
+        query = query.where(jsonb_contains(Email.labels, label))
 
     if is_read is not None:
         query = query.where(Email.is_read == is_read)
@@ -208,21 +238,43 @@ async def list_emails(
             )
             query = query.where(~has_later_reply)
 
-    # Full-text search with ILIKE fallback
-    if search:
-        search_stripped = search.strip()
-        if search_stripped:
-            ts_query = func.plainto_tsquery("english", search_stripped)
-            # Use full-text search when vectors exist, with ILIKE fallback
-            search_pattern = f"%{search_stripped}%"
-            query = query.where(
-                or_(
-                    Email.search_vector.op("@@")(ts_query),
-                    Email.subject.ilike(search_pattern),
-                    Email.from_address.ilike(search_pattern),
-                    Email.from_name.ilike(search_pattern),
-                )
+    if search_plan:
+        label_rows = []
+        if search_plan.needs_labels:
+            label_result = await db.execute(
+                select(
+                    EmailLabel.account_id,
+                    EmailLabel.gmail_label_id,
+                    EmailLabel.name,
+                ).where(EmailLabel.account_id.in_(user_accounts.keys()))
             )
+            label_rows = label_result.all()
+        try:
+            search_clause = build_email_search_clause(
+                search_plan,
+                accounts=[
+                    SearchAccount(
+                        id=row.id,
+                        email=row.email,
+                        display_name=row.display_name,
+                        description=row.description,
+                        short_label=row.short_label,
+                    )
+                    for row in account_rows
+                ],
+                labels=[
+                    SearchLabel(
+                        account_id=row.account_id,
+                        gmail_label_id=row.gmail_label_id,
+                        name=row.name,
+                    )
+                    for row in label_rows
+                ],
+                timezone_name=tz,
+            )
+        except SearchQueryError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        query = query.where(search_clause)
 
     # Count total
     count_query = select(func.count()).select_from(query.subquery())
@@ -232,11 +284,11 @@ async def list_emails(
     _ALLOWED_SORT_FIELDS = {"date", "subject", "sender", "is_read", "has_attachments"}
     if sort_by not in _ALLOWED_SORT_FIELDS:
         sort_by = "date"
-    sort_column = getattr(Email, sort_by, Email.date)
+    sort_column = Email.from_address if sort_by == "sender" else getattr(Email, sort_by, Email.date)
     if sort_order == "asc":
-        query = query.order_by(asc(sort_column))
+        query = query.order_by(asc(sort_column).nulls_last(), asc(Email.id))
     else:
-        query = query.order_by(desc(sort_column))
+        query = query.order_by(desc(sort_column).nulls_last(), desc(Email.id))
 
     # Paginate
     offset = (page - 1) * page_size
@@ -334,6 +386,9 @@ async def list_emails(
             is_read=e.is_read,
             is_starred=e.is_starred,
             is_draft=e.is_draft,
+            is_sent=e.is_sent,
+            is_trash=e.is_trash,
+            is_spam=e.is_spam,
             has_attachments=e.has_attachments,
             labels=e.labels or [],
             account_email=user_accounts.get(e.account_id),
@@ -441,6 +496,9 @@ async def get_email(
         is_read=email.is_read,
         is_starred=email.is_starred,
         is_draft=email.is_draft,
+        is_sent=email.is_sent,
+        is_trash=email.is_trash,
+        is_spam=email.is_spam,
         has_attachments=email.has_attachments,
         labels=email.labels or [],
         size_bytes=email.size_bytes,
@@ -575,6 +633,9 @@ async def get_thread(
             is_read=e.is_read,
             is_starred=e.is_starred,
             is_draft=e.is_draft,
+            is_sent=e.is_sent,
+            is_trash=e.is_trash,
+            is_spam=e.is_spam,
             has_attachments=e.has_attachments,
             labels=e.labels or [],
             size_bytes=e.size_bytes,

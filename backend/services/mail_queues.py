@@ -331,7 +331,7 @@ async def fetch_unread_counts(
         Email.is_read == False,
         Email.is_trash == False,
         Email.is_spam == False,
-        jsonb_contains(Email.labels, '["INBOX"]'),
+        jsonb_contains(Email.labels, "INBOX"),
     ]
     total = await db.scalar(select(func.count(Email.id)).where(*base_filter)) or 0
     per_account = await db.execute(

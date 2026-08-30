@@ -22,6 +22,9 @@ class EmailSummary(BaseModel):
     is_read: bool = False
     is_starred: bool = False
     is_draft: bool = False
+    is_sent: bool = False
+    is_trash: bool = False
+    is_spam: bool = False
     has_attachments: bool = False
     labels: list = []
     account_email: Optional[str] = None

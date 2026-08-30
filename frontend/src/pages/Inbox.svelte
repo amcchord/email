@@ -10,7 +10,12 @@
   } from '../lib/stores.js';
   import { registerActions } from '../lib/shortcutStore.js';
   import { lastEvent } from '../lib/realtime.js';
-  import { canActOnInboxEmails, createLatestRequestGuard, inboxDatasetKey } from '../lib/inboxDataset.js';
+  import {
+    canActOnInboxEmails,
+    createDatasetActionReconciler,
+    createLatestRequestGuard,
+    normalizeInboxDatasetSnapshot,
+  } from '../lib/inboxDataset.js';
   import {
     actionPastTense,
     applyEmailAction,
@@ -28,6 +33,7 @@
   import EmailTable from '../components/email/EmailTable.svelte';
   import EmailView from '../components/email/EmailView.svelte';
   import MailActionStatus from '../components/email/MailActionStatus.svelte';
+  import EmailSearchSummary from '../components/email/EmailSearchSummary.svelte';
   import Icon from '../components/common/Icon.svelte';
 
   let selectedEmail = $state(null);
@@ -38,19 +44,32 @@
   let datasetAuthoritative = $state(false);
   let datasetUpdating = $state(false);
   let datasetError = $state(false);
+  let datasetErrorMessage = $state('');
+  let actionReconciliationRequired = $state(false);
   let selectionEpoch = $state(0);
   let narrowViewport = $state(window.matchMedia('(max-width: 767px)').matches);
   let useTableLayout = $derived($viewMode === 'table' && !narrowViewport);
   let uncertainActions = $state(new Map());
   let checkingUncertainActions = $state(false);
+  let showingPreviousResults = $derived(
+    datasetError && !datasetAuthoritative && Boolean(committedDatasetKey) && $emails.length > 0
+  );
+  let resultsMailbox = $derived($searchQuery ? 'ALL' : $currentMailbox);
 
   const listRequests = createLatestRequestGuard();
   const emailRequests = createLatestRequestGuard();
   const actionSubmissions = createMailActionSubmissionQueue();
+  const acceptedActionReconciler = createDatasetActionReconciler({
+    isCurrent: datasetKey => mounted
+      && Boolean(get(searchQuery))
+      && currentDatasetSnapshot().key === datasetKey,
+    refresh: () => refreshDataset(),
+  });
   let requestedDatasetKey = null;
   let committedDatasetKey = null;
   let latestUndo = null;
   let uncertainActionTimer = null;
+  let actionReconciliationVersion = 0;
 
   // Resizable panel splits (persisted)
   let columnListWidth = $state(parseInt(localStorage.getItem('columnListWidth') || '380', 10));
@@ -151,6 +170,7 @@
     mounted = false;
     listRequests.invalidate();
     emailRequests.invalidate();
+    acceptedActionReconciler.dispose();
     selectionEpoch += 1;
     latestUndo = null;
     if (uncertainActionTimer !== null) window.clearInterval(uncertainActionTimer);
@@ -184,7 +204,7 @@
   }
 
   $effect(() => {
-    const snapshot = {
+    const snapshot = normalizeInboxDatasetSnapshot({
       mailbox: $currentMailbox,
       accountId: $selectedAccountId,
       search: $searchQuery,
@@ -192,8 +212,7 @@
       hideIgnored: $hideIgnored,
       pageSize: $pageSize,
       page: 1,
-    };
-    snapshot.key = inboxDatasetKey(snapshot);
+    });
 
     if (!mounted) return;
     if (snapshot.key === requestedDatasetKey) return;
@@ -223,7 +242,7 @@
   });
 
   function currentDatasetSnapshot(page = get(currentPageNum)) {
-    const snapshot = {
+    return normalizeInboxDatasetSnapshot({
       mailbox: get(currentMailbox),
       accountId: get(selectedAccountId),
       search: get(searchQuery),
@@ -231,9 +250,15 @@
       hideIgnored: get(hideIgnored),
       pageSize: get(pageSize),
       page,
-    };
-    snapshot.key = inboxDatasetKey(snapshot);
-    return snapshot;
+    });
+  }
+
+  function browserTimezone() {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    } catch {
+      return 'UTC';
+    }
   }
 
   function invalidateInboxSelection() {
@@ -252,6 +277,7 @@
 
   async function loadEmails(append, snapshot = currentDatasetSnapshot()) {
     if (!mounted) return false;
+    const actionReconciliationVersionAtStart = actionReconciliationVersion;
     const requestId = listRequests.begin();
     if (append) {
       loadingMore = true;
@@ -259,6 +285,7 @@
       datasetAuthoritative = false;
       datasetUpdating = true;
       datasetError = false;
+      datasetErrorMessage = '';
       emailsLoading.set(true);
       loadingMore = false;
       invalidateInboxSelection();
@@ -283,7 +310,10 @@
         const acctId = snapshot.accountId;
         if (acctId) params.account_id = acctId;
         const sq = snapshot.search;
-        if (sq) params.search = sq;
+        if (sq) {
+          params.search = sq;
+          params.tz = browserTimezone();
+        }
         if (sf) {
           if (sf.type === 'needs_reply') {
             params.needs_reply = true;
@@ -310,23 +340,24 @@
       } else {
         emails.set(result.emails);
         committedDatasetKey = snapshot.key;
-        datasetAuthoritative = true;
+        if (actionReconciliationVersionAtStart === actionReconciliationVersion) {
+          actionReconciliationRequired = false;
+        }
+        datasetAuthoritative = !actionReconciliationRequired;
         datasetError = false;
+        datasetErrorMessage = '';
       }
       emailsTotal.set(result.total);
       hasMore = (snapshot.page * snapshot.pageSize) < result.total;
       return true;
     } catch (err) {
       if (!listRequests.isCurrent(requestId)) return false;
-      if (err.message !== 'Unauthorized') showToast(err.message, 'error');
+      if (err.message !== 'Unauthorized' && !snapshot.search) showToast(err.message, 'error');
       if (!append) {
         datasetError = true;
+        datasetErrorMessage = err.message || 'Search request failed';
         if (committedDatasetKey === snapshot.key) {
-          datasetAuthoritative = true;
-        } else {
-          emails.set([]);
-          emailsTotal.set(0);
-          hasMore = false;
+          datasetAuthoritative = !actionReconciliationRequired;
         }
       }
       return false;
@@ -476,6 +507,10 @@
   }
 
   function acceptMailAction(context, operation, announce, offerUndo) {
+    // Definitive actions always reconcile their still-current structured
+    // search. This is intentionally independent of selectionEpoch: an earlier
+    // refresh can invalidate presentation state while a queued action accepts.
+    requireActionReconciliation(context.datasetKey);
     if (!actionContextIsCurrent(context.actionEpoch, context.datasetKey)) return;
     if (!announce) return;
 
@@ -504,6 +539,13 @@
     } else {
       showToast(actionPastTense(context.action, context.emailIds.length), 'success');
     }
+  }
+
+  function requireActionReconciliation(datasetKey) {
+    if (!mounted || !get(searchQuery) || currentDatasetSnapshot().key !== datasetKey) return;
+    actionReconciliationRequired = true;
+    actionReconciliationVersion += 1;
+    void acceptedActionReconciler.request(datasetKey);
   }
 
   function scheduleUncertainActionChecks() {
@@ -557,6 +599,7 @@
       if (actionContextIsCurrent(context.actionEpoch, context.datasetKey)) {
         restoreOptimisticAction(context);
       }
+      requireActionReconciliation(context.datasetKey);
       if (latestUndo?.requestId === context.operation.request_id) latestUndo = null;
       showToast(`${actionPastTense(context.action, context.emailIds.length)} — undone`, 'success');
       return operation;
@@ -580,7 +623,8 @@
     if (!canActOnEmails(emailIds)) return false;
     const uniqueIds = [...new Set(emailIds)];
     const actionEpoch = selectionEpoch;
-    const datasetKey = currentDatasetSnapshot().key;
+    const datasetSnapshot = currentDatasetSnapshot();
+    const datasetKey = datasetSnapshot.key;
     const detailBefore = selectedEmail;
     const snapshot = captureInboxAction(get(emails), get(selectedEmailId), uniqueIds);
     const optimistic = optimisticInboxAction({
@@ -588,7 +632,7 @@
       selectedId: get(selectedEmailId),
       emailIds: uniqueIds,
       action,
-      mailbox: get(currentMailbox),
+      mailbox: datasetSnapshot.mailbox,
     });
     const removedCount = optimistic.removed ? snapshot.items.length : 0;
 
@@ -648,6 +692,12 @@
       if (actionContextIsCurrent(actionEpoch, datasetKey)) {
         restoreOptimisticAction(context);
         showToast(err.message, 'error');
+      } else if (mounted && currentDatasetSnapshot().key === datasetKey) {
+        // A preceding accepted action may already have invalidated this
+        // presentation epoch. Do not reinsert an old snapshot, but do make the
+        // definitive failure visible and require a trailing server refresh.
+        requireActionReconciliation(datasetKey);
+        showToast(err.message, 'error');
       }
       return false;
     }
@@ -701,7 +751,17 @@
 </script>
 
 <div class="inbox-page h-full flex flex-col" class:select-none={panelDragging} aria-busy={datasetUpdating}>
-  {#if $smartFilter?.type === 'needs_reply_ignored' || $smartFilter?.type === 'needs_reply_snoozed'}
+  {#if $searchQuery}
+    <EmailSearchSummary
+      query={$searchQuery}
+      total={$emailsTotal}
+      updating={datasetUpdating}
+      failed={datasetError}
+      showingPrevious={showingPreviousResults}
+      onQueryChange={(query) => searchQuery.set(query)}
+    />
+  {/if}
+  {#if !$searchQuery && ($smartFilter?.type === 'needs_reply_ignored' || $smartFilter?.type === 'needs_reply_snoozed')}
     <div class="flex items-center gap-2 px-4 py-2 border-b" style="background: var(--bg-tertiary); border-color: var(--border-color)">
       <Icon name={$smartFilter.type === 'needs_reply_ignored' ? 'eye-off' : 'clock'} size={14} />
       <span class="text-xs font-medium" style="color: var(--text-secondary)">
@@ -730,11 +790,9 @@
     <div
       class="flex items-center gap-2 px-4 py-2 border-b shrink-0"
       style="background: var(--bg-tertiary); border-color: var(--border-color); color: var(--text-secondary)"
-      role="status"
-      aria-live="polite"
     >
       <div class="w-3.5 h-3.5 border-2 rounded-full animate-spin shrink-0" style="border-color: var(--border-color); border-top-color: var(--color-accent-500)"></div>
-      <span class="text-xs font-medium">Updating inbox…</span>
+      <span class="text-xs font-medium">{$searchQuery ? 'Searching mail…' : 'Updating inbox…'}</span>
       <span class="text-xs hidden sm:inline" style="color: var(--text-tertiary)">Actions will be available when these results finish loading.</span>
     </div>
   {:else if datasetError}
@@ -745,8 +803,15 @@
     >
       <Icon name="alert-circle" size={14} />
       <span class="text-xs font-medium">
-        {datasetAuthoritative ? 'Could not refresh. Showing previous results.' : 'Inbox results could not be updated.'}
+        {#if $searchQuery}
+          {showingPreviousResults ? 'Search failed. Showing previous results.' : 'Search results could not be updated.'}
+        {:else}
+          {datasetAuthoritative ? 'Could not refresh. Showing previous results.' : 'Inbox results could not be updated.'}
+        {/if}
       </span>
+      {#if datasetErrorMessage && datasetErrorMessage !== 'Request failed'}
+        <span class="text-xs hidden md:inline truncate" style="color: var(--text-tertiary)">{datasetErrorMessage}</span>
+      {/if}
       <button
         onclick={refreshDataset}
         class="ml-auto px-2.5 py-1 rounded-md border text-xs font-medium"
@@ -762,7 +827,7 @@
     checkingPending={checkingUncertainActions}
     onCheckPending={reconcileUncertainActions}
   />
-  <div class="inbox-split flex-1 min-h-0 flex">
+  <div class="inbox-split flex-1 min-h-0 flex" class:results-stale={datasetUpdating || showingPreviousResults}>
   {#if useTableLayout}
     <!-- Table view: vertical split (table on top, preview below) -->
     <div class="flex flex-col w-full h-full overflow-hidden" bind:this={containerEl}>
@@ -774,10 +839,9 @@
           {hasMore}
           total={$emailsTotal}
           selectedId={$selectedEmailId}
-          mailbox={$currentMailbox}
+          mailbox={resultsMailbox}
           searchActive={!!$searchQuery}
-          searchTerm={$searchQuery}
-          loadFailed={datasetError && !datasetAuthoritative}
+          loadFailed={datasetError && !datasetAuthoritative && $emails.length === 0}
           actionsDisabled={!datasetAuthoritative}
           {selectionEpoch}
           onSelect={handleSelect}
@@ -819,10 +883,9 @@
         {hasMore}
         total={$emailsTotal}
         selectedId={$selectedEmailId}
-        mailbox={$currentMailbox}
+        mailbox={resultsMailbox}
         searchActive={!!$searchQuery}
-        searchTerm={$searchQuery}
-        loadFailed={datasetError && !datasetAuthoritative}
+        loadFailed={datasetError && !datasetAuthoritative && $emails.length === 0}
         actionsDisabled={!datasetAuthoritative}
         {selectionEpoch}
         onSelect={handleSelect}
@@ -854,6 +917,11 @@
 </div>
 
 <style>
+  .inbox-split.results-stale {
+    opacity: 0.58;
+    filter: saturate(0.7);
+    transition: opacity 120ms ease;
+  }
   @media (max-width: 767px) {
     .email-list-pane {
       width: 100% !important;

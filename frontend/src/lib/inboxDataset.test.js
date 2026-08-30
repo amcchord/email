@@ -3,8 +3,11 @@ import test from 'node:test';
 
 import {
   canActOnInboxEmails,
+  createDatasetActionReconciler,
   createLatestRequestGuard,
   inboxDatasetKey,
+  normalizeInboxDatasetSnapshot,
+  selectedBooleanState,
 } from './inboxDataset.js';
 
 test('only the newest overlapping request remains current', () => {
@@ -60,6 +63,37 @@ test('equivalent smart-filter objects produce the same dataset key', () => {
   );
 });
 
+test('active search broadens to regular mail while preserving account scope', () => {
+  const snapshot = normalizeInboxDatasetSnapshot({
+    mailbox: 'INBOX',
+    accountId: 7,
+    search: '  subject:"Quarterly & Planning"  ',
+    smartFilter: { type: 'ai_category', value: 'urgent' },
+    hideIgnored: true,
+    pageSize: 50,
+  });
+
+  assert.equal(snapshot.mailbox, 'ALL');
+  assert.equal(snapshot.accountId, 7);
+  assert.equal(snapshot.search, 'subject:"Quarterly & Planning"');
+  assert.equal(snapshot.smartFilter, null);
+  assert.equal(snapshot.hideIgnored, false);
+});
+
+test('clearing search restores the caller mailbox and focused filters', () => {
+  const smartFilter = { type: 'needs_reply' };
+  const snapshot = normalizeInboxDatasetSnapshot({
+    mailbox: 'SENT',
+    search: '',
+    smartFilter,
+    hideIgnored: true,
+  });
+
+  assert.equal(snapshot.mailbox, 'SENT');
+  assert.equal(snapshot.smartFilter, smartFilter);
+  assert.equal(snapshot.hideIgnored, true);
+});
+
 test('actions require an authoritative dataset and a visible email', () => {
   const base = {
     authoritative: true,
@@ -82,4 +116,43 @@ test('a loaded direct-open preview is actionable without authorizing arbitrary i
   assert.equal(canActOnInboxEmails({ ...directOpen, emailIds: [99] }), true);
   assert.equal(canActOnInboxEmails({ ...directOpen, emailIds: [98] }), false);
   assert.equal(canActOnInboxEmails({ ...directOpen, selectedDetailId: 98, emailIds: [99] }), false);
+});
+
+test('accepted actions coalesce while preserving a trailing authoritative refresh', async () => {
+  let currentKey = 'search-a';
+  let releaseFirst;
+  const firstRefresh = new Promise(resolve => { releaseFirst = resolve; });
+  const calls = [];
+  const reconciler = createDatasetActionReconciler({
+    isCurrent: key => key === currentKey,
+    refresh: async key => {
+      calls.push(key);
+      if (calls.length === 1) await firstRefresh;
+    },
+  });
+
+  const running = reconciler.request('search-a');
+  await Promise.resolve();
+  await Promise.resolve();
+  reconciler.request('search-a');
+  releaseFirst();
+  await running;
+
+  assert.deepEqual(calls, ['search-a', 'search-a']);
+
+  currentKey = 'search-b';
+  await reconciler.request('search-a');
+  assert.deepEqual(calls, ['search-a', 'search-a']);
+});
+
+test('selected boolean state distinguishes uniform and mixed search results', () => {
+  const rows = [
+    { id: 1, is_trash: true },
+    { id: 2, is_trash: false },
+    { id: 3, is_trash: true },
+  ];
+
+  assert.equal(selectedBooleanState(rows, new Set([1, 3]), 'is_trash'), true);
+  assert.equal(selectedBooleanState(rows, new Set([2]), 'is_trash'), false);
+  assert.equal(selectedBooleanState(rows, new Set([1, 2]), 'is_trash'), null);
 });

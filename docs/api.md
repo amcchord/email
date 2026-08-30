@@ -34,6 +34,7 @@ free-form questions about your inbox without touching the web UI.
   - [Newspaper / week-ahead polling cadence](#newspaper--week-ahead-polling-cadence)
   - [Ask Claude from a script](#ask-claude-from-a-script)
 - [Security notes](#security-notes)
+- [Web session-only structured email search](#web-session-only-structured-email-search)
 - [Web session-only attachment download](#web-session-only-attachment-download)
 - [Web session-only durable mail actions](#web-session-only-durable-mail-actions)
 
@@ -599,6 +600,62 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 Click **Revoke** next to the token in **Settings → Profile & Accounts →
 API Tokens**. Revocation is immediate; the next request from any client
 using that token returns 401.
+
+## Web session-only structured email search
+
+The authenticated web application, not the `/api/v1` token surface, exposes
+composable search through the normal email-list route:
+
+```text
+GET /api/emails/?search={query}&mailbox=ALL&tz=America/New_York
+```
+
+The route always constrains results to accounts owned by the browser-session
+user. An explicit unknown or foreign `account_id` returns 404 rather than
+falling back to all owned accounts. `account:` and `label:` operators can only
+narrow that ownership boundary.
+
+Search terms separated by whitespace compose with AND. A standalone `OR`
+starts another group, `-` excludes one term, and double quotes request an exact
+phrase. Parenthesized groups are intentionally rejected until their precedence
+can be represented consistently in both the API and UI.
+
+Supported operators are:
+
+| syntax | meaning |
+|--------|---------|
+| `from:`, `to:`, `cc:`, `bcc:` | sender or recipient name/address contains the literal value |
+| `subject:`, `body:` | subject, snippet, or plain-text body contains the literal value |
+| `after:YYYY-MM-DD` | at or after local midnight on the date |
+| `before:YYYY-MM-DD` | before local midnight on the date |
+| `is:read\|unread\|starred\|unstarred\|draft\|sent` | message state |
+| `has:attachment` | message has at least one attachment |
+| `in:inbox\|sent\|drafts\|archive\|starred\|spam\|trash\|all\|anywhere` | mailbox scope |
+| `account:` | owned account ID, email, name, description, or short label |
+| `label:` | exact Gmail label ID or case-insensitive label name within owned accounts |
+
+Unknown operator-shaped text such as `ticket:1234` remains an ordinary search
+term for compatibility. Operator names and enumerated values are
+case-insensitive. Quoted values support `\"` and `\\` escapes. Queries are
+limited to 512 characters, 32 clauses, and 256 characters per value.
+
+`tz` is an IANA timezone used only for date boundaries and defaults to UTC.
+`after:` is inclusive; `before:` is exclusive. Invalid dates, timezones,
+recognized operator values, quotes, escapes, OR placement, and limits return a
+stable string `detail` with status 422.
+
+The outer `mailbox` remains backward compatible when the query has no positive
+`in:` clause. A positive `in:` supplies mailbox scope for its OR branch; other
+OR branches remain in regular mail rather than silently expanding into Spam
+or Trash. The web UI submits non-empty search with `mailbox=ALL`, suspends
+Focused/smart filters while searching, preserves an explicit account filter,
+and restores the prior mailbox/filter context when search is cleared.
+
+Email list, detail, and thread payloads include `is_sent`, `is_trash`, and
+`is_spam` alongside the existing read/starred/draft state. These additive
+fields let mixed-folder search results render recipients and expose safe
+Restore/Not Spam actions per message instead of inferring state from the outer
+mailbox parameter.
 
 ## Web session-only attachment download
 

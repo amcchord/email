@@ -258,7 +258,7 @@ async def emails_recent(
     else:
         gmail_label = MAILBOX_LABEL_MAP.get(mailbox, mailbox)
         if gmail_label:
-            query = query.where(jsonb_contains(Email.labels, f'["{gmail_label}"]'))
+            query = query.where(jsonb_contains(Email.labels, gmail_label))
         query = query.where(Email.is_trash == False, Email.is_spam == False)
 
     if unread_only:
@@ -306,7 +306,7 @@ async def emails_unread_count(
         Email.is_read == False,
         Email.is_trash == False,
         Email.is_spam == False,
-        jsonb_contains(Email.labels, '["INBOX"]'),
+        jsonb_contains(Email.labels, "INBOX"),
     ]
 
     total = await db.scalar(
@@ -391,7 +391,7 @@ async def _fetch_important_emails(
     else:
         gmail_label = MAILBOX_LABEL_MAP.get(mailbox, mailbox)
         if gmail_label:
-            query = query.where(jsonb_contains(Email.labels, f'["{gmail_label}"]'))
+            query = query.where(jsonb_contains(Email.labels, gmail_label))
         query = query.where(Email.is_trash == False, Email.is_spam == False)
 
     if unread_only:
@@ -1156,7 +1156,7 @@ async def _compute_unread(
         Email.is_read == False,
         Email.is_trash == False,
         Email.is_spam == False,
-        jsonb_contains(Email.labels, '["INBOX"]'),
+        jsonb_contains(Email.labels, "INBOX"),
     ]
 
     total = await db.scalar(select(func.count(Email.id)).where(*base_filter)) or 0

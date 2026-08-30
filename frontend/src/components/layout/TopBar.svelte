@@ -4,9 +4,9 @@
   import Icon from '../common/Icon.svelte';
   import { activeShortcuts, formatComboForDisplay, openCommandPalette } from '../../lib/shortcutStore.js';
   import { api } from '../../lib/api.js';
-  import { user, sidebarCollapsed, searchQuery, currentPage, currentMailbox, viewMode, overallSyncState, syncStatus, showToast, forceSyncPoll, selectedAccountId, accounts, accountColorMap, hideIgnored } from '../../lib/stores.js';
+  import { user, sidebarCollapsed, currentPage, currentMailbox, viewMode, overallSyncState, syncStatus, showToast, forceSyncPoll, selectedAccountId, accounts, accountColorMap, hideIgnored } from '../../lib/stores.js';
+  import EmailSearchBox from '../email/EmailSearchBox.svelte';
 
-  let searchValue = $state('');
   let syncDropdownOpen = $state(false);
   let moreMenuOpen = $state(false);
   let commandShortcut = $derived(
@@ -61,14 +61,9 @@
     }
   }
 
-  // Keep local searchValue in sync with the store
   onMount(() => {
-    const unsub = searchQuery.subscribe(val => {
-      searchValue = val;
-    });
     countdownInterval = setInterval(updateCountdown, 1000);
     return () => {
-      unsub();
       if (countdownInterval) clearInterval(countdownInterval);
     };
   });
@@ -78,17 +73,6 @@
     void $overallSyncState.retryAfter;
     updateCountdown();
   });
-
-  function handleSearch(e) {
-    if (e.key === 'Enter') {
-      searchQuery.set(searchValue.trim());
-    }
-  }
-
-  function clearSearch() {
-    searchValue = '';
-    searchQuery.set('');
-  }
 
   async function handleLogout() {
     try {
@@ -282,7 +266,7 @@
       <!-- Sidebar toggle (only on email tab) -->
       <button
         onclick={() => sidebarCollapsed.update(v => !v)}
-        class="p-1.5 rounded-md transition-fast shrink-0"
+        class="sidebar-toggle min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast shrink-0"
         style="color: var(--text-secondary)"
         aria-label="Toggle sidebar"
       >
@@ -292,7 +276,7 @@
       <!-- Focused toggle -->
       <button
         onclick={() => hideIgnored.update(v => !v)}
-        class="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-fast shrink-0 {$hideIgnored ? 'bg-accent-500/15' : ''}"
+        class="focused-toggle min-h-11 flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-fast shrink-0 {$hideIgnored ? 'bg-accent-500/15' : ''}"
         style="color: {$hideIgnored ? 'var(--color-accent-600)' : 'var(--text-tertiary)'}"
         title="{$hideIgnored ? 'Showing focused emails (hiding low priority)' : 'Click to hide low priority emails'}"
         aria-label="Toggle hide low priority emails"
@@ -324,31 +308,8 @@
       {/if}
 
       <!-- Search bar -->
-      <div class="flex-1 max-w-md">
-        <div class="relative">
-          <span class="absolute left-3 top-1/2 -translate-y-1/2" style="color: var(--text-tertiary)">
-            <Icon name="search" size={16} />
-          </span>
-          <input
-            type="text"
-            bind:value={searchValue}
-            onkeydown={handleSearch}
-            placeholder="Search emails..."
-            class="w-full h-8 pl-9 pr-8 rounded-lg text-sm outline-none border"
-            style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
-            data-shortcut="nav.search"
-          />
-          {#if searchValue}
-            <button
-              onclick={clearSearch}
-              class="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 rounded transition-fast"
-              style="color: var(--text-tertiary)"
-              aria-label="Clear search"
-            >
-              <Icon name="x" size={16} />
-            </button>
-          {/if}
-        </div>
+      <div class="email-search-slot flex-1 max-w-xl">
+        <EmailSearchBox />
       </div>
 
       <!-- View mode toggle -->
@@ -639,8 +600,12 @@
       order: 3;
       flex-basis: 100%;
     }
+    .email-search-slot {
+      max-width: none;
+      min-width: 0;
+    }
     .app-topbar:has(.inbox-tools) {
-      min-height: 6.25rem;
+      min-height: 6.75rem;
     }
   }
 

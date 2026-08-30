@@ -516,25 +516,38 @@
           >
             <Icon name="star" size={20} />
           </button>
+          {#if !email.is_trash && !email.is_spam}
+            <button
+              onclick={() => onAction && onAction('archive', [email.id])}
+              class="min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast"
+              style="color: var(--text-tertiary)"
+              title="Archive"
+              aria-label="Archive email"
+              data-shortcut="email.archive"
+            >
+              <Icon name="archive" size={20} />
+            </button>
+          {/if}
+          {#if email.is_spam}
+            <button
+              onclick={() => onAction && onAction('unspam', [email.id])}
+              class="min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast"
+              style="color: var(--color-accent-600)"
+              title="Mark as not spam"
+              aria-label="Mark email as not spam"
+            >
+              <Icon name="shield-check" size={20} />
+            </button>
+          {/if}
           <button
-            onclick={() => onAction && onAction('archive', [email.id])}
+            onclick={() => onAction && onAction(email.is_trash ? 'untrash' : 'trash', [email.id])}
             class="min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast"
             style="color: var(--text-tertiary)"
-            title="Archive"
-            aria-label="Archive email"
-            data-shortcut="email.archive"
-          >
-            <Icon name="archive" size={20} />
-          </button>
-          <button
-            onclick={() => onAction && onAction('trash', [email.id])}
-            class="min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast"
-            style="color: var(--text-tertiary)"
-            title="Move to trash"
-            aria-label="Move email to trash"
+            title={email.is_trash ? 'Restore from trash' : 'Move to trash'}
+            aria-label={email.is_trash ? 'Restore email from trash' : 'Move email to trash'}
             data-shortcut="email.trash"
           >
-            <Icon name="trash-2" size={20} />
+            <Icon name={email.is_trash ? 'rotate-ccw' : 'trash-2'} size={20} />
           </button>
           <!-- Pop out button -->
           {#if !standalone}
