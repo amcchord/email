@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { calendarView, calendarDate, calendarEvents, selectedAccountId, accounts, accountsLoaded, accountsLoadError, accountColorMap, currentPage, forceSyncPoll, showToast } from '../lib/stores.js';
+  import { calendarView, calendarDate, calendarEvents, selectedAccountId, accounts, accountsLoaded, accountsLoadError, accountColorMap, createAuthenticatedSessionGuard, currentPage, forceSyncPoll, showToast } from '../lib/stores.js';
   import { registerActions } from '../lib/shortcutStore.js';
   import { mergeEvents } from '../lib/calendarLayout.js';
   import {
@@ -33,10 +33,15 @@
   let observedDescriptorKey = null;
   let destroyed = false;
   let syncPollTimer = null;
+  let sessionGuard = null;
 
   const eventCache = new Map();
   const eventGate = createLatestRequestGate();
   const statusGate = createLatestRequestGate();
+
+  function calendarSessionIsCurrent() {
+    return !destroyed && Boolean(sessionGuard?.isCurrent());
+  }
 
   function resolveDisplayTimeZone() {
     try {
@@ -112,17 +117,18 @@
   );
 
   async function loadSyncStatus() {
+    if (!calendarSessionIsCurrent()) return null;
     const request = statusGate.begin('calendar-sync-status');
     if (syncStatuses.length === 0) statusState = 'loading';
     statusError = '';
     try {
       const result = await api.getCalendarSyncStatus({ signal: request.signal });
-      if (!request.isCurrent()) return null;
+      if (!calendarSessionIsCurrent() || !request.isCurrent()) return null;
       syncStatuses = Array.isArray(result) ? result : [];
       statusState = 'ready';
       return syncStatuses;
     } catch (err) {
-      if (isCalendarAbort(err) || !request.isCurrent()) return null;
+      if (!calendarSessionIsCurrent() || isCalendarAbort(err) || !request.isCurrent()) return null;
       console.error('Failed to load calendar sync status:', err);
       statusState = 'error';
       statusError = err.message || 'Calendar freshness could not be loaded.';
@@ -131,15 +137,21 @@
   }
 
   async function reauthorize(accountId) {
+    if (!calendarSessionIsCurrent()) return;
     try {
       const result = await api.reauthorizeAccount(accountId, { returnPage: 'calendar' });
+      if (!calendarSessionIsCurrent()) return;
       window.location.href = result.auth_url;
     } catch (err) {
-      showToast(err.message || 'Failed to start reauthorization', 'error');
+      if (calendarSessionIsCurrent()) {
+        showToast(err.message || 'Failed to start reauthorization', 'error');
+      }
     }
   }
 
   onMount(() => {
+    destroyed = false;
+    sessionGuard = createAuthenticatedSessionGuard();
     const narrowQuery = window.matchMedia('(max-width: 767px)');
     const enforceNarrowView = () => {
       if (narrowQuery.matches && $calendarView === 'week') calendarView.set('day');
@@ -158,6 +170,8 @@
     const statusInterval = setInterval(loadSyncStatus, 60000);
     return () => {
       destroyed = true;
+      sessionGuard.dispose();
+      sessionGuard = null;
       narrowQuery.removeEventListener('change', enforceNarrowView);
       cleanupShortcuts();
       clearInterval(statusInterval);
@@ -177,6 +191,7 @@
   }
 
   async function loadEvents(descriptor = currentDescriptor(), { force = false } = {}) {
+    if (!calendarSessionIsCurrent()) return;
     const cached = eventCache.get(descriptor.key);
     currentRequestKey = descriptor.key;
     eventError = '';
@@ -197,14 +212,14 @@
     const request = eventGate.begin(descriptor.key);
     try {
       const result = await api.getCalendarEvents(descriptor.params, { signal: request.signal });
-      if (!request.isCurrent() || currentRequestKey !== descriptor.key) return;
+      if (!calendarSessionIsCurrent() || !request.isCurrent() || currentRequestKey !== descriptor.key) return;
       const events = Array.isArray(result?.events) ? result.events : [];
       eventCache.set(descriptor.key, events);
       visibleEvents = events;
       calendarEvents.set(events);
       eventStatus = 'ready';
     } catch (err) {
-      if (isCalendarAbort(err) || !request.isCurrent() || currentRequestKey !== descriptor.key) return;
+      if (!calendarSessionIsCurrent() || isCalendarAbort(err) || !request.isCurrent() || currentRequestKey !== descriptor.key) return;
       console.error('Failed to load calendar events:', err);
       eventError = err.message || 'Calendar events could not be loaded.';
       eventStatus = 'error';
@@ -215,7 +230,8 @@
   // is shared with mail. Reset only after an authoritative account load.
   $effect(() => {
     if (
-      $accountsLoaded
+      calendarSessionIsCurrent()
+      && $accountsLoaded
       && $selectedAccountId !== null
       && !$accounts.some(account => account.id === $selectedAccountId && account.is_active !== false)
     ) {
@@ -226,6 +242,7 @@
   // Every dataset gets an immutable request identity. loadEvents aborts the
   // previous fetch and stale completions are unable to commit state.
   $effect(() => {
+    if (!calendarSessionIsCurrent()) return;
     const descriptor = calendarRequestDescriptor({
       view: $calendarView,
       date: new Date($calendarDate),
@@ -276,16 +293,16 @@
   }
 
   async function pollTriggeredSync(context, attempt = 0) {
-    if (destroyed) return;
+    if (!calendarSessionIsCurrent()) return;
     const statuses = await loadSyncStatus();
-    if (destroyed) return;
+    if (!calendarSessionIsCurrent()) return;
 
     const everyTargetFinished = calendarSyncTargetsFinished(context, statuses || []);
 
     if (everyTargetFinished || attempt >= 22) {
       syncing = false;
       await loadEvents(currentDescriptor(), { force: true });
-      if (destroyed) return;
+      if (!calendarSessionIsCurrent()) return;
       if (attempt >= 22 && !everyTargetFinished) {
         const activeNow = calendarSyncHasActiveTarget(context, statuses || []);
         showToast(
@@ -302,6 +319,7 @@
   }
 
   async function triggerSync() {
+    if (!calendarSessionIsCurrent()) return;
     const selectedAccountSnapshot = $selectedAccountId;
     const context = createCalendarSyncMonitor({
       accounts: $accounts,
@@ -316,11 +334,14 @@
     clearTimeout(syncPollTimer);
     try {
       await api.triggerCalendarSync(selectedAccountSnapshot || undefined);
+      if (!calendarSessionIsCurrent()) return;
       showToast('Calendar sync triggered', 'success');
       syncPollTimer = setTimeout(() => pollTriggeredSync(context), 1000);
     } catch (err) {
-      showToast(err.message || 'Sync failed', 'error');
-      syncing = false;
+      if (calendarSessionIsCurrent()) {
+        showToast(err.message || 'Sync failed', 'error');
+        syncing = false;
+      }
     }
   }
 

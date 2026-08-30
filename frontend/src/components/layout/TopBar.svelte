@@ -5,8 +5,7 @@
   import { activeShortcuts, formatComboForDisplay, openCommandPalette } from '../../lib/shortcutStore.js';
   import { api } from '../../lib/api.js';
   import { preloadAuthenticatedPage } from '../../lib/lazyRoutes.js';
-  import { user, sidebarCollapsed, currentPage, currentMailbox, viewMode, overallSyncState, syncStatus, showToast, forceSyncPoll, stopSyncPolling, selectedAccountId, accounts, accountColorMap, hideIgnored } from '../../lib/stores.js';
-  import { stopRealtime } from '../../lib/realtime.js';
+  import { sidebarCollapsed, currentPage, currentMailbox, viewMode, overallSyncState, syncStatus, showToast, forceSyncPoll, selectedAccountId, accounts, accountColorMap, hideIgnored, transitionAuthenticatedSession, createAuthenticatedSessionGuard, user } from '../../lib/stores.js';
   import EmailSearchBox from '../email/EmailSearchBox.svelte';
 
   let syncDropdownOpen = $state(false);
@@ -26,6 +25,8 @@
   );
   let countdownText = $state('');
   let countdownInterval = null;
+  let sessionGuard = null;
+  let logoutInProgress = $state(false);
 
   const tabs = [
     { id: 'flow', label: 'Flow', icon: 'sparkles' },
@@ -84,6 +85,7 @@
   }
 
   onMount(() => {
+    sessionGuard = createAuthenticatedSessionGuard();
     countdownInterval = setInterval(updateCountdown, 1000);
     const handleEscape = event => {
       if (event.key !== 'Escape' || !moreMenuOpen) return;
@@ -95,6 +97,8 @@
     return () => {
       if (countdownInterval) clearInterval(countdownInterval);
       window.removeEventListener('keydown', handleEscape, true);
+      sessionGuard?.dispose();
+      sessionGuard = null;
     };
   });
 
@@ -115,14 +119,17 @@
   });
 
   async function handleLogout() {
+    if (logoutInProgress) return;
+    logoutInProgress = true;
+    closeMoreMenu();
+    syncDropdownOpen = false;
     try {
       await api.logout();
     } catch {
       // Continue even if API fails
     }
-    stopSyncPolling();
-    stopRealtime();
-    user.set(null);
+    if (!sessionGuard?.isCurrent()) return;
+    transitionAuthenticatedSession(null);
   }
 
   function switchTab(tabId, { restoreMoreFocus = false } = {}) {
@@ -150,11 +157,14 @@
   async function triggerSync(accountId) {
     try {
       await api.triggerSync(accountId);
+      if (!sessionGuard?.isCurrent()) return;
       showToast('Sync triggered', 'success');
       // Immediately poll so the UI picks up the syncing state
-      setTimeout(forceSyncPoll, 500);
+      setTimeout(() => {
+        if (sessionGuard?.isCurrent()) forceSyncPoll();
+      }, 500);
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionGuard?.isCurrent()) showToast(err.message, 'error');
     }
   }
 
@@ -218,9 +228,12 @@
   async function reauthorizeAccount(accountId) {
     try {
       const result = await api.reauthorizeAccount(accountId);
+      if (!sessionGuard?.isCurrent()) return;
       window.location.href = result.auth_url;
     } catch (err) {
-      showToast(err.message || 'Could not start reconnection', 'error');
+      if (sessionGuard?.isCurrent()) {
+        showToast(err.message || 'Could not start reconnection', 'error');
+      }
     }
   }
 
@@ -279,7 +292,7 @@
     </button>
     {#if moreMenuOpen}
       <button
-        class="fixed inset-0 z-40 cursor-default"
+        class="topbar-backdrop fixed inset-0 z-40 cursor-default"
         onclick={() => closeMoreMenu({ restoreFocus: true })}
         tabindex="-1"
         aria-hidden="true"
@@ -313,7 +326,11 @@
             <Icon name={getEffectiveMode($theme) === 'dark' ? 'sun' : 'moon'} size={16} />
             {getEffectiveMode($theme) === 'dark' ? 'Light theme' : 'Dark theme'}
           </button>
-          <button onclick={handleLogout} class="min-h-11 w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left">
+          <button
+            onclick={handleLogout}
+            disabled={logoutInProgress}
+            class="min-h-11 w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left disabled:opacity-50"
+          >
             <Icon name="log-out" size={16} /> Log out
           </button>
         </div>
@@ -468,7 +485,7 @@
       {#if syncDropdownOpen}
         <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
         <button
-          class="fixed inset-0 z-40"
+          class="topbar-backdrop fixed inset-0 z-40"
           onclick={closeSyncDropdown}
           aria-label="Close sync status"
         ></button>
@@ -579,7 +596,8 @@
       </div>
       <button
         onclick={handleLogout}
-        class="p-1 rounded-md transition-fast"
+        disabled={logoutInProgress}
+        class="p-1 rounded-md transition-fast disabled:opacity-50"
         style="color: var(--text-secondary)"
         aria-label="Logout"
         title="Logout"
@@ -605,12 +623,17 @@
     color: var(--text-primary);
   }
   /* Hover states for icon buttons */
-  header button:not(.tab-active):not(.tab-inactive) {
+  header button:not(.topbar-backdrop):not(.tab-active):not(.tab-inactive) {
     transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
   }
-  header button:not(.tab-active):not(.tab-inactive):hover {
+  header button:not(.topbar-backdrop):not(.tab-active):not(.tab-inactive):hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+  }
+  .topbar-backdrop,
+  .topbar-backdrop:hover {
+    border: 0;
+    background: transparent;
   }
   .menu-item-active {
     color: var(--color-accent-600);

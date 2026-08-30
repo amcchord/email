@@ -3,6 +3,62 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Session ownership and shell reliability candidate
+
+### Scope
+
+Make account switching a complete browser privacy boundary, enforce Todo source
+ownership, fix the Safari More/Sync blank-page regression, and preserve drafts
+during fast navigation while keeping all generated QA read-only with respect to
+real mail and calendars.
+
+### Completed
+
+- Added one central authentication generation and synchronous reset for all
+  user-derived stores; guarded requests, refreshes, raw streams, realtime,
+  polling, timers, delayed continuations, navigation handoffs, and toasts.
+- Ordered logout behind in-flight refresh and kept login unavailable until the
+  final cookie clear; coalesced duplicate logout attempts.
+- Scoped Compose draft and sender storage by user/intent, purged unsafe legacy
+  keys, and persisted the latest edit before teardown.
+- Made generic Todo creation manual-only, scoped email and analysis lookup
+  through account ownership, normalized AI action items, added uniform 404s,
+  and added PostgreSQL cleanup/enforcement revision `c0d1e2f3a4b5`.
+- Fixed the transparent More/Sync fullscreen close targets in Safari and made
+  cancel/failure stop remaining browser-assisted unsubscribe work.
+- Added generated two-user, popover, auth-cookie, Todo, request, stream, action,
+  draft, realtime, reset, and migration regressions.
+
+### Verification
+
+- Final `make check`: 399 backend passed, 4 opt-in PostgreSQL tests skipped;
+  183 frontend passed; 507-module build completed.
+- Disposable PostgreSQL 17 upgrade/downgrade/re-upgrade and trigger checks
+  passed. Production aggregate preflight found zero Todo rows.
+- Generated 1280×720 and exact-375 browser QA passed with delayed User A Todo
+  responses released after User B login, no A data/draft in B, transparent
+  shell backdrops, no overflow, zero fixture mutations/unknown routes, and zero
+  browser warnings/errors.
+- Independent backend, generated-QA, and competitive UX reviews approved the
+  final candidate after all P0/P1 findings were fixed.
+
+### Production Actions
+
+- At the user's explicit request, promoted exact active
+  `austin@mcchord.net` to administrator, initially added the two requested
+  external addresses, then widened only trusted organization domains
+  `@mcchord.net`, `@casanacare.com`, and `@outsidersfund.com`. Consumer domains
+  remain exact-address only. Aggregate verification passed; no restart was
+  required and no allowlist value was printed.
+- Application deploy, database backup/migration, and post-deploy verification
+  remain pending for the candidate.
+
+### Next
+
+Finish final review and aggregate checks, push the exact candidate, take and
+validate a fresh database backup, deploy revision `c0d1e2f3a4b5`, and perform
+read-only production shell and health verification.
+
 ## 2026-08-30 — At a Glance platform release
 
 ### Scope

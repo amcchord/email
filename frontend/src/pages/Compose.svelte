@@ -1,10 +1,22 @@
 <script>
-  import { onDestroy, onMount } from 'svelte';
+  import { onMount } from 'svelte';
   import { get } from 'svelte/store';
   import { api } from '../lib/api.js';
-  import { currentPage, composeData, accounts, selectedAccountId as globalSelectedAccountId, showToast } from '../lib/stores.js';
+  import {
+    accounts,
+    composeData,
+    createAuthenticatedSessionGuard,
+    currentPage,
+    selectedAccountId as globalSelectedAccountId,
+    showToast,
+  } from '../lib/stores.js';
   import { registerActions } from '../lib/shortcutStore.js';
-  import { composeDraftHasContent, composeDraftStorageKey, composeReplyContext, LEGACY_COMPOSE_DRAFT_KEY } from '../lib/composeDraft.js';
+  import {
+    composeDraftHasContent,
+    composeDraftStorageKey,
+    composeLastAccountStorageKey,
+    composeReplyContext,
+  } from '../lib/composeDraft.js';
   import Button from '../components/common/Button.svelte';
   import Icon from '../components/common/Icon.svelte';
   import DeferredRichEditor from '../components/email/DeferredRichEditor.svelte';
@@ -25,9 +37,10 @@
   let fileInput = $state(null);
   let writingSurfaceReady = $state(false);
   let savingDraft = $state(false);
-  let activeDraftKey = $state('composeLocalDraftV2:new');
+  let activeDraftKey = $state(null);
   let replyContext = $state({ in_reply_to: null, references: null, thread_id: null });
   let suppressLocalPersistence = false;
+  let sessionGuard = null;
 
   let senderAccount = $derived(accountList.find(account => account.id === Number(selectedAccountId)) || null);
   let recipientChips = $derived(parseRecipients(to));
@@ -39,7 +52,8 @@
 
   function chooseSender(list, contextAccountId = null) {
     if (!list.length) return null;
-    const savedId = Number(localStorage.getItem('composeLastAccountId'));
+    const lastAccountKey = composeLastAccountStorageKey(sessionGuard?.userId);
+    const savedId = Number(lastAccountKey ? localStorage.getItem(lastAccountKey) : null);
     const preferredId = contextAccountId || get(globalSelectedAccountId) || savedId;
     return list.find(account => account.id === Number(preferredId))?.id
       || list.find(account => /primary/i.test(account.description || ''))?.id
@@ -63,7 +77,7 @@
   }
 
   function persistLocalDraft(draft = draftSnapshot()) {
-    if (suppressLocalPersistence) return;
+    if (suppressLocalPersistence || !activeDraftKey || !sessionGuard?.isCurrent()) return;
     try {
       if (!composeDraftHasContent(draft)) {
         localStorage.removeItem(activeDraftKey);
@@ -78,13 +92,9 @@
   }
 
   function restoreLocalDraft() {
+    if (!activeDraftKey || !sessionGuard?.isCurrent()) return;
     try {
-      let storedKey = activeDraftKey;
-      let serialized = localStorage.getItem(storedKey);
-      if (!serialized && activeDraftKey === 'composeLocalDraftV2:new') {
-        serialized = localStorage.getItem(LEGACY_COMPOSE_DRAFT_KEY);
-        storedKey = LEGACY_COMPOSE_DRAFT_KEY;
-      }
+      const serialized = localStorage.getItem(activeDraftKey);
       const draft = JSON.parse(serialized || 'null');
       if (!composeDraftHasContent(draft)) return;
       to = draft.to || '';
@@ -99,17 +109,20 @@
       replyContext = composeReplyContext(draft);
       showCcBcc = Boolean(cc || bcc);
       autosaveStatus = `Restored local draft from ${new Date(draft.saved_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
-      if (storedKey === LEGACY_COMPOSE_DRAFT_KEY) {
-        persistLocalDraft(draft);
-        localStorage.removeItem(LEGACY_COMPOSE_DRAFT_KEY);
-      }
     } catch {
       localStorage.removeItem(activeDraftKey);
     }
   }
 
   onMount(() => {
+    sessionGuard = createAuthenticatedSessionGuard();
+    if (!sessionGuard.isCurrent()) {
+      return () => sessionGuard?.dispose();
+    }
+    activeDraftKey = composeDraftStorageKey(sessionGuard.userId, get(composeData));
+
     const unsubAccounts = accounts.subscribe(v => {
+      if (!sessionGuard?.isCurrent()) return;
       accountList = v;
       if (v.length > 0 && !selectedAccountId) {
         selectedAccountId = chooseSender(v, get(composeData)?.account_id);
@@ -118,8 +131,9 @@
 
     // Pre-fill from composeData (reply/forward)
     const unsub = composeData.subscribe(data => {
+      if (!sessionGuard?.isCurrent()) return;
       if (data) {
-        activeDraftKey = composeDraftStorageKey(data);
+        activeDraftKey = composeDraftStorageKey(sessionGuard.userId, data);
         if (data.to) to = data.to.join(', ');
         if (data.cc) cc = data.cc.join(', ');
         if (data.subject) subject = data.subject;
@@ -155,10 +169,12 @@
     });
 
     return () => {
+      if (autosaveReady) persistLocalDraft();
       unsubAccounts();
       unsub();
       composeData.set(null);
       cleanupShortcuts();
+      sessionGuard?.dispose();
     };
   });
 
@@ -189,12 +205,11 @@
     return () => clearTimeout(timer);
   });
 
-  onDestroy(() => {
-    if (autosaveReady) persistLocalDraft();
-  });
-
   $effect(() => {
-    if (selectedAccountId) localStorage.setItem('composeLastAccountId', String(selectedAccountId));
+    const lastAccountKey = composeLastAccountStorageKey(sessionGuard?.userId);
+    if (selectedAccountId && lastAccountKey && sessionGuard?.isCurrent()) {
+      localStorage.setItem(lastAccountKey, String(selectedAccountId));
+    }
   });
 
   function removeRecipient(address) {
@@ -221,6 +236,7 @@
       reader.onerror = reject;
       reader.readAsDataURL(file);
     })));
+    if (!sessionGuard?.isCurrent()) return;
     attachments = [...attachments, ...encoded];
     event.currentTarget.value = '';
   }
@@ -230,13 +246,15 @@
   }
 
   function discardDraft() {
+    if (!sessionGuard?.isCurrent()) return;
     suppressLocalPersistence = true;
-    localStorage.removeItem(activeDraftKey);
+    if (activeDraftKey) localStorage.removeItem(activeDraftKey);
     composeData.set(null);
     currentPage.set('inbox');
   }
 
   function returnToInbox() {
+    if (!sessionGuard?.isCurrent()) return;
     persistLocalDraft();
     if (attachments.length > 0) {
       showToast('Draft saved locally without attachments; add them again when you return', 'info');
@@ -246,7 +264,7 @@
   }
 
   async function handleSend() {
-    if (sending || !writingSurfaceReady) return false;
+    if (sending || !writingSurfaceReady || !sessionGuard?.isCurrent()) return false;
     if (!to.trim()) {
       showToast('Please add recipients', 'error');
       return false;
@@ -274,22 +292,23 @@
       if (replyContext.thread_id) data.thread_id = replyContext.thread_id;
 
       await api.sendEmail(data);
+      if (!sessionGuard.isCurrent()) return false;
       suppressLocalPersistence = true;
-      localStorage.removeItem(activeDraftKey);
+      if (activeDraftKey) localStorage.removeItem(activeDraftKey);
       showToast('Email sent', 'success');
       currentPage.set('inbox');
       composeData.set(null);
       return true;
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionGuard?.isCurrent()) showToast(err.message, 'error');
       return false;
     } finally {
-      sending = false;
+      if (sessionGuard?.isCurrent()) sending = false;
     }
   }
 
   async function handleSaveDraft() {
-    if (!selectedAccountId || savingDraft || !writingSurfaceReady) return false;
+    if (!selectedAccountId || savingDraft || !writingSurfaceReady || !sessionGuard?.isCurrent()) return false;
     savingDraft = true;
     try {
       await api.saveDraft({
@@ -306,15 +325,16 @@
         references: replyContext.references,
         thread_id: replyContext.thread_id,
       });
+      if (!sessionGuard.isCurrent()) return false;
       suppressLocalPersistence = true;
-      localStorage.removeItem(activeDraftKey);
+      if (activeDraftKey) localStorage.removeItem(activeDraftKey);
       showToast('Draft saved', 'success');
       return true;
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionGuard?.isCurrent()) showToast(err.message, 'error');
       return false;
     } finally {
-      savingDraft = false;
+      if (sessionGuard?.isCurrent()) savingDraft = false;
     }
   }
 </script>

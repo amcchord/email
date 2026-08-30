@@ -1,32 +1,69 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
+  clearUnscopedComposeStorage,
   composeDraftHasContent,
+  composeLastAccountStorageKey,
   composeDraftStorageKey,
   composeReplyContext,
 } from './composeDraft.js';
 
 test('new, reply, thread, and forward drafts use isolated local keys', () => {
   const keys = [
-    composeDraftStorageKey(null),
-    composeDraftStorageKey({ in_reply_to: '<generated-reply@example.test>' }),
-    composeDraftStorageKey({ thread_id: 'generated-thread-12' }),
-    composeDraftStorageKey({ draft_key: 'forward:1:313' }),
+    composeDraftStorageKey(7, null),
+    composeDraftStorageKey(7, { in_reply_to: '<generated-reply@example.test>' }),
+    composeDraftStorageKey(7, { thread_id: 'generated-thread-12' }),
+    composeDraftStorageKey(7, { draft_key: 'forward:1:313' }),
   ];
 
   assert.equal(new Set(keys).size, keys.length);
-  assert.equal(keys[0], 'composeLocalDraftV2:new');
-  assert.ok(keys.every(key => key.startsWith('composeLocalDraftV2:')));
+  assert.equal(keys[0], 'composeLocalDraftV3:user:7:new');
+  assert.ok(keys.every(key => key.startsWith('composeLocalDraftV3:user:7:')));
+  assert.notEqual(composeDraftStorageKey(8, null), keys[0]);
+  assert.equal(composeLastAccountStorageKey(7), 'composeLastAccountV2:user:7');
 });
 
 test('draft key normalization bounds storage identifiers without merging intent types', () => {
-  const forward = composeDraftStorageKey({ draft_key: `forward:${'a/b '.repeat(100)}` });
-  const reply = composeDraftStorageKey({ draft_key: `reply:${'a/b '.repeat(100)}` });
+  const forward = composeDraftStorageKey('generated-user', { draft_key: `forward:${'a/b '.repeat(100)}` });
+  const reply = composeDraftStorageKey('generated-user', { draft_key: `reply:${'a/b '.repeat(100)}` });
 
-  assert.ok(forward.length <= 'composeLocalDraftV2:'.length + 240);
+  assert.ok(forward.length <= 'composeLocalDraftV3:user:generated-user:'.length + 240);
   assert.doesNotMatch(forward, /[ /]/);
   assert.notEqual(forward, reply);
+});
+
+test('draft and sender keys fail closed without a validated authenticated user', () => {
+  for (const invalidUserId of [null, undefined, '', '../shared', 'two users', {}, -1]) {
+    assert.equal(composeDraftStorageKey(invalidUserId, null), null);
+    assert.equal(composeLastAccountStorageKey(invalidUserId), null);
+  }
+});
+
+test('unscoped cleanup removes V1 and V2 content while preserving scoped V3 drafts', () => {
+  const values = new Map([
+    ['composeLocalDraftV1', 'old-global-draft'],
+    ['composeLocalDraftV2:new', 'old-global-new-draft'],
+    ['composeLocalDraftV2:reply:generated', 'old-global-reply'],
+    ['composeLastAccountId', '91'],
+    ['composeLocalDraftV3:user:7:new', 'scoped-draft'],
+    ['composeLastAccountV2:user:7', '92'],
+    ['unrelatedPreference', 'preserved'],
+  ]);
+  const storage = {
+    get length() { return values.size; },
+    key(index) { return [...values.keys()][index] ?? null; },
+    removeItem(key) { values.delete(key); },
+  };
+
+  clearUnscopedComposeStorage(storage);
+
+  assert.deepEqual([...values.entries()], [
+    ['composeLocalDraftV3:user:7:new', 'scoped-draft'],
+    ['composeLastAccountV2:user:7', '92'],
+    ['unrelatedPreference', 'preserved'],
+  ]);
 });
 
 test('reply metadata alone keeps a handoff draft recoverable', () => {
@@ -43,4 +80,14 @@ test('reply metadata alone keeps a handoff draft recoverable', () => {
     references: '<generated@example.test>',
     thread_id: 'generated-thread',
   });
+});
+
+test('Compose persists the latest edit before navigation disposes its session guard', async () => {
+  const text = await readFile(new URL('../pages/Compose.svelte', import.meta.url), 'utf8');
+  const cleanup = text.match(/return \(\) => \{([\s\S]*?)\n\s*\};\n\s*\}\);/)?.[1] || '';
+
+  assert.ok(cleanup.includes('if (autosaveReady) persistLocalDraft();'));
+  assert.ok(cleanup.indexOf('persistLocalDraft()') < cleanup.indexOf('composeData.set(null)'));
+  assert.ok(cleanup.indexOf('persistLocalDraft()') < cleanup.indexOf('sessionGuard?.dispose()'));
+  assert.doesNotMatch(text, /onDestroy\(/);
 });

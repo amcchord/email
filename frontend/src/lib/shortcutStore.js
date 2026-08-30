@@ -13,6 +13,7 @@
 import { writable, derived, get } from 'svelte/store';
 import { SHORTCUT_DEFAULTS, getDefaultsMap } from './shortcutDefaults.js';
 import { api } from './api.js';
+import { captureAuthEpoch, isAuthEpochCurrent } from './authSession.js';
 
 // ── User overrides store ───────────────────────────────────────────
 // Map of actionId -> custom key combo (sparse — only stores changes from defaults)
@@ -433,11 +434,14 @@ export function checkConflict(actionId, newCombo) {
  * Load user shortcut overrides from the API.
  */
 export async function loadUserShortcuts() {
+  const session = captureAuthEpoch();
   try {
     const resp = await api.getKeyboardShortcuts();
+    if (!isAuthEpochCurrent(session)) return;
     userOverrides.set(resp.shortcuts || {});
     overridesLoaded.set(true);
   } catch {
+    if (!isAuthEpochCurrent(session)) return;
     // Silently fall back to defaults
     overridesLoaded.set(true);
   }
@@ -450,6 +454,7 @@ export async function loadUserShortcuts() {
  * @param {string} newKey - new key combo (empty string to reset to default)
  */
 export async function updateShortcut(actionId, newKey) {
+  const session = captureAuthEpoch();
   const current = get(userOverrides);
   const updated = { ...current };
 
@@ -465,7 +470,7 @@ export async function updateShortcut(actionId, newKey) {
     await api.updateKeyboardShortcuts(updated);
   } catch {
     // Revert on error
-    userOverrides.set(current);
+    if (isAuthEpochCurrent(session)) userOverrides.set(current);
   }
 }
 
@@ -481,12 +486,13 @@ export async function resetShortcut(actionId) {
  * Reset all shortcuts to defaults.
  */
 export async function resetAllShortcuts() {
+  const session = captureAuthEpoch();
   const previous = get(userOverrides);
   userOverrides.set({});
   try {
     await api.updateKeyboardShortcuts({});
   } catch {
-    userOverrides.set(previous);
+    if (isAuthEpochCurrent(session)) userOverrides.set(previous);
   }
 }
 
@@ -500,6 +506,17 @@ export const helpModalOpen = writable(false);
 
 /** Whether the executable command palette is showing */
 export const commandPaletteOpen = writable(false);
+
+/** Clear every shortcut value or surface owned by the previous identity. */
+export function resetShortcutSessionState() {
+  userOverrides.set({});
+  overridesLoaded.set(false);
+  overlayVisible.set(false);
+  helpModalOpen.set(false);
+  commandPaletteOpen.set(false);
+  actionHandlers.clear();
+  bumpActionRegistry();
+}
 
 /** Open one command-surface modal at a time so inert/focus ownership cannot overlap. */
 export function openCommandPalette() {

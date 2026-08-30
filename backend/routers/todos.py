@@ -1,29 +1,83 @@
 from datetime import datetime, timezone
-from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from typing import Literal, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, case
 
 from backend.database import get_db
 from backend.models.user import User
 from backend.models.email import Email
+from backend.models.account import GoogleAccount
 from backend.models.ai import AIAnalysis
 from backend.models.todo import TodoItem
 from backend.routers.auth import get_current_user
 
 router = APIRouter(prefix="/api/todos", tags=["todos"])
 
+MAX_TODO_TITLE_LENGTH = 500
+TODO_NOT_FOUND_DETAIL = "Email not found"
+TodoStatus = Literal["pending", "done", "dismissed"]
+
+
+def _normalized_title(value):
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
 
 class TodoCreate(BaseModel):
-    title: str
-    email_id: Optional[int] = None
-    source: str = "manual"
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=MAX_TODO_TITLE_LENGTH)
+    email_id: Optional[StrictInt] = Field(default=None, gt=0)
+    # AI-derived Todos are created only by the ownership-scoped from-email
+    # endpoint. The general create route is intentionally manual-only.
+    source: Literal["manual"] = "manual"
+
+    _strip_title = field_validator("title", mode="before")(_normalized_title)
 
 
 class TodoUpdate(BaseModel):
-    title: Optional[str] = None
-    status: Optional[str] = None  # pending, done, dismissed
+    model_config = ConfigDict(extra="forbid")
+
+    title: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_TODO_TITLE_LENGTH,
+    )
+    status: Optional[TodoStatus] = None
+
+    _strip_title = field_validator("title", mode="before")(_normalized_title)
+
+
+async def _owned_email_id(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    email_id: int,
+) -> Optional[int]:
+    """Return an email id only when its account belongs to the user."""
+    result = await db.execute(
+        select(Email.id)
+        .join(GoogleAccount, Email.account_id == GoogleAccount.id)
+        .where(
+            Email.id == email_id,
+            GoogleAccount.user_id == user_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+def _action_item_title(item) -> Optional[str]:
+    """Normalize stored analysis output before it becomes user-visible data."""
+    if not isinstance(item, str):
+        return None
+    title = item.strip()
+    if not title:
+        return None
+    return title[:MAX_TODO_TITLE_LENGTH]
 
 
 def _todo_to_dict(todo: TodoItem) -> dict:
@@ -44,7 +98,7 @@ def _todo_to_dict(todo: TodoItem) -> dict:
 
 @router.get("/")
 async def list_todos(
-    status: Optional[str] = None,
+    status: Optional[TodoStatus] = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -84,12 +138,21 @@ async def create_todo(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Create a single todo."""
+    """Create one manual Todo, optionally linked to an owned email."""
+    if body.email_id is not None:
+        owned_email_id = await _owned_email_id(
+            db,
+            user_id=user.id,
+            email_id=body.email_id,
+        )
+        if owned_email_id is None:
+            raise HTTPException(status_code=404, detail=TODO_NOT_FOUND_DETAIL)
+
     todo = TodoItem(
         user_id=user.id,
         email_id=body.email_id,
         title=body.title,
-        source=body.source,
+        source="manual",
         status="pending",
     )
     db.add(todo)
@@ -100,20 +163,30 @@ async def create_todo(
 
 @router.post("/from-email/{email_id}")
 async def create_todos_from_email(
-    email_id: int,
+    email_id: int = Path(gt=0),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """Bulk-create todos from all action items of an email's AI analysis."""
-    # Get the AI analysis for this email
+    # Scope the analysis itself through Email -> GoogleAccount ownership. A
+    # foreign email, a missing email, and an email without analysis intentionally
+    # share one response so the endpoint cannot disclose analysis existence.
     result = await db.execute(
-        select(AIAnalysis).where(AIAnalysis.email_id == email_id)
+        select(AIAnalysis)
+        .join(Email, AIAnalysis.email_id == Email.id)
+        .join(GoogleAccount, Email.account_id == GoogleAccount.id)
+        .where(
+            AIAnalysis.email_id == email_id,
+            GoogleAccount.user_id == user.id,
+        )
     )
     analysis = result.scalar_one_or_none()
     if not analysis:
-        raise HTTPException(status_code=404, detail="No AI analysis found for this email")
+        raise HTTPException(status_code=404, detail=TODO_NOT_FOUND_DETAIL)
 
-    action_items = analysis.action_items or []
+    action_items = analysis.action_items
+    if not isinstance(action_items, list):
+        action_items = []
     if not action_items:
         return {"message": "No action items to add", "created": 0, "todos": []}
 
@@ -124,21 +197,27 @@ async def create_todos_from_email(
             TodoItem.email_id == email_id,
         )
     )
-    existing_titles = set(r[0] for r in existing_result.all())
+    existing_titles = {
+        title
+        for row in existing_result.all()
+        if (title := _action_item_title(row[0]))
+    }
 
     created = []
     for item in action_items:
-        if not item or item in existing_titles:
+        title = _action_item_title(item)
+        if not title or title in existing_titles:
             continue
         todo = TodoItem(
             user_id=user.id,
             email_id=email_id,
-            title=item,
+            title=title,
             source="ai_action_item",
             status="pending",
         )
         db.add(todo)
         created.append(todo)
+        existing_titles.add(title)
 
     await db.commit()
     for t in created:

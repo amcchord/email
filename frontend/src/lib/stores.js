@@ -1,9 +1,19 @@
 import { writable, derived } from 'svelte/store';
+import { clearToasts } from './toasts.js';
+import { clearUnscopedComposeStorage } from './composeDraft.js';
+import { resetShortcutSessionState } from './shortcutStore.js';
+import { stopRealtime } from './realtime.js';
+import {
+  captureAuthEpoch,
+  isAuthEpochCurrent,
+  transitionAuthEpoch,
+} from './authSession.js';
 export { toastMessages, showToast, dismissToast, clearToasts } from './toasts.js';
 
 // Auth state
 export const user = writable(null);
 export const isAuthenticated = derived(user, ($user) => $user !== null);
+export const authenticatedSessionGeneration = writable(0);
 
 // Navigation
 export const currentPage = writable('flow');
@@ -280,3 +290,81 @@ calendarView.subscribe(v => localStorage.setItem('calendarView', v));
 export const calendarDate = writable(new Date());
 export const calendarEvents = writable([]);
 export const calendarLoading = writable(false);
+
+function resetAuthenticatedSessionState() {
+  currentPage.set('flow');
+  currentMailbox.set('INBOX');
+  selectedEmailId.set(null);
+  selectedThreadId.set(null);
+
+  emails.set([]);
+  emailsLoading.set(false);
+  emailsTotal.set(0);
+  currentPageNum.set(1);
+
+  labels.set([]);
+  selectedAccountId.set(null);
+  composeOpen.set(false);
+  composeData.set(null);
+  pendingReplyDraft.set(null);
+  searchQuery.set('');
+  smartFilter.set(null);
+
+  todos.set([]);
+  chatConversations.set([]);
+  currentConversationId.set(null);
+
+  calendarDate.set(new Date());
+  calendarEvents.set([]);
+  calendarLoading.set(false);
+
+  clearToasts();
+  resetShortcutSessionState();
+}
+
+/**
+ * Move the application to one authoritative authenticated identity.
+ *
+ * Every identity boundary invalidates captured async work before publishing
+ * the next user. Non-sensitive browser preferences (theme, layout, page size,
+ * calendar view, thread order) intentionally remain outside this reset.
+ */
+export function transitionAuthenticatedSession(nextUser) {
+  const transition = transitionAuthEpoch(nextUser);
+
+  // This also runs for anonymous -> anonymous bootstrap. Old V1/V2 drafts
+  // have no provable owner, so an upgraded browser must purge them even when
+  // it opens on the signed-out screen.
+  clearUnscopedComposeStorage();
+
+  if (transition.changed) {
+    stopSyncPolling();
+    stopRealtime();
+    resetAuthenticatedSessionState();
+  }
+
+  user.set(transition.user);
+  if (transition.changed) {
+    authenticatedSessionGeneration.set(transition.snapshot.generation);
+  }
+  return captureAuthenticatedSession();
+}
+
+export function captureAuthenticatedSession() {
+  return captureAuthEpoch();
+}
+
+export function isAuthenticatedSessionCurrent(snapshot) {
+  return snapshot?.userId !== null && isAuthEpochCurrent(snapshot);
+}
+
+export function createAuthenticatedSessionGuard() {
+  const snapshot = captureAuthenticatedSession();
+  let active = true;
+  return Object.freeze({
+    snapshot,
+    userId: snapshot.userId,
+    isCurrent: () => active && isAuthenticatedSessionCurrent(snapshot),
+    dispose: () => { active = false; },
+  });
+}

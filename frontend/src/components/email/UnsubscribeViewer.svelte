@@ -1,6 +1,8 @@
 <script>
   import { onMount } from 'svelte';
   import Icon from '../common/Icon.svelte';
+  import { api } from '../../lib/api.js';
+  import { createAuthenticatedSessionGuard } from '../../lib/stores.js';
 
   let { emailId = null, markSpam = true, onComplete = () => {} } = $props();
 
@@ -11,6 +13,7 @@
 
   // Not reactive -- just a plain variable so $effect doesn't track it
   let _abortController = null;
+  let sessionGuard = null;
 
   async function startStream() {
     if (!emailId) return;
@@ -21,10 +24,11 @@
 
     try {
       _abortController = new AbortController();
-      const response = await fetch(`/api/ai/unsubscribe/${emailId}/stream?mark_spam=${markSpam}`, {
-        credentials: 'include',
+      const response = await api.unsubscribeStream(emailId, {
+        markSpam,
         signal: _abortController.signal,
       });
+      if (!sessionGuard?.isCurrent()) return;
 
       if (!response.ok) {
         const errData = await response.json().catch(() => ({ detail: 'Connection failed' }));
@@ -40,6 +44,10 @@
 
       while (true) {
         const { done, value } = await reader.read();
+        if (!sessionGuard?.isCurrent()) {
+          await reader.cancel().catch(() => {});
+          return;
+        }
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
@@ -65,17 +73,17 @@
         }
       }
 
-      if (currentStatus === 'in_progress') {
+      if (sessionGuard?.isCurrent() && currentStatus === 'in_progress') {
         currentStatus = 'success';
       }
     } catch (e) {
-      if (e.name !== 'AbortError') {
+      if (sessionGuard?.isCurrent() && e.name !== 'AbortError') {
         error = e.message;
         currentStatus = 'failed';
       }
     } finally {
       _abortController = null;
-      onComplete(currentStatus);
+      if (sessionGuard?.isCurrent()) onComplete(currentStatus);
     }
   }
 
@@ -87,10 +95,12 @@
   }
 
   onMount(() => {
+    sessionGuard = createAuthenticatedSessionGuard();
     if (emailId) {
-      startStream();
+      void startStream();
     }
     return () => {
+      sessionGuard.dispose();
       if (_abortController) {
         _abortController.abort();
       }

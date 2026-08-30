@@ -6,18 +6,27 @@
  */
 
 import { writable } from 'svelte/store';
+import { captureAuthEpoch, isAuthEpochCurrent } from './authSession.js';
 
 export const lastEvent = writable(null);
 
 let eventSource = null;
 let reconnectTimer = null;
 let reconnectDelay = 1000;
+let realtimeSession = null;
 
 const MAX_RECONNECT_DELAY = 30000;
 const SSE_URL = '/api/events/stream';
 
-function handleEvent(eventType) {
+function realtimeSessionIsCurrent(session) {
+  return realtimeSession === session
+    && session?.userId !== null
+    && isAuthEpochCurrent(session);
+}
+
+function handleEvent(eventType, session) {
   return function (e) {
+    if (!realtimeSessionIsCurrent(session)) return;
     let data = {};
     try {
       data = JSON.parse(e.data);
@@ -28,25 +37,26 @@ function handleEvent(eventType) {
   };
 }
 
-function connect() {
-  if (eventSource) {
+function connect(session) {
+  if (!realtimeSessionIsCurrent(session) || eventSource) {
     return;
   }
 
   eventSource = new EventSource(SSE_URL, { withCredentials: true });
 
-  eventSource.addEventListener('new_emails', handleEvent('new_emails'));
-  eventSource.addEventListener('emails_updated', handleEvent('emails_updated'));
-  eventSource.addEventListener('mail_action_updated', handleEvent('mail_action_updated'));
-  eventSource.addEventListener('sync_complete', handleEvent('sync_complete'));
+  eventSource.addEventListener('new_emails', handleEvent('new_emails', session));
+  eventSource.addEventListener('emails_updated', handleEvent('emails_updated', session));
+  eventSource.addEventListener('mail_action_updated', handleEvent('mail_action_updated', session));
+  eventSource.addEventListener('sync_complete', handleEvent('sync_complete', session));
 
   eventSource.onopen = function () {
+    if (!realtimeSessionIsCurrent(session)) return;
     reconnectDelay = 1000;
   };
 
   eventSource.onerror = function () {
     cleanup();
-    scheduleReconnect();
+    if (realtimeSessionIsCurrent(session)) scheduleReconnect(session);
   };
 }
 
@@ -57,26 +67,32 @@ function cleanup() {
   }
 }
 
-function scheduleReconnect() {
-  if (reconnectTimer) {
+function scheduleReconnect(session) {
+  if (!realtimeSessionIsCurrent(session) || reconnectTimer) {
     return;
   }
   reconnectTimer = setTimeout(function () {
     reconnectTimer = null;
-    connect();
+    connect(session);
   }, reconnectDelay);
   reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY);
 }
 
 export function startRealtime() {
-  connect();
+  stopRealtime();
+  const session = captureAuthEpoch();
+  if (session.userId === null || !isAuthEpochCurrent(session)) return;
+  realtimeSession = session;
+  connect(session);
 }
 
 export function stopRealtime() {
+  realtimeSession = null;
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
   cleanup();
   reconnectDelay = 1000;
+  lastEvent.set(null);
 }

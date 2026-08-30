@@ -362,3 +362,27 @@ add a new entry that explicitly supersedes the old one.
   rotation does not disturb browser displays. Browser flashing and OTA remain
   blocked until their release, recovery, enrollment, power, and rollout gates
   are implemented and hardware-qualified.
+
+## D-022 — Authenticated browser state is identity-generation scoped
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Advance one central authentication generation before publishing a
+  changed user, synchronously clear all user-derived stores, and require every
+  request, stream, timer, poller, and delayed continuation to prove that its
+  captured generation is still current before it can write UI state. Drain any
+  in-flight refresh before the ordered logout clears cookies, and do not expose
+  login again until that barrier completes. Scope browser drafts and last-sender
+  choices by authenticated user and writing intent. Enforce Todo-to-email
+  ownership in both the router and PostgreSQL.
+- Reason: A single-document A-to-B transition can otherwise expose A's
+  messages, drafts, Todos, action results, or notifications in B's UI. A late
+  refresh response can also overwrite B's browser cookies before JavaScript can
+  reject its body. Todo IDs supplied by a client are untrusted cross-account
+  references.
+- Consequence: New authenticated features must register their user-derived
+  state with the session reset, cancel or ignore stale async work, and use the
+  shared API/session guard. Legacy unscoped drafts are purged, never migrated.
+  Foreign, missing, and analysis-missing email IDs share a uniform Todo 404;
+  historical cross-owner AI-derived Todos are purged, while user-authored
+  manual titles are preserved only after detaching unsafe email/draft links.

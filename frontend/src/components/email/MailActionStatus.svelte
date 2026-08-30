@@ -1,7 +1,7 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
   import { api } from '../../lib/api.js';
-  import { showToast } from '../../lib/stores.js';
+  import { createAuthenticatedSessionGuard, showToast } from '../../lib/stores.js';
   import { lastEvent } from '../../lib/realtime.js';
   import { failedMailActionRequestIds, hasNewFailedMailActions } from '../../lib/mailActionUX.js';
   import Icon from '../common/Icon.svelte';
@@ -20,6 +20,11 @@
   let observedEvent = null;
   let observedFailureIds = new Set();
   let initialized = false;
+  let sessionGuard = null;
+
+  function mailActionSessionIsCurrent() {
+    return mounted && Boolean(sessionGuard?.isCurrent());
+  }
 
   let failedOperations = $derived(operations.filter(operation =>
     operation.state === 'failed' || operation.items?.some(item => item.state === 'failed')
@@ -42,9 +47,10 @@
   };
 
   async function loadOperations() {
+    if (!mailActionSessionIsCurrent()) return;
     try {
       const result = await api.listRecentMailActions(20);
-      if (!mounted) return;
+      if (!mailActionSessionIsCurrent()) return;
       const nextOperations = Array.isArray(result) ? result : (result.operations || []);
       const nextFailureIds = failedMailActionRequestIds(nextOperations);
       const discoveredFailure = initialized
@@ -52,7 +58,10 @@
       operations = nextOperations;
       observedFailureIds = nextFailureIds;
       initialized = true;
-      if (discoveredFailure && onReconcile) await onReconcile();
+      if (discoveredFailure && onReconcile) {
+        await onReconcile();
+        if (!mailActionSessionIsCurrent()) return;
+      }
     } catch {
       // This banner is an enhancement over the normal inbox path. A polling
       // failure must not interrupt reading mail or generate recurring toasts.
@@ -60,37 +69,48 @@
   }
 
   async function retry(operation) {
-    if (retrying.has(operation.request_id)) return;
+    if (!mailActionSessionIsCurrent() || retrying.has(operation.request_id)) return;
     retrying = new Set(retrying).add(operation.request_id);
     try {
       await api.retryMailAction(operation.request_id);
+      if (!mailActionSessionIsCurrent()) return;
       operations = operations.filter(item => item.request_id !== operation.request_id);
-      if (onReconcile) await onReconcile();
+      if (onReconcile) {
+        await onReconcile();
+        if (!mailActionSessionIsCurrent()) return;
+      }
       showToast('Email action queued to retry', 'success');
     } catch (err) {
-      showToast(err.message || 'Could not retry this email action', 'error');
+      if (mailActionSessionIsCurrent()) {
+        showToast(err.message || 'Could not retry this email action', 'error');
+      }
     } finally {
-      const next = new Set(retrying);
-      next.delete(operation.request_id);
-      retrying = next;
+      if (mailActionSessionIsCurrent()) {
+        const next = new Set(retrying);
+        next.delete(operation.request_id);
+        retrying = next;
+      }
     }
   }
 
   $effect(() => {
     const event = $lastEvent;
-    if (!mounted || !event || event === observedEvent) return;
+    if (!mailActionSessionIsCurrent() || !event || event === observedEvent) return;
     observedEvent = event;
     void loadOperations();
   });
 
   onMount(() => {
-    mounted = true;
+    sessionGuard = createAuthenticatedSessionGuard();
+    mounted = sessionGuard.isCurrent();
     void loadOperations();
     intervalId = window.setInterval(loadOperations, 15_000);
   });
 
   onDestroy(() => {
     mounted = false;
+    sessionGuard?.dispose();
+    sessionGuard = null;
     if (intervalId !== null) window.clearInterval(intervalId);
   });
 </script>

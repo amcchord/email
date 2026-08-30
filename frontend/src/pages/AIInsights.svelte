@@ -1,7 +1,15 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
-  import { showToast, selectedEmailId, currentPage, currentMailbox, composeData, pendingReplyDraft } from '../lib/stores.js';
+  import {
+    createAuthenticatedSessionGuard,
+    showToast,
+    selectedEmailId,
+    currentPage,
+    currentMailbox,
+    composeData,
+    pendingReplyDraft,
+  } from '../lib/stores.js';
   import Icon from '../components/common/Icon.svelte';
 
   let activeTab = $state('overview');
@@ -26,7 +34,13 @@
   // AI processing progress state
   let processingStatus = $state(null);
   let processingPollInterval = null;
+  let processingFinishedTimer = null;
   let processingJustFinished = $state(false);
+  let sessionGuard = null;
+
+  function sessionIsCurrent() {
+    return Boolean(sessionGuard?.isCurrent());
+  }
 
   const tabs = [
     { id: 'overview', label: 'Overview' },
@@ -64,6 +78,7 @@
   async function pollProcessingStatus() {
     try {
       const result = await api.getAIProcessingStatus();
+      if (!sessionIsCurrent()) return;
       if (result.active) {
         processingStatus = result;
       } else if (result.just_finished) {
@@ -71,11 +86,12 @@
         processingStatus = null;
         processingJustFinished = true;
         stopProcessingPoll();
-        setTimeout(() => {
-          processingJustFinished = false;
+        processingFinishedTimer = setTimeout(() => {
+          processingFinishedTimer = null;
+          if (sessionIsCurrent()) processingJustFinished = false;
         }, 3000);
         // Refresh insights data
-        refreshAllData();
+        void refreshAllData();
       } else {
         processingStatus = null;
         stopProcessingPoll();
@@ -108,6 +124,7 @@
       api.getThreadDigests(),
       api.getEmailBundles(),
     ]);
+    if (!sessionIsCurrent()) return;
     if (results[0].status === 'fulfilled') {
       trends = results[0].value;
     }
@@ -131,10 +148,11 @@
     }
   }
 
-  onMount(async () => {
+  async function initialize() {
     // Check for active AI processing and start polling if needed
     try {
       const status = await api.getAIProcessingStatus();
+      if (!sessionIsCurrent()) return;
       if (status.active) {
         processingStatus = status;
         startProcessingPoll();
@@ -142,6 +160,7 @@
     } catch {
       // Ignore
     }
+    if (!sessionIsCurrent()) return;
 
     // Fetch all data in parallel so tab counts show immediately
     const results = await Promise.allSettled([
@@ -153,6 +172,7 @@
       api.getThreadDigests(),
       api.getEmailBundles(),
     ]);
+    if (!sessionIsCurrent()) return;
 
     if (results[0].status === 'fulfilled') {
       trends = results[0].value;
@@ -177,6 +197,19 @@
     }
 
     loading = false;
+  }
+
+  onMount(() => {
+    sessionGuard = createAuthenticatedSessionGuard();
+    void initialize();
+    return () => {
+      sessionGuard.dispose();
+      stopProcessingPoll();
+      if (processingFinishedTimer) {
+        clearTimeout(processingFinishedTimer);
+        processingFinishedTimer = null;
+      }
+    };
   });
 
   onDestroy(() => {
@@ -189,35 +222,43 @@
     if (tabId === 'needs-reply' && !needsReplyData) {
       tabLoading = true;
       try {
-        needsReplyData = await api.getNeedsReply();
+        const result = await api.getNeedsReply();
+        if (!sessionIsCurrent()) return;
+        needsReplyData = result;
       } catch (err) {
-        showToast(err.message, 'error');
+        if (sessionIsCurrent()) showToast(err.message, 'error');
       }
-      tabLoading = false;
+      if (sessionIsCurrent()) tabLoading = false;
     } else if (tabId === 'subscriptions' && !subscriptionsData) {
       tabLoading = true;
       try {
-        subscriptionsData = await api.getSubscriptions();
+        const result = await api.getSubscriptions();
+        if (!sessionIsCurrent()) return;
+        subscriptionsData = result;
       } catch (err) {
-        showToast(err.message, 'error');
+        if (sessionIsCurrent()) showToast(err.message, 'error');
       }
-      tabLoading = false;
+      if (sessionIsCurrent()) tabLoading = false;
     } else if (tabId === 'conversations' && !digestsData) {
       tabLoading = true;
       try {
-        digestsData = await api.getThreadDigests();
+        const result = await api.getThreadDigests();
+        if (!sessionIsCurrent()) return;
+        digestsData = result;
       } catch (err) {
-        showToast(err.message, 'error');
+        if (sessionIsCurrent()) showToast(err.message, 'error');
       }
-      tabLoading = false;
+      if (sessionIsCurrent()) tabLoading = false;
     } else if (tabId === 'topics' && !bundlesData) {
       tabLoading = true;
       try {
-        bundlesData = await api.getEmailBundles();
+        const result = await api.getEmailBundles();
+        if (!sessionIsCurrent()) return;
+        bundlesData = result;
       } catch (err) {
-        showToast(err.message, 'error');
+        if (sessionIsCurrent()) showToast(err.message, 'error');
       }
-      tabLoading = false;
+      if (sessionIsCurrent()) tabLoading = false;
     }
   }
 
@@ -233,11 +274,13 @@
       if (digestFilter) {
         params.conversation_type = digestFilter;
       }
-      digestsData = await api.getThreadDigests(params);
+      const result = await api.getThreadDigests(params);
+      if (!sessionIsCurrent()) return;
+      digestsData = result;
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
     }
-    tabLoading = false;
+    if (sessionIsCurrent()) tabLoading = false;
   }
 
   async function triggerAutoCategorize(days = null) {
@@ -245,18 +288,20 @@
     showBackfillMenu = false;
     try {
       const result = await api.triggerAutoCategorize(days);
+      if (!sessionIsCurrent()) return;
       showToast(result.message, 'success');
       // Start polling for progress
       startProcessingPoll();
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
     }
-    categorizing = false;
+    if (sessionIsCurrent()) categorizing = false;
   }
 
   async function loadAIStats() {
     try {
-      aiStats = await api.getAIStats();
+      const result = await api.getAIStats();
+      if (sessionIsCurrent()) aiStats = result;
     } catch {
       // Ignore stats loading errors
     }
@@ -267,17 +312,19 @@
     showDropConfirm = false;
     try {
       const result = await api.deleteAIAnalyses(rebuildDays);
+      if (!sessionIsCurrent()) return;
       showToast(result.message, 'success');
       // Refresh stats and start polling if rebuilding
       await loadAIStats();
+      if (!sessionIsCurrent()) return;
       if (rebuildDays !== null) {
         startProcessingPoll();
       }
-      refreshAllData();
+      void refreshAllData();
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
     }
-    dropping = false;
+    if (sessionIsCurrent()) dropping = false;
   }
 
   async function dropOnly() {
@@ -285,13 +332,15 @@
     showDropConfirm = false;
     try {
       const result = await api.deleteAIAnalyses();
+      if (!sessionIsCurrent()) return;
       showToast(result.message, 'success');
       await loadAIStats();
-      refreshAllData();
+      if (!sessionIsCurrent()) return;
+      void refreshAllData();
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
     }
-    dropping = false;
+    if (sessionIsCurrent()) dropping = false;
   }
 
   async function handleUnsubscribe(emailId) {
@@ -299,7 +348,8 @@
     if (unsubscribePreview && unsubscribePreview.emailId === emailId) {
       unsubscribingId = emailId;
       try {
-        const result = await api.unsubscribe(emailId, false);
+        const result = await api.unsubscribe(emailId);
+        if (!sessionIsCurrent()) return;
         if (result.email_sent) {
           showToast(`Unsubscribe email sent to ${result.sent_to}`, 'success');
         } else if (result.url) {
@@ -311,21 +361,24 @@
         unsubscribePreview = null;
         // Refresh subscriptions data to show updated tracking badges
         try {
-          subscriptionsData = await api.getSubscriptions();
+          const refreshed = await api.getSubscriptions();
+          if (!sessionIsCurrent()) return;
+          subscriptionsData = refreshed;
         } catch (_) {
           // ignore refresh error
         }
       } catch (err) {
-        showToast(err.message, 'error');
+        if (sessionIsCurrent()) showToast(err.message, 'error');
       }
-      unsubscribingId = null;
+      if (sessionIsCurrent()) unsubscribingId = null;
       return;
     }
 
     // First click -- fetch preview
     unsubscribingId = emailId;
     try {
-      const result = await api.unsubscribe(emailId, true);
+      const result = await api.unsubscribe(emailId, { preview: true });
+      if (!sessionIsCurrent()) return;
       if (result.preview) {
         unsubscribePreview = {
           emailId,
@@ -339,8 +392,11 @@
         showToast('Opened unsubscribe page in new tab', 'success');
         // Still record the tracking by calling the non-preview endpoint
         try {
-          await api.unsubscribe(emailId, false);
-          subscriptionsData = await api.getSubscriptions();
+          await api.unsubscribe(emailId);
+          if (!sessionIsCurrent()) return;
+          const refreshed = await api.getSubscriptions();
+          if (!sessionIsCurrent()) return;
+          subscriptionsData = refreshed;
         } catch (_) {
           // ignore
         }
@@ -348,9 +404,9 @@
         showToast('No unsubscribe method available', 'error');
       }
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
     }
-    unsubscribingId = null;
+    if (sessionIsCurrent()) unsubscribingId = null;
   }
 
   function cancelUnsubscribePreview() {
@@ -373,13 +429,11 @@
   }
 
   function goToEmail(emailId) {
-    // Set mailbox first (this triggers the Inbox effect that resets selectedEmailId),
-    // then set the email ID on the next tick so it sticks.
     currentMailbox.set('ALL');
+    // Inbox consumes this as one-time direct-open intent before resetting its
+    // first dataset selection; no delayed prior-session callback is needed.
+    selectedEmailId.set(emailId);
     currentPage.set('inbox');
-    setTimeout(() => {
-      selectedEmailId.set(emailId);
-    }, 0);
   }
 
   function goToEmailWithReply(email, replyBody) {
@@ -401,10 +455,8 @@
       threadId: email.gmail_thread_id || null,
     });
     currentMailbox.set('ALL');
+    selectedEmailId.set(email.id);
     currentPage.set('inbox');
-    setTimeout(() => {
-      selectedEmailId.set(email.id);
-    }, 0);
   }
 
   function handleReply(email) {

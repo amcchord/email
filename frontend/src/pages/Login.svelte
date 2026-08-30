@@ -1,7 +1,8 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { user, showToast } from '../lib/stores.js';
+  import { transitionAuthenticatedSession } from '../lib/stores.js';
+  import { captureAuthEpoch, isAuthEpochCurrent } from '../lib/authSession.js';
   import { theme, getEffectiveMode } from '../lib/theme.js';
   import { googleLoginErrorMessage } from '../lib/oauthResult.js';
 
@@ -24,27 +25,34 @@
 
   async function handleLogin(e) {
     e.preventDefault();
+    if (loading || googleLoading) return;
+    const session = captureAuthEpoch();
     loading = true;
     error = '';
 
     try {
       const result = await api.login(username, password);
-      user.set(result.user);
+      if (isAuthEpochCurrent(session)) transitionAuthenticatedSession(result.user);
     } catch (err) {
-      error = err.message || 'Login failed';
+      if (isAuthEpochCurrent(session)) error = err.message || 'Login failed';
     }
-    loading = false;
+    if (isAuthEpochCurrent(session)) loading = false;
   }
 
   async function handleGoogleLogin() {
+    if (loading || googleLoading) return;
+    const session = captureAuthEpoch();
     googleLoading = true;
     error = '';
     try {
-      const result = await api.get('/auth/google/login');
+      const result = await api.startGoogleLogin();
+      if (!isAuthEpochCurrent(session)) return;
       window.location.href = result.auth_url;
     } catch (err) {
-      error = err.message || 'Google login not available';
-      googleLoading = false;
+      if (isAuthEpochCurrent(session)) {
+        error = err.message || 'Google login not available';
+        googleLoading = false;
+      }
     }
   }
 </script>
@@ -70,7 +78,7 @@
       <!-- Google Sign In (primary) -->
       <button
         onclick={handleGoogleLogin}
-        disabled={googleLoading}
+        disabled={loading || googleLoading}
         class="w-full h-11 flex items-center justify-center gap-3 rounded-lg text-sm font-medium border transition-fast disabled:opacity-50"
         style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
       >
@@ -134,7 +142,7 @@
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || googleLoading}
             class="w-full h-10 rounded-lg text-sm font-medium bg-accent-600 text-white hover:bg-accent-700 transition-fast disabled:opacity-50"
           >
             {#if loading}

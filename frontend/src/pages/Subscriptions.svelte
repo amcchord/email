@@ -4,7 +4,7 @@
   import EmailView from '../components/email/EmailView.svelte';
   import UnsubscribeViewer from '../components/email/UnsubscribeViewer.svelte';
   import { api } from '../lib/api.js';
-  import { showToast } from '../lib/stores.js';
+  import { createAuthenticatedSessionGuard, showToast } from '../lib/stores.js';
 
   let loading = $state(true);
   let senders = $state([]);
@@ -40,6 +40,12 @@
   let bulkResults = $state(null);
   let bulkUrlQueue = $state([]);
   let bulkCurrentUrlIdx = $state(-1);
+  let sessionGuard = null;
+  let bulkContinuationTimer = null;
+
+  function sessionIsCurrent() {
+    return Boolean(sessionGuard?.isCurrent());
+  }
 
   async function loadSubscriptions() {
     loading = true;
@@ -51,20 +57,27 @@
         search: searchQuery,
         sort: sortBy,
       });
+      if (!sessionIsCurrent()) return;
       senders = data.senders || [];
       totalSenders = data.total || 0;
     } catch (err) {
-      showToast('Failed to load subscriptions: ' + err.message, 'error');
+      if (sessionIsCurrent()) showToast('Failed to load subscriptions: ' + err.message, 'error');
     }
-    loading = false;
+    if (sessionIsCurrent()) loading = false;
   }
 
   onMount(() => {
-    loadSubscriptions();
+    sessionGuard = createAuthenticatedSessionGuard();
+    void loadSubscriptions();
     const saved = localStorage.getItem('subs_divider_y');
     if (saved) {
       dividerY = parseInt(saved, 10);
     }
+    return () => {
+      sessionGuard.dispose();
+      if (searchTimeout) clearTimeout(searchTimeout);
+      if (bulkContinuationTimer) clearTimeout(bulkContinuationTimer);
+    };
   });
 
   function onSearchInput(e) {
@@ -126,11 +139,13 @@
     previewEmail = null;
     previewLoading = true;
     try {
-      previewEmail = await api.getEmail(sender.sample_email_id);
+      const result = await api.getEmail(sender.sample_email_id);
+      if (!sessionIsCurrent() || previewSender !== sender) return;
+      previewEmail = result;
     } catch (err) {
-      showToast('Failed to load email preview', 'error');
+      if (sessionIsCurrent()) showToast('Failed to load email preview', 'error');
     }
-    previewLoading = false;
+    if (sessionIsCurrent()) previewLoading = false;
   }
 
   function closePreview() {
@@ -154,9 +169,10 @@
 
   async function confirmUnsubscribe() {
     if (!unsubTarget) return;
+    const target = unsubTarget;
     unsubInProgress = true;
 
-    const info = unsubTarget.unsubscribe_info;
+    const info = target.unsubscribe_info;
     const hasEmail = info && info.email;
     const hasUrl = info && info.url;
 
@@ -168,13 +184,14 @@
 
     if (hasEmail) {
       try {
-        const result = await api.unsubscribe(unsubTarget.sample_email_id, {
+        const result = await api.unsubscribe(target.sample_email_id, {
           markSpam: unsubMarkSpam,
         });
+        if (!sessionIsCurrent() || unsubTarget !== target) return;
         if (result.email_sent) {
-          showToast(`Unsubscribe email sent for ${unsubTarget.from_name}`, 'success');
-          unsubTarget.unsubscribe_status = 'success';
-          unsubTarget.unsubscribed_at = new Date().toISOString();
+          showToast(`Unsubscribe email sent for ${target.from_name}`, 'success');
+          target.unsubscribe_status = 'success';
+          target.unsubscribed_at = new Date().toISOString();
         } else if (result.email_error) {
           showToast(`Failed: ${result.email_error}`, 'error');
         }
@@ -185,33 +202,40 @@
           return;
         }
       } catch (err) {
-        showToast('Unsubscribe failed: ' + err.message, 'error');
-        unsubInProgress = false;
+        if (sessionIsCurrent() && unsubTarget === target) {
+          showToast('Unsubscribe failed: ' + err.message, 'error');
+          unsubInProgress = false;
+        }
         if (!hasUrl) return;
       }
     }
 
-    if (hasUrl) {
-      unsubStreamEmailId = unsubTarget.sample_email_id;
+    if (hasUrl && sessionIsCurrent() && unsubTarget === target) {
+      unsubStreamEmailId = target.sample_email_id;
     }
   }
 
   async function confirmBlock() {
     if (!unsubTarget) return;
+    const target = unsubTarget;
     unsubInProgress = true;
     try {
-      await api.blockSender(unsubTarget.sample_email_id);
-      showToast(`Blocked ${unsubTarget.from_name || unsubTarget.domain} and marked as spam`, 'success');
+      await api.blockSender(target.sample_email_id);
+      if (!sessionIsCurrent() || unsubTarget !== target) return;
+      showToast(`Blocked ${target.from_name || target.domain} and marked as spam`, 'success');
       showUnsubModal = false;
       unsubInProgress = false;
       loadSubscriptions();
     } catch (err) {
-      showToast('Block failed: ' + err.message, 'error');
-      unsubInProgress = false;
+      if (sessionIsCurrent() && unsubTarget === target) {
+        showToast('Block failed: ' + err.message, 'error');
+        unsubInProgress = false;
+      }
     }
   }
 
   function onStreamComplete(status) {
+    if (!sessionIsCurrent()) return;
     unsubInProgress = false;
     if (status === 'success') {
       showToast(`Unsubscribed from ${unsubTarget?.from_name || 'sender'}`, 'success');
@@ -220,6 +244,10 @@
   }
 
   function closeModal() {
+    if (bulkContinuationTimer) {
+      clearTimeout(bulkContinuationTimer);
+      bulkContinuationTimer = null;
+    }
     showUnsubModal = false;
     unsubTarget = null;
     unsubStreamEmailId = null;
@@ -242,6 +270,7 @@
 
     try {
       const result = await api.bulkUnsubscribe([...selected], { markSpam: false });
+      if (!sessionIsCurrent()) return;
       bulkResults = result;
 
       if (result.successful > 0) {
@@ -263,19 +292,39 @@
         loadSubscriptions();
       }
     } catch (err) {
-      showToast('Bulk unsubscribe failed: ' + err.message, 'error');
-      bulkInProgress = false;
+      if (sessionIsCurrent()) {
+        showToast('Bulk unsubscribe failed: ' + err.message, 'error');
+        bulkInProgress = false;
+      }
     }
   }
 
   function onBulkStreamComplete(status) {
+    if (!sessionIsCurrent()) return;
+    if (status !== 'success') {
+      if (bulkContinuationTimer) {
+        clearTimeout(bulkContinuationTimer);
+        bulkContinuationTimer = null;
+      }
+      bulkInProgress = false;
+      bulkUrlQueue = [];
+      bulkCurrentUrlIdx = -1;
+      showToast(
+        status === 'cancelled'
+          ? 'Bulk unsubscribe stopped. No additional browser steps were started.'
+          : 'Bulk unsubscribe stopped after a browser step failed.',
+        status === 'cancelled' ? 'info' : 'error',
+      );
+      return;
+    }
     if (bulkCurrentUrlIdx < bulkUrlQueue.length - 1) {
       bulkCurrentUrlIdx++;
       const nextId = bulkUrlQueue[bulkCurrentUrlIdx];
       unsubTarget = senders.find(s => s.sample_email_id === nextId) || { from_name: 'Sender' };
       unsubStreamEmailId = null;
-      setTimeout(() => {
-        unsubStreamEmailId = nextId;
+      bulkContinuationTimer = setTimeout(() => {
+        bulkContinuationTimer = null;
+        if (sessionIsCurrent()) unsubStreamEmailId = nextId;
       }, 500);
     } else {
       bulkInProgress = false;

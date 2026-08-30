@@ -6,7 +6,7 @@
     emails, emailsLoading, emailsTotal, currentPageNum,
     currentMailbox, selectedEmailId, selectedAccountId,
     searchQuery, showToast, pageSize, viewMode, smartFilter,
-    hideIgnored, sidebarCollapsed,
+    hideIgnored, sidebarCollapsed, createAuthenticatedSessionGuard,
   } from '../lib/stores.js';
   import { registerActions } from '../lib/shortcutStore.js';
   import { lastEvent } from '../lib/realtime.js';
@@ -41,6 +41,7 @@
   let emailLoading = $state(false);
   let loadingMore = $state(false);
   let mounted = $state(false);
+  let sessionGuard = null;
   let hasMore = $state(false);
   let datasetAuthoritative = $state(false);
   let datasetUpdating = $state(false);
@@ -62,7 +63,7 @@
   const initialDirectOpen = createInitialDirectOpenGuard();
   const actionSubmissions = createMailActionSubmissionQueue();
   const acceptedActionReconciler = createDatasetActionReconciler({
-    isCurrent: datasetKey => mounted
+    isCurrent: datasetKey => inboxSessionIsCurrent()
       && Boolean(get(searchQuery))
       && currentDatasetSnapshot().key === datasetKey,
     refresh: () => refreshDataset(),
@@ -80,7 +81,8 @@
   let containerEl = $state(null);
 
   onMount(() => {
-    mounted = true;
+    sessionGuard = createAuthenticatedSessionGuard();
+    mounted = sessionGuard.isCurrent();
     const narrowViewportQuery = window.matchMedia('(max-width: 767px)');
     const updateNarrowViewport = () => {
       narrowViewport = narrowViewportQuery.matches;
@@ -89,7 +91,7 @@
     narrowViewportQuery.addEventListener('change', updateNarrowViewport);
 
     // Register keyboard shortcut actions for the inbox
-    const selectedActionEnabled = () => mounted
+    const selectedActionEnabled = () => inboxSessionIsCurrent()
       && datasetAuthoritative
       && Boolean(get(selectedEmailId));
     const selectedActionUnavailable = () => datasetUpdating
@@ -170,6 +172,8 @@
     // instance disappears so a late response cannot write into the shared
     // inbox stores after a newly mounted Inbox has committed newer results.
     mounted = false;
+    sessionGuard?.dispose();
+    sessionGuard = null;
     listRequests.invalidate();
     emailRequests.invalidate();
     acceptedActionReconciler.dispose();
@@ -189,7 +193,7 @@
   });
 
   function navigateEmails(direction) {
-    if (!datasetAuthoritative) return;
+    if (!inboxSessionIsCurrent() || !datasetAuthoritative) return;
     const list = get(emails);
     if (!list || list.length === 0) return;
     const currentId = get(selectedEmailId);
@@ -216,7 +220,7 @@
       page: 1,
     });
 
-    if (!mounted) return;
+    if (!inboxSessionIsCurrent()) return;
     if (snapshot.key === requestedDatasetKey) return;
     requestedDatasetKey = snapshot.key;
     currentPageNum.set(1);
@@ -237,7 +241,7 @@
 
   $effect(() => {
     const evt = $lastEvent;
-    if (!evt || !mounted) return;
+    if (!evt || !inboxSessionIsCurrent()) return;
     if (evt.type === 'new_emails' || evt.type === 'emails_updated') {
       untrack(() => { refreshDataset(); });
     }
@@ -271,14 +275,22 @@
     emailLoading = false;
   }
 
+  function inboxSessionIsCurrent() {
+    return mounted && Boolean(sessionGuard?.isCurrent());
+  }
+
+  function listRequestIsCurrent(requestId) {
+    return inboxSessionIsCurrent() && listRequests.isCurrent(requestId);
+  }
+
   function refreshDataset() {
-    if (!mounted) return Promise.resolve(false);
+    if (!inboxSessionIsCurrent()) return Promise.resolve(false);
     currentPageNum.set(1);
     return loadEmails(false, currentDatasetSnapshot(1));
   }
 
   async function loadEmails(append, snapshot = currentDatasetSnapshot()) {
-    if (!mounted) return false;
+    if (!inboxSessionIsCurrent()) return false;
     const actionReconciliationVersionAtStart = actionReconciliationVersion;
     const requestId = listRequests.begin();
     if (append) {
@@ -335,7 +347,7 @@
         result = await api.listEmails(params);
       }
 
-      if (!listRequests.isCurrent(requestId)) return false;
+      if (!listRequestIsCurrent(requestId)) return false;
 
       if (append) {
         emails.update(existing => {
@@ -359,7 +371,7 @@
       hasMore = (snapshot.page * snapshot.pageSize) < result.total;
       return true;
     } catch (err) {
-      if (!listRequests.isCurrent(requestId)) return false;
+      if (!listRequestIsCurrent(requestId)) return false;
       if (err.message !== 'Unauthorized' && !snapshot.search) showToast(err.message, 'error');
       if (!append) {
         datasetError = true;
@@ -370,7 +382,7 @@
       }
       return false;
     } finally {
-      if (listRequests.isCurrent(requestId)) {
+      if (listRequestIsCurrent(requestId)) {
         if (!append) {
           emailsLoading.set(false);
           datasetUpdating = false;
@@ -385,7 +397,7 @@
     const actionEpoch = selectionEpoch;
     try {
       await api.unignoreNeedsReply(emailId);
-      if (actionEpoch !== selectionEpoch) return;
+      if (!inboxSessionIsCurrent() || actionEpoch !== selectionEpoch) return;
       showToast('Restored to needs reply', 'success');
       emails.update(list => list.filter(e => e.id !== emailId));
       emailsTotal.update(t => Math.max(0, t - 1));
@@ -394,7 +406,7 @@
         selectedEmail = null;
       }
     } catch (err) {
-      if (actionEpoch === selectionEpoch) showToast(err.message, 'error');
+      if (inboxSessionIsCurrent() && actionEpoch === selectionEpoch) showToast(err.message, 'error');
     }
   }
 
@@ -403,7 +415,7 @@
     const actionEpoch = selectionEpoch;
     try {
       await api.unsnoozeNeedsReply(emailId);
-      if (actionEpoch !== selectionEpoch) return;
+      if (!inboxSessionIsCurrent() || actionEpoch !== selectionEpoch) return;
       showToast('Unsnooze — restored to needs reply', 'success');
       emails.update(list => list.filter(e => e.id !== emailId));
       emailsTotal.update(t => Math.max(0, t - 1));
@@ -412,7 +424,7 @@
         selectedEmail = null;
       }
     } catch (err) {
-      if (actionEpoch === selectionEpoch) showToast(err.message, 'error');
+      if (inboxSessionIsCurrent() && actionEpoch === selectionEpoch) showToast(err.message, 'error');
     }
   }
 
@@ -422,7 +434,7 @@
     const nextPage = previousPage + 1;
     currentPageNum.set(nextPage);
     const loaded = await loadEmails(true, currentDatasetSnapshot(nextPage));
-    if (!loaded && mounted && get(currentPageNum) === nextPage) {
+    if (!loaded && inboxSessionIsCurrent() && get(currentPageNum) === nextPage) {
       currentPageNum.set(previousPage);
     }
   }
@@ -440,27 +452,28 @@
         void handleAction('mark_read', [id], { announce: false, offerUndo: false });
       }
     } catch (err) {
-      if (emailRequests.isCurrent(requestId)) showToast(err.message, 'error');
+      if (isCurrentEmailRequest(requestId, id)) showToast(err.message, 'error');
     } finally {
-      if (emailRequests.isCurrent(requestId)) emailLoading = false;
+      if (inboxSessionIsCurrent() && emailRequests.isCurrent(requestId)) emailLoading = false;
     }
   }
 
   function isCurrentEmailRequest(requestId, emailId) {
-    return emailRequests.isCurrent(requestId)
+    return inboxSessionIsCurrent()
+      && emailRequests.isCurrent(requestId)
       && datasetAuthoritative
       && get(selectedEmailId) === emailId;
   }
 
   function handleSelect(emailId) {
-    if (!datasetAuthoritative) return;
+    if (!inboxSessionIsCurrent() || !datasetAuthoritative) return;
     if (!get(emails).some(email => email.id === emailId)) return;
     selectedEmailId.set(emailId);
   }
 
   function canActOnEmails(emailIds, notify = true) {
     const canAct = canActOnInboxEmails({
-      authoritative: mounted && datasetAuthoritative,
+      authoritative: inboxSessionIsCurrent() && datasetAuthoritative,
       emailIds,
       visibleEmailIds: get(emails).map(email => email.id),
       selectedEmailId: get(selectedEmailId),
@@ -474,7 +487,7 @@
   }
 
   function actionContextIsCurrent(actionEpoch, datasetKey) {
-    return mounted
+    return inboxSessionIsCurrent()
       && actionEpoch === selectionEpoch
       && datasetAuthoritative
       && currentDatasetSnapshot().key === datasetKey;
@@ -550,7 +563,7 @@
   }
 
   function requireActionReconciliation(datasetKey) {
-    if (!mounted || !get(searchQuery) || currentDatasetSnapshot().key !== datasetKey) return;
+    if (!inboxSessionIsCurrent() || !get(searchQuery) || currentDatasetSnapshot().key !== datasetKey) return;
     actionReconciliationRequired = true;
     actionReconciliationVersion += 1;
     void acceptedActionReconciler.request(datasetKey);
@@ -570,7 +583,7 @@
   }
 
   async function reconcileUncertainActions() {
-    if (checkingUncertainActions || uncertainActions.size === 0) return;
+    if (!inboxSessionIsCurrent() || checkingUncertainActions || uncertainActions.size === 0) return;
     checkingUncertainActions = true;
     try {
       for (const [requestKey, pending] of [...uncertainActions]) {
@@ -583,6 +596,7 @@
             pending.context.action,
             requestKey,
           );
+          if (!inboxSessionIsCurrent()) return;
           const next = new Map(uncertainActions);
           if (next.get(requestKey) === pending) {
             next.delete(requestKey);
@@ -604,6 +618,7 @@
   async function undoAcceptedAction(context) {
     try {
       const operation = await api.undoMailAction(context.operation.request_id);
+      if (!inboxSessionIsCurrent()) return operation;
       if (actionContextIsCurrent(context.actionEpoch, context.datasetKey)) {
         restoreOptimisticAction(context);
       }
@@ -612,13 +627,15 @@
       showToast(`${actionPastTense(context.action, context.emailIds.length)} — undone`, 'success');
       return operation;
     } catch (err) {
-      showToast(err.message || 'This action can no longer be undone', 'error');
+      if (inboxSessionIsCurrent()) {
+        showToast(err.message || 'This action can no longer be undone', 'error');
+      }
       throw err;
     }
   }
 
   function runLatestUndo() {
-    if (!latestUndo) return;
+    if (!inboxSessionIsCurrent() || !latestUndo) return;
     if (latestUndo.expiresAt <= Date.now()) {
       latestUndo = null;
       showToast('The undo window has closed', 'info');
@@ -681,10 +698,12 @@
           }
         },
       );
+      if (!inboxSessionIsCurrent()) return false;
       acceptMailAction(context, operation, announce, offerUndo);
       return true;
     } catch (err) {
       if (err.code === 'mail_action_outcome_unknown') {
+        if (!inboxSessionIsCurrent()) return false;
         const next = new Map(uncertainActions);
         next.set(requestKey, {
           announce,
@@ -700,7 +719,7 @@
       if (actionContextIsCurrent(actionEpoch, datasetKey)) {
         restoreOptimisticAction(context);
         showToast(err.message, 'error');
-      } else if (mounted && currentDatasetSnapshot().key === datasetKey) {
+      } else if (inboxSessionIsCurrent() && currentDatasetSnapshot().key === datasetKey) {
         // A preceding accepted action may already have invalidated this
         // presentation epoch. Do not reinsert an old snapshot, but do make the
         // definitive failure visible and require a trailing server refresh.

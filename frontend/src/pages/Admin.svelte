@@ -1,7 +1,14 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
-  import { user, showToast, syncStatus, forceSyncPoll, threadOrder } from '../lib/stores.js';
+  import {
+    user,
+    showToast as showGlobalToast,
+    syncStatus,
+    forceSyncPoll,
+    threadOrder,
+    createAuthenticatedSessionGuard,
+  } from '../lib/stores.js';
   import { theme, activeTheme, getEffectiveMode } from '../lib/theme.js';
   import { getThemeList } from '../lib/themes.js';
   import {
@@ -20,6 +27,17 @@
   import AIModelsPanel from '../lib/admin/AIModelsPanel.svelte';
   import Input from '../components/common/Input.svelte';
   import Icon from '../components/common/Icon.svelte';
+
+  const sessionGuard = createAuthenticatedSessionGuard();
+
+  function sessionIsCurrent() {
+    return sessionGuard.isCurrent();
+  }
+
+  function showToast(...args) {
+    if (!sessionIsCurrent()) return null;
+    return showGlobalToast(...args);
+  }
 
   // Theme state
   let themeList = getThemeList();
@@ -91,6 +109,7 @@
 
   onMount(async () => {
     await loadData();
+    if (!sessionIsCurrent()) return;
     // Check URL params for tab
     const params = new URLSearchParams(window.location.search);
     if (params.get('tab')) {
@@ -112,6 +131,7 @@
     loadAIStats();
     try {
       const status = await api.getAIProcessingStatus();
+      if (!sessionIsCurrent()) return;
       if (status.active) {
         processingStatus = status;
         startProcessingPoll();
@@ -122,7 +142,9 @@
   });
 
   onDestroy(() => {
+    sessionGuard.dispose();
     stopProcessingPoll();
+    if (previewAutoRefreshTimer) clearInterval(previewAutoRefreshTimer);
     window.removeEventListener('shortcut-settings-navigate', handleShortcutSettingsNavigate);
   });
 
@@ -146,6 +168,7 @@
         sets = results[1];
         allowed = results[2];
       }
+      if (!sessionIsCurrent()) return;
       dashboard = dash;
       settings = sets;
       allowedAccounts = allowed.allowed_accounts || '';
@@ -224,6 +247,7 @@
   async function connectGoogle() {
     try {
       const result = await api.startOAuth();
+      if (!sessionIsCurrent()) return;
       window.location.href = result.auth_url;
     } catch (err) {
       showToast(err.message, 'error');
@@ -233,6 +257,7 @@
   async function reauthorizeAccount(id) {
     try {
       const result = await api.reauthorizeAccount(id);
+      if (!sessionIsCurrent()) return;
       window.location.href = result.auth_url;
     } catch (err) {
       showToast(err.message, 'error');
@@ -243,7 +268,9 @@
     try {
       await api.delete(`/accounts/${id}`);
       showToast('Account removed', 'success');
-      setTimeout(forceSyncPoll, 500);
+      setTimeout(() => {
+        if (sessionIsCurrent()) forceSyncPoll();
+      }, 500);
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -254,7 +281,9 @@
       await api.triggerSync(accountId);
       showToast('Sync started', 'success');
       // Force immediate poll to pick up the syncing state, then adaptive polling kicks in
-      setTimeout(forceSyncPoll, 500);
+      setTimeout(() => {
+        if (sessionIsCurrent()) forceSyncPoll();
+      }, 500);
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -469,6 +498,7 @@
   async function loadUIPreferences() {
     try {
       const data = await api.getUIPreferences();
+      if (!sessionIsCurrent()) return;
       threadOrder.set(data.thread_order || 'newest_first');
       if (data.theme) {
         selectedThemeId = data.theme;
@@ -518,6 +548,7 @@
     uiPrefsSaving = true;
     try {
       const data = await api.updateUIPreferences({ thread_order: $threadOrder });
+      if (!sessionIsCurrent()) return;
       threadOrder.set(data.thread_order);
       showToast('Preferences saved', 'success');
     } catch (err) {
@@ -571,6 +602,7 @@
   async function pollProcessingStatus() {
     try {
       const result = await api.getAIProcessingStatus();
+      if (!sessionIsCurrent()) return;
       if (result.active) {
         processingStatus = result;
       } else if (result.just_finished) {
@@ -578,7 +610,7 @@
         processingJustFinished = true;
         stopProcessingPoll();
         setTimeout(() => {
-          processingJustFinished = false;
+          if (sessionIsCurrent()) processingJustFinished = false;
         }, 3000);
         loadAIStats();
       } else {
@@ -605,7 +637,8 @@
 
   async function loadAIStats() {
     try {
-      aiStats = await api.getAIStats();
+      const result = await api.getAIStats();
+      if (sessionIsCurrent()) aiStats = result;
     } catch {
       // Ignore stats loading errors
     }
@@ -891,8 +924,11 @@
   async function copyToClipboard(text, hint = 'Copied') {
     try {
       await navigator.clipboard.writeText(text);
+      if (!sessionIsCurrent()) return;
       copyHint = hint;
-      setTimeout(() => { if (copyHint === hint) copyHint = ''; }, 1200);
+      setTimeout(() => {
+        if (sessionIsCurrent() && copyHint === hint) copyHint = '';
+      }, 1200);
     } catch {
       showToast('Copy failed -- select and copy manually', 'error');
     }

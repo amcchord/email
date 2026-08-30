@@ -1,25 +1,37 @@
 <script>
   import { onMount, tick } from 'svelte';
   import { api } from '../lib/api.js';
-  import { user } from '../lib/stores.js';
+  import { createAuthenticatedSessionGuard, user } from '../lib/stores.js';
 
   let userCode = $state('');
   let status = $state('ready');
   let error = $state('');
   let inputEl = $state(null);
+  let sessionGuard = null;
 
-  onMount(async () => {
+  function deviceSessionIsCurrent() {
+    return Boolean(sessionGuard?.isCurrent());
+  }
+
+  async function initialize() {
     const params = new URLSearchParams(window.location.search);
     const code = params.get('code');
     if (code) {
       userCode = formatCode(code);
       if ($user && userCode.length === 9) {
         await tick();
-        authorize();
+        if (!deviceSessionIsCurrent()) return;
+        void authorize();
       }
     }
     await tick();
-    if (inputEl) inputEl.focus();
+    if (deviceSessionIsCurrent() && inputEl) inputEl.focus();
+  }
+
+  onMount(() => {
+    sessionGuard = createAuthenticatedSessionGuard();
+    void initialize();
+    return () => sessionGuard.dispose();
   });
 
   function formatCode(raw) {
@@ -51,19 +63,25 @@
   }
 
   async function authorize() {
+    if (!deviceSessionIsCurrent()) return false;
     if (!userCode.trim() || userCode.length < 9) {
       error = 'Enter the full 8-character code';
-      return;
+      return false;
     }
-    if (status === 'authorizing') return;
+    if (status === 'authorizing') return false;
     status = 'authorizing';
     error = '';
     try {
       await api.deviceAuthorize(userCode.trim().toUpperCase());
+      if (!deviceSessionIsCurrent()) return false;
       status = 'success';
+      return true;
     } catch (e) {
-      error = e.message || 'Invalid or expired code. Check your terminal and try again.';
-      status = 'ready';
+      if (deviceSessionIsCurrent()) {
+        error = e.message || 'Invalid or expired code. Check your terminal and try again.';
+        status = 'ready';
+      }
+      return false;
     }
   }
 </script>

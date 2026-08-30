@@ -3,7 +3,7 @@
   import { marked } from 'marked';
   import { api } from '../lib/api.js';
   import { sanitizeMarkdown } from '../lib/sanitize.js';
-  import { chatConversations, currentConversationId, showToast } from '../lib/stores.js';
+  import { chatConversations, createAuthenticatedSessionGuard, currentConversationId, showToast } from '../lib/stores.js';
   import { registerActions } from '../lib/shortcutStore.js';
   import Icon from '../components/common/Icon.svelte';
 
@@ -22,6 +22,14 @@
   let conversationMessages = $state([]); // messages for the loaded conversation
   let messagesContainer = $state(null);
   let sidebarOpen = $state(true);
+  let sessionGuard = null;
+  let streamAbortController = null;
+  let conversationLoadGeneration = 0;
+  let pdfExportContainer = null;
+
+  function sessionIsCurrent() {
+    return Boolean(sessionGuard?.isCurrent());
+  }
 
   // Configure marked for safe rendering
   marked.setOptions({
@@ -30,6 +38,7 @@
   });
 
   onMount(() => {
+    sessionGuard = createAuthenticatedSessionGuard();
     if (window.matchMedia('(max-width: 767px)').matches) {
       sidebarOpen = false;
     }
@@ -60,12 +69,21 @@
     });
 
     void loadConversations();
-    return cleanupShortcuts;
+    return () => {
+      sessionGuard.dispose();
+      conversationLoadGeneration += 1;
+      streamAbortController?.abort();
+      streamAbortController = null;
+      pdfExportContainer?.remove();
+      pdfExportContainer = null;
+      cleanupShortcuts();
+    };
   });
 
   async function loadConversations() {
     try {
       const data = await api.getConversations();
+      if (!sessionIsCurrent()) return;
       conversations = data;
       chatConversations.set(data);
     } catch {
@@ -74,6 +92,8 @@
   }
 
   async function loadConversation(id) {
+    if (!sessionIsCurrent()) return;
+    const loadGeneration = ++conversationLoadGeneration;
     loadingConversation = true;
     activeConversationId = id;
     currentConversationId.set(id);
@@ -84,6 +104,7 @@
 
     try {
       const data = await api.getConversation(id);
+      if (!sessionIsCurrent() || loadGeneration !== conversationLoadGeneration) return;
       conversationMessages = data.messages || [];
 
       // Find the last assistant message to display
@@ -113,14 +134,19 @@
         currentPhase = 'done';
       }
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent() && loadGeneration === conversationLoadGeneration) {
+        showToast(err.message, 'error');
+      }
     }
-    loadingConversation = false;
+    if (sessionIsCurrent() && loadGeneration === conversationLoadGeneration) {
+      loadingConversation = false;
+    }
   }
 
   async function deleteConversation(id) {
     try {
       await api.deleteConversation(id);
+      if (!sessionIsCurrent()) return;
       conversations = conversations.filter(c => c.id !== id);
       chatConversations.set(conversations);
       if (activeConversationId === id) {
@@ -131,7 +157,7 @@
       }
       showToast('Conversation deleted', 'success');
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
     }
   }
 
@@ -155,7 +181,7 @@
 
   async function sendMessage() {
     const msg = messageInput.trim();
-    if (!msg || isProcessing) return;
+    if (!msg || isProcessing || !sessionIsCurrent()) return;
 
     messageInput = '';
     isProcessing = true;
@@ -163,9 +189,14 @@
 
     // Add user message to display
     conversationMessages = [...conversationMessages, { role: 'user', content: msg }];
+    const controller = new AbortController();
+    streamAbortController = controller;
 
     try {
-      const response = await api.chatStream(msg, activeConversationId);
+      const response = await api.chatStream(msg, activeConversationId, {
+        signal: controller.signal,
+      });
+      if (!sessionIsCurrent() || streamAbortController !== controller) return;
 
       if (!response.ok) {
         const err = await response.json().catch(() => ({ detail: 'Request failed' }));
@@ -178,6 +209,10 @@
 
       while (true) {
         const { done, value } = await reader.read();
+        if (!sessionIsCurrent() || streamAbortController !== controller) {
+          await reader.cancel().catch(() => {});
+          return;
+        }
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
@@ -213,15 +248,21 @@
       }
 
     } catch (err) {
-      errorMessage = err.message;
-      showToast(err.message, 'error');
+      if (sessionIsCurrent() && streamAbortController === controller && err.name !== 'AbortError') {
+        errorMessage = err.message;
+        showToast(err.message, 'error');
+      }
+    } finally {
+      if (streamAbortController === controller) streamAbortController = null;
     }
 
+    if (!sessionIsCurrent()) return;
     isProcessing = false;
     await loadConversations();
   }
 
   function handleSSEEvent(eventType, data) {
+    if (!sessionIsCurrent()) return;
     if (eventType === 'phase') {
       currentPhase = data.phase;
     } else if (eventType === 'plan_ready') {
@@ -288,7 +329,9 @@
     // Scroll to bottom
     if (messagesContainer) {
       requestAnimationFrame(() => {
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        if (sessionIsCurrent() && messagesContainer) {
+          messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
       });
     }
   }
@@ -425,15 +468,19 @@
   }
 
   async function downloadPDF() {
-    if (!renderedContent || pdfGenerating) return;
+    if (!renderedContent || pdfGenerating || !sessionIsCurrent()) return;
 
     pdfGenerating = true;
+    const renderedContentAtStart = renderedContent;
+    const activeConversationIdAtStart = activeConversationId;
     let container = null;
     try {
       const { default: jsPDF } = await import('jspdf');
+      if (!sessionIsCurrent()) return;
       const { default: html2canvas } = await import('html2canvas-pro');
+      if (!sessionIsCurrent()) return;
 
-      const title = conversations.find(c => c.id === activeConversationId)?.title || 'Chat Response';
+      const title = conversations.find(c => c.id === activeConversationIdAtStart)?.title || 'Chat Response';
       const safeName = title.replace(/[^a-zA-Z0-9\-_ ]/g, '').replace(/\s+/g, '-').substring(0, 60);
 
       // Create an offscreen container with print-optimized styles
@@ -465,15 +512,18 @@
             .pdf-body strong { font-weight: 600; }
             .pdf-body em { font-style: italic; color: #555; }
           </style>
-          <div class="pdf-body">${renderedContent}</div>
+          <div class="pdf-body">${renderedContentAtStart}</div>
           <div style="margin-top:20px;padding-top:6px;border-top:1px solid #ddd;font-size:8px;color:#999;text-align:center;">
             Generated from Mail Chat &middot; ${new Date().toLocaleDateString()}
           </div>
         </div>`;
+      if (!sessionIsCurrent()) return;
       document.body.appendChild(container);
+      pdfExportContainer = container;
 
       // Wait a moment for styles and any images to settle
       await new Promise(r => setTimeout(r, 300));
+      if (!sessionIsCurrent()) return;
 
       const canvas = await html2canvas(container.firstElementChild, {
         scale: 2,
@@ -484,6 +534,7 @@
         logging: false,
         backgroundColor: '#ffffff',
       });
+      if (!sessionIsCurrent()) return;
 
       const renderedRoot = container.firstElementChild;
       const renderedBody = renderedRoot.querySelector('.pdf-body');
@@ -516,6 +567,7 @@
         .filter(sourceTop => sourceTop > 0);
 
       container.remove();
+      if (pdfExportContainer === container) pdfExportContainer = null;
       container = null;
 
       // Calculate PDF dimensions -- letter size (8.5 x 11 in), content area with margins
@@ -566,11 +618,14 @@
       pdf.save(`${safeName}.pdf`);
       showToast('PDF downloaded', 'success');
     } catch (err) {
-      console.error('PDF generation failed:', err);
-      showToast('Failed to generate PDF: ' + err.message, 'error');
+      if (sessionIsCurrent()) {
+        console.error('PDF generation failed:', err);
+        showToast('Failed to generate PDF: ' + err.message, 'error');
+      }
     } finally {
       container?.remove();
-      pdfGenerating = false;
+      if (pdfExportContainer === container) pdfExportContainer = null;
+      if (sessionIsCurrent()) pdfGenerating = false;
     }
   }
 </script>

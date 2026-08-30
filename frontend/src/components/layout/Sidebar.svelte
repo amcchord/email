@@ -1,5 +1,5 @@
 <script>
-  import { currentPage, currentMailbox, sidebarCollapsed, composeOpen, accounts, selectedAccountId, labels as labelsStore, syncStatus, smartFilter, todos, accountColorMap } from '../../lib/stores.js';
+  import { currentPage, currentMailbox, sidebarCollapsed, composeOpen, accounts, selectedAccountId, labels as labelsStore, syncStatus, smartFilter, todos, accountColorMap, createAuthenticatedSessionGuard } from '../../lib/stores.js';
   import { api } from '../../lib/api.js';
   import { onMount } from 'svelte';
   import Icon from '../common/Icon.svelte';
@@ -76,13 +76,14 @@
     return acct.sync_status.status || 'idle';
   }
 
-  onMount(async () => {
-    try {
-      const fetchedLabels = await api.getLabels();
-      labelsStore.set(fetchedLabels);
-    } catch {
+  onMount(() => {
+    const sessionGuard = createAuthenticatedSessionGuard();
+    void api.getLabels().then(fetchedLabels => {
+      if (sessionGuard.isCurrent()) labelsStore.set(fetchedLabels);
+    }).catch(() => {
       // Labels not available
-    }
+    });
+    return () => sessionGuard.dispose();
   });
 </script>
 

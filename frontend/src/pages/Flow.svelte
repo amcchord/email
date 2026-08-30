@@ -3,7 +3,7 @@
   import { marked } from 'marked';
   import { api } from '../lib/api.js';
   import { sanitizeMarkdown } from '../lib/sanitize.js';
-  import { chatConversations, currentConversationId, showToast, currentPage, currentMailbox, selectedEmailId, pendingReplyDraft, accounts, composeData, threadOrder, accountColorMap } from '../lib/stores.js';
+  import { chatConversations, createAuthenticatedSessionGuard, currentConversationId, showToast, currentPage, currentMailbox, selectedEmailId, pendingReplyDraft, accounts, composeData, threadOrder, accountColorMap } from '../lib/stores.js';
   import { get } from 'svelte/store';
   import { registerActions } from '../lib/shortcutStore.js';
   import { lastEvent } from '../lib/realtime.js';
@@ -56,6 +56,13 @@
   let conversationMessages = $state([]);
   let messagesContainer = $state(null);
   let expandedTasks = $state({});
+  let sessionGuard = null;
+  let streamAbortController = null;
+  let conversationLoadGeneration = 0;
+
+  function sessionIsCurrent() {
+    return Boolean(sessionGuard?.isCurrent());
+  }
 
   // --- Reply View State ---
   let replyViewOpen = $state(false);
@@ -302,6 +309,7 @@
   });
 
   onMount(() => {
+    sessionGuard = createAuthenticatedSessionGuard();
     // Register keyboard shortcut actions for the Flow page
     const cleanupShortcuts = registerActions({
       'flow.next': () => {
@@ -401,12 +409,18 @@
       loadActiveThreads(),
     ]);
 
-    return cleanupShortcuts;
+    return () => {
+      sessionGuard.dispose();
+      conversationLoadGeneration += 1;
+      streamAbortController?.abort();
+      streamAbortController = null;
+      cleanupShortcuts();
+    };
   });
 
   $effect(() => {
     const evt = $lastEvent;
-    if (!evt) return;
+    if (!evt || !sessionIsCurrent()) return;
     if (evt.type === 'new_emails' || evt.type === 'emails_updated') {
       loadDaySummary();
       loadAwaitingResponse();
@@ -424,6 +438,7 @@
       api.getNeedsReply({ limit: 20, ...(hideFyi ? { exclude_category: 'fyi' } : {}) }),
       api.getAITrends(),
     ]);
+    if (!sessionIsCurrent()) return;
 
     if (results[0].status === 'fulfilled') {
       upcomingEvents = (results[0].value.events || []).slice(0, 5);
@@ -451,6 +466,7 @@
   async function loadAwaitingResponse() {
     try {
       const data = await api.getAwaitingResponse({ limit: 10 });
+      if (!sessionIsCurrent()) return;
       awaitingResponse = data.emails || [];
       awaitingResponseTotal = data.total || 0;
     } catch {
@@ -461,6 +477,7 @@
   async function loadActiveThreads() {
     try {
       const data = await api.getThreadDigests({ page_size: 8, sort: 'recent' });
+      if (!sessionIsCurrent()) return;
       activeThreads = (data.digests || []).slice(0, 6);
     } catch {
       // ignore
@@ -472,6 +489,7 @@
   async function loadConversations() {
     try {
       const data = await api.getConversations();
+      if (!sessionIsCurrent()) return;
       conversations = data;
       chatConversations.set(data);
     } catch {
@@ -480,6 +498,8 @@
   }
 
   async function loadConversation(id) {
+    if (!sessionIsCurrent()) return;
+    const loadGeneration = ++conversationLoadGeneration;
     loadingConversation = true;
     activeConversationId = id;
     currentConversationId.set(id);
@@ -487,6 +507,7 @@
 
     try {
       const data = await api.getConversation(id);
+      if (!sessionIsCurrent() || loadGeneration !== conversationLoadGeneration) return;
       conversationMessages = data.messages || [];
 
       const lastAssistant = [...conversationMessages].reverse().find(m => m.role === 'assistant');
@@ -514,14 +535,19 @@
         currentPhase = 'done';
       }
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent() && loadGeneration === conversationLoadGeneration) {
+        showToast(err.message, 'error');
+      }
     }
-    loadingConversation = false;
+    if (sessionIsCurrent() && loadGeneration === conversationLoadGeneration) {
+      loadingConversation = false;
+    }
   }
 
   async function deleteConversation(id) {
     try {
       await api.deleteConversation(id);
+      if (!sessionIsCurrent()) return;
       conversations = conversations.filter(c => c.id !== id);
       chatConversations.set(conversations);
       if (activeConversationId === id) {
@@ -532,7 +558,7 @@
       }
       showToast('Conversation deleted', 'success');
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
     }
   }
 
@@ -556,16 +582,21 @@
 
   async function sendMessage() {
     const msg = messageInput.trim();
-    if (!msg || isProcessing) return;
+    if (!msg || isProcessing || !sessionIsCurrent()) return;
 
     messageInput = '';
     isProcessing = true;
     resetChatState();
 
     conversationMessages = [...conversationMessages, { role: 'user', content: msg }];
+    const controller = new AbortController();
+    streamAbortController = controller;
 
     try {
-      const response = await api.chatStream(msg, activeConversationId);
+      const response = await api.chatStream(msg, activeConversationId, {
+        signal: controller.signal,
+      });
+      if (!sessionIsCurrent() || streamAbortController !== controller) return;
 
       if (!response.ok) {
         const err = await response.json().catch(() => ({ detail: 'Request failed' }));
@@ -578,6 +609,10 @@
 
       while (true) {
         const { done, value } = await reader.read();
+        if (!sessionIsCurrent() || streamAbortController !== controller) {
+          await reader.cancel().catch(() => {});
+          return;
+        }
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
@@ -610,15 +645,23 @@
       }
 
     } catch (err) {
-      errorMessage = err.message;
-      showToast(err.message, 'error');
+      if (sessionIsCurrent() && streamAbortController === controller && err.name !== 'AbortError') {
+        errorMessage = err.message;
+        showToast(err.message, 'error');
+      }
+    } finally {
+      if (sessionIsCurrent() && streamAbortController === controller) {
+        streamAbortController = null;
+      }
     }
 
+    if (!sessionIsCurrent()) return;
     isProcessing = false;
     await loadConversations();
   }
 
   function handleSSEEvent(eventType, data) {
+    if (!sessionIsCurrent()) return;
     if (eventType === 'phase') {
       currentPhase = data.phase;
     } else if (eventType === 'plan_ready') {
@@ -667,7 +710,9 @@
 
     if (messagesContainer) {
       requestAnimationFrame(() => {
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        if (sessionIsCurrent() && messagesContainer) {
+          messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
       });
     }
   }
@@ -735,11 +780,10 @@
 
   // Navigate to an email in the inbox
   function goToEmail(emailId) {
+    if (!sessionIsCurrent()) return;
     currentMailbox.set('ALL');
+    selectedEmailId.set(emailId);
     currentPage.set('inbox');
-    setTimeout(() => {
-      selectedEmailId.set(emailId);
-    }, 0);
   }
 
   function downloadMarkdown() {
@@ -855,7 +899,7 @@
   }
 
   function threadRequestIsCurrent(requestGeneration, { emailId = null, threadId = null, source = null } = {}) {
-    return isCurrentFlowThreadRequest({
+    return sessionIsCurrent() && isCurrentFlowThreadRequest({
       requestedGeneration: requestGeneration,
       currentGeneration: threadLoadGeneration,
       replyViewOpen: replyViewOpen && Boolean(selectedReplyEmail),
@@ -869,6 +913,7 @@
   }
 
   async function openReplyView(email, index, option) {
+    if (!sessionIsCurrent()) return;
     rememberCurrentReplyDraft();
     const requestGeneration = ++threadLoadGeneration;
     const emailId = email.id;
@@ -934,6 +979,7 @@
   }
 
   async function openThreadInFlow(threadId, metadata, source) {
+    if (!sessionIsCurrent()) return;
     rememberCurrentReplyDraft();
     const requestGeneration = ++threadLoadGeneration;
     viewSource = source;
@@ -1128,7 +1174,7 @@
         }
       }
     } catch (err) {
-      console.error('Failed to generate custom reply:', err);
+      if (requestIsCurrent()) console.error('Failed to generate custom reply:', err);
     } finally {
       if (requestIsCurrent()) customPromptLoading = false;
     }
@@ -1177,31 +1223,33 @@
   }
 
   async function archiveCurrentEmail() {
-    if (!selectedReplyEmail) return;
+    if (!selectedReplyEmail || !sessionIsCurrent()) return;
     const emailId = selectedReplyEmail.id;
     try {
       await api.emailActions([emailId], 'archive');
+      if (!sessionIsCurrent()) return;
       showToast('Email archived', 'success');
       removeEmailAndAdvance(emailId);
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
     }
   }
 
   async function trashCurrentEmail() {
-    if (!selectedReplyEmail) return;
+    if (!selectedReplyEmail || !sessionIsCurrent()) return;
     const emailId = selectedReplyEmail.id;
     try {
       await api.emailActions([emailId], 'trash');
+      if (!sessionIsCurrent()) return;
       showToast('Moved to trash', 'success');
       removeEmailAndAdvance(emailId);
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
     }
   }
 
   async function ignoreCurrentEmail() {
-    if (!selectedReplyEmail) return false;
+    if (!selectedReplyEmail || !sessionIsCurrent()) return false;
     const emailId = selectedReplyEmail.id;
     const sourceAtStart = viewSource;
     const nextPending = addPendingReplyId(ignoringReplyEmailIds, emailId);
@@ -1209,6 +1257,7 @@
     ignoringReplyEmailIds = nextPending;
     try {
       await api.ignoreNeedsReply(emailId);
+      if (!sessionIsCurrent()) return false;
       showToast('Ignored — won\'t appear in needs reply', 'success');
       if (sourceAtStart === 'needs_reply') {
         removeEmailAndAdvance(emailId);
@@ -1219,21 +1268,25 @@
       }
       return true;
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
       return false;
     } finally {
-      ignoringReplyEmailIds = removePendingReplyId(ignoringReplyEmailIds, emailId);
+      if (sessionIsCurrent()) {
+        ignoringReplyEmailIds = removePendingReplyId(ignoringReplyEmailIds, emailId);
+      }
     }
   }
 
   async function ignoreEmailFromList(emailId) {
+    if (!sessionIsCurrent()) return;
     try {
       await api.ignoreNeedsReply(emailId);
+      if (!sessionIsCurrent()) return;
       needsReplyEmails = needsReplyEmails.filter(e => e.id !== emailId);
       if (needsReplyTotal > 0) needsReplyTotal -= 1;
       showToast('Ignored — won\'t appear in needs reply', 'success');
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
     }
   }
 
@@ -1252,9 +1305,11 @@
   }
 
   async function snoozeEmail(emailId, duration, fromReplyView) {
+    if (!sessionIsCurrent()) return;
     const labels = { '1h': '1 hour', '3h': '3 hours', 'tomorrow': 'tomorrow morning', 'next_week': 'next week' };
     try {
       await api.snoozeNeedsReply(emailId, duration);
+      if (!sessionIsCurrent()) return;
       snoozePopoverEmailId = null;
       showToast(`Snoozed until ${labels[duration]}`, 'success');
       if (fromReplyView && viewSource === 'needs_reply') {
@@ -1268,7 +1323,7 @@
         if (needsReplyTotal > 0) needsReplyTotal -= 1;
       }
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
     }
   }
 
@@ -1327,7 +1382,7 @@
   }
 
   async function sendReply() {
-    if (!canSendReply()) return false;
+    if (!canSendReply() || !sessionIsCurrent()) return false;
     const email = selectedReplyEmail;
     const bodyHtmlAtStart = replyBodyHtml;
     const plainText = bodyHtmlAtStart ? bodyHtmlAtStart.replace(/<[^>]*>/g, '').trim() : '';
@@ -1349,6 +1404,7 @@
         body_text: plainText,
         body_html: bodyHtmlAtStart,
       });
+      if (!sessionIsCurrent()) return false;
       showToast('Reply sent!', 'success');
 
       if (sourceAtStart === 'needs_reply') {
@@ -1359,6 +1415,7 @@
           } catch {
             // silent fail on archive
           }
+          if (!sessionIsCurrent()) return false;
         }
       }
 
@@ -1380,10 +1437,10 @@
       }
       return true;
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
       return false;
     } finally {
-      inlineReplySending = false;
+      if (sessionIsCurrent()) inlineReplySending = false;
     }
   }
 

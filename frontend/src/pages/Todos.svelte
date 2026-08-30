@@ -2,7 +2,14 @@
   import { onMount } from 'svelte';
   import Icon from '../components/common/Icon.svelte';
   import { api } from '../lib/api.js';
-  import { showToast, todos, selectedEmailId, currentPage, currentMailbox } from '../lib/stores.js';
+  import {
+    createAuthenticatedSessionGuard,
+    showToast,
+    todos,
+    selectedEmailId,
+    currentPage,
+    currentMailbox,
+  } from '../lib/stores.js';
   import { registerActions } from '../lib/shortcutStore.js';
 
   let loading = $state(true);
@@ -15,10 +22,14 @@
   let editingDraftId = $state(null);
   let editDraftBody = $state('');
   let todoMutationIds = $state([]);
+  let mounted = false;
+  let sessionGuard = null;
 
   let selectedTodoIndex = $state(-1);
 
   onMount(() => {
+    sessionGuard = createAuthenticatedSessionGuard();
+    mounted = sessionGuard.isCurrent();
     const cleanupShortcuts = registerActions({
       'todos.new': () => {
         const input = document.querySelector('[data-shortcut="todos.new"]');
@@ -63,23 +74,32 @@
       },
     });
 
-    let active = true;
     void loadTodos().finally(() => {
-      if (active) loading = false;
+      if (todoSessionIsCurrent()) loading = false;
     });
 
     return () => {
-      active = false;
+      mounted = false;
+      sessionGuard?.dispose();
+      todoMutationIds = [];
       cleanupShortcuts();
     };
   });
 
+  function todoSessionIsCurrent() {
+    return mounted && Boolean(sessionGuard?.isCurrent());
+  }
+
   async function loadTodos() {
+    if (!todoSessionIsCurrent()) return false;
     try {
       const result = await api.getTodos();
+      if (!todoSessionIsCurrent()) return false;
       todos.set(result.todos);
+      return true;
     } catch (err) {
-      showToast(err.message, 'error');
+      if (todoSessionIsCurrent()) showToast(err.message, 'error');
+      return false;
     }
   }
 
@@ -91,7 +111,7 @@
   }
 
   function beginTodoMutation(todoId) {
-    if (todoMutationIds.includes(todoId)) return false;
+    if (!todoSessionIsCurrent() || todoMutationIds.includes(todoId)) return false;
     todoMutationIds = [...todoMutationIds, todoId];
     return true;
   }
@@ -101,16 +121,20 @@
   }
 
   async function addManualTodo() {
-    if (!newTodoText.trim()) return;
+    if (!newTodoText.trim() || !todoSessionIsCurrent()) return false;
     addingTodo = true;
     try {
       const todo = await api.createTodo({ title: newTodoText.trim() });
+      if (!todoSessionIsCurrent()) return false;
       todos.update(list => [todo, ...list]);
       newTodoText = '';
+      return true;
     } catch (err) {
-      showToast(err.message, 'error');
+      if (todoSessionIsCurrent()) showToast(err.message, 'error');
+      return false;
+    } finally {
+      if (todoSessionIsCurrent()) addingTodo = false;
     }
-    addingTodo = false;
   }
 
   async function toggleTodo(todo) {
@@ -118,22 +142,27 @@
     const newStatus = todo.status === 'done' ? 'pending' : 'done';
     try {
       const updated = await api.updateTodo(todo.id, { status: newStatus });
+      if (!todoSessionIsCurrent()) return false;
       todos.update(list => list.map(t => t.id === todo.id ? updated : t));
       return true;
     } catch (err) {
-      showToast(err.message, 'error');
+      if (todoSessionIsCurrent()) showToast(err.message, 'error');
       return false;
     } finally {
-      endTodoMutation(todo.id);
+      if (todoSessionIsCurrent()) endTodoMutation(todo.id);
     }
   }
 
   async function dismissTodo(todo) {
+    if (!todoSessionIsCurrent()) return false;
     try {
       const updated = await api.updateTodo(todo.id, { status: 'dismissed' });
+      if (!todoSessionIsCurrent()) return false;
       todos.update(list => list.map(t => t.id === todo.id ? updated : t));
+      return true;
     } catch (err) {
-      showToast(err.message, 'error');
+      if (todoSessionIsCurrent()) showToast(err.message, 'error');
+      return false;
     }
   }
 
@@ -141,48 +170,61 @@
     if (!beginTodoMutation(todo.id)) return false;
     try {
       await api.deleteTodo(todo.id);
+      if (!todoSessionIsCurrent()) return false;
       todos.update(list => list.filter(t => t.id !== todo.id));
       return true;
     } catch (err) {
-      showToast(err.message, 'error');
+      if (todoSessionIsCurrent()) showToast(err.message, 'error');
       return false;
     } finally {
-      endTodoMutation(todo.id);
+      if (todoSessionIsCurrent()) endTodoMutation(todo.id);
     }
   }
 
   async function draftWithAI(todo) {
+    if (!todoSessionIsCurrent()) return false;
     draftingId = todo.id;
     try {
       const result = await api.draftAction(todo.id);
+      if (!todoSessionIsCurrent()) return false;
       todos.update(list => list.map(t => t.id === todo.id ? { ...t, ...result } : t));
       expandedDraftId = todo.id;
       showToast('AI draft ready for review', 'success');
+      return true;
     } catch (err) {
-      showToast(err.message, 'error');
+      if (todoSessionIsCurrent()) showToast(err.message, 'error');
+      return false;
+    } finally {
+      if (todoSessionIsCurrent()) draftingId = null;
     }
-    draftingId = null;
   }
 
   async function approveAndSend(todo) {
+    if (!todoSessionIsCurrent()) return false;
     approvingId = todo.id;
     try {
       const result = await api.approveAction(todo.id);
+      if (!todoSessionIsCurrent()) return false;
       todos.update(list => list.map(t => t.id === todo.id ? { ...t, ...result, status: 'done' } : t));
       showToast('Reply sent and todo marked done!', 'success');
       expandedDraftId = null;
+      return true;
     } catch (err) {
-      showToast(err.message, 'error');
+      if (todoSessionIsCurrent()) showToast(err.message, 'error');
+      return false;
+    } finally {
+      if (todoSessionIsCurrent()) approvingId = null;
     }
-    approvingId = null;
   }
 
   function startEditDraft(todo) {
+    if (!todoSessionIsCurrent()) return;
     editingDraftId = todo.id;
     editDraftBody = todo.ai_draft_body || '';
   }
 
   async function saveEditedDraft(todo) {
+    if (!todoSessionIsCurrent()) return false;
     // We save the edited body by re-updating the todo's draft body via the update endpoint
     // For simplicity, we'll update locally and send on approve
     todos.update(list => list.map(t => {
@@ -193,14 +235,16 @@
     }));
     editingDraftId = null;
     showToast('Draft updated', 'success');
+    return true;
   }
 
   function goToEmail(emailId) {
+    if (!todoSessionIsCurrent()) return;
     currentMailbox.set('ALL');
+    // Inbox captures a source-provided selection as one-time direct-open
+    // intent before it resets the dataset selection during its first load.
+    selectedEmailId.set(emailId);
     currentPage.set('inbox');
-    setTimeout(() => {
-      selectedEmailId.set(emailId);
-    }, 0);
   }
 
   function formatDate(dateStr) {

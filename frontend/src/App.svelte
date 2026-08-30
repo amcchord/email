@@ -1,7 +1,21 @@
 <script>
   import { onMount } from 'svelte';
   import { api, setUnauthorizedHandler } from './lib/api.js';
-  import { user, currentPage, showToast, toastMessages, dismissToast, startSyncPolling, stopSyncPolling, forceSyncPoll, threadOrder } from './lib/stores.js';
+  import {
+    authenticatedSessionGeneration,
+    captureAuthenticatedSession,
+    currentPage,
+    dismissToast,
+    forceSyncPoll,
+    isAuthenticatedSessionCurrent,
+    showToast,
+    startSyncPolling,
+    stopSyncPolling,
+    threadOrder,
+    toastMessages,
+    transitionAuthenticatedSession,
+    user,
+  } from './lib/stores.js';
   import { theme, activeTheme } from './lib/theme.js';
   import { startVersionPolling } from './lib/autoReload.js';
   import { startRealtime, stopRealtime } from './lib/realtime.js';
@@ -38,19 +52,38 @@
     onState: nextState => { routeState = nextState; },
   });
 
-  let accountSessionActive = false;
+  let observedSessionGeneration = null;
   $effect(() => {
+    const generation = $authenticatedSessionGeneration;
     const authenticated = Boolean($user);
-    if (authenticated === accountSessionActive) return;
-    accountSessionActive = authenticated;
+    if (generation === observedSessionGeneration) return;
+    observedSessionGeneration = generation;
+    stopSyncPolling();
+    stopRealtime();
     if (authenticated) {
       startSyncPolling(() => api.listAccounts());
       startRealtime();
-    } else {
-      stopSyncPolling();
-      stopRealtime();
+      void loadAuthenticatedPreferences(captureAuthenticatedSession());
     }
   });
+
+  async function loadAuthenticatedPreferences(session) {
+    try {
+      const uiPrefs = await api.getUIPreferences();
+      if (!isAuthenticatedSessionCurrent(session)) return;
+      if (uiPrefs.thread_order) {
+        threadOrder.set(uiPrefs.thread_order);
+      }
+      if (uiPrefs.theme) {
+        activeTheme.set(uiPrefs.theme);
+      }
+      if (uiPrefs.color_scheme) {
+        theme.set(uiPrefs.color_scheme);
+      }
+    } catch {
+      // Keep this browser's non-sensitive local preferences.
+    }
+  }
 
   function parseStandaloneEmailId(params) {
     if (params.get('view') !== 'email' || !params.get('id')) return null;
@@ -95,7 +128,7 @@
 
   onMount(async () => {
     setUnauthorizedHandler(() => {
-      user.set(null);
+      transitionAuthenticatedSession(null);
     });
 
     // Check if this is a device auth page or pop-out email view
@@ -107,24 +140,9 @@
 
     try {
       const me = await api.me();
-      user.set(me);
-      // Load UI preferences from server (sync across devices)
-      try {
-        const uiPrefs = await api.getUIPreferences();
-        if (uiPrefs.thread_order) {
-          threadOrder.set(uiPrefs.thread_order);
-        }
-        if (uiPrefs.theme) {
-          activeTheme.set(uiPrefs.theme);
-        }
-        if (uiPrefs.color_scheme) {
-          theme.set(uiPrefs.color_scheme);
-        }
-      } catch {
-        // Use localStorage default
-      }
+      transitionAuthenticatedSession(me);
     } catch {
-      user.set(null);
+      transitionAuthenticatedSession(null);
     }
     // Poll for build version changes and auto-reload when restart.sh runs
     startVersionPolling();
@@ -220,34 +238,40 @@
     </div>
   </div>
 {:else if deviceAuthCode !== null}
-  <DeviceAuth />
+  {#key $authenticatedSessionGeneration}
+    <DeviceAuth />
+  {/key}
 {:else if standaloneEmailId !== null}
   <!-- Pop-out email viewer (no layout chrome) -->
   {#if $user}
-    <LazyRouteState
-      expectedKey={lazyRouteKey}
-      label={lazyRouteLabel}
-      {routeState}
-      componentProps={{ emailId: standaloneEmailId }}
-      onRetry={retryLazyRoute}
-    />
+    {#key $authenticatedSessionGeneration}
+      <LazyRouteState
+        expectedKey={lazyRouteKey}
+        label={lazyRouteLabel}
+        {routeState}
+        componentProps={{ emailId: standaloneEmailId }}
+        onRetry={retryLazyRoute}
+      />
+    {/key}
   {:else}
     <Login />
   {/if}
 {:else if !$user}
   <Login />
 {:else}
-  <Layout>
-    <LazyRouteState
-      expectedKey={lazyRouteKey}
-      label={lazyRouteLabel}
-      {routeState}
-      inShell
-      canGoHome={lazyRouteKey !== DEFAULT_AUTHENTICATED_PAGE}
-      onRetry={retryLazyRoute}
-      onGoHome={goToFlow}
-    />
-  </Layout>
+  {#key $authenticatedSessionGeneration}
+    <Layout>
+      <LazyRouteState
+        expectedKey={lazyRouteKey}
+        label={lazyRouteLabel}
+        {routeState}
+        inShell
+        canGoHome={lazyRouteKey !== DEFAULT_AUTHENTICATED_PAGE}
+        onRetry={retryLazyRoute}
+        onGoHome={goToFlow}
+      />
+    </Layout>
+  {/key}
 {/if}
 
 {#if $toastMessages.length}

@@ -12,6 +12,7 @@
       input/textarea/contenteditable is focused; modifier shortcuts still work.
 -->
 <script>
+  import { onDestroy } from 'svelte';
   import { currentPage } from '../../lib/stores.js';
   import {
     eventToCombo,
@@ -166,6 +167,16 @@
     }
     overlayVisible.set(false);
   }
+
+  onDestroy(() => {
+    clearPending();
+    altPressedAt = 0;
+    if (altHoldTimer) {
+      clearTimeout(altHoldTimer);
+      altHoldTimer = null;
+    }
+    overlayVisible.set(false);
+  });
 </script>
 
 <svelte:window

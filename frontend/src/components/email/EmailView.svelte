@@ -1,6 +1,6 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
-  import { currentPage, composeData, showToast, pendingReplyDraft, accounts, todos, accountColorMap } from '../../lib/stores.js';
+  import { createAuthenticatedSessionGuard, currentPage, composeData, showToast, pendingReplyDraft, accounts, todos, accountColorMap } from '../../lib/stores.js';
   import { commandPaletteOpen, helpModalOpen, registerActions } from '../../lib/shortcutStore.js';
   import { api } from '../../lib/api.js';
   import {
@@ -75,6 +75,11 @@
     message: email,
     accounts: $accounts,
   }));
+  const sessionGuard = createAuthenticatedSessionGuard();
+
+  function sessionIsCurrent() {
+    return sessionGuard.isCurrent();
+  }
 
   function replyUnavailableMessage(reason) {
     if (reason === REPLY_ENVELOPE_UNAVAILABLE.SOURCE_ACCOUNT_INACTIVE) {
@@ -114,6 +119,7 @@
   }));
 
   onDestroy(() => {
+    sessionGuard.dispose();
     closeAttachmentPreview();
     abortAttachmentRequests();
   });
@@ -169,7 +175,7 @@
   }
 
   function previewRequestIsCurrent(requestedEmailId, attachmentId, previewGeneration) {
-    return isCurrentAttachmentPreviewRequest({
+    return sessionIsCurrent() && isCurrentAttachmentPreviewRequest({
       requestedEmailId,
       requestedAttachmentId: attachmentId,
       requestedGeneration: previewGeneration,
@@ -227,7 +233,7 @@
   }
 
   async function openAttachmentPreview(attachment, returnFocusTarget = null) {
-    if (!email) return;
+    if (!email || !sessionIsCurrent()) return;
     if (returnFocusTarget instanceof HTMLElement) {
       attachmentPreviewReturnFocus = returnFocusTarget;
     }
@@ -299,7 +305,8 @@
         });
       }
     } finally {
-      if (attachmentAbortControllers.get(attachment.id) === abortController) {
+      if (sessionIsCurrent()
+        && attachmentAbortControllers.get(attachment.id) === abortController) {
         const nextControllers = new Map(attachmentAbortControllers);
         nextControllers.delete(attachment.id);
         attachmentAbortControllers = nextControllers;
@@ -318,7 +325,7 @@
     confirmed = false,
     returnFocusTarget = null,
   ) {
-    if (!email) return;
+    if (!email || !sessionIsCurrent()) return;
     const previewNotice = attachmentPreview?.attachment?.id === attachment.id
       ? attachmentPreview.notice
       : null;
@@ -337,7 +344,8 @@
     }
     const downloadDialogGeneration = attachmentPreviewGeneration;
     const downloadDialogIsCurrent = () => (
-      attachmentPreview?.attachment?.id === attachment.id
+      sessionIsCurrent()
+      && attachmentPreview?.attachment?.id === attachment.id
       && attachmentPreviewGeneration === downloadDialogGeneration
     );
     if (!canStartAttachmentDownload(downloadingAttachmentIds, attachment.id)) {
@@ -368,7 +376,8 @@
       message: `Downloading ${filename}…`,
     });
     const requestIsCurrent = () => (
-      attachmentAbortControllers.get(attachment.id) === abortController
+      sessionIsCurrent()
+      && attachmentAbortControllers.get(attachment.id) === abortController
       && isCurrentAttachmentRequest({
         requestedEmailId,
         requestGeneration,
@@ -408,7 +417,8 @@
         }
       }
     } finally {
-      if (attachmentAbortControllers.get(attachment.id) === abortController) {
+      if (sessionIsCurrent()
+        && attachmentAbortControllers.get(attachment.id) === abortController) {
         const nextControllers = new Map(attachmentAbortControllers);
         nextControllers.delete(attachment.id);
         attachmentAbortControllers = nextControllers;
@@ -424,21 +434,23 @@
   }
 
   async function handleUnignore() {
-    if (!email) return;
+    if (!email || !sessionIsCurrent()) return;
     try {
       await api.unignoreNeedsReply(email.id);
+      if (!sessionIsCurrent()) return;
       email.needs_reply_ignored = false;
       showToast('Restored to needs reply', 'success');
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
     }
   }
 
   async function addAllTodos() {
-    if (!email) return;
+    if (!email || !sessionIsCurrent()) return;
     addingTodos = true;
     try {
       const result = await api.createTodosFromEmail(email.id);
+      if (!sessionIsCurrent()) return;
       if (result.created > 0) {
         todos.update(list => [...result.todos, ...list]);
         showToast(`Added ${result.created} action items to todos`, 'success');
@@ -446,24 +458,25 @@
         showToast('Action items already in todos', 'info');
       }
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
     }
+    if (!sessionIsCurrent()) return;
     addingTodos = false;
     showTodoPrompt = false;
   }
 
   async function addSingleTodo(item) {
-    if (!email) return;
+    if (!email || !sessionIsCurrent()) return;
     try {
       const todo = await api.createTodo({
         title: item,
         email_id: email.id,
-        source: 'ai_action_item',
       });
+      if (!sessionIsCurrent()) return;
       todos.update(list => [todo, ...list]);
       showToast('Added to todos', 'success');
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
     }
   }
 
@@ -536,7 +549,7 @@
   }
 
   async function sendInlineReply() {
-    if (!email || !inlineReplyBody.trim()) return;
+    if (!email || !inlineReplyBody.trim() || !sessionIsCurrent()) return;
     const replyAtStart = activeReplyEnvelopeResult;
     if (!replyAtStart.available) {
       showToast(replyUnavailableMessage(replyAtStart.reason), 'error');
@@ -553,6 +566,7 @@
         body_text: bodyAtStart,
         body_html: `<p>${bodyAtStart.replace(/\n/g, '<br>')}</p>`,
       });
+      if (!sessionIsCurrent()) return;
       showToast('Reply sent!', 'success');
       const sentDraftStillActive = replyCompletionStillCurrent({
         capturedGeneration: generationAtStart,
@@ -570,9 +584,10 @@
         }
       }
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
+    } finally {
+      if (sessionIsCurrent()) inlineReplySending = false;
     }
-    inlineReplySending = false;
   }
 
   function formatFullDate(dateStr) {
@@ -717,10 +732,11 @@
   }
 
   async function handleUnsubscribe() {
-    if (!email) return;
+    if (!email || !sessionIsCurrent()) return;
     unsubscribing = true;
     try {
       const result = await api.unsubscribe(email.id);
+      if (!sessionIsCurrent()) return;
       if (result.email_sent) {
         showToast(`Unsubscribe email sent to ${result.sent_to}`, 'success');
       } else if (result.url) {
@@ -730,9 +746,10 @@
         showToast('No unsubscribe method available', 'error');
       }
     } catch (err) {
-      showToast(err.message, 'error');
+      if (sessionIsCurrent()) showToast(err.message, 'error');
+    } finally {
+      if (sessionIsCurrent()) unsubscribing = false;
     }
-    unsubscribing = false;
   }
 
   const categoryLabels = {

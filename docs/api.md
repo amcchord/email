@@ -38,6 +38,7 @@ free-form questions about your inbox without touching the web UI.
 - [Web session-only structured email search](#web-session-only-structured-email-search)
 - [Web session-only attachment preview and download](#web-session-only-attachment-preview-and-download)
 - [Web session-only durable mail actions](#web-session-only-durable-mail-actions)
+- [Web session-only Todo ownership](#web-session-only-todo-ownership)
 - [At a Glance displays and terminal management](#at-a-glance-displays-and-terminal-management)
 
 ## Authentication
@@ -839,6 +840,52 @@ is picked up by the next durable cron pass.
 operations with unresolved failed items before newer completed operations, so
 a failure does not silently disappear behind routine successes. Public API
 tokens cannot call these mutation routes.
+
+## Web session-only Todo ownership
+
+Todos use the authenticated browser session and are always scoped to its user.
+Public API tokens cannot call these routes.
+
+```text
+GET    /api/todos/?status=pending&page=1&page_size=50
+POST   /api/todos/
+POST   /api/todos/from-email/{email_id}
+PATCH  /api/todos/{todo_id}
+DELETE /api/todos/{todo_id}
+```
+
+The generic create route creates only manual Todos. `title` is trimmed and
+must contain 1–500 characters; `email_id`, when supplied, must be a positive
+ID for an email owned through one of the current user's Google accounts.
+`source` may only be `manual`, and unknown request fields are rejected.
+
+```json
+{
+  "title": "Follow up next week",
+  "email_id": 9001,
+  "source": "manual"
+}
+```
+
+AI-derived Todos can be created only through `POST /from-email/{email_id}`.
+That route resolves the analysis through the owned Email and Google Account,
+then accepts only non-empty string action items, bounds titles to 500
+characters, and avoids duplicates for that email. A foreign email, a missing
+email, and an owned email without an analysis all return the same 404
+`{"detail":"Email not found"}` response, avoiding an ownership or analysis
+existence oracle.
+
+List, update, and delete routes filter by the current user. Updates accept only
+`title` and the statuses `pending`, `done`, or `dismissed`. PostgreSQL also
+enforces the Todo-to-email ownership relationship on inserts and relevant
+updates, so a future caller cannot bypass the router invariant.
+
+Migration `c0d1e2f3a4b5` removes historical AI-derived rows linked across user
+boundaries because their titles may contain source-email content. It preserves
+user-authored manual titles by detaching the invalid email and clearing any
+derived reply-draft fields. Downgrade removes the trigger but intentionally
+does not recreate unsafe links or purged content; restoring those rows requires
+the validated pre-migration backup.
 
 ## At a Glance displays and terminal management
 

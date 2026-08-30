@@ -1,29 +1,52 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
-  import { accounts, currentPage, searchQuery, showToast } from '../lib/stores.js';
+  import { accounts, createAuthenticatedSessionGuard, currentPage, searchQuery, showToast } from '../lib/stores.js';
 
   let stats = $state(null);
   let loading = $state(true);
   let selectedDays = $state(30);
   let statAccountId = $state('');
+  let sessionGuard = null;
+  let loadGeneration = 0;
 
-  onMount(() => loadStats());
+  function statsSessionIsCurrent() {
+    return Boolean(sessionGuard?.isCurrent());
+  }
+
+  onMount(() => {
+    sessionGuard = createAuthenticatedSessionGuard();
+    void loadStats();
+    return () => {
+      loadGeneration += 1;
+      sessionGuard.dispose();
+    };
+  });
 
   async function loadStats() {
+    if (!statsSessionIsCurrent()) return false;
+    const requestGeneration = ++loadGeneration;
     loading = true;
     try {
-      stats = await api.getStats({
+      const result = await api.getStats({
         days: selectedDays,
         account_id: statAccountId || undefined,
       });
+      if (!statsSessionIsCurrent() || requestGeneration !== loadGeneration) return false;
+      stats = result;
+      return true;
     } catch (err) {
-      showToast(err.message, 'error');
+      if (statsSessionIsCurrent() && requestGeneration === loadGeneration) {
+        showToast(err.message, 'error');
+      }
+      return false;
+    } finally {
+      if (statsSessionIsCurrent() && requestGeneration === loadGeneration) loading = false;
     }
-    loading = false;
   }
 
   function openSender(sender) {
+    if (!statsSessionIsCurrent()) return;
     searchQuery.set(`from:${sender.address}`);
     currentPage.set('inbox');
   }

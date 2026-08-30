@@ -1,42 +1,81 @@
+import { captureAuthEpoch, isAuthEpochCurrent } from './authSession.js';
+
 const BASE = '/api';
 
 let onUnauthorized = null;
-let isRefreshing = false;
-let refreshPromise = null;
+const refreshPromises = new Map();
+let explicitRefreshSequence = 0;
+let logoutPromise = null;
+let logoutBlocksRefresh = false;
 
 export function setUnauthorizedHandler(handler) {
   onUnauthorized = handler;
 }
 
-async function attemptTokenRefresh() {
-  // If already refreshing, wait for the existing attempt
-  if (isRefreshing && refreshPromise) {
-    return refreshPromise;
-  }
+function authEpochKey(snapshot) {
+  return `${snapshot.generation}:${snapshot.userId ?? 'anonymous'}`;
+}
 
-  isRefreshing = true;
+function assertAuthEpochCurrent(snapshot) {
+  if (isAuthEpochCurrent(snapshot)) return;
+  const error = new Error('Authentication session changed');
+  error.name = 'AbortError';
+  error.code = 'auth_session_changed';
+  throw error;
+}
+
+function authLogoutInProgressError() {
+  const error = new Error('Authentication logout is in progress');
+  error.name = 'AbortError';
+  error.code = 'auth_logout_in_progress';
+  return error;
+}
+
+async function attemptTokenRefresh(requestEpoch) {
+  assertAuthEpochCurrent(requestEpoch);
+  // A refresh response mutates HttpOnly auth cookies before JavaScript can
+  // inspect it. Once logout starts, no later refresh may be allowed to put the
+  // prior identity's cookies back after the ordered cookie clear.
+  if (logoutBlocksRefresh) return false;
+  const key = authEpochKey(requestEpoch);
+  const existing = refreshPromises.get(key);
+  if (existing) return existing;
+
+  let refreshPromise;
   refreshPromise = fetch(`${BASE}/auth/refresh`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
     body: JSON.stringify({}),
   }).then(resp => {
-    if (resp.ok) {
-      return true;
-    }
-    return false;
+    return isAuthEpochCurrent(requestEpoch) && resp.ok;
   }).catch(() => {
     return false;
   }).finally(() => {
-    isRefreshing = false;
-    refreshPromise = null;
+    if (refreshPromises.get(key) === refreshPromise) refreshPromises.delete(key);
   });
 
+  refreshPromises.set(key, refreshPromise);
   return refreshPromise;
 }
 
+async function drainTokenRefreshes() {
+  while (refreshPromises.size > 0) {
+    await Promise.allSettled([...refreshPromises.values()]);
+  }
+}
+
+export async function waitForAuthCookieBarrier() {
+  while (logoutPromise) {
+    const pendingLogout = logoutPromise;
+    await pendingLogout.catch(() => {});
+    if (logoutPromise === pendingLogout) break;
+  }
+}
+
 async function request(method, path, body = null, options = {}) {
-  const { responseType = 'json', ...fetchOptions } = options;
+  const requestEpoch = captureAuthEpoch();
+  const { responseType = 'json', skipAuthRefresh = false, ...fetchOptions } = options;
   const headers = { ...fetchOptions.headers };
   if (body && !(body instanceof FormData)) {
     headers['Content-Type'] = 'application/json';
@@ -54,10 +93,12 @@ async function request(method, path, body = null, options = {}) {
   }
 
   let response = await fetch(`${BASE}${path}`, config);
+  assertAuthEpochCurrent(requestEpoch);
 
   // On 401, try to refresh the token and retry once
-  if (response.status === 401 && !path.includes('/auth/refresh')) {
-    const refreshed = await attemptTokenRefresh();
+  if (response.status === 401 && !skipAuthRefresh && !path.includes('/auth/refresh')) {
+    const refreshed = await attemptTokenRefresh(requestEpoch);
+    assertAuthEpochCurrent(requestEpoch);
     if (refreshed) {
       // Rebuild config for retry (body may be consumed)
       const retryConfig = {
@@ -73,9 +114,14 @@ async function request(method, path, body = null, options = {}) {
         retryConfig.body = body instanceof FormData ? body : JSON.stringify(body);
       }
       response = await fetch(`${BASE}${path}`, retryConfig);
+      assertAuthEpochCurrent(requestEpoch);
     }
 
     if (response.status === 401) {
+      assertAuthEpochCurrent(requestEpoch);
+      // Logout owns the final cookie mutation. Do not publish anonymous state
+      // from a concurrent 401 before its cookie-clearing response has landed.
+      if (logoutBlocksRefresh) throw authLogoutInProgressError();
       if (onUnauthorized) {
         onUnauthorized();
       }
@@ -87,15 +133,21 @@ async function request(method, path, body = null, options = {}) {
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Request failed' }));
+    assertAuthEpochCurrent(requestEpoch);
     const requestError = new Error(error.detail || `HTTP ${response.status}`);
     requestError.status = response.status;
     throw requestError;
   }
 
   if (response.status === 204) return null;
-  if (responseType === 'blob') return response.blob();
+  if (responseType === 'blob') {
+    const blob = await response.blob();
+    assertAuthEpochCurrent(requestEpoch);
+    return blob;
+  }
   if (responseType === 'attachmentPreview') {
     const blob = await response.blob();
+    assertAuthEpochCurrent(requestEpoch);
     return {
       blob,
       kind: response.headers.get('X-Attachment-Preview-Kind'),
@@ -103,7 +155,61 @@ async function request(method, path, body = null, options = {}) {
       contentType: response.headers.get('Content-Type') || blob.type,
     };
   }
-  return response.json();
+  const result = await response.json();
+  assertAuthEpochCurrent(requestEpoch);
+  return result;
+}
+
+function orderedLogout() {
+  if (logoutPromise) return logoutPromise;
+
+  logoutBlocksRefresh = true;
+  const operation = (async () => {
+    // Responses from these requests may carry Set-Cookie. Drain them before
+    // sending the final cookie-clearing response so network completion order
+    // cannot resurrect the identity that is signing out.
+    await drainTokenRefreshes();
+    return request('POST', '/auth/logout', null, { skipAuthRefresh: true });
+  })();
+
+  let trackedLogout;
+  trackedLogout = operation.finally(() => {
+    if (logoutPromise === trackedLogout) {
+      logoutPromise = null;
+    }
+  });
+  logoutPromise = trackedLogout;
+  return trackedLogout;
+}
+
+async function orderedLogin(username, password) {
+  await waitForAuthCookieBarrier();
+  const result = await request('POST', '/auth/login', { username, password }, { skipAuthRefresh: true });
+  // A successful login has authoritatively replaced any cookies that survived
+  // a failed logout. Automatic refreshes may resume for this new session.
+  logoutBlocksRefresh = false;
+  return result;
+}
+
+async function orderedGoogleLoginStart() {
+  await waitForAuthCookieBarrier();
+  return request('GET', '/auth/google/login', null, { skipAuthRefresh: true });
+}
+
+async function trackedExplicitRefresh() {
+  if (logoutBlocksRefresh) {
+    throw authLogoutInProgressError();
+  }
+  const requestEpoch = captureAuthEpoch();
+  assertAuthEpochCurrent(requestEpoch);
+  const key = `${authEpochKey(requestEpoch)}:explicit:${++explicitRefreshSequence}`;
+  const refreshPromise = request('POST', '/auth/refresh', {}, { skipAuthRefresh: true });
+  refreshPromises.set(key, refreshPromise);
+  try {
+    return await refreshPromise;
+  } finally {
+    if (refreshPromises.get(key) === refreshPromise) refreshPromises.delete(key);
+  }
 }
 
 export const api = {
@@ -113,10 +219,11 @@ export const api = {
   delete: (path) => request('DELETE', path),
 
   // Auth
-  login: (username, password) => request('POST', '/auth/login', { username, password }),
-  logout: () => request('POST', '/auth/logout'),
+  login: orderedLogin,
+  startGoogleLogin: orderedGoogleLoginStart,
+  logout: orderedLogout,
   me: () => request('GET', '/auth/me'),
-  refresh: () => request('POST', '/auth/refresh', {}),
+  refresh: trackedExplicitRefresh,
 
   // API Tokens (for the read-only public /api/v1 surface)
   listApiTokens: () => request('GET', '/auth/api-tokens'),
@@ -299,14 +406,18 @@ export const api = {
     const qs = params.toString();
     return request('POST', `/ai/unsubscribe/${emailId}${qs ? '?' + qs : ''}`);
   },
-  unsubscribeStream: (emailId, { markSpam = true } = {}) => {
+  unsubscribeStream: async (emailId, { markSpam = true, signal = null } = {}) => {
+    const requestEpoch = captureAuthEpoch();
     const params = new URLSearchParams();
     if (!markSpam) params.set('mark_spam', 'false');
     const qs = params.toString();
-    return fetch(`${BASE}/ai/unsubscribe/${emailId}/stream${qs ? '?' + qs : ''}`, {
+    const response = await fetch(`${BASE}/ai/unsubscribe/${emailId}/stream${qs ? '?' + qs : ''}`, {
       method: 'GET',
       credentials: 'include',
+      signal,
     });
+    assertAuthEpochCurrent(requestEpoch);
+    return response;
   },
   bulkUnsubscribe: (emailIds, { markSpam = true } = {}) => {
     const params = new URLSearchParams();
@@ -375,14 +486,18 @@ export const api = {
   reprocessEmails: (model) => request('POST', '/ai/reprocess', { model }),
 
   // Chat
-  chatStream: (message, conversationId = null) => {
+  chatStream: async (message, conversationId = null, { signal = null } = {}) => {
+    const requestEpoch = captureAuthEpoch();
     // Returns the raw Response for SSE streaming -- caller reads the stream
-    return fetch(`${BASE}/chat`, {
+    const response = await fetch(`${BASE}/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({ message, conversation_id: conversationId }),
+      signal,
     });
+    assertAuthEpochCurrent(requestEpoch);
+    return response;
   },
   getConversations: () => request('GET', '/chat/conversations'),
   getConversation: (id) => request('GET', `/chat/conversations/${id}`),
