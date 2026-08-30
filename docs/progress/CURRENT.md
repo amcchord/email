@@ -11,6 +11,11 @@ recovery evidence exists.
 
 ## Baseline
 
+- The deployed Calendar scope-preservation runtime is
+  `a9295b8fae1dee97f1f85be3530396bc5390dd80`. Gmail and Calendar now refresh
+  their shared token with the same recorded data-scope set, so Gmail cannot
+  strip Calendar access after a successful reauthorization. The three affected
+  accounts require one final reconnect.
 - The deployed Durable Replies application/documentation commit is
   `9aa93f61fe7031ce267b833930a84c5d0a2121c3`; the following closeout is docs
   only. Reader, Flow, Compose, and Drafts now share one exact-source durable
@@ -62,6 +67,17 @@ live state.
   real production mail remained read-only.
 - Complete behavior, code, verification, production, and rollback evidence is
   in `DURABLE_INLINE_REPLIES_RELEASE_2026-08-30.md`.
+
+## Recent Calendar Reliability Fix
+
+- The recurring post-reauthorization Calendar failure was caused by Gmail
+  narrowing the access token shared with Calendar during refresh.
+- Runtime scopes are now centralized and derived from the account's recorded
+  grant. Legacy Gmail-only accounts remain supported without inventing a
+  Calendar grant.
+- Remaining OAuth hardening is to validate a retained refresh grant explicitly
+  and add compare-and-swap protection against stale token persistence; neither
+  weakens the direct deployed recurrence fix.
 
 ## Recent Terminal Release
 

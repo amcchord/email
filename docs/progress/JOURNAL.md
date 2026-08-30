@@ -3,6 +3,51 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Preserve Calendar scope across Gmail refresh
+
+### Scope
+
+Stop successful Google Calendar reauthorization from failing again after the
+next Gmail token refresh, without changing account data, calendar data, mail,
+AI, terminal behavior, or the frontend.
+
+### Completed
+
+- Confirmed Gmail and Calendar persist one shared account access token, while
+  Gmail requested only its four Gmail scopes during refresh. That deterministic
+  narrowing caused Calendar `insufficient_scope`, local scope removal, and the
+  recurring reconnect prompt.
+- Centralized runtime data scopes. Gmail and Calendar now request the identical
+  recorded grant; Calendar is included only when the account records it, so
+  legacy Gmail-only accounts continue to refresh safely.
+- Kept token-expiry behavior unchanged after review found that adding a stored
+  aware expiry without atomic refreshed-expiry persistence would create churn
+  and datetime compatibility risk.
+
+### Verification
+
+- Focused OAuth/runtime coverage passed 28 tests. The single release gate
+  passed 552 backend tests with 35 intentional PostgreSQL/external skips.
+- Two independent read-only audits confirmed the recurrence mechanism and the
+  direct fix. No P0 was found; retained-refresh proof and stale-token
+  compare-and-swap remain separate hardening work.
+
+### Production Actions
+
+- Pushed and deployed exact runtime
+  `a9295b8fae1dee97f1f85be3530396bc5390dd80` from clean shared-shell closeout
+  `9dc908173d180be13a0b73a74b7ad3088fc6ac4a`.
+- Restarted only `mailapp`. Exact clean Git, all seven services active, public
+  health `ok`, zero automatic restarts, and unchanged Alembic
+  `f3a4b5c6d7e8 (head)` were verified. No schema, dependency, frontend, Caddy,
+  worker, database, mail, calendar, AI, or terminal mutation occurred.
+
+### Next
+
+Reconnect the three affected Google accounts once so they receive a broad
+token under the corrected refresh behavior. Continue the first-class At a
+Glance route from this exact backend baseline.
+
 ## 2026-08-30 — Durable inline replies release
 
 ### Scope
