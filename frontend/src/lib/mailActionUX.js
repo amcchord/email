@@ -1,7 +1,9 @@
 export const REMOVAL_ACTIONS = new Set(['archive', 'trash', 'untrash', 'spam', 'unspam']);
 
-export function actionPastTense(action, count = 1, labelName = '') {
-  const subject = count === 1 ? 'Email' : `${count} emails`;
+export function actionPastTense(action, count = 1, labelName = '', unit = 'email') {
+  const singular = unit === 'conversation' ? 'Conversation' : 'Email';
+  const plural = unit === 'conversation' ? 'conversations' : 'emails';
+  const subject = count === 1 ? singular : `${count} ${plural}`;
   const labels = {
     archive: `${subject} archived`,
     trash: `${subject} moved to trash`,
@@ -32,6 +34,10 @@ export function actionRemovesFromMailbox(action, mailbox, gmailLabelId = null) {
 
 export function applyEmailAction(email, action, { gmailLabelId = null } = {}) {
   const labels = new Set(Array.isArray(email.labels) ? email.labels : []);
+  const isConversation = Boolean(email?.conversation_scope);
+  const labelCoverage = email?.label_coverage && !Array.isArray(email.label_coverage)
+    ? { ...email.label_coverage }
+    : {};
 
   switch (action) {
     case 'mark_read': labels.delete('UNREAD'); break;
@@ -52,15 +58,18 @@ export function applyEmailAction(email, action, { gmailLabelId = null } = {}) {
     case 'add_label':
       if (!gmailLabelId) return email;
       labels.add(gmailLabelId);
+      labelCoverage[gmailLabelId] = 'all';
       break;
     case 'remove_label':
       if (!gmailLabelId) return email;
       labels.delete(gmailLabelId);
+      delete labelCoverage[gmailLabelId];
       break;
     case 'move_to_label':
       if (!gmailLabelId) return email;
       labels.add(gmailLabelId);
       labels.delete('INBOX');
+      labelCoverage[gmailLabelId] = 'all';
       break;
     default: return email;
   }
@@ -72,6 +81,13 @@ export function applyEmailAction(email, action, { gmailLabelId = null } = {}) {
     is_starred: labels.has('STARRED'),
     is_trash: labels.has('TRASH'),
     is_spam: labels.has('SPAM'),
+    ...(isConversation ? {
+      unread_count: action === 'mark_read'
+        ? 0
+        : (action === 'mark_unread' ? Math.max(1, Number(email.member_count) || 1) : email.unread_count),
+      star_state: action === 'star' ? 'all' : (action === 'unstar' ? 'none' : email.star_state),
+      label_coverage: labelCoverage,
+    } : {}),
   };
 }
 
@@ -137,6 +153,24 @@ export function rollbackEmailAction(current, original, action, { gmailLabelId = 
   for (const label of desiredLabels) {
     if (!labels.includes(label)) labels.push(label);
   }
+  const aggregateRollback = {};
+  if (current?.conversation_scope) {
+    if (current.unread_count === projected.unread_count) {
+      aggregateRollback.unread_count = original.unread_count;
+    }
+    if (current.star_state === projected.star_state) {
+      aggregateRollback.star_state = original.star_state;
+    }
+    if (gmailLabelId) {
+      const coverage = { ...(current.label_coverage || {}) };
+      const originalCoverage = original.label_coverage?.[gmailLabelId];
+      if (coverage[gmailLabelId] === projected.label_coverage?.[gmailLabelId]) {
+        if (originalCoverage) coverage[gmailLabelId] = originalCoverage;
+        else delete coverage[gmailLabelId];
+      }
+      aggregateRollback.label_coverage = coverage;
+    }
+  }
   return {
     ...current,
     labels,
@@ -144,6 +178,24 @@ export function rollbackEmailAction(current, original, action, { gmailLabelId = 
     is_starred: desiredLabels.has('STARRED'),
     is_trash: desiredLabels.has('TRASH'),
     is_spam: desiredLabels.has('SPAM'),
+    ...aggregateRollback,
+  };
+}
+
+export function rollbackThreadAction(currentThread, originalThread, action, actionOptions = {}) {
+  if (!originalThread) return currentThread;
+  if (!currentThread) return originalThread;
+  const originals = new Map(
+    (originalThread.emails || []).map(message => [Number(message.id), message]),
+  );
+  return {
+    ...currentThread,
+    emails: (currentThread.emails || []).map(message => {
+      const original = originals.get(Number(message.id));
+      return original
+        ? rollbackEmailAction(message, original, action, actionOptions)
+        : message;
+    }),
   };
 }
 

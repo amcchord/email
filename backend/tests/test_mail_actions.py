@@ -187,6 +187,8 @@ def test_action_request_requires_positive_unique_strict_ids_and_known_action():
         EmailActionRequest(email_ids=[True], action="archive")
     with pytest.raises(ValidationError):
         EmailActionRequest(email_ids=[1], action="move")
+    with pytest.raises(ValidationError):
+        EmailActionRequest(email_ids=[1], action="archive", scope="threads")
 
 
 @pytest.mark.parametrize("action", ["add_label", "remove_label", "move_to_label"])
@@ -219,6 +221,54 @@ def test_label_action_deltas_and_payload_hash_cover_local_label_identity():
     assert action_payload_hash(
         [1, 2], "add_label", label_id=7
     ) != action_payload_hash([1, 2], "add_label", label_id=8)
+    assert action_payload_hash([1, 2], "archive") == action_payload_hash(
+        [1, 2], "archive", scope="messages"
+    )
+    assert action_payload_hash([1, 2], "archive") != action_payload_hash(
+        [1, 2], "archive", scope="conversations"
+    )
+
+
+@pytest.mark.asyncio
+async def test_conversation_scope_expands_generic_action_and_hashes_scope(monkeypatch):
+    first = _email(10, labels=["INBOX", "UNREAD"])
+    second = _email(11, labels=["INBOX", "STARRED"], is_read=True, is_starred=True)
+    first.gmail_thread_id = second.gmail_thread_id = "generated-shared-thread"
+    db = _StageSession([first, second])
+
+    async def no_lock(*_args, **_kwargs):
+        return None
+
+    async def no_existing(*_args, **_kwargs):
+        return []
+
+    async def context(*_args, **_kwargs):
+        return [first, second], [first]
+
+    async def no_publish(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(action_module, "_lock_idempotency_key", no_lock)
+    monkeypatch.setattr(action_module, "_actions_for_idempotency", no_existing)
+    monkeypatch.setattr(action_module, "_conversation_action_context", context)
+    monkeypatch.setattr(action_module, "_publish_action_event", no_publish)
+
+    actions, created = await stage_mail_actions(
+        db,
+        user_id=9,
+        email_ids=[first.id],
+        action="archive",
+        scope="conversations",
+        idempotency_key=uuid4(),
+        now=NOW,
+    )
+
+    assert created is True
+    assert [item.email_id for item in actions] == [first.id, second.id]
+    assert all(item.payload_hash == action_payload_hash(
+        [first.id], "archive", scope="conversations"
+    ) for item in actions)
+    assert all("INBOX" not in email.labels for email in (first, second))
 
 
 def test_label_response_exposes_account_boundary():
@@ -600,6 +650,7 @@ async def test_email_action_route_forwards_owned_local_label_id(monkeypatch):
         email_ids=[email.id],
         action="move_to_label",
         label_id=7,
+        scope="conversations",
     )
 
     response = await email_router_module.email_actions(
@@ -612,6 +663,7 @@ async def test_email_action_route_forwards_owned_local_label_id(monkeypatch):
     assert captured["email_ids"] == [email.id]
     assert captured["action"] == "move_to_label"
     assert captured["label_id"] == 7
+    assert captured["scope"] == "conversations"
     assert response.action == "move_to_label"
     assert response.accepted_count == 1
     assert len(background.calls) == 1
@@ -802,6 +854,58 @@ async def test_label_context_bounds_expanded_conversation_before_staging():
             user_id=9,
             selected_email_ids=[anchor.id],
             label_id=label.id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_conversation_context_uses_account_thread_identity_and_isolates_blank_threads():
+    first = _email(10, account_id=3)
+    sibling = _email(11, account_id=3)
+    same_thread_other_account = _email(12, account_id=4)
+    blank = _email(13, account_id=3)
+    first.gmail_thread_id = sibling.gmail_thread_id = same_thread_other_account.gmail_thread_id = (
+        "generated-shared-thread"
+    )
+    blank.gmail_thread_id = ""
+    db = _SequenceSession([
+        _Result(values=[first, blank]),
+        _Result(values=[first, sibling, blank]),
+    ])
+
+    expanded, anchors = await action_module._conversation_action_context(
+        db,
+        user_id=9,
+        selected_email_ids=[first.id, blank.id],
+    )
+
+    assert expanded == [first, sibling, blank]
+    assert anchors == [first, blank]
+    expanded_sql = str(db.statements[1])
+    assert "emails.account_id" in expanded_sql
+    assert "emails.gmail_thread_id" in expanded_sql
+    assert "emails.id IN" in expanded_sql
+    assert "ORDER BY emails.id" in expanded_sql
+    assert "FOR UPDATE" in expanded_sql
+
+
+@pytest.mark.asyncio
+async def test_conversation_context_rejects_expansion_over_bound():
+    anchor = _email(1)
+    anchor.gmail_thread_id = "generated-large-thread"
+    expanded = []
+    for email_id in range(1, action_module.MAIL_ACTION_MAX_BATCH + 2):
+        email = _email(email_id)
+        email.gmail_thread_id = anchor.gmail_thread_id
+        expanded.append(email)
+
+    with pytest.raises(MailActionValidationError, match="at most 200"):
+        await action_module._conversation_action_context(
+            _SequenceSession([
+                _Result(values=[anchor]),
+                _Result(values=expanded),
+            ]),
+            user_id=9,
+            selected_email_ids=[anchor.id],
         )
 
 

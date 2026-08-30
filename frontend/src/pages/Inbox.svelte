@@ -29,6 +29,7 @@
     optimisticInboxAction,
     remainingUndoMs,
     rollbackEmailAction,
+    rollbackThreadAction,
     restoreInboxAction,
   } from '../lib/mailActionUX.js';
   import {
@@ -36,9 +37,16 @@
     isLabelAction,
     mergeLabelCatalog,
   } from '../lib/labelWorkflows.js';
+  import {
+    actionScopeForEmails,
+    isConversationSummary,
+    nextConversationFocus,
+    normalizeConversationList,
+  } from '../lib/conversationInbox.js';
   import EmailList from '../components/email/EmailList.svelte';
   import EmailTable from '../components/email/EmailTable.svelte';
   import EmailView from '../components/email/EmailView.svelte';
+  import ConversationView from '../components/email/ConversationView.svelte';
   import LabelPicker from '../components/email/LabelPicker.svelte';
   import MailActionStatus from '../components/email/MailActionStatus.svelte';
   import WorkingDrafts from '../components/email/WorkingDrafts.svelte';
@@ -61,6 +69,8 @@
   import { formatSnoozeWake } from '../lib/remindLater.js';
 
   let selectedEmail = $state(null);
+  let selectedThread = $state(null);
+  let focusedEmailId = $state(null);
   let emailLoading = $state(false);
   let loadingMore = $state(false);
   let mounted = $state(false);
@@ -119,7 +129,11 @@
   function selectedActionEnabled() {
     return inboxSessionIsCurrent()
       && datasetAuthoritative
-      && Boolean(get(selectedEmailId));
+      && Boolean(actionTargetId());
+  }
+
+  function actionTargetId() {
+    return get(selectedEmailId) || focusedEmailId;
   }
 
   function selectedActionUnavailable() {
@@ -170,18 +184,18 @@
         disabledReason: 'No email results are available',
       },
       'inbox.archive': {
-        run: () => handleAction('archive', [get(selectedEmailId)]),
+        run: () => handleAction('archive', [actionTargetId()]),
         isEnabled: selectedActionEnabled,
         disabledReason: selectedActionUnavailable,
       },
       'inbox.trash': {
-        run: () => handleAction('trash', [get(selectedEmailId)]),
+        run: () => handleAction('trash', [actionTargetId()]),
         isEnabled: selectedActionEnabled,
         disabledReason: selectedActionUnavailable,
       },
       'inbox.star': {
         run: () => {
-          const emailId = get(selectedEmailId);
+          const emailId = actionTargetId();
           const target = get(emails).find(email => email.id === emailId) || selectedEmail;
           return handleAction(target?.is_starred ? 'unstar' : 'star', [emailId]);
         },
@@ -189,27 +203,27 @@
         disabledReason: selectedActionUnavailable,
       },
       'inbox.read': {
-        run: () => handleAction('mark_read', [get(selectedEmailId)]),
+        run: () => handleAction('mark_read', [actionTargetId()]),
         isEnabled: selectedActionEnabled,
         disabledReason: selectedActionUnavailable,
       },
       'inbox.unread': {
-        run: () => handleAction('mark_unread', [get(selectedEmailId)]),
+        run: () => handleAction('mark_unread', [actionTargetId()]),
         isEnabled: selectedActionEnabled,
         disabledReason: selectedActionUnavailable,
       },
       'inbox.spam': {
-        run: () => handleAction('spam', [get(selectedEmailId)]),
+        run: () => handleAction('spam', [actionTargetId()]),
         isEnabled: selectedActionEnabled,
         disabledReason: selectedActionUnavailable,
       },
       'inbox.snooze': {
-        run: () => openSnoozePicker(get(selectedEmailId)),
+        run: () => openSnoozePicker(actionTargetId()),
         isEnabled: selectedActionEnabled,
         disabledReason: selectedActionUnavailable,
       },
       'inbox.label': {
-        run: () => openLabelPicker('apply', [get(selectedEmailId)]),
+        run: () => openLabelPicker('apply', [actionTargetId()]),
         isEnabled: selectedActionEnabled,
         disabledReason: selectedActionUnavailable,
       },
@@ -230,6 +244,16 @@
         isEnabled: () => Boolean(latestUndo && latestUndo.expiresAt > Date.now()),
         disabledReason: 'There is no email action available to undo',
       },
+      'inbox.open': {
+        run: () => openFocusedEmail(),
+        isEnabled: () => datasetAuthoritative && Boolean(actionTargetId()),
+        disabledReason: 'Focus a conversation first',
+      },
+      'inbox.close': {
+        run: () => closeSelectedEmail(),
+        isEnabled: () => Boolean(get(selectedEmailId)),
+        disabledReason: 'No conversation is open',
+      },
     });
 
     return () => {
@@ -242,7 +266,7 @@
     if (!moveAvailable) return undefined;
     return registerActions({
       'inbox.move': {
-        run: () => openLabelPicker('move', [get(selectedEmailId)]),
+        run: () => openLabelPicker('move', [actionTargetId()]),
         isEnabled: selectedActionEnabled,
         disabledReason: selectedActionUnavailable,
       },
@@ -273,6 +297,8 @@
     snoozeBusyIds = new Set();
     selectedEmailId.set(null);
     selectedEmail = null;
+    selectedThread = null;
+    focusedEmailId = null;
     emailLoading = false;
     loadingMore = false;
     emailsLoading.set(false);
@@ -282,7 +308,7 @@
     if (!inboxSessionIsCurrent() || !datasetAuthoritative) return;
     const list = get(emails);
     if (!list || list.length === 0) return;
-    const currentId = get(selectedEmailId);
+    const currentId = focusedEmailId || get(selectedEmailId);
     const currentIdx = list.findIndex(e => e.id === currentId);
     let nextIdx;
     if (currentIdx === -1) {
@@ -291,7 +317,13 @@
       nextIdx = currentIdx + direction;
     }
     if (nextIdx >= 0 && nextIdx < list.length) {
-      await handleSelect(list[nextIdx].id);
+      const nextId = list[nextIdx].id;
+      focusedEmailId = nextId;
+      if (get(selectedEmailId)) {
+        await handleSelect(nextId);
+      } else {
+        queueMicrotask(() => focusEmailRow(document.querySelector('.inbox-page'), nextId));
+      }
     }
   }
 
@@ -321,6 +353,7 @@
       untrack(() => { loadEmail(eid); });
     } else {
       selectedEmail = null;
+      selectedThread = null;
       emailLoading = false;
     }
   });
@@ -357,6 +390,8 @@
     selectionEpoch += 1;
     selectedEmailId.set(null);
     selectedEmail = null;
+    selectedThread = null;
+    focusedEmailId = null;
     emailRequests.invalidate();
     emailLoading = false;
   }
@@ -446,7 +481,11 @@
         if (snapshot.hideIgnored) {
           params.exclude_ai_category = 'can_ignore';
         }
-        result = await api.listEmails(params);
+        const useConversations = Boolean(snapshot.search)
+          || (!sf && snapshot.mailbox !== 'DRAFTS');
+        result = useConversations
+          ? normalizeConversationList(await api.listConversations(params))
+          : await api.listEmails(params);
       }
 
       const reconcileActiveSnoozes = sf?.type !== 'snoozed';
@@ -480,7 +519,10 @@
         datasetError = false;
         datasetErrorMessage = '';
         const directOpenEmailId = initialDirectOpen.commit(datasetAuthoritative);
-        if (directOpenEmailId !== null) selectedEmailId.set(directOpenEmailId);
+        if (directOpenEmailId !== null) {
+          focusedEmailId = directOpenEmailId;
+          selectedEmailId.set(directOpenEmailId);
+        }
       }
       emailsTotal.set(result.total);
       hasMore = (snapshot.page * snapshot.pageSize) < result.total;
@@ -559,21 +601,34 @@
   async function loadEmail(id) {
     const requestId = emailRequests.begin();
     emailLoading = true;
+    selectedEmail = null;
+    selectedThread = null;
     try {
-      const result = await api.getEmail(id);
-      if (!isCurrentEmailRequest(requestId, id)) return;
       const summary = get(emails).find(email => email.id === id);
-      selectedEmail = summary?.snooze_id
+      const conversation = isConversationSummary(summary);
+      const result = conversation && summary.gmail_thread_id
+        ? await api.getThread(summary.gmail_thread_id, 'asc', summary.account_id)
+        : await api.getEmail(id);
+      if (!isCurrentEmailRequest(requestId, id)) return;
+      selectedThread = conversation
+        ? (summary.gmail_thread_id ? result : { thread_id: '', emails: [result] })
+        : null;
+      const detail = conversation
+        ? (selectedThread.emails || []).find(message => Number(message.id) === Number(summary.anchor_email_id))
+          || selectedThread.emails?.[selectedThread.emails.length - 1]
+          || null
+        : result;
+      selectedEmail = summary?.snooze_id && detail
         ? {
-            ...result,
+            ...detail,
             snooze_id: summary.snooze_id,
             snooze_wake_at: summary.snooze_wake_at,
             snooze_time_zone: summary.snooze_time_zone,
             snooze_condition: summary.snooze_condition,
             snooze_state: summary.snooze_state,
           }
-        : result;
-      if (!result.is_read) {
+        : detail;
+      if (conversation ? Number(summary.unread_count) > 0 : !detail?.is_read) {
         // Rendering the message must never wait for a mailbox mutation. The
         // durable action path owns retries and exposes any terminal failure.
         void handleAction('mark_read', [id], { announce: false, offerUndo: false });
@@ -596,12 +651,33 @@
     if (!inboxSessionIsCurrent() || !datasetAuthoritative) return;
     if (!get(emails).some(email => email.id === emailId)) return;
     if (get(selectedEmailId) !== emailId && !(await canLeaveSelectedEmail())) return;
+    focusedEmailId = emailId;
     selectedEmailId.set(emailId);
+  }
+
+  async function openFocusedEmail() {
+    const emailId = actionTargetId();
+    if (!emailId) return;
+    await handleSelect(emailId);
+  }
+
+  function handleRowFocus(emailId) {
+    if (get(emails).some(email => Number(email.id) === Number(emailId))) {
+      focusedEmailId = emailId;
+    }
   }
 
   async function closeSelectedEmail() {
     if (!(await canLeaveSelectedEmail())) return;
+    const returnId = focusedEmailId || get(selectedEmailId);
     selectedEmailId.set(null);
+    selectedEmail = null;
+    selectedThread = null;
+    queueMicrotask(() => {
+      if (!focusEmailRow(document.querySelector('.inbox-page'), returnId)) {
+        document.querySelector('[data-inbox-focus-fallback]')?.focus?.();
+      }
+    });
   }
 
   function canActOnEmails(emailIds, notify = true) {
@@ -626,7 +702,7 @@
       && currentDatasetSnapshot().key === datasetKey;
   }
 
-  function restoreOptimisticAction({ action, snapshot, optimistic, detailBefore, removedCount, gmailLabelId }) {
+  function restoreOptimisticAction({ action, snapshot, optimistic, detailBefore, threadBefore, removedCount, gmailLabelId, focusedBefore }) {
     emails.update(current => restoreInboxAction(
       current,
       snapshot,
@@ -641,17 +717,26 @@
     if (detailBefore && selectedEmail?.id === detailBefore.id) {
       selectedEmail = rollbackEmailAction(selectedEmail, detailBefore, action, { gmailLabelId });
     }
+    if (threadBefore && get(selectedEmailId) === snapshot.selectedId) {
+      selectedThread = rollbackThreadAction(
+        selectedThread,
+        threadBefore,
+        action,
+        { gmailLabelId },
+      );
+    }
+    focusedEmailId = focusedBefore;
   }
 
-  async function submitMailAction(emailIds, action, requestKey, labelId = null) {
+  async function submitMailAction(emailIds, action, requestKey, labelId = null, scope = null) {
     try {
-      return await api.emailActions(emailIds, action, requestKey, labelId);
+      return await api.emailActions(emailIds, action, requestKey, labelId, scope);
     } catch (err) {
       // A lost response is ambiguous. Replaying once with the same key is safe
       // and lets the server return the original accepted operation.
       if (!isMailActionNetworkError(err)) throw err;
       try {
-        return await api.emailActions(emailIds, action, requestKey, labelId);
+        return await api.emailActions(emailIds, action, requestKey, labelId, scope);
       } catch (retryError) {
         if (!isMailActionNetworkError(retryError)) throw retryError;
         try {
@@ -667,6 +752,7 @@
   }
 
   function actionDisplayCount(context, operation = null) {
+    if (context.scope === 'conversations') return context.snapshot.items.length;
     const acceptedCount = Number(operation?.accepted_count);
     return isLabelAction(context.action) && Number.isFinite(acceptedCount)
       ? acceptedCount
@@ -699,13 +785,13 @@
         expiresAt: Date.parse(operation.undo_until),
         run: runUndo,
       };
-      showToast(actionPastTense(context.action, displayCount, context.labelName), 'success', undoMs, {
+      showToast(actionPastTense(context.action, displayCount, context.labelName, context.scope === 'conversations' ? 'conversation' : 'email'), 'success', undoMs, {
         actionLabel: 'Undo',
         onAction: latestUndo.run,
         dismissLabel: 'Dismiss action confirmation',
       });
     } else {
-      showToast(actionPastTense(context.action, displayCount, context.labelName), 'success');
+      showToast(actionPastTense(context.action, displayCount, context.labelName, context.scope === 'conversations' ? 'conversation' : 'email'), 'success');
     }
   }
 
@@ -743,6 +829,7 @@
             pending.context.action,
             requestKey,
             pending.context.labelId,
+            pending.context.scope,
           );
           if (!inboxSessionIsCurrent()) return;
           const next = new Map(uncertainActions);
@@ -772,7 +859,7 @@
       }
       requireActionReconciliation(context.datasetKey);
       if (latestUndo?.requestId === context.operation.request_id) latestUndo = null;
-      showToast(`${actionPastTense(context.action, actionDisplayCount(context, context.operation), context.labelName)} — undone`, 'success');
+      showToast(`${actionPastTense(context.action, actionDisplayCount(context, context.operation), context.labelName, context.scope === 'conversations' ? 'conversation' : 'email')} — undone`, 'success');
       return operation;
     } catch (err) {
       if (inboxSessionIsCurrent()) {
@@ -808,13 +895,17 @@
     const uniqueIds = isLabelAction(action)
       ? expandVisibleLabelTargets(requestedIds, get(emails))
       : requestedIds;
+    const scope = actionScopeForEmails(uniqueIds, get(emails));
     const actionEpoch = selectionEpoch;
     const datasetSnapshot = currentDatasetSnapshot();
     const datasetKey = datasetSnapshot.key;
     const detailBefore = selectedEmail;
-    const snapshot = captureInboxAction(get(emails), get(selectedEmailId), uniqueIds);
+    const threadBefore = selectedThread;
+    const focusedBefore = focusedEmailId;
+    const emailsBefore = get(emails);
+    const snapshot = captureInboxAction(emailsBefore, get(selectedEmailId), uniqueIds);
     const optimistic = optimisticInboxAction({
-      emails: get(emails),
+      emails: emailsBefore,
       selectedId: get(selectedEmailId),
       emailIds: uniqueIds,
       action,
@@ -827,10 +918,33 @@
     emails.set(optimistic.emails);
     if (removedCount > 0) emailsTotal.update(total => Math.max(0, total - removedCount));
     selectedEmailId.set(optimistic.selectedId);
-    if (optimistic.removed && snapshot.selectedId != null && uniqueIds.includes(snapshot.selectedId)) {
+    if (optimistic.removed) {
+      focusedEmailId = nextConversationFocus(emailsBefore, focusedBefore, uniqueIds);
+      if (optimistic.selectedId != null) focusedEmailId = optimistic.selectedId;
+    }
+    if (optimistic.removed && (
+      (snapshot.selectedId != null && uniqueIds.includes(snapshot.selectedId))
+      || uniqueIds.includes(focusedBefore)
+    )) {
       queueMicrotask(focusInboxSelection);
     }
-    if (!optimistic.removed && selectedEmail && uniqueIds.includes(selectedEmail.id)) {
+    const selectedConversationTargeted = scope === 'conversations'
+      && snapshot.selectedId != null
+      && uniqueIds.includes(snapshot.selectedId);
+    if (optimistic.removed && snapshot.selectedId !== optimistic.selectedId) {
+      selectedEmail = null;
+      selectedThread = null;
+    } else if (!optimistic.removed && selectedConversationTargeted) {
+      selectedEmail = selectedEmail
+        ? applyEmailAction(selectedEmail, action, { gmailLabelId })
+        : null;
+      selectedThread = selectedThread
+        ? {
+            ...selectedThread,
+            emails: (selectedThread.emails || []).map(message => applyEmailAction(message, action, { gmailLabelId })),
+          }
+        : null;
+    } else if (!optimistic.removed && selectedEmail && uniqueIds.includes(selectedEmail.id)) {
       selectedEmail = applyEmailAction(selectedEmail, action, { gmailLabelId });
     }
 
@@ -839,6 +953,8 @@
       actionEpoch,
       datasetKey,
       detailBefore,
+      threadBefore,
+      focusedBefore,
       emailIds: uniqueIds,
       gmailLabelId,
       labelId: labelId ? Number(labelId) : null,
@@ -846,6 +962,7 @@
       optimistic,
       removedCount,
       snapshot,
+      scope,
     };
     const requestKey = idempotencyKey();
     let releaseQueue = null;
@@ -855,7 +972,7 @@
         uniqueIds,
         async queueControl => {
           try {
-            return await submitMailAction(uniqueIds, action, requestKey, context.labelId);
+            return await submitMailAction(uniqueIds, action, requestKey, context.labelId, context.scope);
           } catch (err) {
             if (err.code === 'mail_action_outcome_unknown') {
               // Keep this original queue entry unsettled for followers even
@@ -942,7 +1059,7 @@
   function focusInboxSelection() {
     if (!inboxSessionIsCurrent()) return;
     const inboxRoot = document.querySelector('.inbox-page');
-    focusEmailRowOrFallback(inboxRoot, get(selectedEmailId), inboxRoot);
+    focusEmailRowOrFallback(inboxRoot, focusedEmailId || get(selectedEmailId), inboxRoot);
   }
 
   function emailForSnooze(target) {
@@ -1441,13 +1558,14 @@
           {loadingMore}
           {hasMore}
           total={$emailsTotal}
-          selectedId={$selectedEmailId}
+          selectedId={focusedEmailId || $selectedEmailId}
           mailbox={resultsMailbox}
           searchActive={!!$searchQuery}
           loadFailed={datasetError && !datasetAuthoritative && $emails.length === 0}
           actionsDisabled={!datasetAuthoritative}
           {selectionEpoch}
           onSelect={handleSelect}
+          onFocus={handleRowFocus}
           onAction={handleAction}
           onLabel={openLabelPicker}
           allowMove={moveAvailable}
@@ -1466,16 +1584,30 @@
           <div class="w-10 h-1 rounded-full transition-colors group-hover:bg-accent-500" style="background: var(--border-color)"></div>
         </div>
         <div class="email-preview-pane flex-1 min-h-0 overflow-hidden">
-          <EmailView
-            email={selectedEmail}
-            loading={emailLoading}
-            onAction={handleAction}
-            onLabel={openLabelPicker}
-            allowMove={moveAvailable}
-            onSnooze={openSnoozePicker}
-            onClose={closeSelectedEmail}
-            onGuardChange={registerEmailViewTransitionGuard}
-          />
+          {#if isConversationSummary($emails.find(email => email.id === $selectedEmailId))}
+            <ConversationView
+              conversation={$emails.find(email => email.id === $selectedEmailId)}
+              thread={selectedThread}
+              loading={emailLoading}
+              onAction={handleAction}
+              onLabel={openLabelPicker}
+              allowMove={moveAvailable}
+              onSnooze={openSnoozePicker}
+              onClose={closeSelectedEmail}
+              onGuardChange={registerEmailViewTransitionGuard}
+            />
+          {:else}
+            <EmailView
+              email={selectedEmail}
+              loading={emailLoading}
+              onAction={handleAction}
+              onLabel={openLabelPicker}
+              allowMove={moveAvailable}
+              onSnooze={openSnoozePicker}
+              onClose={closeSelectedEmail}
+              onGuardChange={registerEmailViewTransitionGuard}
+            />
+          {/if}
         </div>
       {/if}
     </div>
@@ -1492,13 +1624,14 @@
         {loadingMore}
         {hasMore}
         total={$emailsTotal}
-        selectedId={$selectedEmailId}
+        selectedId={focusedEmailId || $selectedEmailId}
         mailbox={resultsMailbox}
         searchActive={!!$searchQuery}
         loadFailed={datasetError && !datasetAuthoritative && $emails.length === 0}
         actionsDisabled={!datasetAuthoritative}
         {selectionEpoch}
         onSelect={handleSelect}
+        onFocus={handleRowFocus}
         onAction={handleAction}
         onLabel={openLabelPicker}
         allowMove={moveAvailable}
@@ -1517,16 +1650,30 @@
         <div class="h-10 w-1 rounded-full transition-colors group-hover:bg-accent-500" style="background: var(--border-color)"></div>
       </div>
       <div class="email-preview-pane flex-1 min-w-0 overflow-hidden">
-        <EmailView
-          email={selectedEmail}
-          loading={emailLoading}
-          onAction={handleAction}
-          onLabel={openLabelPicker}
-          allowMove={moveAvailable}
-          onSnooze={openSnoozePicker}
-          onClose={closeSelectedEmail}
-          onGuardChange={registerEmailViewTransitionGuard}
-        />
+        {#if isConversationSummary($emails.find(email => email.id === $selectedEmailId))}
+          <ConversationView
+            conversation={$emails.find(email => email.id === $selectedEmailId)}
+            thread={selectedThread}
+            loading={emailLoading}
+            onAction={handleAction}
+            onLabel={openLabelPicker}
+            allowMove={moveAvailable}
+            onSnooze={openSnoozePicker}
+            onClose={closeSelectedEmail}
+            onGuardChange={registerEmailViewTransitionGuard}
+          />
+        {:else}
+          <EmailView
+            email={selectedEmail}
+            loading={emailLoading}
+            onAction={handleAction}
+            onLabel={openLabelPicker}
+            allowMove={moveAvailable}
+            onSnooze={openSnoozePicker}
+            onClose={closeSelectedEmail}
+            onGuardChange={registerEmailViewTransitionGuard}
+          />
+        {/if}
       </div>
     {/if}
   {/if}

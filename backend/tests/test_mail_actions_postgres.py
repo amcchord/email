@@ -265,6 +265,124 @@ async def test_label_move_expands_conversation_and_replays_exact_operation():
         await engine.dispose()
 
 
+async def test_generic_conversation_scope_expands_exact_members_and_replays_snapshot():
+    engine, sessions = _session_factory()
+    try:
+        await _reset_database(engine)
+        async with sessions() as db:
+            user = User(username="generated-conversation-actions", is_admin=False, is_active=True)
+            db.add(user)
+            await db.flush()
+            account = GoogleAccount(
+                user_id=user.id,
+                email="generated-conversation-actions@example.test",
+                is_active=True,
+            )
+            db.add(account)
+            await db.flush()
+            first = Email(
+                account_id=account.id,
+                gmail_message_id="generated-conversation-action-first",
+                gmail_thread_id="generated-conversation-action-thread",
+                labels=["INBOX", "UNREAD"],
+                is_read=False,
+                is_starred=False,
+                is_trash=False,
+                is_spam=False,
+                is_draft=False,
+                is_sent=False,
+                mail_action_version=0,
+                has_attachments=False,
+            )
+            second = Email(
+                account_id=account.id,
+                gmail_message_id="generated-conversation-action-second",
+                gmail_thread_id="generated-conversation-action-thread",
+                labels=["INBOX"],
+                is_read=True,
+                is_starred=False,
+                is_trash=False,
+                is_spam=False,
+                is_draft=False,
+                is_sent=False,
+                mail_action_version=0,
+                has_attachments=False,
+            )
+            db.add_all([first, second])
+            await db.commit()
+            user_id = user.id
+            account_id = account.id
+            first_id = first.id
+
+        key = uuid4()
+        async with sessions() as db:
+            accepted, created = await stage_mail_actions(
+                db,
+                user_id=user_id,
+                email_ids=[first_id],
+                action="archive",
+                scope="conversations",
+                idempotency_key=key,
+                now=NOW,
+            )
+        assert created is True
+        assert len(accepted) == 2
+        accepted_ids = [action.id for action in accepted]
+
+        # A later synchronized reply belongs to a future user intent. Replaying
+        # the lost response must return the exact originally accepted snapshot.
+        async with sessions() as db:
+            db.add(Email(
+                account_id=account_id,
+                gmail_message_id="generated-conversation-action-later",
+                gmail_thread_id="generated-conversation-action-thread",
+                labels=["INBOX"],
+                is_read=True,
+                is_starred=False,
+                is_trash=False,
+                is_spam=False,
+                is_draft=False,
+                is_sent=False,
+                mail_action_version=0,
+                has_attachments=False,
+            ))
+            await db.commit()
+
+        async with sessions() as db:
+            replay, replay_created = await stage_mail_actions(
+                db,
+                user_id=user_id,
+                email_ids=[first_id],
+                action="archive",
+                scope="conversations",
+                idempotency_key=key,
+                now=NOW,
+            )
+            assert replay_created is False
+            assert [action.id for action in replay] == accepted_ids
+            with pytest.raises(MailActionConflict):
+                await stage_mail_actions(
+                    db,
+                    user_id=user_id,
+                    email_ids=[first_id],
+                    action="archive",
+                    scope="messages",
+                    idempotency_key=key,
+                    now=NOW,
+                )
+            await db.rollback()
+
+        async with sessions() as db:
+            messages = list((await db.execute(
+                select(Email)
+                .where(Email.account_id == account_id)
+                .order_by(Email.id)
+            )).scalars().all())
+            assert ["INBOX" in email.labels for email in messages] == [False, False, True]
+    finally:
+        await engine.dispose()
+
+
 async def test_label_action_rejects_system_and_cross_account_targets_atomically():
     engine, sessions = _session_factory()
     try:

@@ -106,7 +106,7 @@ async def test_get_email_keeps_foreign_account_indistinguishable_from_missing():
 
 
 @pytest.mark.asyncio
-async def test_get_thread_populates_account_identity_for_every_message():
+async def test_get_thread_requires_account_scope_when_provider_thread_collides():
     first = generated_email(email_id=201, account_id=17)
     second = generated_email(email_id=202, account_id=29)
     db = FakeSession(
@@ -117,21 +117,39 @@ async def test_get_thread_populates_account_identity_for_every_message():
         FakeResult(values=[first, second]),
     )
 
+    with pytest.raises(HTTPException) as exc_info:
+        await get_thread(
+            thread_id="thread-generated",
+            order="asc",
+            account_id=None,
+            db=db,
+            user=SimpleNamespace(id=23),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "Account scope is required for this conversation"
+    assert db.results == []
+
+
+@pytest.mark.asyncio
+async def test_get_thread_preserves_unique_account_legacy_lookup():
+    first = generated_email(email_id=201, account_id=17)
+    second = generated_email(email_id=202, account_id=17)
+    db = FakeSession(
+        FakeResult(rows=[(17, "first-account@example.test")]),
+        FakeResult(values=[first, second]),
+    )
+
     response = await get_thread(
         thread_id="thread-generated",
         order="asc",
+        account_id=None,
         db=db,
         user=SimpleNamespace(id=23),
     )
 
-    assert [
-        (email.account_id, email.account_email)
-        for email in response.emails
-    ] == [
-        (17, "first-account@example.test"),
-        (29, "second-account@example.test"),
-    ]
-    assert db.results == []
+    assert [email.account_id for email in response.emails] == [17, 17]
+    assert all(email.account_email == "first-account@example.test" for email in response.emails)
 
 
 @pytest.mark.asyncio

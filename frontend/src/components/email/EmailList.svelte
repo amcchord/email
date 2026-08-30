@@ -22,6 +22,7 @@
     actionsDisabled = false,
     selectionEpoch = 0,
     onSelect = null,
+    onFocus = null,
     onAction = null,
     onLabel = null,
     allowMove = false,
@@ -44,6 +45,7 @@
   let selectedInProtectedMailbox = $derived(
     emails.some(email => selectedIds.has(email.id) && (email.is_spam || email.is_trash))
   );
+  let conversationResults = $derived(emails.some(email => email?.conversation_scope));
 
   $effect(() => {
     void selectionEpoch;
@@ -213,7 +215,7 @@
     const seenDigestThreads = {};
     for (const e of emails) {
       const tid = e.gmail_thread_id;
-      if (!tid || !e.thread_digest_type) continue;
+      if (!tid || !e.thread_digest_type || e.conversation_scope) continue;
       if (seenDigestThreads[tid]) {
         hidden.add(e.id);
       } else {
@@ -228,7 +230,7 @@
     const map = {};
     for (const e of emails) {
       const tid = e.gmail_thread_id;
-      if (!tid || !e.thread_digest_type) continue;
+      if (!tid || !e.thread_digest_type || e.conversation_scope) continue;
       if (!map[tid]) {
         map[tid] = [];
       }
@@ -278,7 +280,7 @@
   <!-- Toolbar -->
   {#if selectedIds.size > 0}
     <div class="flex flex-col items-stretch gap-1 px-3 py-2 border-b shrink-0 sm:flex-row sm:items-center sm:gap-2" style="border-color: var(--border-color); background: var(--bg-tertiary)" aria-busy={bulkActionPending}>
-      <span class="text-xs font-medium shrink-0" style="color: var(--text-secondary)">{selectedIds.size} selected</span>
+      <span class="text-xs font-medium shrink-0" style="color: var(--text-secondary)">{selectedIds.size} {conversationResults ? (selectedIds.size === 1 ? 'conversation selected' : 'conversations selected') : 'selected'}</span>
       <div class="grid grid-cols-3 gap-1 sm:ml-auto sm:flex sm:min-w-0 sm:flex-1 sm:flex-wrap sm:justify-end">
         <button onclick={() => handleBulkAction('mark_read')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Read</button>
         <button onclick={() => handleBulkAction('mark_unread')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Unread</button>
@@ -355,7 +357,7 @@
       {#each emails as email (email.id)}
         {#if hiddenDigestEmails.has(email.id)}
           <!-- Hidden: part of a digested thread (rendered grouped under header) -->
-        {:else if email.thread_digest_type && seenThreadIds[email.id]}
+        {:else if !email.conversation_scope && email.thread_digest_type && seenThreadIds[email.id]}
           <!-- ========== DIGEST THREAD (collapsed or expanded) ========== -->
           {@const dConf = getDigestConfig(email.thread_digest_type)}
           {@const isExpanded = expandedThreads.has(email.gmail_thread_id)}
@@ -462,7 +464,7 @@
               onclick={(e) => toggleSelect(email.id, e)}
               disabled={actionsDisabled}
               class="min-w-11 min-h-11 rounded-md flex items-center justify-center shrink-0 transition-fast disabled:opacity-50"
-              aria-label="{selectedIds.has(email.id) ? 'Deselect' : 'Select'} {cleanEmailText(email.subject) || 'email'}"
+              aria-label="{selectedIds.has(email.id) ? 'Deselect' : 'Select'} {cleanEmailText(email.subject) || (email.conversation_scope ? 'conversation' : 'email')}"
             >
               <span
                 class="w-4 h-4 rounded border flex items-center justify-center"
@@ -481,7 +483,7 @@
               disabled={actionsDisabled}
               class="min-w-11 min-h-11 rounded-md inline-flex items-center justify-center shrink-0 transition-fast disabled:opacity-50"
               style="color: {email.is_starred ? 'var(--color-accent-500)' : 'var(--text-tertiary)'}"
-              aria-label="{email.is_starred ? 'Unstar' : 'Star'} {cleanEmailText(email.subject) || 'email'}"
+              aria-label="{email.star_state === 'some' ? 'Some messages starred; unstar conversation' : (email.is_starred ? 'Unstar' : 'Star')} {cleanEmailText(email.subject) || (email.conversation_scope ? 'conversation' : 'email')}"
             >
               <Icon name="star" size={16} />
             </button>
@@ -505,7 +507,8 @@
               type="button"
               class="flex-1 min-w-0 min-h-11 text-left py-1"
               onclick={() => onSelect && onSelect(email.id)}
-              aria-label="Open email: {cleanEmailText(email.subject) || 'No subject'}"
+              onfocus={() => onFocus && onFocus(email.id)}
+              aria-label="Open {email.conversation_scope ? 'conversation' : 'email'}: {cleanEmailText(email.subject) || 'No subject'}"
               data-email-row-id={email.id}
             >
               <span class="flex items-center gap-2 mb-0.5">
@@ -533,16 +536,17 @@
                 {#each userLabelState.labels as label}
                   <span
                     class="max-w-24 shrink-0 truncate rounded-full px-1.5 py-0.5 text-[10px] font-medium"
-                    style="background: {safeLabelColor(label.color_bg, 'var(--bg-tertiary)')}; color: {safeLabelColor(label.color_text, 'var(--text-secondary)')}"
-                    title={label.name}
+                    style="background: {label.coverage === 'some' ? 'transparent' : safeLabelColor(label.color_bg, 'var(--bg-tertiary)')}; color: {safeLabelColor(label.color_text, 'var(--text-secondary)')}; border: {label.coverage === 'some' ? `1px dashed ${safeLabelColor(label.color_text, 'var(--border-color)')}` : '1px solid transparent'}"
+                    title={label.coverage === 'some' ? `${label.name} on some messages` : label.name}
                   >{label.name}</span>
                 {/each}
                 {#if userLabelState.overflow > 0}
                   <span class="shrink-0 text-[10px]" style="color: var(--text-tertiary)" title={`${userLabelState.overflow} more labels`}>+{userLabelState.overflow}</span>
                 {/if}
-                {#if email.gmail_thread_id && seenThreadIds[email.id] && threadCounts[email.gmail_thread_id] > 1}
-                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0" style="background: var(--bg-tertiary); color: var(--text-secondary)" title="Thread with {threadCounts[email.gmail_thread_id]} messages">
-                    {threadCounts[email.gmail_thread_id]}
+                {#if (email.member_count || (email.gmail_thread_id && seenThreadIds[email.id] ? threadCounts[email.gmail_thread_id] : 0)) > 1}
+                  {@const displayCount = email.member_count || threadCounts[email.gmail_thread_id]}
+                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0" style="background: var(--bg-tertiary); color: var(--text-secondary)" title="Conversation with {displayCount} messages">
+                    {displayCount}
                   </span>
                 {/if}
                 {#if email.needs_reply}
@@ -585,7 +589,7 @@
   {#if emails.length > 0}
     <div class="h-8 flex items-center justify-center px-4 border-t shrink-0" style="border-color: var(--border-color); background: var(--bg-secondary)">
       <span class="text-xs" style="color: var(--text-tertiary)">
-        Showing {emails.length.toLocaleString()} of {total.toLocaleString()}
+        Showing {emails.length.toLocaleString()} of {total.toLocaleString()} {conversationResults ? (total === 1 ? 'conversation' : 'conversations') : ''}
         {#if !hasMore && total > 0}
           — all loaded
         {/if}

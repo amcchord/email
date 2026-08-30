@@ -185,6 +185,61 @@ function conversationEmails(value) {
   ));
 }
 
+function conversationKey(value) {
+  const threadId = String(value.gmail_thread_id || '').trim();
+  return threadId
+    ? `${value.account_id}:thread:${threadId}`
+    : `${value.account_id}:message:${value.id}`;
+}
+
+function conversationSummary(matches) {
+  const sortedMatches = [...matches].sort((first, second) => (
+    Date.parse(second.date) - Date.parse(first.date) || second.id - first.id
+  ));
+  const anchor = sortedMatches[0];
+  const members = conversationEmails(anchor);
+  const labelCounts = new Map();
+  for (const member of members) {
+    for (const label of member.labels || []) {
+      labelCounts.set(label, (labelCounts.get(label) || 0) + 1);
+    }
+  }
+  const labelCoverage = Object.fromEntries(
+    [...labelCounts].map(([label, count]) => [label, count === members.length ? 'all' : 'some']),
+  );
+  const allLabels = [...labelCounts].filter(([, count]) => count === members.length).map(([label]) => label);
+  const starredCount = members.filter(member => member.is_starred).length;
+  const unreadCount = members.filter(member => !member.is_read).length;
+  return {
+    ...structuredClone(anchor),
+    id: anchor.id,
+    anchor_email_id: anchor.id,
+    conversation_key: conversationKey(anchor),
+    member_count: members.length,
+    matched_count: matches.length,
+    unread_count: unreadCount,
+    is_read: unreadCount === 0,
+    star_state: starredCount === 0 ? 'none' : (starredCount === members.length ? 'all' : 'some'),
+    is_starred: starredCount > 0,
+    has_attachments: members.some(member => member.has_attachments),
+    labels: allLabels,
+    label_coverage: labelCoverage,
+  };
+}
+
+function visibleConversations(mailbox, accountId = null) {
+  const groups = new Map();
+  for (const email of visibleEmails(mailbox)) {
+    if (Number.isInteger(accountId) && accountId > 0 && email.account_id !== accountId) continue;
+    const key = conversationKey(email);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(email);
+  }
+  return [...groups.values()]
+    .map(conversationSummary)
+    .sort((first, second) => Date.parse(second.date) - Date.parse(first.date) || second.id - first.id);
+}
+
 function inboxReturnTargets(snooze) {
   return snooze.return_target_email_ids
     .map(emailId => emails.get(emailId))
@@ -456,6 +511,7 @@ async function handleActionCreate(request, response) {
       action: payload.action,
       email_ids: [...(payload.email_ids || [])].map(Number).sort((a, b) => a - b),
       label_id: payload.label_id == null ? null : Number(payload.label_id),
+      scope: payload.scope || 'messages',
     });
     if (expected && expected !== received) {
       audit.rejected_mutations.push({ route: '/api/emails/actions', reason: 'Idempotency key payload conflict' });
@@ -487,7 +543,9 @@ async function handleActionCreate(request, response) {
   }
   const expanded = new Map();
   for (const email of requested) {
-    const targets = labelAction ? conversationEmails(email) : [email];
+    const targets = labelAction || payload.scope === 'conversations'
+      ? conversationEmails(email)
+      : [email];
     for (const target of targets) expanded.set(target.id, target);
   }
   const requestId = randomUUID();
@@ -526,6 +584,7 @@ async function handleActionCreate(request, response) {
     action: payload.action,
     email_ids: [...payload.email_ids].map(Number).sort((a, b) => a - b),
     label_id: payload.label_id == null ? null : Number(payload.label_id),
+    scope: payload.scope || 'messages',
   }));
   if (labelAction) {
     audit.label_actions.push({
@@ -608,6 +667,23 @@ async function handleRequest(request, response) {
       visible = visible.filter(email => email.account_id === accountId);
     }
     return writeJson(response, { emails: visible, total: visible.length, page: 1, page_size: 50 });
+  }
+  if (request.method === 'GET' && pathname === '/api/emails/conversations') {
+    const accountId = Number(url.searchParams.get('account_id'));
+    const page = Math.max(1, Number(url.searchParams.get('page') || 1));
+    const pageSize = Math.max(1, Math.min(200, Number(url.searchParams.get('page_size') || 50)));
+    const visible = visibleConversations(
+      url.searchParams.get('mailbox') || 'INBOX',
+      Number.isInteger(accountId) && accountId > 0 ? accountId : null,
+    );
+    const offset = (page - 1) * pageSize;
+    return writeJson(response, {
+      conversations: visible.slice(offset, offset + pageSize),
+      total: visible.length,
+      page,
+      page_size: pageSize,
+      total_pages: visible.length ? Math.ceil(visible.length / pageSize) : 0,
+    });
   }
   if (request.method === 'GET' && pathname === '/api/emails/actions/recent') {
     return writeJson(response, [...operations.values()].slice(-20).reverse());
@@ -803,6 +879,30 @@ async function handleRequest(request, response) {
   const actionMatch = pathname.match(/^\/api\/emails\/actions\/([^/]+)$/);
   if (request.method === 'GET' && actionMatch) {
     return writeJson(response, operations.get(actionMatch[1]) || { detail: 'Not found' }, operations.has(actionMatch[1]) ? 200 : 404);
+  }
+
+  const threadMatch = pathname.match(/^\/api\/emails\/thread\/([^/]+)$/);
+  if (request.method === 'GET' && threadMatch) {
+    const threadId = decodeURIComponent(threadMatch[1]);
+    const accountId = Number(url.searchParams.get('account_id'));
+    const members = [...emails.values()]
+      .filter(email => email.gmail_thread_id === threadId && email.account_id === accountId)
+      .sort((first, second) => Date.parse(first.date) - Date.parse(second.date) || first.id - second.id);
+    if (!members.length) return writeJson(response, { detail: 'Thread not found' }, 404);
+    const participants = new Map();
+    for (const email of members) {
+      if (email.from_address) participants.set(email.from_address, { name: email.from_name, address: email.from_address });
+      for (const recipient of email.to_addresses || []) {
+        const address = typeof recipient === 'string' ? recipient : recipient.address;
+        if (address) participants.set(address, typeof recipient === 'string' ? { name: null, address } : recipient);
+      }
+    }
+    return writeJson(response, {
+      thread_id: threadId,
+      subject: members.at(-1)?.subject || members[0]?.subject || null,
+      emails: members.map(email => structuredClone(email)),
+      participants: [...participants.values()],
+    });
   }
 
   const emailMatch = pathname.match(/^\/api\/emails\/(\d+)$/);

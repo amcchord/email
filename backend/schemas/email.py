@@ -16,6 +16,7 @@ class EmailAddress(BaseModel):
 
 class EmailSummary(BaseModel):
     id: int
+    account_id: Optional[int] = None
     gmail_message_id: str
     gmail_thread_id: str
     subject: Optional[str] = None
@@ -102,6 +103,54 @@ class EmailListResponse(BaseModel):
     total_pages: int
 
 
+class ConversationSummary(BaseModel):
+    conversation_key: str
+    account_id: int
+    account_email: str
+    anchor_email_id: int
+    gmail_message_id: str
+    gmail_thread_id: str
+    subject: Optional[str] = None
+    from_address: Optional[str] = None
+    from_name: Optional[str] = None
+    to_addresses: list = []
+    date: Optional[datetime] = None
+    snippet: Optional[str] = None
+    is_draft: bool = False
+    is_sent: bool = False
+    is_trash: bool = False
+    is_spam: bool = False
+    is_read: bool
+    unread_count: int
+    is_starred: bool
+    star_state: Literal["none", "some", "all"]
+    has_attachments: bool
+    labels: list[str] = []
+    label_coverage: dict[str, Literal["some", "all"]] = {}
+    member_count: int
+    matched_count: int
+    ai_category: Optional[str] = None
+    ai_priority: Optional[int] = None
+    ai_email_type: Optional[str] = None
+    is_subscription: Optional[bool] = None
+    needs_reply: Optional[bool] = None
+    needs_reply_ignored: Optional[bool] = None
+    unsubscribe_info: Optional[dict] = None
+    thread_digest_type: Optional[str] = None
+    thread_digest_summary: Optional[str] = None
+    thread_digest_outcome: Optional[str] = None
+    thread_digest_resolved: Optional[bool] = None
+    thread_digest_count: Optional[int] = None
+
+
+class ConversationListResponse(BaseModel):
+    conversations: list[ConversationSummary]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
 class ThreadResponse(BaseModel):
     thread_id: str
     subject: Optional[str] = None
@@ -128,6 +177,7 @@ class EmailActionRequest(BaseModel):
         "move_to_label",
     ]
     idempotency_key: UUID = Field(default_factory=uuid4)
+    scope: Literal["messages", "conversations"] = "messages"
     label_id: Optional[StrictInt] = Field(default=None, gt=0)
     label: Optional[str] = None
 

@@ -14,6 +14,7 @@ import {
   optimisticInboxAction,
   remainingUndoMs,
   rollbackEmailAction,
+  rollbackThreadAction,
   restoreInboxAction,
 } from './mailActionUX.js';
 
@@ -83,6 +84,43 @@ test('older rollback preserves a newer optimistic change on the same email', () 
   assert.equal(rolledBack.is_starred, false);
   assert.equal(rolledBack.is_read, true);
   assert.deepEqual(rolledBack.labels, ['INBOX']);
+});
+
+test('conversation rollback restores only its aggregate while preserving newer intent', () => {
+  const original = {
+    ...email(1),
+    conversation_scope: true,
+    member_count: 3,
+    unread_count: 2,
+    star_state: 'none',
+    label_coverage: { Project: 'some' },
+  };
+  const afterStar = applyEmailAction(original, 'star');
+  const afterNewerRead = applyEmailAction(afterStar, 'mark_read');
+
+  const rolledBack = rollbackEmailAction(afterNewerRead, original, 'star');
+
+  assert.equal(rolledBack.star_state, 'none');
+  assert.equal(rolledBack.unread_count, 0);
+  assert.equal(rolledBack.is_starred, false);
+  assert.equal(rolledBack.is_read, true);
+});
+
+test('thread rollback restores the failed delta while preserving a newer message action', () => {
+  const before = { thread_id: 'generated-thread', emails: [email(1), email(2)] };
+  const afterStar = {
+    ...before,
+    emails: before.emails.map(message => applyEmailAction(message, 'star')),
+  };
+  const afterNewerRead = {
+    ...afterStar,
+    emails: afterStar.emails.map(message => applyEmailAction(message, 'mark_read')),
+  };
+
+  const rolledBack = rollbackThreadAction(afterNewerRead, before, 'star');
+
+  assert.ok(rolledBack.emails.every(message => message.is_starred === false));
+  assert.ok(rolledBack.emails.every(message => message.is_read === true));
 });
 
 test('older in-place rollback never resurrects a row removed by a newer action', () => {
@@ -204,6 +242,7 @@ test('undo eligibility is server-deadline and state driven', () => {
 test('client idempotency keys come from the supplied secure UUID source', () => {
   assert.equal(idempotencyKey(() => 'generated-uuid'), 'generated-uuid');
   assert.equal(actionPastTense('archive', 2), '2 emails archived');
+  assert.equal(actionPastTense('archive', 2, '', 'conversation'), '2 conversations archived');
 });
 
 test('ambiguous action failures are recognized as network outcomes', () => {

@@ -277,6 +277,15 @@ export const api = {
     }
     return request('GET', `/emails/?${searchParams.toString()}`);
   },
+  listConversations: (params = {}) => {
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== null && value !== undefined && value !== '') {
+        searchParams.set(key, value);
+      }
+    }
+    return request('GET', `/emails/conversations?${searchParams.toString()}`);
+  },
   getEmail: (id) => request('GET', `/emails/${id}`),
   downloadAttachment: (emailId, attachmentId, options = {}) =>
     request(
@@ -301,12 +310,13 @@ export const api = {
     const query = params.toString();
     return request('GET', `/emails/thread/${threadId}${query ? `?${query}` : ''}`);
   },
-  emailActions: (emailIds, action, idempotencyKey = null, labelId = null) =>
+  emailActions: (emailIds, action, idempotencyKey = null, labelId = null, scope = null) =>
     request('POST', '/emails/actions', {
       email_ids: emailIds,
       action,
       ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
       ...(labelId ? { label_id: labelId } : {}),
+      ...(scope ? { scope } : {}),
     }),
   getMailAction: (requestId) => request('GET', `/emails/actions/${requestId}`),
   getMailActionByIdempotency: (idempotencyKey) =>

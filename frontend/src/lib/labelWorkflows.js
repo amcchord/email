@@ -83,11 +83,30 @@ export function mergeLabelCatalog(current = [], fetched = [], accountId) {
 
 export function labelMembership(emails = [], gmailLabelId) {
   if (!emails.length || !gmailLabelId) return 'none';
+  if (emails.length === 1 && emails[0]?.conversation_scope) {
+    return conversationLabelCoverage(emails[0], gmailLabelId);
+  }
   const count = emails.filter(email => (
     Array.isArray(email?.labels) && email.labels.includes(gmailLabelId)
   )).length;
   if (count === 0) return 'none';
   return count === emails.length ? 'all' : 'some';
+}
+
+export function conversationLabelCoverage(email, gmailLabelId) {
+  if (!email || !gmailLabelId) return 'none';
+  const coverage = email.label_coverage;
+  let state = null;
+  if (coverage && !Array.isArray(coverage) && typeof coverage === 'object') {
+    state = coverage[gmailLabelId];
+  } else if (Array.isArray(coverage)) {
+    const entry = coverage.find(item => (
+      item?.gmail_label_id === gmailLabelId || item?.label_id === gmailLabelId
+    ));
+    state = entry?.coverage || entry?.state;
+  }
+  if (state === 'all' || state === 'some' || state === 'none') return state;
+  return Array.isArray(email.labels) && email.labels.includes(gmailLabelId) ? 'all' : 'none';
 }
 
 export function labelActionForMode(mode, membership) {
@@ -105,7 +124,11 @@ export function visibleUserLabels(email, labels = [], accounts = [], limit = 2) 
   if (account.state !== 'single') return { labels: [], overflow: 0 };
   const applied = new Set(Array.isArray(email?.labels) ? email.labels : []);
   const matching = normalizeUserLabels(labels, account.accountId)
-    .filter(label => applied.has(label.gmail_label_id));
+    .filter(label => applied.has(label.gmail_label_id))
+    .map(label => ({
+      ...label,
+      coverage: conversationLabelCoverage(email, label.gmail_label_id),
+    }));
   const count = Math.max(0, Number(limit) || 0);
   return { labels: matching.slice(0, count), overflow: Math.max(0, matching.length - count) };
 }

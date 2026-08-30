@@ -72,6 +72,14 @@ test('membership selects remove only when every selected email has the label', (
   assert.equal(labelActionForMode('move', 'none'), 'move_to_label');
 });
 
+test('conversation membership preserves a partially applied label', () => {
+  assert.equal(labelMembership([email(1, {
+    conversation_scope: true,
+    labels: ['INBOX', 'Label_12'],
+    label_coverage: { Label_12: 'some' },
+  })], 'Label_12'), 'some');
+});
+
 test('visible thread expansion is account-aware and deduplicated', () => {
   const visible = [
     email(1, { gmail_thread_id: 'shared' }),
@@ -143,4 +151,5 @@ test('chips expose catalog names/colors, collapse overflow, and reject unsafe co
   assert.equal(safeLabelColor('#aabbcc', 'fallback'), '#aabbcc');
   assert.equal(safeLabelColor('url(javascript:bad)', 'fallback'), 'fallback');
   assert.equal(actionPastTense('move_to_label', 3, 'Receipts'), '3 emails moved to Receipts');
+  assert.equal(actionPastTense('move_to_label', 3, 'Receipts', 'conversation'), '3 conversations moved to Receipts');
 });

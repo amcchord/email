@@ -16,7 +16,7 @@ test('labels and move are discoverable in commands, bulk surfaces, and reader', 
   assert.match(shortcuts, /id: 'inbox\.move',\s+key: 'v'/);
   assert.match(inbox, /<LabelPicker/);
   assert.match(inbox, /expandVisibleLabelTargets/);
-  assert.match(inbox, /submitMailAction\(uniqueIds, action, requestKey, context\.labelId\)/);
+  assert.match(inbox, /submitMailAction\(uniqueIds, action, requestKey, context\.labelId, context\.scope\)/);
   assert.match(list, /openBulkLabels\('apply'\)/);
   assert.match(list, /openBulkLabels\('move'\)/);
   assert.match(table, /openBulkLabels\('apply'\)/);
@@ -75,7 +75,7 @@ test('row-removing label actions have a selected-row or Inbox-root focus fallbac
   const inbox = read('../pages/Inbox.svelte');
   const picker = read('../components/email/LabelPicker.svelte');
   assert.match(inbox, /optimistic\.removed[\s\S]*queueMicrotask\(focusInboxSelection\)/);
-  assert.match(inbox, /focusEmailRowOrFallback\(inboxRoot, get\(selectedEmailId\), inboxRoot\)/);
+  assert.match(inbox, /focusEmailRowOrFallback\(inboxRoot, focusedEmailId \|\| get\(selectedEmailId\), inboxRoot\)/);
   assert.match(inbox, /onfocusfallback=\{focusInboxSelection\}/);
   assert.match(picker, /else onfocusfallback\?\.\(\)/);
 });

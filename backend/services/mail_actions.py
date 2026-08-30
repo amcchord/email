@@ -18,7 +18,7 @@ from uuid import UUID, uuid4
 
 from arq import create_pool
 from arq.connections import RedisSettings
-from sqlalchemy import and_, case, exists, func, or_, select, text, update
+from sqlalchemy import and_, case, exists, func, or_, select, text, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -202,6 +202,7 @@ def action_payload_hash(
     action: str,
     *,
     label_id: int | None = None,
+    scope: str = "messages",
 ) -> str:
     payload_data: dict[str, object] = {
         "action": action,
@@ -209,6 +210,8 @@ def action_payload_hash(
     }
     if action in LABEL_ACTION_TYPES or label_id is not None:
         payload_data["label_id"] = label_id
+    if scope != "messages":
+        payload_data["scope"] = scope
     payload = json.dumps(
         payload_data,
         separators=(",", ":"),
@@ -281,12 +284,25 @@ async def _label_action_context(
             "Label actions require messages and a user label from one account"
         )
 
-    thread_ids = sorted({email.gmail_thread_id for email in anchors})
+    thread_ids = sorted({
+        email.gmail_thread_id
+        for email in anchors
+        if str(email.gmail_thread_id or "").strip()
+    })
+    fallback_email_ids = sorted({
+        email.id
+        for email in anchors
+        if not str(email.gmail_thread_id or "").strip()
+    })
+    identity_clause = or_(
+        Email.gmail_thread_id.in_(thread_ids) if thread_ids else False,
+        Email.id.in_(fallback_email_ids) if fallback_email_ids else False,
+    )
     expanded_result = await db.execute(
         select(Email)
         .where(
             Email.account_id == label.account_id,
-            Email.gmail_thread_id.in_(thread_ids),
+            identity_clause,
         )
         .order_by(Email.id)
         .limit(MAIL_ACTION_MAX_BATCH + 1)
@@ -303,6 +319,70 @@ async def _label_action_context(
         raise MailActionNotFound("One or more emails were not found")
     locked_anchors = [expanded_by_id[email_id] for email_id in selected_email_ids]
     return expanded, label, locked_anchors
+
+
+async def _conversation_action_context(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    selected_email_ids: list[int],
+) -> tuple[list[Email], list[Email]]:
+    """Resolve anchors and lock every exact account/thread member once.
+
+    Gmail thread identifiers are account-local.  Anchors are deliberately read
+    before any Email row is locked, then the complete expanded set is locked in
+    primary-key order.  This gives bulk operations across accounts one stable
+    lock order and prevents client-visible pagination from defining scope.
+    """
+    anchor_result = await db.execute(
+        select(Email)
+        .join(GoogleAccount, GoogleAccount.id == Email.account_id)
+        .where(
+            Email.id.in_(selected_email_ids),
+            GoogleAccount.user_id == user_id,
+        )
+        .order_by(Email.id)
+    )
+    anchors = list(anchor_result.scalars().all())
+    if (
+        len(anchors) != len(selected_email_ids)
+        or {email.id for email in anchors} != set(selected_email_ids)
+    ):
+        raise MailActionNotFound("One or more emails were not found")
+
+    identities = sorted({
+        (email.account_id, email.gmail_thread_id)
+        for email in anchors
+        if str(email.gmail_thread_id or "").strip()
+    })
+    fallback_email_ids = sorted({
+        email.id
+        for email in anchors
+        if not str(email.gmail_thread_id or "").strip()
+    })
+    identity_clause = or_(
+        tuple_(Email.account_id, Email.gmail_thread_id).in_(identities)
+        if identities else False,
+        Email.id.in_(fallback_email_ids) if fallback_email_ids else False,
+    )
+    expanded_result = await db.execute(
+        select(Email)
+        .where(identity_clause)
+        .order_by(Email.id)
+        .limit(MAIL_ACTION_MAX_BATCH + 1)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    expanded = list(expanded_result.scalars().all())
+    if len(expanded) > MAIL_ACTION_MAX_BATCH:
+        raise MailActionValidationError(
+            f"Conversation actions can affect at most {MAIL_ACTION_MAX_BATCH} messages"
+        )
+    expanded_by_id = {email.id: email for email in expanded}
+    if not set(selected_email_ids).issubset(expanded_by_id):
+        raise MailActionNotFound("One or more emails were not found")
+    locked_anchors = [expanded_by_id[email_id] for email_id in selected_email_ids]
+    return expanded, locked_anchors
 
 
 def aggregate_action_state(actions: list[MailAction]) -> str:
@@ -356,6 +436,7 @@ async def stage_mail_actions(
     action: str,
     idempotency_key: UUID,
     label_id: int | None = None,
+    scope: str = "messages",
     now: datetime | None = None,
 ) -> tuple[list[MailAction], bool]:
     """Atomically stage a fully-owned operation and its optimistic state."""
@@ -365,6 +446,8 @@ async def stage_mail_actions(
         raise MailActionValidationError("Mail actions require 1 to 200 emails")
     if len(set(email_ids)) != len(email_ids):
         raise MailActionValidationError("Mail action email IDs must be unique")
+    if scope not in {"messages", "conversations"}:
+        raise MailActionValidationError("Mail action scope is invalid")
     is_label_action = action in LABEL_ACTION_TYPES
     if is_label_action and label_id is None:
         raise MailActionValidationError("label_id is required for label actions")
@@ -376,6 +459,7 @@ async def stage_mail_actions(
         ordered_ids,
         action,
         label_id=label_id if is_label_action else None,
+        scope=scope,
     )
     await _lock_idempotency_key(
         db,
@@ -412,6 +496,12 @@ async def stage_mail_actions(
             )
         label_add, label_remove = label_action_delta(
             action, str(resolved_label.gmail_label_id)
+        )
+    elif scope == "conversations":
+        emails, _anchors = await _conversation_action_context(
+            db,
+            user_id=user_id,
+            selected_email_ids=ordered_ids,
         )
     else:
         email_result = await db.execute(

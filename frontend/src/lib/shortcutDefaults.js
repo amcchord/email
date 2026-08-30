@@ -41,8 +41,10 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'nav.theme',    key: '.',   label: 'Toggle dark/light theme', context: 'global', category: 'Navigation' },
 
   // ── Inbox / Email List ───────────────────────────────────────────
-  { id: 'inbox.next',     key: 'j',       label: 'Next email',            context: 'inbox', category: 'Inbox' },
-  { id: 'inbox.prev',     key: 'k',       label: 'Previous email',        context: 'inbox', category: 'Inbox' },
+  { id: 'inbox.next',     key: 'j',       label: 'Next conversation',     context: 'inbox', category: 'Inbox' },
+  { id: 'inbox.prev',     key: 'k',       label: 'Previous conversation', context: 'inbox', category: 'Inbox' },
+  { id: 'inbox.open',     key: 'o',       label: 'Open conversation',     context: 'inbox', category: 'Inbox' },
+  { id: 'inbox.close',    key: 'Escape',  label: 'Close conversation',    context: 'inbox', category: 'Inbox' },
   { id: 'inbox.archive',  key: 'e',       label: 'Archive',               context: 'inbox', category: 'Inbox' },
   { id: 'inbox.trash',    key: '#',       label: 'Trash',                 context: 'inbox', category: 'Inbox' },
   { id: 'inbox.star',     key: 's',       label: 'Toggle star',           context: 'inbox', category: 'Inbox' },
