@@ -52,6 +52,7 @@ class WizardState:
         self.admin_username = "admin"
         self.admin_password = ""
         self.claude_api_key = ""
+        self.openai_api_key = ""
         self.redis_url = "redis://localhost:6379/0"
         # Tracking
         self.completed_steps: list[str] = []

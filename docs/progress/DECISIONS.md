@@ -62,3 +62,19 @@ add a new entry that explicitly supersedes the old one.
   surface, direct questions from Andrea remain Austin's responsibility, and
   future relationship changes should be made in the centralized workflow
   context rather than scattered prompt text.
+
+## D-006 — Select AI model and effort by workload
+
+- Date: 2026-08-29
+- Status: accepted
+- Decision: Keep provider, model capability, compatible effort levels, and
+  per-workload defaults in one registry. Use GPT-5.6 Terra/medium for planning,
+  Luna/low for parallel and bulk work, Sol/high for final verification,
+  Terra/medium for custom replies, and Claude Sonnet 5/medium for unsubscribe.
+- Reason: Planning, parallel retrieval, final synthesis, bulk triage, and
+  browser automation have different quality, latency, cost, and protocol needs.
+- Consequence: New model families must declare their provider, effort support,
+  and workload compatibility in the registry. Unsubscribe remains Claude-only
+  until its Computer Use loop has an explicitly implemented provider adapter;
+  retired or incompatible stored preferences fall back to the full default
+  model/effort pair.

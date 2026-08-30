@@ -10,6 +10,7 @@ from backend.services.ai_models import (
     DEFAULT_CU_MODEL,
     base_model_id,
     is_fast_variant,
+    resolve_effort,
 )
 
 logger = logging.getLogger(__name__)
@@ -103,7 +104,7 @@ class UnsubscribeEvent:
 
 
 class UnsubscribeService:
-    def __init__(self, model: str = None):
+    def __init__(self, model: str = None, effort: str = None):
         self._anthropic_client = None
         requested = model or DEFAULT_CU_MODEL
         # Computer Use is incompatible with fast-mode; strip the suffix and
@@ -114,6 +115,7 @@ class UnsubscribeService:
         if not cu_entry:
             cu_entry = CU_CONFIG[DEFAULT_CU_MODEL]
             self.model = DEFAULT_CU_MODEL
+        self.effort = resolve_effort(self.model, effort)
         self.cu_beta, self.cu_tool_type = cu_entry
 
     def _get_anthropic(self):
@@ -336,6 +338,7 @@ class UnsubscribeService:
                             tools=tools,
                             messages=messages,
                             betas=[self.cu_beta],
+                            output_config={"effort": self.effort},
                         )
                     except Exception as e:
                         logger.error(f"Computer Use API call failed: {e}")

@@ -2,7 +2,7 @@
 
 A small, stable JSON API for building external tools on top of your mail and
 calendar data. The canonical use cases are a "day ahead" display, a
-"newspaper front page" of your week, or a script that asks Claude
+"newspaper front page" of your week, or a script that asks the configured AI
 free-form questions about your inbox without touching the web UI.
 
 ## Contents
@@ -26,13 +26,13 @@ free-form questions about your inbox without touching the web UI.
   - Newspaper / briefing
     - [`GET /briefing`](#get-apiv1briefing)
     - [`GET /briefing/summary`](#get-apiv1briefingsummary)
-  - Claude-powered Q&A
+  - AI-powered Q&A
     - [`POST /ask`](#post-apiv1ask)
 - [Error responses](#error-responses)
 - [Recipes](#recipes)
   - [Day-ahead display](#day-ahead-display)
   - [Newspaper / week-ahead polling cadence](#newspaper--week-ahead-polling-cadence)
-  - [Ask Claude from a script](#ask-claude-from-a-script)
+  - [Ask the mail assistant from a script](#ask-the-mail-assistant-from-a-script)
 - [Security notes](#security-notes)
 
 ## Authentication
@@ -62,7 +62,7 @@ If your install lives at `https://email.example.com`, the API is at
 
 ## Rate limits
 
-Limits are per token. Heavier tiers protect Claude spend.
+Limits are per token. Heavier tiers protect AI-provider spend.
 
 | Tier | Endpoints | Limit |
 |------|-----------|-------|
@@ -355,14 +355,14 @@ counts. Ideal for an e-ink display or a morning dashboard.
 |-------------------|--------|---------|----------------------------------------------------------------------------|
 | `tz`              | string | `UTC`   | IANA timezone for day bucketing                                            |
 | `days`            | int    | 7       | 1–14; how many days in `week_ahead`                                        |
-| `summary`         | bool   | false   | If true, also generates a Claude-written prose briefing (counts against the 10/min AI tier) |
+| `summary`         | bool   | false   | If true, also generates an AI-written prose briefing (counts against the 10/min AI tier) |
 | `summary_chars`   | int    | 600     | 100–4000. Soft target for the AI prose length, in characters. Ignored when `summary=false`. The model is told to aim for this length and the response is soft-trimmed at sentence boundaries if it overshoots by more than ~40%. |
 | `important_limit` | int    | 20      | 1–100. Number of `important_emails` to include.                            |
 | `digests_limit`   | int    | 10      | 1–50. Number of `recent_digests` to include.                               |
 
 Without `summary=true` the endpoint runs purely against the database and
 parallelises its sub-queries; expect ~50–150 ms typical latency. With
-`summary=true` it then makes one Claude call (a few seconds; token budget
+`summary=true` it then makes one model call (a few seconds; token budget
 scales with `summary_chars`).
 
 The `important_limit` value also bounds how many emails feed into the AI
@@ -375,7 +375,7 @@ prose, so trimming it makes the prose call faster and cheaper as well.
     "timezone": "America/New_York",
     "days": 7,
     "summary_included": true,
-    "summary_model": "claude-sonnet-4-6",
+    "summary_model": "gpt-5.6-terra",
     "summary_tokens_used": 920
   },
   "today":      [ /* PublicWeekEvent objects */ ],
@@ -391,7 +391,7 @@ prose, so trimming it makes the prose call faster and cheaper as well.
 
 ### `GET /api/v1/briefing/summary`
 
-Just the Claude-written prose. Useful when you poll `/briefing` (the data
+Just the AI-written prose. Useful when you poll `/briefing` (the data
 part) on a fast cadence and refresh the prose less frequently.
 
 | param             | type   | default | notes                                                       |
@@ -399,8 +399,8 @@ part) on a fast cadence and refresh the prose less frequently.
 | `tz`              | string | `UTC`   | IANA timezone for day bucketing                             |
 | `days`            | int    | 7       | 1–14                                                        |
 | `chars`           | int    | 600     | 100–4000. Soft target for prose length in characters.       |
-| `important_limit` | int    | 20      | 1–100. How many important emails to feed Claude as context. |
-| `digests_limit`   | int    | 10      | 1–50. How many recent digests to feed Claude as context.    |
+| `important_limit` | int    | 20      | 1–100. How many important emails to feed the model as context. |
+| `digests_limit`   | int    | 10      | 1–50. How many recent digests to feed the model as context.    |
 
 Length guidance the model gets, by `chars` value:
 
@@ -415,7 +415,7 @@ Length guidance the model gets, by `chars` value:
 ```json
 {
   "summary": "Your morning is light...",
-  "model": "claude-sonnet-4-6",
+  "model": "gpt-5.6-terra",
   "tokens_used": 920,
   "char_target": 600,
   "generated_at": "2026-05-02T13:46:00+00:00",
@@ -426,7 +426,7 @@ Length guidance the model gets, by `chars` value:
 ### `POST /api/v1/ask`
 
 Free-form Q&A about your emails and calendar. Internally runs the same
-plan → execute → verify Claude agent that powers the in-app chat, but
+plan → execute → verify agent that powers the in-app chat, but
 returns one JSON response instead of an SSE stream and **does not**
 persist a `ChatConversation` (so calls don't clutter your web chat history).
 
@@ -436,7 +436,7 @@ Request body:
 |-------------------|--------|---------|----------------------------------------|
 | `prompt`          | string | —       | Required. Free-form question.          |
 | `tz`              | string | null    | Reserved for future use; currently the agent infers times from event metadata. |
-| `fast`            | bool   | false   | If true, swap to Haiku for plan/execute/verify (cheaper, faster, less smart). |
+| `fast`            | bool   | false   | If true, use the efficient GPT-5.6 Luna profile for all phases. |
 | `timeout_seconds` | int    | 60      | Server-side ceiling: 120s. On timeout returns 504. |
 
 Response:
@@ -453,7 +453,7 @@ Response:
     "1": "Found 3 meetings on 2026-05-03",
     "2": "Found 2 relevant threads, including contract redlines from Alex"
   },
-  "model": "claude-sonnet-4-6",
+  "model": "gpt-5.6-sol",
   "tokens_used": 4231,
   "duration_seconds": 6.42
 }
@@ -468,7 +468,7 @@ If the agent isn't confident and asks back, `answer` is null and
   "clarification": "Which week did you mean -- this week or next week?",
   "plan": [],
   "task_results": {},
-  "model": "claude-sonnet-4-6",
+  "model": "gpt-5.6-sol",
   "tokens_used": 412,
   "duration_seconds": 1.18
 }
@@ -479,7 +479,7 @@ Errors specific to this endpoint:
 | status | when |
 |--------|------|
 | 400    | empty `prompt`, or no Google accounts connected |
-| 502    | upstream Anthropic error |
+| 502    | upstream AI provider error |
 | 504    | did not finish within `timeout_seconds` (capped at 120s) |
 
 ## Error responses
@@ -495,8 +495,8 @@ Standard FastAPI shape:
 | 400    | bad request (unknown timezone, no accounts, empty prompt) |
 | 401    | missing / invalid / revoked token, or inactive user    |
 | 429    | rate limit exceeded                                    |
-| 502    | upstream Anthropic error (AI endpoints only)           |
-| 503    | Claude API key not configured (AI endpoints only)      |
+| 502    | upstream AI provider error (AI endpoints only)         |
+| 503    | selected provider API key not configured (AI endpoints only) |
 | 504    | `/ask` timed out                                       |
 
 ## Recipes
@@ -538,7 +538,7 @@ TOKEN="mk_yourtoken..."
 HOST="https://email.example.com"
 TZ="America/New_York"
 
-# Every 5 minutes -- cheap composite payload (no Claude call)
+# Every 5 minutes -- cheap composite payload (no AI call)
 # Trim what you don't need with important_limit / digests_limit
 curl -s -H "Authorization: Bearer $TOKEN" \
   "$HOST/api/v1/briefing?tz=$TZ&days=7&important_limit=10&digests_limit=5"
@@ -557,7 +557,7 @@ For a richer "feel for the week ahead" view, combine `/calendar/week`
 (things waiting on you) and `/emails/volume` (whether your week is loud or
 quiet relative to the trend).
 
-### Ask Claude from a script
+### Ask the mail assistant from a script
 
 ```bash
 TOKEN="mk_yourtoken..."
@@ -571,7 +571,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   }' \
   "$HOST/api/v1/ask"
 
-# Cheaper / faster (Haiku for all phases)
+# Cheaper / faster (GPT-5.6 Luna at low effort for all phases)
 curl -s -X POST -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{ "prompt": "Any unread emails I should reply to today?", "fast": true }' \
@@ -581,7 +581,7 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 ## Security notes
 
 - Treat tokens like passwords. They grant full read access to your
-  emails and calendar, plus AI Q&A which can cost you Claude tokens.
+  emails and calendar, plus AI Q&A which can consume provider tokens.
 - Tokens are stored only as `sha256(token)`; if you lose the plaintext,
   revoke the token and create a new one.
 - The API never accepts JWT/cookie auth, and the web UI never accepts

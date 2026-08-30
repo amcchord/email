@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     admin_username: str = "admin"
     admin_password: str = ""
     claude_api_key: str = ""
+    openai_api_key: str = ""
     google_client_id: str = ""
     google_client_secret: str = ""
     google_redirect_uri: str = "http://localhost:8080/api/auth/google/callback"

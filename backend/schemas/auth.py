@@ -1,10 +1,15 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from typing import Optional
 
 from backend.services.ai_models import (
     ALLOWED_MODELS,
     DEFAULT_AI_PREFERENCES,
+    MODEL_EFFORT_LEVELS,
     MODEL_LABELS,
+    MODEL_PROVIDERS,
+    MODELS_BY_PREFERENCE,
+    is_model_allowed_for_preference,
+    is_valid_effort,
 )
 
 # Re-exported here for backwards compatibility with existing imports.
@@ -60,23 +65,38 @@ class UserResponse(BaseModel):
 
 class AIPreferencesResponse(BaseModel):
     chat_plan_model: str
+    chat_plan_effort: str
     chat_execute_model: str
+    chat_execute_effort: str
     chat_verify_model: str
+    chat_verify_effort: str
     agentic_model: str
+    agentic_effort: str
     custom_prompt_model: str
+    custom_prompt_effort: str
     unsubscribe_model: str
+    unsubscribe_effort: str
     allowed_models: list[str] = ALLOWED_MODELS
     # `model_` prefix is reserved by Pydantic v2; use `labels` instead.
     labels: dict[str, str] = MODEL_LABELS
+    providers: dict[str, str] = MODEL_PROVIDERS
+    effort_levels: dict[str, list[str]] = MODEL_EFFORT_LEVELS
+    models_by_preference: dict[str, list[str]] = MODELS_BY_PREFERENCE
 
 
 class AIPreferencesUpdate(BaseModel):
     chat_plan_model: Optional[str] = None
+    chat_plan_effort: Optional[str] = None
     chat_execute_model: Optional[str] = None
+    chat_execute_effort: Optional[str] = None
     chat_verify_model: Optional[str] = None
+    chat_verify_effort: Optional[str] = None
     agentic_model: Optional[str] = None
+    agentic_effort: Optional[str] = None
     custom_prompt_model: Optional[str] = None
+    custom_prompt_effort: Optional[str] = None
     unsubscribe_model: Optional[str] = None
+    unsubscribe_effort: Optional[str] = None
 
     @field_validator("chat_plan_model", "chat_execute_model", "chat_verify_model", "agentic_model", "custom_prompt_model", "unsubscribe_model")
     @classmethod
@@ -84,6 +104,39 @@ class AIPreferencesUpdate(BaseModel):
         if v is not None and v not in ALLOWED_MODELS:
             raise ValueError(f"Model must be one of: {', '.join(ALLOWED_MODELS)}")
         return v
+
+    @field_validator(
+        "chat_plan_effort",
+        "chat_execute_effort",
+        "chat_verify_effort",
+        "agentic_effort",
+        "custom_prompt_effort",
+        "unsubscribe_effort",
+    )
+    @classmethod
+    def validate_effort_name(cls, v):
+        allowed = {level for levels in MODEL_EFFORT_LEVELS.values() for level in levels}
+        if v is not None and v not in allowed:
+            raise ValueError(f"Effort must be one of: {', '.join(sorted(allowed))}")
+        return v
+
+    @model_validator(mode="after")
+    def validate_model_effort_pairs(self):
+        for key in (
+            "chat_plan_model",
+            "chat_execute_model",
+            "chat_verify_model",
+            "agentic_model",
+            "custom_prompt_model",
+            "unsubscribe_model",
+        ):
+            model = getattr(self, key)
+            effort = getattr(self, key.removesuffix("_model") + "_effort")
+            if model and not is_model_allowed_for_preference(model, key):
+                raise ValueError(f"{model} is not supported for {key}")
+            if model and effort and not is_valid_effort(model, effort):
+                raise ValueError(f"{effort} effort is not supported by {model}")
+        return self
 
 
 class AboutMeResponse(BaseModel):

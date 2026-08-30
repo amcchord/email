@@ -20,8 +20,8 @@ from backend.routers.ai import router, _get_user_account_ids
 from backend.routers.auth import get_current_user
 from backend.services.ai import (
     AIService,
-    get_custom_prompt_model_for_user,
-    get_model_for_user,
+    get_custom_prompt_model_config_for_user,
+    get_model_config_for_user,
 )
 from backend.services.credentials import get_google_credentials
 from backend.services.gmail import GmailService
@@ -53,8 +53,8 @@ async def draft_action(
     await db.commit()
 
     try:
-        model = await get_model_for_user(user.id)
-        ai = AIService(model=model)
+        model, effort = await get_model_config_for_user(user.id)
+        ai = AIService(model=model, effort=effort)
         result = await ai.draft_action_reply(todo_id, user_context=user.about_me)
         return result
     except Exception as e:
@@ -97,8 +97,8 @@ async def generate_reply(
     acct_email = acct_row[1] if acct_row else None
 
     try:
-        model = await get_custom_prompt_model_for_user(user.id)
-        ai = AIService(model=model)
+        model, effort = await get_custom_prompt_model_config_for_user(user.id)
+        ai = AIService(model=model, effort=effort)
         result = await ai.generate_custom_reply(
             email_id,
             user_prompt=prompt,

@@ -3,6 +3,57 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-29 — OpenAI GPT-5.6 and Anthropic Claude 5 support
+
+### Scope
+
+Add provider-neutral model selection and reasoning-effort controls using the
+project credentials available through AustinLand, with workload-specific
+defaults for quality, speed, and cost.
+
+### Completed
+
+- Registered GPT-5.6 Sol, Terra, and Luna plus Claude Fable 5, Opus 5, and
+  Sonnet 5 with provider, effort, label, and workload-compatibility metadata.
+- Set balanced defaults: Terra/medium planning, Luna/low parallel execution and
+  email processing, Sol/high final verification, Terra/medium custom replies,
+  and Sonnet 5/medium Computer Use unsubscribe.
+- Added OpenAI Responses API support for text, structured tools, and the
+  plan/execute/verify loop; upgraded Claude 5 calls to adaptive
+  `output_config.effort` and retained Claude-only Computer Use routing.
+- Carried model and effort through routers, worker jobs, bundles, briefings,
+  dashboard snippets, and user preferences, including retired-model fallback
+  and model/effort validation.
+- Added model and effort controls to Settings, OpenAI setup/configuration,
+  provider-neutral documentation, the OpenAI SDK dependency, and a regenerated
+  Python 3.13 lockfile.
+- Added focused provider-registry, validation, fallback, OpenAI request-shape,
+  and Anthropic request-shape tests.
+
+### Verification
+
+- `make check`: 136 tests passed and the frontend production build completed;
+  the existing large JavaScript chunk advisory remains.
+- Python bytecode compilation and `git diff --check`: passed.
+- AustinLand created the idempotent `Email-openai` project-scoped entry and
+  recorded the shared `Email-anthropic` assignment. No secret value was
+  printed, persisted in this checkout, or recorded in the workbook.
+- Live provider catalog retrieval found all six requested model IDs. Minimal
+  smoke calls returned the requested response from GPT-5.6 Luna with `none`
+  effort and Claude Sonnet 5 with `low` effort. Both provider adapters passed a
+  forced structured-tool call, and the OpenAI stateless tool-result
+  continuation used by the chat executor also passed.
+
+### Production Actions
+
+- None. No production files, configuration, dependencies, services, database
+  rows, or deployed code changed.
+
+### Next
+
+Review and commit the branch. Installing the scoped provider keys and deploying
+the exact commit require separate production authorization.
+
 ## 2026-08-29 — Scheduling delegation and trusted-colleague context
 
 ### Scope
