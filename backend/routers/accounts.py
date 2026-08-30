@@ -393,6 +393,15 @@ async def get_sync_status(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    account_result = await db.execute(
+        select(GoogleAccount.id).where(
+            GoogleAccount.id == account_id,
+            GoogleAccount.user_id == user.id,
+        )
+    )
+    if account_result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+
     result = await db.execute(
         select(SyncStatus).where(SyncStatus.account_id == account_id)
     )
