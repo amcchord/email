@@ -169,17 +169,13 @@ export function layoutEvents(events, pxPerHour) {
   // Tier 2: All foreground events (merged + normal) with unified overlap detection
   if (fgEvents.length > 0) {
     const items = fgEvents.map(e => {
-      const start = new Date(e.start_time);
-      const end = e.end_time ? new Date(e.end_time) : new Date(start.getTime() + 3600000);
+      const { startMin, endMin } = calendarEventMinuteRange(e);
       const isMerged = e._mergedAccounts && e._mergedAccounts.length > 1;
       return {
         event: e,
         isMerged,
-        startMin: start.getHours() * 60 + start.getMinutes(),
-        endMin: Math.max(
-          end.getHours() * 60 + end.getMinutes(),
-          start.getHours() * 60 + start.getMinutes() + 15
-        ),
+        startMin,
+        endMin,
       };
     });
 
@@ -286,13 +282,25 @@ export function layoutEvents(events, pxPerHour) {
   return result;
 }
 
-function computePosition(event, pxPerHour) {
-  if (!event.start_time) return { top: 0, height: pxPerHour * 0.8 };
+export function calendarEventMinuteRange(event) {
+  if (!event?.start_time) return { startMin: 0, endMin: 48 };
   const start = new Date(event.start_time);
   const end = event.end_time ? new Date(event.end_time) : new Date(start.getTime() + 3600000);
   const startMin = start.getHours() * 60 + start.getMinutes();
-  const endMin = end.getHours() * 60 + end.getMinutes();
-  const duration = Math.max(endMin - startMin, 15);
+  const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  // Day/Week callers pass segments clipped to a local day. Midnight at the
+  // segment's next-day boundary is the visual end of that day, not minute 0.
+  const rawEndMin = endDay > startDay
+    ? 24 * 60
+    : end.getHours() * 60 + end.getMinutes();
+  return { startMin, endMin: Math.max(rawEndMin, startMin + 15) };
+}
+
+function computePosition(event, pxPerHour) {
+  if (!event.start_time) return { top: 0, height: pxPerHour * 0.8 };
+  const { startMin, endMin } = calendarEventMinuteRange(event);
+  const duration = endMin - startMin;
   return {
     top: (startMin / 60) * pxPerHour,
     height: Math.max((duration / 60) * pxPerHour, pxPerHour * 0.33),

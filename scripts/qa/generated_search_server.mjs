@@ -27,6 +27,19 @@ const forcedEditorCase = ['slow', 'fail-once'].includes(process.env.QA_EDITOR_CA
   ? process.env.QA_EDITOR_CASE
   : null;
 const forcedEditorRun = process.env.QA_EDITOR_RUN || null;
+const calendarFixtureEnabled = process.env.QA_CALENDAR_FIXTURE === '1';
+const forcedCalendarCase = [
+  'populated',
+  'empty',
+  'slow-overlap',
+  'slow-initial',
+  'fail-once',
+  'disconnected',
+  'status-error',
+  'boundary',
+].includes(process.env.QA_CALENDAR_CASE)
+  ? process.env.QA_CALENDAR_CASE
+  : 'populated';
 
 const compoundQuery = 'from:renee+launch@example.test subject:"Quarterly & Planning" has:attachment -is:read in:inbox';
 const removalQuery = 'from:renee+launch@example.test subject:"Quarterly & Planning" -is:read in:inbox';
@@ -664,6 +677,164 @@ const generatedAccounts = deepFreeze([
   },
 ]);
 
+function calendarAccounts() {
+  if (!calendarFixtureEnabled || forcedCalendarCase !== 'disconnected') return generatedAccounts;
+  return generatedAccounts.map(account => account.id === 2
+    ? { ...account, has_calendar_scope: false, calendar_sync_status: null }
+    : account);
+}
+
+function generatedCalendarEvent(overrides) {
+  const accountId = overrides.account_id || 1;
+  return {
+    id: overrides.id,
+    account_id: accountId,
+    account_email: accountId === 1
+      ? 'search.primary@example.test'
+      : 'search.secondary@example.test',
+    google_event_id: `generated-calendar-${overrides.id}`,
+    calendar_id: 'primary',
+    summary: overrides.summary || `Generated calendar event ${overrides.id}`,
+    description: 'Generated locally for read-only Calendar QA. No real calendar data is used.',
+    location: overrides.location || null,
+    start_time: overrides.start_time || null,
+    end_time: overrides.end_time || null,
+    start_date: overrides.start_date || null,
+    end_date: overrides.end_date || null,
+    timezone: 'America/New_York',
+    is_all_day: overrides.is_all_day || false,
+    recurring_event_id: null,
+    recurrence_rule: null,
+    status: 'confirmed',
+    html_link: null,
+    hangout_link: null,
+    organizer_email: 'organizer@example.test',
+    organizer_name: 'Generated Organizer',
+    organizer_self: false,
+    attendees: [],
+    visibility: 'default',
+    transparency: 'opaque',
+    reminders: null,
+    created_at: fixtureNow.toISOString(),
+    updated_at: fixtureNow.toISOString(),
+  };
+}
+
+const generatedCalendarEvents = deepFreeze([
+  generatedCalendarEvent({
+    id: 9101,
+    account_id: 1,
+    summary: 'Generated product review',
+    start_time: '2026-08-30T15:00:00Z',
+    end_time: '2026-08-30T15:45:00Z',
+  }),
+  generatedCalendarEvent({
+    id: 9102,
+    account_id: 1,
+    summary: 'Generated planning block',
+    start_time: '2026-08-31T18:00:00Z',
+    end_time: '2026-08-31T19:00:00Z',
+  }),
+  generatedCalendarEvent({
+    id: 9201,
+    account_id: 2,
+    summary: 'Generated secondary calendar',
+    start_time: '2026-09-01T16:30:00Z',
+    end_time: '2026-09-01T17:30:00Z',
+  }),
+  generatedCalendarEvent({
+    id: 9202,
+    account_id: 2,
+    summary: 'Generated launch day',
+    start_date: '2026-09-02',
+    end_date: '2026-09-03',
+    is_all_day: true,
+  }),
+  generatedCalendarEvent({
+    id: 9103,
+    account_id: 1,
+    summary: 'Generated secondary calendar',
+    start_time: '2026-09-01T16:30:00Z',
+    end_time: '2026-09-01T17:30:00Z',
+  }),
+]);
+
+const generatedCalendarBoundaryEvents = deepFreeze([
+  generatedCalendarEvent({
+    id: 9301,
+    account_id: 1,
+    summary: 'Generated carry-in across midnight',
+    start_time: '2026-11-01T03:30:00Z',
+    end_time: '2026-11-01T06:45:00Z',
+  }),
+  generatedCalendarEvent({
+    id: 9302,
+    account_id: 1,
+    summary: 'Generated first 1:30 AM',
+    start_time: '2026-11-01T05:30:00Z',
+    end_time: '2026-11-01T05:50:00Z',
+  }),
+  generatedCalendarEvent({
+    id: 9303,
+    account_id: 2,
+    summary: 'Generated second 1:30 AM',
+    start_time: '2026-11-01T06:30:00Z',
+    end_time: '2026-11-01T07:00:00Z',
+  }),
+  generatedCalendarEvent({
+    id: 9304,
+    account_id: 2,
+    summary: 'Generated DST all-day',
+    start_date: '2026-11-01',
+    end_date: '2026-11-02',
+    is_all_day: true,
+  }),
+  generatedCalendarEvent({
+    id: 9305,
+    account_id: 1,
+    summary: 'Generated ending at range start',
+    start_time: '2026-11-01T03:00:00Z',
+    end_time: '2026-11-01T04:00:00Z',
+  }),
+  generatedCalendarEvent({
+    id: 9306,
+    account_id: 1,
+    summary: 'Generated all-day ending at range start',
+    start_date: '2026-10-31',
+    end_date: '2026-11-01',
+    is_all_day: true,
+  }),
+]);
+
+const generatedCalendarStatuses = deepFreeze([
+  {
+    account_id: 1,
+    account_email: 'search.primary@example.test',
+    status: 'completed',
+    sync_token: null,
+    last_full_sync: '2026-08-30T13:50:00Z',
+    last_incremental_sync: '2026-08-30T13:58:00Z',
+    error_message: null,
+    events_synced: 2,
+    started_at: '2026-08-30T13:57:00Z',
+    completed_at: '2026-08-30T13:58:00Z',
+    needs_reauth: false,
+  },
+  {
+    account_id: 2,
+    account_email: 'search.secondary@example.test',
+    status: 'completed',
+    sync_token: null,
+    last_full_sync: '2026-08-30T13:45:00Z',
+    last_incremental_sync: '2026-08-30T13:55:00Z',
+    error_message: null,
+    events_synced: 2,
+    started_at: '2026-08-30T13:54:00Z',
+    completed_at: '2026-08-30T13:55:00Z',
+    needs_reauth: false,
+  },
+]);
+
 const generatedLabels = deepFreeze([
   {
     id: 1,
@@ -687,6 +858,7 @@ const audit = {
   attachment_reads: [],
   attachment_preview_reads: [],
   chat_reads: [],
+  calendar_reads: [],
   reply_envelope_reads: [],
   mutation_attempts: [],
   unknown_routes: [],
@@ -699,6 +871,7 @@ const editorAssetAttempts = new Map();
 let editorAssetsPromise = null;
 const attachmentAttempts = new Map();
 const attachmentPreviewAttempts = new Map();
+const calendarEventAttempts = new Map();
 let receivedSequence = 0;
 let respondedSequence = 0;
 
@@ -1488,6 +1661,92 @@ function wait(delayMs) {
   return new Promise(resolveWait => setTimeout(resolveWait, delayMs));
 }
 
+async function calendarSyncStatus(request, response, url) {
+  const entry = beginAudit(request, url, {
+    calendar_case: forcedCalendarCase,
+    resource: 'sync-status',
+  });
+  audit.calendar_reads.push(entry);
+
+  if (forcedCalendarCase === 'status-error') {
+    completeAudit(entry, 503);
+    return writeJson(response, { detail: 'Generated calendar status service unavailable' }, 503);
+  }
+
+  const statuses = forcedCalendarCase === 'disconnected'
+    ? generatedCalendarStatuses.filter(status => status.account_id === 1)
+    : generatedCalendarStatuses;
+  completeAudit(entry, 200, statuses.map(status => status.account_id));
+  return writeJson(response, statuses);
+}
+
+async function calendarEvents(request, response, url) {
+  const accountValue = url.searchParams.get('account_id');
+  const accountId = accountValue === null ? null : Number.parseInt(accountValue, 10);
+  const entry = beginAudit(request, url, {
+    calendar_case: forcedCalendarCase,
+    resource: 'events',
+    start: url.searchParams.get('start'),
+    end: url.searchParams.get('end'),
+    timezone: url.searchParams.get('tz'),
+    account_id: Number.isFinite(accountId) ? accountId : null,
+  });
+  audit.calendar_reads.push(entry);
+
+  const attemptKey = url.search;
+  const attempt = (calendarEventAttempts.get(attemptKey) || 0) + 1;
+  calendarEventAttempts.set(attemptKey, attempt);
+  entry.attempt = attempt;
+
+  if (forcedCalendarCase === 'fail-once' && attempt === 1) {
+    completeAudit(entry, 503);
+    return writeJson(response, { detail: 'Generated calendar events unavailable for the first attempt' }, 503);
+  }
+
+  if (forcedCalendarCase === 'slow-overlap') {
+    await wait(accountId === 1 ? 650 : accountId === 2 ? 15 : 30);
+  } else if (forcedCalendarCase === 'slow-initial') {
+    await wait(900);
+  }
+
+  const requestedStart = url.searchParams.get('start');
+  const requestedEnd = url.searchParams.get('end');
+  const requestedTimeZone = url.searchParams.get('tz') || 'UTC';
+  const localParts = value => {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: requestedTimeZone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+    }).formatToParts(new Date(value));
+    const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+    return {
+      date: `${values.year}-${values.month}-${values.day}`,
+      time: `${values.hour}:${values.minute}:${values.second}`,
+    };
+  };
+  const inRequestedRange = event => {
+    if (event.is_all_day) {
+      return event.start_date <= requestedEnd && event.end_date > requestedStart;
+    }
+    const startParts = localParts(event.start_time);
+    const endParts = localParts(event.end_time || event.start_time);
+    if (startParts.date > requestedEnd) return false;
+    if (endParts.date < requestedStart) return false;
+    if (endParts.date === requestedStart && endParts.time === '00:00:00') return false;
+    return true;
+  };
+  const fixtureEvents = forcedCalendarCase === 'boundary'
+    ? generatedCalendarBoundaryEvents
+    : generatedCalendarEvents;
+  const events = ['empty', 'status-error'].includes(forcedCalendarCase)
+    ? []
+    : fixtureEvents.filter(event =>
+      (accountId === null || event.account_id === accountId) && inRequestedRange(event)
+    );
+  completeAudit(entry, 200, events.map(event => event.id));
+  return writeJson(response, { events, total: events.length });
+}
+
 async function listEmails(request, response, url) {
   const decodedSearch = url.searchParams.get('search') ?? '';
   const mailbox = url.searchParams.get('mailbox') || 'INBOX';
@@ -1959,6 +2218,9 @@ async function handleGet(request, response, url) {
     response.end();
     return;
   }
+  if (pathname === '/__qa/calendar-reauthorize-sink') {
+    return writeHtml(response, '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Generated Calendar reconnect</title></head><body><main><h1>Generated Calendar reconnect sink</h1><p>No external authorization was opened.</p></main></body></html>');
+  }
   if (pathname === '/__qa/mobile') return mobileQaFrame(response, url);
   if (pathname === '/__qa/attachment-mobile') return mobileAttachmentQaFrame(response);
   if (pathname === '/__qa/attachment-preview-mobile') {
@@ -2006,6 +2268,12 @@ async function handleGet(request, response, url) {
       fixture_message_id: 316,
       fixture_conversation_id: generatedChatId,
       chat_reads: audit.chat_reads,
+      calendar_fixture: {
+        enabled: calendarFixtureEnabled,
+        case: forcedCalendarCase,
+        fixture_event_ids: [...generatedCalendarEvents, ...generatedCalendarBoundaryEvents].map(event => event.id),
+      },
+      calendar_reads: audit.calendar_reads,
       mutation_attempts: audit.mutation_attempts,
       unknown_routes: audit.unknown_routes,
     });
@@ -2028,6 +2296,12 @@ async function handleGet(request, response, url) {
       attachment_reads: audit.attachment_reads,
       attachment_preview_reads: audit.attachment_preview_reads,
       chat_reads: audit.chat_reads,
+      calendar_fixture: {
+        enabled: calendarFixtureEnabled,
+        case: forcedCalendarCase,
+        fixture_event_ids: [...generatedCalendarEvents, ...generatedCalendarBoundaryEvents].map(event => event.id),
+      },
+      calendar_reads: audit.calendar_reads,
       mutation_attempts: audit.mutation_attempts,
       unknown_routes: audit.unknown_routes,
     });
@@ -2055,7 +2329,26 @@ async function handleGet(request, response, url) {
   }
   if (pathname === '/api/auth/about-me') return writeJson(response, { about_me: '' });
   if (pathname === '/api/auth/api-tokens') return writeJson(response, []);
-  if (pathname === '/api/accounts/') return writeJson(response, generatedAccounts);
+  if (pathname === '/api/accounts/') return writeJson(response, calendarAccounts());
+  const calendarReauthorizeMatch = pathname.match(/^\/api\/accounts\/(\d+)\/reauthorize$/);
+  if (calendarFixtureEnabled && calendarReauthorizeMatch) {
+    const accountId = Number.parseInt(calendarReauthorizeMatch[1], 10);
+    const entry = beginAudit(request, url, {
+      calendar_case: forcedCalendarCase,
+      resource: 'reauthorize',
+      account_id: accountId,
+      return_page: url.searchParams.get('return_page'),
+    });
+    audit.calendar_reads.push(entry);
+    if (!generatedAccounts.some(account => account.id === accountId)) {
+      completeAudit(entry, 404);
+      return writeJson(response, { detail: 'Generated account not found' }, 404);
+    }
+    completeAudit(entry, 200, [accountId]);
+    return writeJson(response, {
+      auth_url: `/__qa/calendar-reauthorize-sink?account_id=${accountId}`,
+    });
+  }
   if (pathname === '/api/admin/feature-flags') {
     return writeJson(response, { desktop_app_enabled: false });
   }
@@ -2115,9 +2408,11 @@ async function handleGet(request, response, url) {
     return writeJson(response, []);
   }
   if (pathname === '/api/calendar/sync-status') {
-    return writeJson(response, { status: 'idle', accounts: [] });
+    if (calendarFixtureEnabled) return calendarSyncStatus(request, response, url);
+    return writeJson(response, []);
   }
   if (pathname === '/api/calendar/events') {
+    if (calendarFixtureEnabled) return calendarEvents(request, response, url);
     return writeJson(response, { events: [], total: 0 });
   }
   if (pathname === '/api/calendar/upcoming') return writeJson(response, { events: [] });

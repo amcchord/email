@@ -38,6 +38,20 @@
     onState: nextState => { routeState = nextState; },
   });
 
+  let accountSessionActive = false;
+  $effect(() => {
+    const authenticated = Boolean($user);
+    if (authenticated === accountSessionActive) return;
+    accountSessionActive = authenticated;
+    if (authenticated) {
+      startSyncPolling(() => api.listAccounts());
+      startRealtime();
+    } else {
+      stopSyncPolling();
+      stopRealtime();
+    }
+  });
+
   function parseStandaloneEmailId(params) {
     if (params.get('view') !== 'email' || !params.get('id')) return null;
     const parsed = Number(params.get('id'));
@@ -82,8 +96,6 @@
   onMount(async () => {
     setUnauthorizedHandler(() => {
       user.set(null);
-      stopSyncPolling();
-      stopRealtime();
     });
 
     // Check if this is a device auth page or pop-out email view
@@ -96,9 +108,6 @@
     try {
       const me = await api.me();
       user.set(me);
-      // Start polling sync status once authenticated
-      startSyncPolling(() => api.listAccounts());
-      startRealtime();
       // Load UI preferences from server (sync across devices)
       try {
         const uiPrefs = await api.getUIPreferences();

@@ -20,6 +20,8 @@ export const pageSize = writable(parseInt(localStorage.getItem('pageSize') || '5
 
 // Accounts
 export const accounts = writable([]);
+export const accountsLoaded = writable(false);
+export const accountsLoadError = writable('');
 export const selectedAccountId = writable(null);
 
 // Deterministic color palette for distinguishing accounts
@@ -53,57 +55,75 @@ export const syncStatus = writable([]);  // Array of account objects with sync_s
 let syncPollInterval = null;
 let syncPollFn = null;
 let syncPollFast = false;  // true when actively syncing (3s), false when idle (30s)
+let syncPollGeneration = 0;
 
 export function startSyncPolling(apiFn) {
-  stopSyncPolling();
-  syncPollFn = apiFn;
+  stopSyncPolling({ clearAuthority: false });
+  const generation = syncPollGeneration;
+  let inFlightPromise = null;
+  accountsLoadError.set('');
 
-  async function poll() {
-    try {
-      const accountList = await apiFn();
-      syncStatus.set(accountList);
-      accounts.set(accountList);
+  function poll() {
+    if (inFlightPromise) return inFlightPromise;
+    inFlightPromise = (async () => {
+      try {
+        const accountList = await apiFn();
+        if (generation !== syncPollGeneration) return null;
+        syncStatus.set(accountList);
+        accounts.set(accountList);
+        accountsLoaded.set(true);
+        accountsLoadError.set('');
 
-      // Adaptive polling: fast during active sync, slow when idle
-      const anySyncing = accountList.some(
-        a => a.sync_status && a.sync_status.status === 'syncing'
-      );
-      if (anySyncing && !syncPollFast) {
-        // Switch to fast polling
-        syncPollFast = true;
-        clearInterval(syncPollInterval);
-        syncPollInterval = setInterval(poll, 3000);
-      } else if (!anySyncing && syncPollFast) {
-        // Switch back to slow polling
-        syncPollFast = false;
-        clearInterval(syncPollInterval);
-        syncPollInterval = setInterval(poll, 30000);
+        // Adaptive polling: fast during active sync, slow when idle
+        const anySyncing = accountList.some(
+          a => a.sync_status && a.sync_status.status === 'syncing'
+        );
+        if (anySyncing && !syncPollFast) {
+          syncPollFast = true;
+          clearInterval(syncPollInterval);
+          syncPollInterval = setInterval(poll, 3000);
+        } else if (!anySyncing && syncPollFast) {
+          syncPollFast = false;
+          clearInterval(syncPollInterval);
+          syncPollInterval = setInterval(poll, 30000);
+        }
+        return accountList;
+      } catch (error) {
+        if (generation === syncPollGeneration) {
+          accountsLoadError.set(error?.message || 'Connected accounts could not be loaded.');
+        }
+        return null;
+      } finally {
+        if (generation === syncPollGeneration) inFlightPromise = null;
       }
-    } catch {
-      // Ignore polling errors (e.g. not authenticated)
-    }
+    })();
+    return inFlightPromise;
   }
-  poll();
+  syncPollFn = poll;
+  void poll();
   syncPollInterval = setInterval(poll, 30000);
 }
 
-export function stopSyncPolling() {
+export function stopSyncPolling({ clearAuthority = true } = {}) {
+  syncPollGeneration += 1;
   if (syncPollInterval) {
     clearInterval(syncPollInterval);
     syncPollInterval = null;
   }
   syncPollFn = null;
   syncPollFast = false;
+  if (clearAuthority) {
+    syncStatus.set([]);
+    accounts.set([]);
+    accountsLoaded.set(false);
+    accountsLoadError.set('');
+    selectedAccountId.set(null);
+  }
 }
 
 // Force an immediate poll (e.g. after triggering a sync)
 export function forceSyncPoll() {
-  if (syncPollFn) {
-    syncPollFn().then(accountList => {
-      syncStatus.set(accountList);
-      accounts.set(accountList);
-    }).catch(() => {});
-  }
+  return syncPollFn?.() || Promise.resolve(null);
 }
 
 // Derived sync state -- multi-account aware

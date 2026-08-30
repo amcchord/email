@@ -77,16 +77,6 @@
   }
 
   onMount(async () => {
-    // Only fetch accounts if sync polling hasn't populated them yet
-    if (accountList.length === 0) {
-      try {
-        const fetched = await api.listAccounts();
-        accounts.set(fetched);
-      } catch {
-        // Not authenticated or no accounts yet
-      }
-    }
-
     try {
       const fetchedLabels = await api.getLabels();
       labelsStore.set(fetchedLabels);

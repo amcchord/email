@@ -1,6 +1,7 @@
 <script>
   import CalendarEventPill from './CalendarEventPill.svelte';
   import { mergeEvents } from '../../lib/calendarLayout.js';
+  import { sourceCalendarEvent, timedEventsForDay } from '../../lib/calendarDisplay.js';
   import { accountColorMap, calendarView, calendarDate } from '../../lib/stores.js';
 
   let { events = [], currentDate = new Date(), onEventClick = null } = $props();
@@ -46,16 +47,13 @@
   function getEventsForDay(date) {
     const dateStr = fmtDateStr(date);
 
-    return events.filter(e => {
+    const allDay = events.filter(e => {
       if (e.is_all_day) {
         return e.start_date <= dateStr && e.end_date > dateStr;
       }
-      if (!e.start_time) return false;
-      const eventDate = new Date(e.start_time);
-      return eventDate.getFullYear() === date.getFullYear() &&
-        eventDate.getMonth() === date.getMonth() &&
-        eventDate.getDate() === date.getDate();
+      return false;
     });
+    return [...allDay, ...timedEventsForDay(events, date)];
   }
 
   function switchToDay(date) {
@@ -90,6 +88,7 @@
           class:opacity-40={!cell.inMonth}
           style="color: {isToday(cell.date) ? 'white' : 'var(--text-primary)'}; background: {isToday(cell.date) ? 'var(--color-accent-500)' : 'transparent'}"
           onclick={() => switchToDay(cell.date)}
+          aria-label={`Open ${cell.date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })} in day view`}
         >
           {cell.day}
         </button>
@@ -102,7 +101,7 @@
               color={$accountColorMap[event.account_email]}
               showTime={!event.is_all_day}
               compact={true}
-              onclick={() => onEventClick?.(event)}
+              onclick={() => onEventClick?.(sourceCalendarEvent(event))}
             />
           {/each}
           {#if overflowCount > 0}

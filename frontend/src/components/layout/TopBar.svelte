@@ -5,7 +5,8 @@
   import { activeShortcuts, formatComboForDisplay, openCommandPalette } from '../../lib/shortcutStore.js';
   import { api } from '../../lib/api.js';
   import { preloadAuthenticatedPage } from '../../lib/lazyRoutes.js';
-  import { user, sidebarCollapsed, currentPage, currentMailbox, viewMode, overallSyncState, syncStatus, showToast, forceSyncPoll, selectedAccountId, accounts, accountColorMap, hideIgnored } from '../../lib/stores.js';
+  import { user, sidebarCollapsed, currentPage, currentMailbox, viewMode, overallSyncState, syncStatus, showToast, forceSyncPoll, stopSyncPolling, selectedAccountId, accounts, accountColorMap, hideIgnored } from '../../lib/stores.js';
+  import { stopRealtime } from '../../lib/realtime.js';
   import EmailSearchBox from '../email/EmailSearchBox.svelte';
 
   let syncDropdownOpen = $state(false);
@@ -119,6 +120,8 @@
     } catch {
       // Continue even if API fails
     }
+    stopSyncPolling();
+    stopRealtime();
     user.set(null);
   }
 

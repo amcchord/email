@@ -1,9 +1,60 @@
 <script>
+  import { onMount } from 'svelte';
   import { accountColorMap } from '../../lib/stores.js';
   import Icon from '../common/Icon.svelte';
-  import { isWebLocation, videoCallUrl } from '../../lib/calendarDisplay.js';
+  import { inclusiveAllDayEnd, isWebLocation, videoCallUrl } from '../../lib/calendarDisplay.js';
 
-  let { event, onclose = null } = $props();
+  let { event, onclose = null, returnFocus = null } = $props();
+  let dialog = $state(null);
+  let closeButton = $state(null);
+  const titleId = 'calendar-event-detail-title';
+
+  function displayTimeZone() {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    } catch {
+      return 'UTC';
+    }
+  }
+
+  function close() {
+    onclose?.();
+  }
+
+  function handleDialogKeydown(keyEvent) {
+    if (keyEvent.key === 'Escape') {
+      keyEvent.preventDefault();
+      close();
+      return;
+    }
+    if (keyEvent.key !== 'Tab' || !dialog) return;
+    const focusable = [...dialog.querySelectorAll(
+      'button:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+    )].filter(element => !element.hasAttribute('hidden'));
+    if (focusable.length === 0) {
+      keyEvent.preventDefault();
+      dialog.focus();
+      return;
+    }
+    const first = focusable[0];
+    const last = focusable.at(-1);
+    if (keyEvent.shiftKey && document.activeElement === first) {
+      keyEvent.preventDefault();
+      last.focus();
+    } else if (!keyEvent.shiftKey && document.activeElement === last) {
+      keyEvent.preventDefault();
+      first.focus();
+    }
+  }
+
+  onMount(() => {
+    const fallbackFocus = document.activeElement;
+    closeButton?.focus();
+    return () => {
+      const target = returnFocus?.isConnected ? returnFocus : fallbackFocus;
+      target?.focus?.();
+    };
+  });
 
   function formatDateTime(dt) {
     if (!dt) return '';
@@ -34,15 +85,22 @@
   function formatTimeRange() {
     if (event.is_all_day) {
       const start = formatDateOnly(event.start_date);
-      const end = formatDateOnly(event.end_date);
+      const end = formatDateOnly(inclusiveAllDayEnd(event.start_date, event.end_date));
       if (start === end || !event.end_date) return `${start} (All day)`;
       return `${start} - ${end} (All day)`;
     }
     const start = formatDateTime(event.start_time);
-    const end = event.end_time ? new Date(event.end_time).toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-    }) : '';
+    const startDate = event.start_time ? new Date(event.start_time) : null;
+    const endDate = event.end_time ? new Date(event.end_time) : null;
+    const sameLocalDay = startDate && endDate
+      && startDate.getFullYear() === endDate.getFullYear()
+      && startDate.getMonth() === endDate.getMonth()
+      && startDate.getDate() === endDate.getDate();
+    const end = endDate
+      ? (sameLocalDay
+        ? endDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+        : formatDateTime(event.end_time))
+      : '';
     return end ? `${start} - ${end}` : start;
   }
 
@@ -57,15 +115,21 @@
 </script>
 
 <div class="fixed inset-0 z-50 flex items-center justify-center">
-  <button class="absolute inset-0 bg-black/40" onclick={onclose} aria-label="Close event details"></button>
+  <button class="absolute inset-0 bg-black/40" onclick={close} aria-label="Close event details" tabindex="-1"></button>
   <div
-    class="relative z-10 w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-xl border shadow-2xl"
+    bind:this={dialog}
+    class="event-detail-dialog relative z-10 w-full max-w-lg max-h-[80vh] overflow-y-auto rounded-xl border shadow-2xl"
     style="background: var(--bg-primary); border-color: var(--border-color)"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby={titleId}
+    tabindex="-1"
+    onkeydown={handleDialogKeydown}
   >
     <!-- Header -->
     <div class="flex items-start justify-between p-5 border-b" style="border-color: var(--border-color)">
       <div class="flex-1 min-w-0 pr-4">
-        <h2 class="text-lg font-semibold leading-tight" style="color: var(--text-primary)">
+        <h2 id={titleId} class="text-lg font-semibold leading-tight" style="color: var(--text-primary)">
           {event.summary || '(No title)'}
         </h2>
         {#if event._mergedAccounts && event._mergedAccounts.length > 1}
@@ -92,8 +156,9 @@
         {/if}
       </div>
       <button
-        onclick={onclose}
-        class="p-1 rounded-md transition-fast"
+        bind:this={closeButton}
+        onclick={close}
+        class="event-detail-close p-1 rounded-md transition-fast"
         style="color: var(--text-tertiary)"
         aria-label="Close"
       >
@@ -110,9 +175,9 @@
         </span>
         <div>
           <div class="text-sm" style="color: var(--text-primary)">{formatTimeRange()}</div>
-          {#if event.timezone}
-            <div class="text-xs mt-0.5" style="color: var(--text-tertiary)">{event.timezone}</div>
-          {/if}
+          <div class="text-xs mt-0.5" style="color: var(--text-tertiary)">
+            Times shown in {displayTimeZone().replaceAll('_', ' ')}{event.timezone && event.timezone !== displayTimeZone() ? ` · Original timezone: ${event.timezone.replaceAll('_', ' ')}` : ''}
+          </div>
         </div>
       </div>
 
@@ -197,3 +262,21 @@
     </div>
   </div>
 </div>
+
+<style>
+  .event-detail-close {
+    min-width: 40px;
+    min-height: 40px;
+  }
+
+  @media (max-width: 767px) {
+    .event-detail-dialog {
+      width: calc(100% - 1rem);
+      max-height: calc(100vh - 1rem);
+    }
+    .event-detail-close {
+      min-width: 44px;
+      min-height: 44px;
+    }
+  }
+</style>

@@ -35,7 +35,7 @@
   class:text-xs={!compact}
   class:text-[10px]={compact}
   class:leading-tight={compact}
-  style="background: {lightColor}; color: {bgColor}"
+  style="background: {lightColor}; color: var(--text-primary)"
   onclick={onclick}
   onkeydown={handleKeydown}
   role="button"

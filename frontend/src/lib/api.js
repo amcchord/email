@@ -389,21 +389,21 @@ export const api = {
   deleteConversation: (id) => request('DELETE', `/chat/conversations/${id}`),
 
   // Calendar
-  getCalendarEvents: (params = {}) => {
+  getCalendarEvents: (params = {}, options = {}) => {
     const searchParams = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
       if (value !== null && value !== undefined && value !== '') {
         searchParams.set(key, value);
       }
     }
-    return request('GET', `/calendar/events?${searchParams.toString()}`);
+    return request('GET', `/calendar/events?${searchParams.toString()}`, null, options);
   },
   getCalendarEvent: (id) => request('GET', `/calendar/events/${id}`),
   triggerCalendarSync: (accountId = null) => {
     const qs = accountId ? `?account_id=${accountId}` : '';
     return request('POST', `/calendar/sync${qs}`);
   },
-  getCalendarSyncStatus: () => request('GET', '/calendar/sync-status'),
+  getCalendarSyncStatus: (options = {}) => request('GET', '/calendar/sync-status', null, options),
   getUpcomingEvents: (days = 7) => request('GET', `/calendar/upcoming?days=${days}`),
 
   // AI Preferences

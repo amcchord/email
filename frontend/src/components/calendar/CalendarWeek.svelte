@@ -2,7 +2,7 @@
   import { accountColorMap } from '../../lib/stores.js';
   import { mergeEvents, layoutEvents } from '../../lib/calendarLayout.js';
   import { onMount } from 'svelte';
-  import { locationLabel } from '../../lib/calendarDisplay.js';
+  import { locationLabel, sourceCalendarEvent, timedEventsForDay } from '../../lib/calendarDisplay.js';
 
   function activateEvent(event, calendarEvent) {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -55,13 +55,7 @@
   }
 
   function getTimedEvents(date) {
-    return events.filter(e => {
-      if (e.is_all_day || !e.start_time) return false;
-      const eventDate = new Date(e.start_time);
-      return eventDate.getFullYear() === date.getFullYear() &&
-        eventDate.getMonth() === date.getMonth() &&
-        eventDate.getDate() === date.getDate();
-    });
+    return timedEventsForDay(events, date);
   }
 
   const PX_PER_HOUR = 48;
@@ -106,14 +100,21 @@
   let hasAllDay = $derived(weekDays.some(d => getAllDayEvents(d).length > 0));
 
   let scrollContainer = $state(null);
+  let autoScrolledWeek = null;
 
   onMount(() => {
     updateCurrentTime();
     const interval = setInterval(updateCurrentTime, 60000);
-    if (scrollContainer) {
-      scrollContainer.scrollTop = 8 * 48 - 20;
-    }
     return () => clearInterval(interval);
+  });
+
+  $effect(() => {
+    const key = dateStr(weekStart);
+    const items = weekDays.flatMap(day => getDayLayout(day));
+    if (!scrollContainer || autoScrolledWeek === key || items.length === 0) return;
+    const earliestTop = Math.min(...items.map(item => item.top));
+    scrollContainer.scrollTop = Math.max(0, Math.min(8 * 48 - 20, earliestTop - 20));
+    autoScrolledWeek = key;
   });
 </script>
 
@@ -130,7 +131,7 @@
             <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
             <div
               class="rounded px-1 py-0.5 text-[10px] leading-tight truncate cursor-pointer flex items-center gap-0.5"
-              style="background: {color ? color.light : 'var(--bg-tertiary)'}; color: {color ? color.bg : 'var(--text-secondary)'}"
+              style="background: {color ? color.light : 'var(--bg-tertiary)'}; color: var(--text-primary)"
               onclick={() => onEventClick?.(event)}
               onkeydown={(keyEvent) => activateEvent(keyEvent, event)}
               role="button"
@@ -219,20 +220,20 @@
               <div
                 class="absolute px-1 py-0.5 overflow-hidden cursor-pointer"
                 style="top: {item.top}px; height: {item.height}px; left: {item.left}; width: {item.width}; background: {color ? color.light : 'var(--bg-tertiary)'}; opacity: 0.3; z-index: {item.zIndex}; border-left: 3px solid {color ? color.bg : 'var(--color-accent-500)'}"
-                onclick={() => onEventClick?.(item.event)}
-                onkeydown={(event) => activateEvent(event, item.event)}
+                onclick={() => onEventClick?.(sourceCalendarEvent(item.event))}
+                onkeydown={(event) => activateEvent(event, sourceCalendarEvent(item.event))}
                 role="button"
                 tabindex="0"
                 aria-label="Open {item.event.summary || 'untitled'} event"
               >
-                <div class="text-[10px] font-medium leading-tight truncate" style="color: {color ? color.bg : 'var(--text-primary)'}">{item.event.summary || '(No title)'}</div>
+                <div class="text-[10px] font-medium leading-tight truncate" style="color: var(--text-primary)">{item.event.summary || '(No title)'}</div>
               </div>
             {:else}
               <div
                 class="absolute rounded px-1 py-0.5 overflow-hidden cursor-pointer transition-opacity hover:opacity-80 hover:!z-40"
-                style="top: {item.top}px; height: {item.height}px; left: {item.left}; width: {item.width}; z-index: {item.zIndex}; background: {color ? color.light : 'var(--bg-tertiary)'}; color: {color ? color.bg : 'var(--text-primary)'}"
-                onclick={() => onEventClick?.(item.event)}
-                onkeydown={(event) => activateEvent(event, item.event)}
+                style="top: {item.top}px; height: {item.height}px; left: {item.left}; width: {item.width}; z-index: {item.zIndex}; background: {color ? color.light : 'var(--bg-tertiary)'}; color: var(--text-primary)"
+                onclick={() => onEventClick?.(sourceCalendarEvent(item.event))}
+                onkeydown={(event) => activateEvent(event, sourceCalendarEvent(item.event))}
                 role="button"
                 tabindex="0"
                 aria-label="Open {item.event.summary || 'untitled'} event at {formatEventTime(item.event)}"

@@ -34,6 +34,7 @@ free-form questions about your inbox without touching the web UI.
   - [Newspaper / week-ahead polling cadence](#newspaper--week-ahead-polling-cadence)
   - [Ask the mail assistant from a script](#ask-the-mail-assistant-from-a-script)
 - [Security notes](#security-notes)
+- [Web session-only calendar reads](#web-session-only-calendar-reads)
 - [Web session-only structured email search](#web-session-only-structured-email-search)
 - [Web session-only attachment preview and download](#web-session-only-attachment-preview-and-download)
 - [Web session-only durable mail actions](#web-session-only-durable-mail-actions)
@@ -600,6 +601,29 @@ curl -s -X POST -H "Authorization: Bearer $TOKEN" \
 Click **Revoke** next to the token in **Settings → Profile & Accounts →
 API Tokens**. Revocation is immediate; the next request from any client
 using that token returns 401.
+
+## Web session-only calendar reads
+
+The authenticated Calendar screen reads the local Google Calendar cache through:
+
+```text
+GET /api/calendar/events?start=YYYY-MM-DD&end=YYYY-MM-DD&tz=America/New_York&account_id={optional_owned_id}
+GET /api/calendar/sync-status
+```
+
+`start` and `end` are inclusive local calendar dates interpreted in the IANA
+`tz`. Timed-event selection uses the equivalent half-open instant range
+`[start at local midnight, day after end at local midnight)`, so DST transition
+days retain their real 23- or 25-hour duration. An event overlaps when it starts
+before the exclusive range end and ends after the range start. Google all-day
+events use their native exclusive `end_date`, with the same half-open overlap
+rule. Events ending exactly at the requested start are excluded.
+
+An optional positive `account_id` must belong to the session user; otherwise
+the route returns 404. Invalid dates, a reversed range, or an unknown timezone
+return 400. The response remains `{ "events": [...], "total": n }` and contains
+cached data only; `/sync-status` is the separate freshness and connection-health
+authority used by the UI. Public API tokens cannot call these routes.
 
 ## Web session-only structured email search
 

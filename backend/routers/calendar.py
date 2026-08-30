@@ -16,6 +16,31 @@ from backend.routers.auth import get_current_user
 router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 
 
+def _calendar_range_utc(start: str, end: str, tz: str) -> tuple[datetime, datetime]:
+    """Return a half-open local-date range converted to UTC."""
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    try:
+        local_tz = ZoneInfo(tz) if tz else timezone.utc
+    except ZoneInfoNotFoundError:
+        raise HTTPException(status_code=400, detail=f"Unknown timezone: {tz}")
+
+    try:
+        start_day = datetime.strptime(start, "%Y-%m-%d")
+        end_day = datetime.strptime(end, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    if end_day < start_day:
+        raise HTTPException(status_code=400, detail="End date must not be before start date")
+
+    start_local = start_day.replace(tzinfo=local_tz)
+    end_exclusive_local = (end_day + timedelta(days=1)).replace(tzinfo=local_tz)
+    return (
+        start_local.astimezone(timezone.utc),
+        end_exclusive_local.astimezone(timezone.utc),
+    )
+
+
 async def _get_user_account_ids(db: AsyncSession, user: User) -> list[int]:
     """Get all account IDs belonging to the current user."""
     result = await db.execute(
@@ -64,27 +89,13 @@ async def list_calendar_events(
 
     target_ids = [account_id] if account_id else account_ids
 
-    try:
-        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-        try:
-            local_tz = ZoneInfo(tz) if tz else timezone.utc
-        except ZoneInfoNotFoundError:
-            raise HTTPException(status_code=400, detail=f"Unknown timezone: {tz}")
-        start_local = datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=local_tz)
-        end_local = datetime.strptime(end, "%Y-%m-%d").replace(
-            hour=23, minute=59, second=59, tzinfo=local_tz
-        )
-        # Convert to UTC for comparison against stored start_time/end_time
-        start_dt = start_local.astimezone(timezone.utc)
-        end_dt = end_local.astimezone(timezone.utc)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    start_dt, end_exclusive_dt = _calendar_range_utc(start, end, tz)
 
     # Query for timed events in range
     timed_condition = and_(
         CalendarEvent.is_all_day == False,
-        CalendarEvent.start_time <= end_dt,
-        CalendarEvent.end_time >= start_dt,
+        CalendarEvent.start_time < end_exclusive_dt,
+        CalendarEvent.end_time > start_dt,
     )
 
     # Query for all-day events in range
@@ -93,7 +104,7 @@ async def list_calendar_events(
     allday_condition = and_(
         CalendarEvent.is_all_day == True,
         CalendarEvent.start_date <= end_str,
-        CalendarEvent.end_date >= start_str,
+        CalendarEvent.end_date > start_str,
     )
 
     result = await db.execute(
