@@ -3,6 +3,53 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-29 — Scheduling delegation and trusted-colleague context
+
+### Scope
+
+Teach triage, follow-up options, chat, and mail queues that Andrea Durbin owns
+Austin's scheduling and that Angie Mecham is a trusted close colleague, with
+special handling when Andrea is included on To or Cc.
+
+### Completed
+
+- Added one structured workflow-context module for known relationships,
+  address normalization, prompt context, deterministic AI result correction,
+  and a shared SQL predicate for delegated scheduling.
+- Included Cc recipients in email analysis, sent-mail classification, thread
+  analysis, action-item replies, and custom-reply prompts.
+- Made "Andrea to coordinate" the default scheduling quick reply when a
+  response is needed and Andrea is not the sender.
+- Removed routine low/normal-priority scheduling already sent to Andrea from
+  Austin's action items, needs-reply, awaiting-response, and important queues;
+  high/urgent exceptions remain visible.
+- Applied the workflow correction at read time as well as analysis time so
+  existing AI rows improve without a destructive reprocessing job.
+- Prevented direct questions from Andrea from being delegated back to her and
+  prevented Andrea or Angie from remaining classified as cold outreach.
+- Coordinated file ownership and Git timing with the parallel app-wide UX task;
+  neither task staged or rewrote the other's work.
+
+### Verification
+
+- `make test`: 128 tests passed.
+- Added eight focused tests for address parsing, Cc context, routine and urgent
+  scheduling, Andrea handoff options, direct mail from Andrea, Angie trust, and
+  PostgreSQL queue predicates.
+- Needs-reply and awaiting-response SQLAlchemy queries compiled successfully
+  with the PostgreSQL dialect.
+- Python bytecode compilation and `git diff --check`: passed.
+
+### Production Actions
+
+- None. This work is isolated on `codex/andrea-scheduling-workflow`; it was not
+  pushed or deployed and made no production data or configuration changes.
+
+### Next
+
+Review the focused commit, then push/deploy only with explicit production
+authorization and verify health plus representative Flow/Inbox behavior.
+
 ## 2026-08-29 — App-wide UX release implementation
 
 ### Scope

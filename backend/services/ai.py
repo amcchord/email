@@ -21,6 +21,11 @@ from backend.services.ai_models import (
     is_fast_variant,
     is_valid_model,
 )
+from backend.services.workflow_context import (
+    WORKFLOW_CONTEXT,
+    apply_workflow_routing,
+    workflow_context_for_message,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -68,11 +73,13 @@ conversation_type guide:
 - "other": anything that does not fit the above categories
 
 reply_options guide (for SCHEDULING emails):
-- ALWAYS include an "accept" option with a friendly acceptance reply body
-- ALWAYS include a "decline" option with a polite decline reply body
+- Follow any scheduling-delegation rules in the per-email workflow context before generating options
+- When scheduling is delegated to an assistant, make the assistant handoff the first/default option; do not make the user coordinate availability
+- If the assistant is already on To or Cc and no substantive decision is addressed to the user, set needs_reply=false and reply_options=null
+- Include "accept" and "decline" options when the user is actually being asked to make that decision
 - If calendar events show a conflict at the proposed time, mention the conflict in the decline body (but do NOT reveal the conflicting event title)
 - Optionally include a "defer" option suggesting alternative times or asking to check back later
-- If the user has a scheduling assistant, suggest coordinating through them
+- If no delegation context applies, include friendly "accept" and polite "decline" options
 
 reply_options guide (for NON-SCHEDULING emails):
 - If the email needs a reply, include a "custom" option with a helpful default reply body
@@ -88,7 +95,7 @@ Cold sales emails are crafted to avoid spam filters -- they use subtle, polite l
 When cold outreach is detected: set is_subscription=true, needs_reply=false, category="can_ignore", priority=0. Do NOT suggest the user reply to cold outreach."""
 
 
-CLASSIFY_SENT_SYSTEM = """You decide whether a sent email expects a reply from the recipient. Respond with ONLY valid JSON: {"expects_reply": <true|false>}. expects_reply is true if the sender is asking a question, making a request, or otherwise expects the recipient to respond; false if this is a closing message, confirmation, acknowledgment, or statement that does not require a response."""
+CLASSIFY_SENT_SYSTEM = """You decide whether a sent email belongs in the user's personal awaiting-response queue. Respond with ONLY valid JSON: {"expects_reply": <true|false>}. expects_reply is true if the sender is asking a question, making a request, or otherwise expects a response the user should personally monitor; false if this is a closing message, confirmation, acknowledgment, statement that does not require a response, or routine work explicitly delegated to another recipient in the workflow context."""
 
 
 THREAD_ANALYSIS_SYSTEM = """You analyze entire email threads. Respond with ONLY valid JSON (no markdown fences) in this exact format:
@@ -577,6 +584,7 @@ class AIService:
             context_parts.append(f"About the user: {user_context}")
         if account_description:
             context_parts.append(f"This email is from their account used for: {account_description}")
+        context_parts.append(workflow_context_for_message(email))
         if context_parts:
             context_preamble = "\n".join(context_parts) + "\n\nUse this context to prioritize and categorize the email appropriately.\n"
 
@@ -644,31 +652,19 @@ class AIService:
             except Exception as cal_err:
                 logger.debug(f"Could not load calendar context: {cal_err}")
 
-        # Build scheduling assistant hint if the user's context mentions one
-        scheduling_assistant_hint = ""
-        combined_context = ((user_context or "") + " " + (account_description or "")).lower()
-        assistant_keywords = ["assistant", "ea", "executive assistant", "scheduler",
-                              "scheduling assistant", "admin assistant", "office manager"]
-        has_scheduling_assistant = any(kw in combined_context for kw in assistant_keywords)
-        if has_scheduling_assistant:
-            scheduling_assistant_hint = (
-                "\nNote: The user's context mentions they have a scheduling assistant or similar. "
-                "When generating scheduling-related replies, consider suggesting that the sender "
-                "coordinate with the assistant or that the user will check with their assistant.\n"
-            )
-
         scheduling_marker = (
             "This IS a scheduling email — follow the scheduling reply_options guide."
             if is_scheduling
             else "This is NOT a scheduling email — follow the non-scheduling reply_options guide."
         )
 
-        return f"""{context_preamble}{calendar_context}{scheduling_assistant_hint}{scheduling_marker}
+        return f"""{context_preamble}{calendar_context}{scheduling_marker}
 
 Analyze this email and provide a structured analysis.
 
 From: {email.from_name or ''} <{email.from_address or ''}>
 To: {json.dumps(email.to_addresses or [])}
+Cc: {json.dumps(email.cc_addresses or [])}
 Subject: {email.subject or '(no subject)'}
 Date: {email.date}
 {unsub_hint}{age_hint}{thread_context}
@@ -677,7 +673,7 @@ Body:
 
     def _build_analysis_row(
         self,
-        email_id: int,
+        email: Email,
         analysis_data: dict,
         unsub_info: Optional[dict],
         tokens_used: int,
@@ -686,6 +682,7 @@ Body:
 
         Validates `reply_options` and applies sensible defaults.
         """
+        analysis_data = apply_workflow_routing(email, analysis_data)
         raw_reply_options = analysis_data.get("reply_options")
         reply_options = None
         if raw_reply_options and isinstance(raw_reply_options, list):
@@ -703,7 +700,7 @@ Body:
                 reply_options = validated
 
         return AIAnalysis(
-            email_id=email_id,
+            email_id=email.id,
             category=analysis_data.get("category", "fyi"),
             email_type=analysis_data.get("email_type", "personal"),
             conversation_type=analysis_data.get("conversation_type", "other"),
@@ -769,7 +766,7 @@ Body:
                 logger.error(f"AI analysis returned no tool_use for email {email_id}")
                 return None
 
-            analysis = self._build_analysis_row(email_id, analysis_data, unsub_info, tokens_used)
+            analysis = self._build_analysis_row(email, analysis_data, unsub_info, tokens_used)
             db.add(analysis)
             await db.commit()
             await db.refresh(analysis)
@@ -845,8 +842,11 @@ Body:
                         + "\n".join(lines) + "\n"
                     )
 
-            prompt = f"""From: {email.from_name or ''} <{email.from_address or ''}>
+            prompt = f"""{workflow_context_for_message(email)}
+
+From: {email.from_name or ''} <{email.from_address or ''}>
 To: {json.dumps(email.to_addresses or [])}
+Cc: {json.dumps(email.cc_addresses or [])}
 Subject: {email.subject or '(no subject)'}
 Date: {email.date}
 {thread_context}
@@ -912,20 +912,23 @@ Body (quoted text removed):
                 body = e.body_text or e.snippet or ""
                 if len(body) > 2000:
                     body = body[:2000] + "..."
-                thread_text += f"\n---\n{direction} From: {e.from_name} <{e.from_address}>\nDate: {e.date}\nSubject: {e.subject}\n\n{body}\n"
+                thread_text += (
+                    f"\n---\n{direction} From: {e.from_name} <{e.from_address}>"
+                    f"\nTo: {json.dumps(e.to_addresses or [])}"
+                    f"\nCc: {json.dumps(e.cc_addresses or [])}"
+                    f"\nDate: {e.date}\nSubject: {e.subject}\n\n{body}\n"
+                )
 
             if len(thread_text) > 15000:
                 thread_text = thread_text[:15000] + "\n... (truncated)"
 
             # Build user context preamble
-            context_preamble = ""
-            if user_context or account_description:
-                context_parts = []
-                if user_context:
-                    context_parts.append(f"About the user: {user_context}")
-                if account_description:
-                    context_parts.append(f"This thread is from their account used for: {account_description}")
-                context_preamble = "\n".join(context_parts) + "\n\nUse this context to provide a more relevant summary.\n\n"
+            context_parts = [WORKFLOW_CONTEXT]
+            if user_context:
+                context_parts.append(f"About the user: {user_context}")
+            if account_description:
+                context_parts.append(f"This thread is from their account used for: {account_description}")
+            context_preamble = "\n".join(context_parts) + "\n\nUse this context to provide a more relevant summary.\n\n"
 
             prompt = f"""{context_preamble}Analyze this email thread and provide a comprehensive summary.
 
@@ -1161,14 +1164,17 @@ Body (quoted text removed):
                 body = body[:3000] + "..."
 
             # Build user context preamble for reply drafting
-            context_preamble = ""
+            context_parts = [workflow_context_for_message(email)]
             if user_context:
-                context_preamble = f"About the person writing this reply: {user_context}\n\nUse this context to write a reply that matches their role and tone.\n\n"
+                context_parts.append(f"About the person writing this reply: {user_context}")
+            context_preamble = "\n".join(context_parts) + "\n\nUse this context to write a reply that matches their role and tone.\n\n"
 
             prompt = f"""{context_preamble}You need to draft a reply to an email to address a specific action item.
 
 Original email:
 From: {email.from_name or ''} <{email.from_address or ''}>
+To: {json.dumps(email.to_addresses or [])}
+Cc: {json.dumps(email.cc_addresses or [])}
 Subject: {email.subject or '(no subject)'}
 Date: {email.date}
 
@@ -1243,6 +1249,7 @@ Write a concise, professional reply that addresses this specific action item. Wr
                 context_parts.append(f"About the user: {user_context}")
             if account_description:
                 context_parts.append(f"This email is from their account used for: {account_description}")
+            context_parts.append(workflow_context_for_message(email))
             if context_parts:
                 context_preamble = "\n".join(context_parts) + "\n\n"
 
@@ -1294,6 +1301,7 @@ Write a concise, professional reply that addresses this specific action item. Wr
             prompt = f"""{context_preamble}{calendar_context}The email the user is currently viewing:
 From: {email.from_name or ''} <{email.from_address or ''}>
 To: {json.dumps(email.to_addresses or [])}
+Cc: {json.dumps(email.cc_addresses or [])}
 Subject: {email.subject or '(no subject)'}
 Date: {email.date}
 {thread_context}
@@ -1497,7 +1505,7 @@ User's instruction: {user_prompt}"""
                     if existing:
                         continue
                     row = self._build_analysis_row(
-                        eid, analysis_data, unsub_by_id.get(eid), tokens_used,
+                        emails[eid], analysis_data, unsub_by_id.get(eid), tokens_used,
                     )
                     db.add(row)
                     await db.commit()

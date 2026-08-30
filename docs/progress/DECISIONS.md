@@ -47,3 +47,18 @@ add a new entry that explicitly supersedes the old one.
   production data replica.
 - Consequence: Local integration work uses fakes or separately provisioned
   non-production credentials.
+
+## D-005 — Treat known working relationships as routing data
+
+- Date: 2026-08-29
+- Status: accepted
+- Decision: Encode Andrea Durbin as Austin's default scheduling owner and Angie
+  Mecham as a trusted close colleague in a single workflow-context module used
+  by prompts, presentation, and mail queues.
+- Reason: Free-form LLM inference is not reliable enough for stable delegation
+  and trusted-sender behavior, especially when Andrea is included on Cc.
+- Consequence: Routine low/normal-priority scheduling already routed to Andrea
+  does not become Austin's action item or follow-up; high/urgent messages still
+  surface, direct questions from Andrea remain Austin's responsibility, and
+  future relationship changes should be made in the centralized workflow
+  context rather than scattered prompt text.

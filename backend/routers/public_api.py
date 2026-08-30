@@ -50,6 +50,7 @@ from backend.schemas.public_api import (
     PublicWeekEvent,
     PublicWeekResponse,
 )
+from backend.services.workflow_context import delegated_scheduling_sql
 from backend.utils.api_auth import api_token_rate_limit_key, get_api_user
 
 logger = logging.getLogger(__name__)
@@ -377,6 +378,11 @@ async def _fetch_important_emails(
         .join(AIAnalysis, AIAnalysis.email_id == Email.id)
         .where(Email.account_id.in_(account_emails.keys()))
     )
+    delegated_scheduling = delegated_scheduling_sql(
+        AIAnalysis.conversation_type,
+        Email.to_addresses,
+        Email.cc_addresses,
+    )
 
     if mailbox == "STARRED":
         query = query.where(Email.is_starred == True)
@@ -405,7 +411,12 @@ async def _fetch_important_emails(
                     AIAnalysis.needs_reply_ignored.is_(None),
                 ),
             ),
-        )
+        ),
+        or_(
+            AIAnalysis.conversation_type.is_(None),
+            ~delegated_scheduling,
+            AIAnalysis.priority >= 2,
+        ),
     )
 
     # Order by priority desc, then needs_reply, then date

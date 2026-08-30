@@ -4,22 +4,21 @@ Last updated: 2026-08-29
 
 ## Active Objective
 
-Make Google account authorization durable beyond the seven-day lifetime that
-applies while an External OAuth app remains in Testing. The application now
-preserves refresh tokens and presents structured reconnect guidance; the
-remaining step is an explicitly separate Google Cloud publishing change and
-one-time reauthorization of affected accounts.
+Make Austin's real working relationships part of mail intelligence: Andrea
+Durbin owns routine scheduling, and Angie Mecham is a trusted close colleague.
+The local implementation is complete and verified; pushing and deploying it
+remain separate production actions.
 
 ## Baseline
 
-- Local checkout: release branch containing the UX code through `d0ba84d`;
-  the reviewed commits are published on `origin/main`.
+- Local checkout: `codex/andrea-scheduling-workflow`, based on the published UX
+  release worklog at `e849e9f`.
 - Repository origin: `https://github.com/amcchord/email.git`.
 - Production host: `root@email.mcchord.net` (host currently reports
   `localhost`; do not rely on the server hostname for identity).
 - Production OS: Debian 13 (trixie).
 - Production checkout: `/opt/mail`, owned by `mailapp:mailapp`.
-- Production Git at observation: clean `main` at `d0ba84d`, aligned with
+- Production Git at observation: clean `main` at `e849e9f`, aligned with
   `origin/main`.
 - Active application services at observation: `mailapp`, `mailworker`,
   `mailworker-cron`, `mailtui`, and `caddy`.
@@ -31,6 +30,22 @@ This is a point-in-time snapshot. Use `make remote-status` before relying on
 live state.
 
 ## Work Queue
+
+### P0 — Scheduling delegation and trusted colleagues
+
+- State: ready
+- Why: Austin almost never coordinates scheduling himself; Andrea owns that
+  work, and messages involving Andrea or Angie need relationship-aware triage.
+- Scope: AI analysis and reply prompts, thread/chat context, read-time email
+  presentation, needs-reply/awaiting-response/important queues, and focused
+  backend tests.
+- Acceptance: routine low/normal-priority scheduling already sent to Andrea is
+  removed from Austin's action queues; high/urgent exceptions remain visible;
+  scheduling replies default to Andrea; direct questions from Andrea are not
+  delegated back to her; and Angie is never treated as cold outreach.
+- Next: Review the focused local commit and, with explicit release
+  authorization, push and deploy it without a migration, then verify mailapp
+  health and representative Flow/Inbox behavior.
 
 ### P1 — Durable Google account authorization
 
@@ -55,13 +70,18 @@ live state.
 - `make check` after the UX implementation: 128 tests passed and the frontend
   production build completed with no Svelte accessibility diagnostics. The
   remaining build notice is the existing large JavaScript chunk advisory.
+- `make test` after the workflow-context implementation: 128 tests passed,
+  including eight focused Andrea/Angie routing tests.
+- Focused PostgreSQL compilation passed for the needs-reply and
+  awaiting-response queue queries.
 - Three follow-up `make frontend-build` runs passed for the mobile Compose
   overflow correction and concise sender label found during visual QA.
 - Authenticated production screenshots passed at 1440×900 and 390×844 for
   Flow, Inbox, Calendar, Compose, Subscriptions, Stats, and the More menu.
-- `make remote-status` after deployment: production Git was clean and aligned
-  at `d0ba84d`, all seven checked services were active, and `/api/health`
-  returned status `ok`; the post-release mailapp error log had no entries.
+- `make remote-status` after the workflow implementation: production Git was
+  clean and aligned at `e849e9f`, all seven checked services were active, and
+  `/api/health` returned status `ok`; the post-release mailapp error log had no
+  entries.
 - `npm ci`: reported 11 dependency advisories (4 moderate, 6 high, 1 critical).
   Dependency review is future scoped work; no automatic audit fix was applied.
 
@@ -86,6 +106,6 @@ live state.
 
 ## Next Safe Action
 
-Confirm the Google Cloud OAuth application publishing status without changing
-it. If it remains External/Testing, obtain explicit authorization for the
-publishing change and subsequent one-time reauthorization of affected accounts.
+Review the `codex/andrea-scheduling-workflow` commit. Push and deploy it only
+with explicit production authorization; no schema migration or data rewrite is
+required because read-time routing also corrects existing AI analyses.

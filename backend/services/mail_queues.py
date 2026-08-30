@@ -26,6 +26,7 @@ from backend.models.account import GoogleAccount
 from backend.models.ai import AIAnalysis, ThreadDigest
 from backend.models.email import Email
 from backend.routers.emails import jsonb_contains
+from backend.services.workflow_context import delegated_scheduling_sql
 
 
 # ── Needs a reply ───────────────────────────────────────────────────────
@@ -40,6 +41,11 @@ def _needs_reply_deduped(account_ids: list[int], *, exclude_category: Optional[s
     query in `backend/routers/ai.py::get_needs_reply`.
     """
     account_filter = Email.account_id.in_(account_ids)
+    delegated_scheduling = delegated_scheduling_sql(
+        AIAnalysis.conversation_type,
+        Email.to_addresses,
+        Email.cc_addresses,
+    )
 
     SentEmail = aliased(Email, flat=True)
     has_later_reply = (
@@ -98,6 +104,10 @@ def _needs_reply_deduped(account_ids: list[int], *, exclude_category: Optional[s
             Email.is_trash == False,
             Email.is_spam == False,
             AIAnalysis.is_subscription == False,
+            # Andrea owns routine scheduling. Keep high/urgent exceptions in
+            # Austin's personal reply queue, including for analyses created
+            # before the workflow prompt was improved.
+            or_(~delegated_scheduling, AIAnalysis.priority >= 2),
             ~has_later_reply,
             ~has_direct_reply_to,
             *([AIAnalysis.category != exclude_category] if exclude_category else []),
@@ -156,6 +166,11 @@ def _awaiting_response_deduped(account_ids: list[int]):
     heuristic), collapsed cross-account by Message-ID.
     """
     account_filter = Email.account_id.in_(account_ids)
+    delegated_scheduling = delegated_scheduling_sql(
+        ThreadDigest.conversation_type,
+        Email.to_addresses,
+        Email.cc_addresses,
+    )
 
     ReplyEmail = aliased(Email, flat=True)
     has_reply = (
@@ -249,6 +264,10 @@ def _awaiting_response_deduped(account_ids: list[int]):
             or_(
                 ThreadDigest.is_resolved == False,
                 ThreadDigest.is_resolved.is_(None),
+            ),
+            or_(
+                ThreadDigest.conversation_type.is_(None),
+                ~delegated_scheduling,
             ),
             ~should_exclude,
         )

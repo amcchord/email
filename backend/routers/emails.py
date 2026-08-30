@@ -19,6 +19,7 @@ from backend.schemas.email import (
     EmailAddress,
 )
 from backend.routers.auth import get_current_user
+from backend.services.workflow_context import apply_workflow_routing, delegated_scheduling_sql
 
 router = APIRouter(prefix="/api/emails", tags=["emails"])
 
@@ -31,6 +32,29 @@ MAILBOX_LABEL_MAP = {
     "TRASH": "TRASH",
     "ALL": None,
 }
+
+
+def _workflow_adjusted_analysis(email: Email) -> Optional[dict]:
+    """Return presentation values corrected for known workflow delegation.
+
+    Applying this at read time fixes already-analyzed messages immediately;
+    new analyses persist the same corrections in ``AIService``.
+    """
+    analysis = email.ai_analysis
+    if not analysis:
+        return None
+    return apply_workflow_routing(email, {
+        "category": analysis.category,
+        "email_type": analysis.email_type,
+        "conversation_type": analysis.conversation_type,
+        "priority": analysis.priority,
+        "action_items": analysis.action_items,
+        "context": analysis.context,
+        "suggested_reply": analysis.suggested_reply,
+        "reply_options": analysis.reply_options,
+        "is_subscription": analysis.is_subscription,
+        "needs_reply": analysis.needs_reply,
+    })
 
 
 @router.get("/", response_model=EmailListResponse)
@@ -135,6 +159,19 @@ async def list_emails(
         # mirrors the logic in /api/ai/needs-reply and catches any stale
         # flags that haven't been cleared yet by the post-sync job.
         if needs_reply:
+            delegated_scheduling = delegated_scheduling_sql(
+                AIAnalysis.conversation_type,
+                Email.to_addresses,
+                Email.cc_addresses,
+            )
+            query = query.where(
+                or_(
+                    AIAnalysis.conversation_type.is_(None),
+                    ~delegated_scheduling,
+                    AIAnalysis.priority >= 2,
+                )
+            )
+
             from sqlalchemy.orm import aliased
             SentEmail = aliased(Email, flat=True)
             has_later_reply = (
@@ -236,12 +273,13 @@ async def list_emails(
         needs_rpl = None
         needs_rpl_ignored = None
         unsub_info = None
-        if e.ai_analysis:
-            ai_cat = e.ai_analysis.category
-            ai_pri = e.ai_analysis.priority
-            ai_etype = e.ai_analysis.email_type
-            is_sub = e.ai_analysis.is_subscription
-            needs_rpl = e.ai_analysis.needs_reply
+        analysis_view = _workflow_adjusted_analysis(e)
+        if analysis_view:
+            ai_cat = analysis_view["category"]
+            ai_pri = analysis_view["priority"]
+            ai_etype = analysis_view["email_type"]
+            is_sub = analysis_view["is_subscription"]
+            needs_rpl = analysis_view["needs_reply"]
             needs_rpl_ignored = e.ai_analysis.needs_reply_ignored
             unsub_info = e.ai_analysis.unsubscribe_info
 
@@ -351,19 +389,20 @@ async def get_email(
     ai_model = None
     ai_suggested_reply = None
     ai_reply_options = None
-    if email.ai_analysis:
+    analysis_view = _workflow_adjusted_analysis(email)
+    if analysis_view:
         ai_summary = email.ai_analysis.summary
-        ai_actions = email.ai_analysis.action_items
-        ai_cat = email.ai_analysis.category
-        ai_pri = email.ai_analysis.priority
-        ai_etype = email.ai_analysis.email_type
-        is_sub = email.ai_analysis.is_subscription
-        needs_rpl = email.ai_analysis.needs_reply
+        ai_actions = analysis_view["action_items"]
+        ai_cat = analysis_view["category"]
+        ai_pri = analysis_view["priority"]
+        ai_etype = analysis_view["email_type"]
+        is_sub = analysis_view["is_subscription"]
+        needs_rpl = analysis_view["needs_reply"]
         needs_rpl_ignored = email.ai_analysis.needs_reply_ignored
         unsub_info = email.ai_analysis.unsubscribe_info
         ai_model = email.ai_analysis.model_used
-        ai_suggested_reply = email.ai_analysis.suggested_reply
-        ai_reply_options = email.ai_analysis.reply_options
+        ai_suggested_reply = analysis_view["suggested_reply"]
+        ai_reply_options = analysis_view["reply_options"]
 
     return EmailDetail(
         id=email.id,

@@ -22,6 +22,7 @@ from backend.models.email import Email, Attachment
 from backend.models.account import GoogleAccount
 from backend.models.user import User
 from backend.schemas.auth import DEFAULT_AI_PREFERENCES
+from backend.services.workflow_context import WORKFLOW_CONTEXT
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -1438,21 +1439,22 @@ class ChatService:
         total_tokens = 0
 
         # Build user context supplement for system prompts
-        user_context_block = ""
         about_me = getattr(user, "about_me", None)
-        if about_me or account_contexts:
-            parts = ["\n\nUSER CONTEXT (use this to understand the user's role, priorities, and how to tailor your answers):"]
-            if about_me:
-                parts.append(f"About the user: {about_me}")
-            if account_contexts:
-                parts.append("Connected email accounts:")
-                for ac in account_contexts:
-                    desc = ac.get("description")
-                    if desc:
-                        parts.append(f"  - {ac['email']}: {desc}")
-                    else:
-                        parts.append(f"  - {ac['email']}")
-            user_context_block = "\n".join(parts)
+        parts = [
+            "\n\nUSER CONTEXT (use this to understand the user's role, priorities, and how to tailor your answers):",
+            WORKFLOW_CONTEXT,
+        ]
+        if about_me:
+            parts.append(f"About the user: {about_me}")
+        if account_contexts:
+            parts.append("Connected email accounts:")
+            for ac in account_contexts:
+                desc = ac.get("description")
+                if desc:
+                    parts.append(f"  - {ac['email']}: {desc}")
+                else:
+                    parts.append(f"  - {ac['email']}")
+        user_context_block = "\n".join(parts)
 
         # The static prompt portion is cached; the per-user context block is
         # the dynamic suffix, which still benefits from caching at the user
