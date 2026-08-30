@@ -3,6 +3,57 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Calendar state-integrity candidate
+
+### Scope
+
+Remove false-empty, stale-response, account-authority, date-boundary, and
+responsive/accessibility ambiguity from Calendar while leaving real mail and
+calendars read-only and preserving separately owned terminal/e-ink and AI work.
+
+### Completed
+
+- Added immutable range/account/timezone request identity, cancellation,
+  same-key cache refresh, explicit loading/error/retry states, and stale modal
+  closure.
+- Centralized generation-scoped account authority across polling,
+  login/logout, retry, and same-document re-login; removed Sidebar’s competing
+  account writer.
+- Separated cached Reload from Google Sync, captured submitted sync scope, and
+  required all targets to finish or produce honest unconfirmed timeout copy.
+- Added connection/freshness coverage states and limited verified-empty claims
+  to ranges inside every visible account’s successful full-sync window.
+- Corrected API DST/half-open range selection, Google all-day exclusive ends,
+  cross-midnight display/geometry, merged counts, event-detail dates, focus
+  behavior, mobile views/controls, timezone disclosure, and accessible labels.
+- Expanded the generated localhost Calendar harness with immutable accounts,
+  events, statuses, boundary/DST/failure/overlap/disconnected cases, a local
+  reauthorization sink, and exact read/mutation auditing.
+
+### Verification
+
+- `make check`: 341 backend passed, 4 opt-in PostgreSQL tests skipped, 156
+  frontend passed, and the 506-module production build completed.
+- Harness syntax, secret scan, and `git diff --check` passed.
+- Generated desktop/exact-375 browser QA passed for loading, populated,
+  verified and unverified empty, error/retry, slow overlap, disconnected,
+  status failure, event dialog, and DST boundary paths. Audit: zero accepted
+  mutations and zero unknown routes.
+- Independent architecture, competitive UX, and QA rereviews found and then
+  verified closure of midnight geometry, account ABA, loading authority,
+  coverage-window, and timeout-truthfulness blockers.
+
+### Production Actions
+
+- None yet. Preflight found clean healthy production at `aa91430`; the Calendar
+  application candidate is `bbf96b3` and contains no schema, dependency-lock,
+  worker, terminal/e-ink, AI, configuration, Google grant, or mailbox changes.
+
+### Next
+
+Push, fast-forward `main`, deploy the exact reviewed release, rebuild the
+frontend, restart only `mailapp`, and record post-deploy evidence.
+
 ## 2026-08-30 — Google OAuth callback fail-safe candidate
 
 ### Scope

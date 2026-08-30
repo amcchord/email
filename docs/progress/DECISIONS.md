@@ -308,3 +308,23 @@ add a new entry that explicitly supersedes the old one.
   reply thread reads are account-scoped; all owned accounts and aliases are
   removed from recipients; Bcc is never inherited; failed thread reads disable
   editing, full compose, and send until authoritative data is restored.
+
+## D-019 — Calendar truth is range-, account-, and generation-scoped
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Treat the visible Calendar dataset as the result of one immutable
+  view/range/account/timezone request generation. Treat account discovery,
+  cached event reads, successful full-sync coverage, and active Google
+  ingestion as separate authorities. Certify an empty range only when every
+  visible account has Calendar scope, healthy status, and a successful
+  full-sync window that covers the exact displayed range.
+- Reason: Event GET success alone cannot distinguish a truly empty calendar
+  from a stale, disconnected, out-of-window, partially loaded, or superseded
+  cache. Client clocks and historical activity also cannot prove that every
+  requested sync target finished.
+- Consequence: Superseded account/range reads and old-session polling results
+  cannot commit UI state; local-date API selection uses DST-correct half-open
+  boundaries; Reload remains a cache read; Sync captures one target set and
+  requires server-observed progress for all targets; and uncertain/out-of-
+  window empty states must use saved-data language with a recovery path.
