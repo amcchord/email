@@ -218,12 +218,29 @@ class GmailService:
             context=f"get_message({message_id})",
         )
 
+    async def get_profile_history_id(self) -> str:
+        """Return Gmail's current numeric mailbox history high-water."""
+        service = self._get_service()
+        result = await self._execute_with_retry(
+            service.users().getProfile(userId="me"),
+            context="get_profile",
+        )
+        history_id = result.get("historyId")
+        try:
+            numeric_history_id = int(history_id)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Gmail profile did not return a numeric historyId") from exc
+        if numeric_history_id < 0:
+            raise RuntimeError("Gmail profile returned an invalid historyId")
+        return str(numeric_history_id)
+
     async def batch_get_messages(self, message_ids: list[str], format_type: str = "full") -> list[dict]:
         """Batch get messages with rate limit handling and Retry-After support.
 
         When individual items inside a batch are rate-limited, they are
-        skipped rather than retried one-by-one (which would amplify quota
-        usage).  The next sync tick will pick them up via history.
+        omitted rather than retried one-by-one (which would amplify quota
+        usage). Callers must treat missing responses as an incomplete unit
+        and retry without advancing their sync checkpoint.
 
         If rate limiting is severe (>= 50% of items in a sub-batch, or 3+
         consecutive sub-batches with any rate-limited items), raises the
@@ -312,7 +329,7 @@ class GmailService:
 
                     logger.warning(
                         f"Batch: {len(rate_limited_ids)} of {len(batch_ids)} items "
-                        f"rate-limited -- skipping (will retry next sync)"
+                        f"rate-limited -- returning a partial batch for checkpoint retry"
                     )
                 else:
                     # Reset consecutive counter on a clean batch
@@ -338,6 +355,7 @@ class GmailService:
             history_types = ["messageAdded", "messageDeleted", "labelAdded", "labelRemoved"]
 
         all_history = []
+        response_history_ids = []
         page_token = None
 
         while True:
@@ -357,6 +375,12 @@ class GmailService:
                 )
                 history = result.get("history", [])
                 all_history.extend(history)
+                response_history_id = result.get("historyId")
+                if response_history_id is not None:
+                    try:
+                        response_history_ids.append(int(response_history_id))
+                    except (TypeError, ValueError):
+                        logger.warning("Gmail returned a non-numeric historyId")
                 page_token = result.get("nextPageToken")
                 if not page_token:
                     break
@@ -368,9 +392,26 @@ class GmailService:
                 raise
 
         new_history_id = None
-        if all_history:
-            # The historyId of the last history record
-            new_history_id = str(all_history[-1].get("id", start_history_id))
+        if response_history_ids:
+            candidates = response_history_ids
+            try:
+                candidates = [*candidates, int(start_history_id)]
+            except (TypeError, ValueError):
+                pass
+            new_history_id = str(max(candidates))
+        elif all_history:
+            history_ids = []
+            for entry in all_history:
+                try:
+                    history_ids.append(int(entry.get("id")))
+                except (AttributeError, TypeError, ValueError):
+                    continue
+            if history_ids:
+                try:
+                    history_ids.append(int(start_history_id))
+                except (TypeError, ValueError):
+                    pass
+                new_history_id = str(max(history_ids))
 
         return {"history": all_history, "new_history_id": new_history_id}
 
