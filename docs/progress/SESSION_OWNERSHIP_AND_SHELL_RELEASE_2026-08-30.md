@@ -64,8 +64,9 @@ Alembic revision `c0d1e2f3a4b5` follows `b9c0d1e2f3a4`.
 
 Disposable PostgreSQL 17 rehearsal passed upgrade, ownership enforcement,
 downgrade, and re-upgrade. Production preflight reported zero Todo rows, so the
-cleanup statements have no current production data impact. A fresh validated
-custom-format backup is still required immediately before upgrade.
+cleanup statements had no production data impact. A fresh validated
+custom-format backup was captured immediately before upgrade and is recorded
+below.
 
 ## Main implementation areas
 
@@ -96,8 +97,8 @@ custom-format backup is still required immediately before upgrade.
 - Independent architecture, generated-QA, and competitive UX reviews were run;
   their Todo, stale-stream, toast, draft-lifecycle, unsubscribe-continuation,
   and auth-cookie findings were closed before release.
-- `git diff --check`, harness syntax, and a tracked-file secret/path audit are
-  required before commit.
+- `git diff --check`, harness syntax, and a tracked-file secret/path audit
+  passed before commit.
 
 Generated in-app browser QA at desktop 1280×720 and mobile 375×812 verified:
 
@@ -134,6 +135,49 @@ database-backed setting took effect without a restart.
 
 ## Deployment record
 
-To be completed with the exact application commit, release-record commit,
-backup path and size, applied Alembic head, service action, public health,
-production browser QA, and rollback reference after deployment.
+The reviewed application release is
+`18e80fdd9247c52825b225e55b85aabc240e76d3`. It was pushed to GitHub `main`
+and `codex/session-isolation`, then fast-forwarded into the clean production
+checkout from `2d20f6a3daad1734c2581dc579cb42e1012c809a`.
+
+Before the migration, production created and validated the PostgreSQL
+custom-format backup
+`/var/backups/mailapp/maildb-pre-session-ownership-20260830T1559Z.dump`:
+1,383,527,167 bytes, mode `0600`, owner `postgres:postgres`, with
+`pg_restore --list` passing. Production preflight still found zero Todo rows.
+
+Two fail-closed deployment checks behaved as intended:
+
+- An initial command used a mistyped expected full SHA and stopped before any
+  production mutation.
+- After the corrected command fast-forwarded Git, installed 144 locked
+  frontend packages with zero reported vulnerabilities, and built 507 modules,
+  it referenced the nonexistent `/opt/mail/.venv/bin/alembic` and stopped
+  before migration or restart. Read-only inspection identified the documented
+  production interpreter at `/opt/mail/venv/bin/alembic`; the release resumed
+  only after reconfirming the exact clean Git state and prior Alembic head.
+
+Alembic upgraded from `b9c0d1e2f3a4` to `c0d1e2f3a4b5`, and only `mailapp`
+was restarted. The replacement process became active under a new PID; workers,
+TUI, Caddy, PostgreSQL, and Redis were not restarted.
+
+Post-deploy verification passed:
+
+- production Git was exact and clean, the new frontend asset returned 200,
+  `/` returned 200, and `/api/health` returned `ok`;
+- all seven checked services were active, `mailapp` reported zero systemd
+  restarts and zero warning-or-higher entries since the new process started;
+- the Todo ownership trigger and function each existed exactly once, Todo and
+  mismatched-Todo counts were both zero, and unauthenticated `/api/todos/`
+  returned 401;
+- aggregate access checks found the three intended trusted-domain entries, no
+  unexpected wildcard domain, and one active administrator match; and
+- signed-in, read-only production browser QA at 1280x720 opened More without
+  touching Sync, mail, calendar, unsubscribe, send, or Todos. The 1280x720
+  close target computed to transparent, the More menu and main content both
+  remained visible, and the browser reported no warnings or errors.
+
+The rollback references are the prior Git commit and the validated backup.
+Migration downgrade removes future enforcement but cannot reconstruct any
+scrubbed rows; production's zero-row preflight means this deployment performed
+no Todo cleanup.

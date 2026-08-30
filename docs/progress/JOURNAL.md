@@ -50,14 +50,30 @@ real mail and calendars.
   `@mcchord.net`, `@casanacare.com`, and `@outsidersfund.com`. Consumer domains
   remain exact-address only. Aggregate verification passed; no restart was
   required and no allowlist value was printed.
-- Application deploy, database backup/migration, and post-deploy verification
-  remain pending for the candidate.
+- Pushed exact application commit
+  `18e80fdd9247c52825b225e55b85aabc240e76d3` to the feature branch and GitHub
+  `main`, then fast-forwarded clean production from `2d20f6a`.
+- Captured and validated the 1,383,527,167-byte custom-format backup
+  `/var/backups/mailapp/maildb-pre-session-ownership-20260830T1559Z.dump`, mode
+  `0600`, owner `postgres:postgres`.
+- A mistyped expected full SHA stopped the first preflight before mutation. A
+  later command stopped after Git/frontend deployment but before migration or
+  restart because it referenced `.venv`; after reconfirming clean exact Git,
+  the documented `/opt/mail/venv` applied Alembic `c0d1e2f3a4b5` and restarted
+  only `mailapp`.
+- Post-deploy checks passed: exact clean Git, public health, `/`, exact frontend
+  asset, all seven services, new `mailapp` process/logs, unauthenticated Todo
+  boundary, migration head, ownership trigger/function, zero Todo/mismatch
+  rows, and aggregate trusted-domain/admin state.
+- Signed-in production QA opened More at 1280x720 with a transparent full-page
+  close target while the menu and main remained visible. No browser errors or
+  real mail, calendar, Sync, unsubscribe, send, or Todo mutations occurred.
 
 ### Next
 
-Finish final review and aggregate checks, push the exact candidate, take and
-validate a fresh database backup, deploy revision `c0d1e2f3a4b5`, and perform
-read-only production shell and health verification.
+User-test More and trusted-domain reauthorization, then continue the next
+generated-fixture product cycle. The coordinating At a Glance task may rebase
+after receiving the exact docs-closeout SHA.
 
 ## 2026-08-30 — At a Glance platform release
 

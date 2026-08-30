@@ -4,19 +4,22 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Ship and user-test the session-ownership, Todo-ownership, Compose-lifecycle,
+User-test the deployed session-ownership, Todo-ownership, Compose-lifecycle,
 and Safari shell reliability release without touching real mail or calendar
-data. Preserve the concurrently owned firmware work in its separate repository.
+data, then continue the next scoped product-improvement cycle. Preserve the
+concurrently owned firmware work in its separate repository.
 
 ## Baseline
 
-- GitHub `main` and production are clean at At a Glance docs closeout
-  `2d20f6a3daad1734c2581dc579cb42e1012c809a`.
-- Production Alembic is `b9c0d1e2f3a4 (head)` and all seven checked services
-  are active; public health reports `ok`.
-- Production preflight found zero Todo rows, so the ownership-cleanup migration
-  has no current data impact. A new validated backup is still required before
-  applying revision `c0d1e2f3a4b5`.
+- The released application code is
+  `18e80fdd9247c52825b225e55b85aabc240e76d3`; GitHub `main` and production
+  contain that exact application state plus the docs-only closeout.
+- Production Alembic is `c0d1e2f3a4b5 (head)`, all seven checked services are
+  active, the exact frontend asset returns 200, and public health reports `ok`.
+- Production preflight and postflight both found zero Todo rows and zero
+  ownership mismatches. The ownership trigger/function are installed. The
+  validated pre-upgrade backup is
+  `/var/backups/mailapp/maildb-pre-session-ownership-20260830T1559Z.dump`.
 - At the user's request, `austin@mcchord.net` is an active administrator. Google
   OAuth now accepts the trusted organization domains `@mcchord.net`,
   `@casanacare.com`, and `@outsidersfund.com`; consumer domains remain
@@ -55,21 +58,27 @@ live state.
   the final candidate after closure of unsubscribe continuation, post-await
   toast, standalone/device surface, export/timer, Compose teardown, and
   auth-cookie races.
+- Production verification passed: exact clean Git, Alembic head, all services,
+  public health, static asset, unauthenticated Todo boundary, aggregate database
+  invariants, and zero new `mailapp` warning-or-higher log entries.
+- Signed-in production browser QA opened More at 1280x720: the fullscreen close
+  target was transparent, the menu and main page remained visible, and no
+  browser warning/error appeared. No real-data mutation was exercised.
 
 ## Known Constraints and Follow-ups
 
 - The generated browser harness proves deterministic A-to-B isolation without
-  real mail or calendar access. Production browser verification remains
+  real mail or calendar access. Ongoing production user testing remains
   read-only and must not trigger Sync, send, unsubscribe, or Todo mutations.
 - Migration downgrade removes enforcement but cannot restore deleted or
   scrubbed historical content. The validated pre-upgrade backup is the rollback
   source.
-- The At a Glance browser-flashing/API/docs slice remains deferred until this
-  release is landed and its exact deployed SHA is sent to the coordinating task.
+- The At a Glance browser-flashing/API/docs slice may rebase after receiving
+  this release's exact landed/deployed docs closeout SHA.
 
 ## Next Safe Action
 
-Commit and push the exact approved candidate, take and validate a production
-database backup, deploy/migrate/restart only the required application service,
-then perform public health, aggregate ownership, service/log, and read-only
-production shell verification.
+Have the user verify More and reauthorization for the newly trusted organization
+domains. Continue generated-fixture product improvements and read-only
+production observation; keep real mail, calendar, and Todo mutations out of
+automated QA.
