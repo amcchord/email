@@ -3,6 +3,78 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Durable draft sessions release
+
+### Scope
+
+Make full Compose a durable, versioned writing session across hard reloads,
+attachments, offline work, provider ambiguity, conflicts, discard/Undo, and
+send recovery. Keep real production mail read-only and preserve the concurrent
+AI and terminal workstreams.
+
+### Completed
+
+- Added user/account-owned PostgreSQL draft sessions, attachments, mutation
+  receipts, stable provider identity, bounded quotas, leases, Gmail
+  create-at-most-once reconciliation, provider updates, and content-free
+  discard tombstones.
+- Added auth-scoped IndexedDB recovery, stable Compose URL identity, truthful
+  lifecycle copy, explicit conflict resolution, accessible dialog focus
+  management, attachment-byte recovery, app-managed Gmail Draft reopening, and
+  exact durable-draft linkage into the outbound outbox.
+- Retained a send-owned browser snapshot until terminal truth: sent removes it;
+  failed or cancelled recovery creates a fresh durable Compose identity before
+  removing the source. Provider-draft cleanup begins after the authoritative
+  Undo deadline independently of outbound reconciliation.
+- Added a localhost-only generated provider fixture restricted to reserved
+  `.example.test` recipients. Its immutable per-draft email identities prevent
+  one fixture deletion from retargeting another draft.
+
+### Verification
+
+- Backend passed 472 tests with 21 opt-in PostgreSQL skips. Frontend passed
+  256/256 tests and built 518 modules locally and on production.
+- Disposable PostgreSQL passed eight focused tests, concurrency and scrub
+  checks, and an actual `e2f3a4b5c6d7 → d1e2f3a4b5c6 → e2f3a4b5c6d7`
+  migration cycle.
+- Generated-provider scenarios produced zero unexpected mutations, unknown
+  routes, or external calls. The guard intentionally attempted and rejected one
+  forbidden Todo mutation and two non-reserved recipients without creating a
+  provider draft.
+- Local browser QA at 1280×720 and 390×844 proved stable URL, hard-reload text
+  and attachment recovery, truthful saved status, and a clean console. Three
+  independent architecture, competitive-UX, and generated-provider reviews
+  found no remaining P0/P1 issue after their findings were fixed.
+
+### Production Actions
+
+- Pushed application `61e0ad8f47bd12dff07b7c0e695ea3f5680af7a4`
+  to the feature branch and GitHub `main`, then fast-forwarded clean production
+  from `8fed5d1c9cd356c3222891251e692dfbe932a8eb`.
+- Captured and validated
+  `/var/backups/mailapp/maildb-pre-durable-drafts-20260830T1859Z.dump`:
+  1,383,545,000 bytes, mode `0600`, owner `postgres:postgres`, and 273 readable
+  archive entries. Advanced Alembic from `d1e2f3a4b5c6` to
+  `e2f3a4b5c6d7 (head)`.
+- Restarted only `mailapp` and `mailworker-cron`. The retired API process
+  exceeded its 90-second graceful-stop window and was killed; the reviewed
+  replacement and cron worker started successfully with zero automatic
+  restarts or post-start warning-or-higher entries.
+- Verified exact clean Git, public health, all seven services, anonymous draft
+  API 401, exact frontend asset 200, and zero rows in all three draft tables.
+  Signed-in read-only Compose QA entered no content, invoked no draft action,
+  emitted no browser warning/error, and left those tables empty.
+- Recorded the complete release and rollback evidence in
+  `docs/progress/DURABLE_DRAFT_SESSIONS_RELEASE_2026-08-30.md` at
+  `0c92e59bb47101f24a9c08afd692296cda8d47c0`.
+
+### Next
+
+Rebase the terminal enrollment slice onto the new exact `e2f3a4b5c6d7` Email
+baseline. For the email client, extend the same durable controller into inline
+reader/Flow replies and add a cross-device Recent Drafts surface without
+weakening the released ownership, ambiguity, or recovery contract.
+
 ## 2026-08-30 — Fail-closed terminal firmware gateway release
 
 ### Scope
