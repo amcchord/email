@@ -3,6 +3,80 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Composable structured email search
+
+### Scope
+
+Replace substring-only Inbox search with a safe, discoverable structured
+grammar and modern desktop/mobile result UX, using only immutable generated
+mail while leaving the concurrent AI-model checkout untouched.
+
+### Completed
+
+- Added a bounded parser/compiler for implicit AND, OR groups, one-term
+  exclusion, exact phrases, and `from`, `to`, `cc`, `bcc`, `subject`,
+  `body`, `after`, `before`, `is`, `has`, `in`, `account`, and
+  `label` filters.
+- Kept the account-ownership predicate independent and immutable, failed closed
+  on unknown outer accounts, bound every user value, searched only recipient
+  object/string values, made negation NULL-safe, used explicit IANA date
+  boundaries, preserved complete literal fallback, and added stable sorting.
+- Replaced the placeholder-only search input with an accessible combobox,
+  keyboard suggestions, inline grammar alerts, exact 512-character parity,
+  removable filter chips, truthful folder scope, retained inert results on
+  errors, Retry/Clear/Edit recovery, latest-request guards, and context restore.
+- Added list/detail/thread state fields so mixed-folder results render Sent and
+  Draft recipients and derive Restore/Not Spam actions from each message.
+  Mixed protected-folder selections disable ambiguous Spam/Trash/Archive
+  actions instead of applying the wrong operation.
+- Coalesced accepted/failed/undone action reconciliation behind the exact
+  normalized search dataset. Versioned dirty state keeps actions disabled until
+  a non-stale refresh succeeds, including rapid same-message action races and
+  repeated refresh failures.
+- Added a localhost-only generated search server with exact scenario oracles,
+  two accounts, legacy/object recipients, protected folders, date/null/race
+  edges, 422/503 responses, mobile wrappers, mutation rejection, and auditing.
+- Documented the browser-session search contract and recorded the immutable
+  ownership/scope decision.
+
+### Verification
+
+- `make check`: 245 backend tests passed, 4 opt-in PostgreSQL tests skipped,
+  79 frontend tests passed, and the production frontend build completed with
+  only the existing large-chunk advisory.
+- Focused backend search tests passed 30/30; parser/URL/dataset/action/scope
+  frontend coverage is included in the 79-test suite. Python compilation,
+  harness syntax, SQL compilation review, and `git diff --check` passed.
+- Generated browser QA passed on desktop and exact 375x812 mobile wrappers for
+  search discovery, keyboard suggestions, Escape behavior, compound filters,
+  chips, validation without requests, 422/503 retained-results recovery,
+  no-match, account/mailbox restore, responsive touch targets, and no page
+  overflow.
+- An out-of-order slow/fast pair received slow first but responded fast first;
+  the final UI retained only the fast result. Generated Trash, Spam, Sent, and
+  mixed-folder scenarios verified truthful scope and recovery controls without
+  clicking an action. The final audit had no mutation attempts or unknown
+  routes; no message was opened.
+- Independent safety and generated-user reviews exercised the flow. Recipient
+  JSON keys, OR mailbox scope, action projection/reconciliation races,
+  protected-folder controls, and scope-label blockers were corrected; the
+  final safety gate reported no remaining P0/P1 issue.
+- The concurrent AI checkout remained clean and untouched at `41d2898`.
+
+### Production Actions
+
+- None. No deploy, migration, restart, configuration change, production write,
+  real-mail read, message open, or mailbox mutation occurred.
+- Committed the implementation as `0e8f8fd` and pushed it to
+  `origin/codex/product-polish-cycle-1` without rebasing or touching the
+  separately owned AI branch.
+
+### Next
+
+Audit attachment-cache retention, per-user quota, orphan cleanup, and in-flight
+download safety as the next isolated slice. Defer saved search/view persistence
+until the separate AI owner releases the shared authentication contract.
+
 ## 2026-08-30 — Executable command surface
 
 ### Scope

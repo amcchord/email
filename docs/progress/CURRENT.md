@@ -13,7 +13,7 @@ continue without overlapping files or Git state.
 
 - Product worktree: `codex/product-polish-cycle-1`, pushed to
   `origin/codex/product-polish-cycle-1`; product implementation is complete
-  through the executable command surface at `21fcb11`.
+  through composable structured email search at `0e8f8fd`.
 - Repository source baseline: `origin/main` at `41d2898`.
 - Concurrent AI-model work is owned by another process in the original
   checkout; do not edit, stage, or reconcile its files from this worktree.
@@ -57,16 +57,17 @@ live state.
 
 ### P1 — Fast retrieval and command surface
 
-- State: command surface complete; structured search and saved views ready
+- State: command surface and structured search complete; saved views deferred
 - Why: modern high-speed clients provide a discoverable command palette,
   composable search operators, and reusable saved views.
 - Scope: truthful executable command palette, complete shortcut registration,
   search operator parser, and saved splits/views.
 - Acceptance: primary navigation and triage commands are keyboard discoverable,
   search operators compose predictably, and saved views remain account-scoped.
-- Next: implement a composable search grammar against generated fixtures,
-  then coordinate account-scoped saved-view persistence after the separate AI
-  owner releases the shared authentication contract.
+- Next: coordinate account-scoped saved-view persistence after the separate AI
+  owner releases the shared authentication contract. Keep search-history and
+  saved-query persistence out of URLs until its privacy/retention contract is
+  explicit.
 
 ### P2 — Attachment cache lifecycle
 
@@ -116,11 +117,17 @@ live state.
   Flow Ignore and Todo mutations return their promises, expose disabled state,
   and reconcile delayed completion to the captured item without clearing a
   newer cross-source reply or draft (`21fcb11`).
+- Added composable structured email search with AND/OR groups, exclusions,
+  exact phrases, sender/recipient/body/date/state/folder/account/label filters,
+  local grammar feedback, accessible suggestions and removable chips,
+  fail-closed ownership, bound JSONB/recipient predicates, deterministic
+  sorting, truthful mixed-folder actions, and generated desktop/mobile/race
+  verification (`0e8f8fd`).
 
 ## Verification
 
-- Latest `make check`: 215 backend tests passed, 4 disposable-PostgreSQL tests
-  skipped by default, and 58 frontend tests passed; the production build
+- Latest `make check`: 245 backend tests passed, 4 disposable-PostgreSQL tests
+  skipped by default, and 79 frontend tests passed; the production build
   passed with only the existing large-chunk advisory.
 - Forty-three generated durable-action tests cover every supported transition,
   strict request validation, cross-account staging, idempotency, exact bulk
@@ -157,6 +164,23 @@ live state.
 - The localhost-only `.example.test` command harness rejected every mutating
   method. Its final audit reported empty `mutation_attempts` and
   `unknown_routes`; no real message was opened or changed.
+- Generated structured-search QA passed for desktop and exact 375x812 mobile
+  viewports: keyboard suggestions and Escape hierarchy, compound Unicode and
+  quoted filters, chip removal, local and backend validation, retained results
+  after 422/503 failures, no-match recovery, account preservation, mailbox
+  restoration, and 44px/16px mobile controls without page overflow. An
+  intentionally slow response completed after a newer fast response while the
+  fast result remained authoritative. Trash, Spam, Sent, and mixed-folder
+  scenarios exposed truthful scope, recipient rendering, Restore/Not Spam,
+  and disabled ambiguous bulk actions.
+- The structured-search harness used immutable `.example.test` fixtures,
+  bound only to localhost, rejected all mutation methods, and finished with
+  empty `mutation_attempts` and `unknown_routes`. No message was opened and
+  no real mail, production service, or mailbox state was read or changed.
+- Independent parser, UX, safety, and user-test agents reviewed the slice. All
+  ownership, recipient JSON, OR scope, action reconciliation, protected-folder
+  action, and scope-truth P0/P1 findings were corrected; the final safety pass
+  found no remaining P0/P1 blocker.
 - Independent feature and safety reviews identified and then cleared command
   lifecycle, modal ownership, duplicate-send, inaccessible disabled-state, and
   delayed Flow mutation blockers. The generated-user agent validated the
@@ -194,8 +218,8 @@ live state.
 ## Next Safe Action
 
 Preserve the reviewed, pushed product branch without rebasing it onto the
-separately owned AI work. Implement structured email search as a focused,
-generated-fixture slice without touching AI-owned authentication files. Defer
-saved-view and shortcut-reset persistence until that ownership boundary is
-explicitly coordinated, and repeat all checks before any merge or explicitly
-authorized deployment.
+separately owned AI work. Audit the attachment cache lifecycle and choose
+bounded per-user retention/quota defaults as the next isolated product slice.
+Defer saved-view and shortcut-reset persistence until the shared authentication
+ownership boundary is explicitly coordinated, and repeat all checks before any
+merge or explicitly authorized deployment.
