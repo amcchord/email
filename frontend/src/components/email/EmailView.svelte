@@ -493,27 +493,30 @@
         <div class="flex items-center gap-1 shrink-0">
           <button
             onclick={() => onAction && onAction(email.is_starred ? 'unstar' : 'star', [email.id])}
-            class="p-1.5 rounded-md transition-fast"
+            class="min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast"
             style="color: {email.is_starred ? 'var(--color-accent-500)' : 'var(--text-tertiary)'}"
-            title="Star"
+            title={email.is_starred ? 'Unstar' : 'Star'}
+            aria-label={email.is_starred ? 'Unstar email' : 'Star email'}
             data-shortcut="email.star"
           >
             <Icon name="star" size={20} />
           </button>
           <button
             onclick={() => onAction && onAction('archive', [email.id])}
-            class="p-1.5 rounded-md transition-fast"
+            class="min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast"
             style="color: var(--text-tertiary)"
             title="Archive"
+            aria-label="Archive email"
             data-shortcut="email.archive"
           >
             <Icon name="archive" size={20} />
           </button>
           <button
             onclick={() => onAction && onAction('trash', [email.id])}
-            class="p-1.5 rounded-md transition-fast"
+            class="min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast"
             style="color: var(--text-tertiary)"
             title="Delete"
+            aria-label="Move email to trash"
             data-shortcut="email.trash"
           >
             <Icon name="trash-2" size={20} />
@@ -522,18 +525,20 @@
           {#if !standalone}
             <button
               onclick={handlePopOut}
-              class="p-1.5 rounded-md transition-fast"
+              class="hidden sm:inline-flex min-w-11 min-h-11 items-center justify-center rounded-md transition-fast"
               style="color: var(--text-tertiary)"
               title="Open in new window"
+              aria-label="Open email in new window"
               data-shortcut="email.popout"
             >
               <Icon name="external-link" size={20} />
             </button>
             <button
               onclick={onClose}
-              class="p-1.5 rounded-md transition-fast ml-2"
+              class="min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast ml-1"
               style="color: var(--text-tertiary)"
               title="Close"
+              aria-label="Close email"
             >
               <Icon name="x" size={20} />
             </button>
@@ -860,11 +865,11 @@
 
     <!-- Reply actions -->
     <div class="px-6 py-3 border-t shrink-0 flex gap-2" style="border-color: var(--border-color)">
-      <Button size="sm" onclick={handleReply}>
+      <Button size="sm" class="min-h-11" onclick={handleReply}>
         <Icon name="corner-up-left" size={16} />
         Reply
       </Button>
-      <Button size="sm" onclick={handleForward}>
+      <Button size="sm" class="min-h-11" onclick={handleForward}>
         <Icon name="corner-up-right" size={16} />
         Forward
       </Button>
@@ -872,7 +877,7 @@
         <button
           onclick={handleUnsubscribe}
           disabled={unsubscribing}
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-fast ml-auto disabled:opacity-50"
+          class="min-h-11 flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-fast ml-auto disabled:opacity-50"
           style="background: var(--status-error); color: white"
         >
           {#if unsubscribing}
