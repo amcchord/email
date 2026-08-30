@@ -13,9 +13,10 @@ This release is migration-free and preserves secure terminal enrollment head
 `f3a4b5c6d7e8`. It changes no Gmail send worker, AI file, terminal runtime,
 Caddy policy, firmware artifact, credential, or production mailbox data.
 
-Release status at authoring: reviewed candidate on
-`codex/durable-inline-replies`. The exact landed application and production
-closeout commits are recorded below after deployment.
+The exact landed and deployed application/documentation commit is
+`9aa93f61fe7031ce267b833930a84c5d0a2121c3`. The following repository
+closeout changes only progress documentation; no additional runtime is
+deployed from it.
 
 ## User-visible changes
 
@@ -194,10 +195,28 @@ useful without body retrieval.
 
 ## Production actions and closeout
 
-To be completed after the reviewed candidate is fast-forwarded to GitHub main
-and production. This section will record the exact application commit, exact
-docs-closeout commit, service/build evidence, public health, Git cleanliness,
-and authenticated read-only production QA.
+- Fast-forwarded GitHub `main` and the clean production checkout from secure
+  terminal closeout `2fd5e4c776e3dd808ac7e1bb32110a7e3ce16e73` to exact
+  application/documentation commit
+  `9aa93f61fe7031ce267b833930a84c5d0a2121c3`.
+- Restarted only `mailapp` so the exact-source API preceded the new browser
+  bundle. One retired worker retained a long-lived connection through the
+  90-second stop window and systemd killed that old process; the replacement
+  started cleanly with two ready workers, zero automatic restarts, and no
+  warning-or-higher entry after application startup.
+- Installed the unchanged locked frontend dependencies as `mailapp`: 145
+  packages audited with zero vulnerabilities. Production built the same 524
+  modules as the reviewed local candidate. No Caddy reload, worker restart,
+  dependency change, schema migration, database backup, or data write was
+  required.
+- Postflight verified exact clean Git, Alembic still exactly
+  `f3a4b5c6d7e8 (head)`, all seven checked services active, public health `ok`,
+  the new durable-reply asset returning 200, and anonymous exact-source draft
+  lookup returning 401.
+- Authenticated read-only production QA opened Drafts and verified one visible
+  **Continue writing** region and its Refresh control. It did not open a real
+  message or draft, enter content, send, discard, archive, delete, change a
+  terminal, or mutate a calendar.
 
 ## Rollback and next boundary
 

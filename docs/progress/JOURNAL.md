@@ -3,6 +3,68 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Durable inline replies release
+
+### Scope
+
+Extend durable draft ownership and recovery into Reader and Flow replies, add a
+cross-device metadata-only Continue Writing surface, preserve the secure
+terminal f3 baseline, and exercise mutations only against generated
+`.example.test` fixtures.
+
+### Completed
+
+- Unified Reader, Flow, full Compose, and Drafts under one exact
+  account/source reply identity with immediate auth-scoped IndexedDB writes,
+  cross-device lookup, Reply/Reply All envelope rebase, safe send/discard
+  handoff, focus restoration, and guarded navigation/mail actions.
+- Added exact-source server lookup, concurrent first-save convergence with
+  stable `draft_source_exists`, and a recent-draft query that projects metadata
+  without loading draft content, provider IDs, or attachment bytes.
+- Added responsive **Continue writing**, server-revision comparison, generated
+  provider exact-source scenarios, comprehensive tests, API documentation,
+  decision D-028, and
+  `DURABLE_INLINE_REPLIES_RELEASE_2026-08-30.md`.
+
+### Verification
+
+- After rebase onto terminal closeout `2fd5e4c`, 550 backend tests passed with
+  35 intentional PostgreSQL/external skips; ten focused PostgreSQL draft tests
+  passed; all 295 frontend tests passed; production build transformed 524
+  modules.
+- Generated-provider scenarios passed with normal paths reporting zero
+  unexpected mutations, unknown routes, non-fixture recipients, or external
+  calls. Desktop and 390×844 browser QA proved save, close/focus, reopen,
+  hard-reload recovery, full-Compose handoff, and Continue Writing.
+- Backend, frontend, and generated-QA reviews reported no remaining P0–P2
+  issue after their transition, conflict, revision, teardown, and focus
+  findings were corrected. `git diff --check` passed.
+
+### Production Actions
+
+- Fast-forwarded GitHub `main` and clean production from `2fd5e4c` to exact
+  application/documentation commit
+  `9aa93f61fe7031ce267b833930a84c5d0a2121c3`.
+- Restarted only `mailapp` before publishing the new frontend. One old process
+  held a connection through the 90-second stop window and was killed by
+  systemd; the replacement started with zero automatic restarts and no
+  post-start warning-or-higher entries.
+- Installed the unchanged frontend lock with zero audit vulnerabilities and
+  built 524 modules. No migration, backup, dependency change, Caddy reload, AI
+  change, worker restart, mail send, mail mutation, calendar mutation, or
+  terminal mutation occurred.
+- Verified exact clean Git, Alembic `f3a4b5c6d7e8 (head)`, all seven services
+  active, public health `ok`, new asset 200, anonymous exact-source lookup 401,
+  and a visible authenticated production Continue Writing region without
+  opening a real message or draft.
+
+### Next
+
+Hand the exact docs-closeout GitHub/production SHA to the terminal milestone,
+then rebase and implement At a Glance as a first-class migration-free
+application route while keeping all serial, enrollment, flashing, and OTA
+controls locked.
+
 ## 2026-08-30 — Secure terminal enrollment foundation release
 
 ### Scope

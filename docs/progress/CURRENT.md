@@ -11,6 +11,10 @@ recovery evidence exists.
 
 ## Baseline
 
+- The deployed Durable Replies application/documentation commit is
+  `9aa93f61fe7031ce267b833930a84c5d0a2121c3`; the following closeout is docs
+  only. Reader, Flow, Compose, and Drafts now share one exact-source durable
+  reply identity, and production built 524 frontend modules.
 - The deployed secure-enrollment application/runtime commit is
   `8ff01848a2be2818dfd9eb88b84be9aab4befb0a`; the following closeout is docs
   only. Production and GitHub were exact and clean at the runtime boundary.
@@ -42,9 +46,22 @@ live state.
 - Acceptance: At a Glance is discoverable and directly navigable like Flow,
   Email, Calendar, and Todos; it uses the existing shared catalog/adapters and
   preserves responsive, loading, empty, and error behavior.
-- Next: receive the exact Durable Replies GitHub/production SHA after this f3
-  release, rebase onto that shared-shell baseline, and implement the route in a
-  separate migration-free slice.
+- Next: rebase onto the exact Durable Replies GitHub/production closeout and
+  implement the route in a separate migration-free slice.
+
+## Recent Durable Replies Release
+
+- Reader and Flow replies now commit locally before remote debounce, recover
+  across close/reload/offline/cross-device use, and hand the same stable reply
+  identity to full Compose.
+- Drafts exposes a responsive metadata-only **Continue writing** surface.
+  Navigation, mail actions, send, discard, and authentication transitions fail
+  closed while reply durability or ownership is unresolved.
+- The release was migration-free. Full checks, disposable PostgreSQL,
+  generated-provider failure scenarios, and desktop/mobile browser QA passed;
+  real production mail remained read-only.
+- Complete behavior, code, verification, production, and rollback evidence is
+  in `DURABLE_INLINE_REPLIES_RELEASE_2026-08-30.md`.
 
 ## Recent Terminal Release
 
