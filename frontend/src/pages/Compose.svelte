@@ -2,11 +2,15 @@
   import { onMount } from 'svelte';
   import { get } from 'svelte/store';
   import { api } from '../lib/api.js';
+  import { submitOutboundSend } from '../lib/outboundSend.js';
+  import { restoreOutboundComposeDraft } from '../lib/outboundDraftRecovery.js';
   import {
     accounts,
+    captureAuthenticatedSession,
     composeData,
     createAuthenticatedSessionGuard,
     currentPage,
+    isAuthenticatedSessionCurrent,
     selectedAccountId as globalSelectedAccountId,
     showToast,
   } from '../lib/stores.js';
@@ -38,7 +42,7 @@
   let writingSurfaceReady = $state(false);
   let savingDraft = $state(false);
   let activeDraftKey = $state(null);
-  let replyContext = $state({ in_reply_to: null, references: null, thread_id: null });
+  let replyContext = $state({ in_reply_to: null, references: null, thread_id: null, source_email_id: null });
   let suppressLocalPersistence = false;
   let sessionGuard = null;
 
@@ -48,6 +52,10 @@
 
   function parseRecipients(value) {
     return (value || '').split(/[;,]/).map(item => item.trim()).filter(Boolean);
+  }
+
+  function recipientFieldValue(value) {
+    return Array.isArray(value) ? value.join(', ') : String(value || '');
   }
 
   function chooseSender(list, contextAccountId = null) {
@@ -72,8 +80,28 @@
       in_reply_to: replyContext.in_reply_to,
       references: replyContext.references,
       thread_id: replyContext.thread_id,
+      source_email_id: replyContext.source_email_id,
       saved_at: new Date().toISOString(),
     };
+  }
+
+  function persistedDraftFingerprint(draft) {
+    if (!draft || typeof draft !== 'object') return null;
+    const { saved_at: _savedAt, ...content } = draft;
+    return JSON.stringify(content);
+  }
+
+  function removeCapturedDraftIfUnchanged(draftKey, fingerprint) {
+    if (!draftKey || !fingerprint) return;
+    try {
+      const stored = JSON.parse(localStorage.getItem(draftKey) || 'null');
+      if (persistedDraftFingerprint(stored) === fingerprint) {
+        localStorage.removeItem(draftKey);
+      }
+    } catch {
+      // Preserve an unreadable or concurrently replaced value. Deleting it
+      // could erase a newer draft that reused the ordinary `new` intent key.
+    }
   }
 
   function persistLocalDraft(draft = draftSnapshot()) {
@@ -134,14 +162,17 @@
       if (!sessionGuard?.isCurrent()) return;
       if (data) {
         activeDraftKey = composeDraftStorageKey(sessionGuard.userId, data);
-        if (data.to) to = data.to.join(', ');
-        if (data.cc) cc = data.cc.join(', ');
+        if (data.to) to = recipientFieldValue(data.to);
+        if (data.cc) cc = recipientFieldValue(data.cc);
+        if (data.bcc) bcc = recipientFieldValue(data.bcc);
         if (data.subject) subject = data.subject;
         if (data.body_html) {
           initialContent = data.body_html;
           bodyHtml = data.body_html;
         }
+        showCcBcc = Boolean(data.cc?.length || data.bcc?.length);
         if (data.account_id) selectedAccountId = data.account_id;
+        if (Array.isArray(data.attachments)) attachments = data.attachments;
         replyContext = composeReplyContext(data);
       }
     });
@@ -274,6 +305,20 @@
       return false;
     }
 
+    const sendSession = captureAuthenticatedSession();
+    const capturedDraftKey = activeDraftKey;
+    const capturedDraftFingerprint = persistedDraftFingerprint(draftSnapshot());
+    let editorReleased = false;
+    const releaseEditor = () => {
+      if (editorReleased || !isAuthenticatedSessionCurrent(sendSession)) return;
+      editorReleased = true;
+      suppressLocalPersistence = true;
+      removeCapturedDraftIfUnchanged(capturedDraftKey, capturedDraftFingerprint);
+      if (!sessionGuard?.isCurrent()) return;
+      composeData.set(null);
+      currentPage.set('inbox');
+    };
+
     sending = true;
     try {
       const data = {
@@ -290,14 +335,27 @@
       if (replyContext.in_reply_to) data.in_reply_to = replyContext.in_reply_to;
       if (replyContext.references) data.references = replyContext.references;
       if (replyContext.thread_id) data.thread_id = replyContext.thread_id;
+      if (replyContext.source_email_id) data.source_email_id = replyContext.source_email_id;
 
-      await api.sendEmail(data);
+      const composeIntent = get(composeData);
+      const restoreDraft = {
+        ...data,
+        draft_key: composeIntent?.draft_key,
+        attachments: attachments.map(item => ({ ...item })),
+      };
+      const restoreEditor = (operation, reason) => (
+        restoreOutboundComposeDraft(restoreDraft, operation, reason)
+      );
+
+      const operation = await submitOutboundSend(data, {
+        onAccepted: releaseEditor,
+        onRestore: restoreEditor,
+      });
       if (!sessionGuard.isCurrent()) return false;
-      suppressLocalPersistence = true;
-      if (activeDraftKey) localStorage.removeItem(activeDraftKey);
-      showToast('Email sent', 'success');
-      currentPage.set('inbox');
-      composeData.set(null);
+      // Even if the acceptance response was lost, this logical send now owns
+      // its idempotency key. Leave status reconciliation to the global monitor
+      // instead of exposing a second Send action for the same message.
+      if (operation) releaseEditor();
       return true;
     } catch (err) {
       if (sessionGuard?.isCurrent()) showToast(err.message, 'error');
@@ -324,6 +382,7 @@
         in_reply_to: replyContext.in_reply_to,
         references: replyContext.references,
         thread_id: replyContext.thread_id,
+        source_email_id: replyContext.source_email_id,
       });
       if (!sessionGuard.isCurrent()) return false;
       suppressLocalPersistence = true;

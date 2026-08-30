@@ -3,6 +3,69 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Safe outbound delivery and More anchoring
+
+### Scope
+
+Eliminate duplicate-send risk and false delivery confirmation across Compose,
+reader replies, and Flow; add Undo Send and durable recovery; correct the More
+dropdown position reported on Calendar; preserve concurrent AI and terminal
+work; and exercise mutations only against generated `.example.test` fixtures.
+
+### Completed
+
+- Shipped the isolated More positioning fix first at
+  `9d0d4754a3c1ba3817f1c20244810231b4f8894d`. The menu now uses the trigger as
+  its positioning context while retaining the fixed mobile sheet and
+  transparent Safari backdrop.
+- Added a user/account-owned PostgreSQL outbound outbox, immutable idempotency
+  contract, ten-second Undo window, stable RFC Message-ID, leases, bounded
+  pre-attempt retries, lookup-only post-attempt reconciliation, payload
+  scrubbing, safe errors, Redis wakeup, and cron recovery.
+- Required exact owned source-message/account/thread/header proof for replies
+  and moved Compose, reader, and Flow to one session-scoped frontend controller.
+- Added global reconciling/failure status, reload-aware Undo, truthful terminal
+  notifications, queued distinct-draft recovery, and sent-confirmed Flow
+  archive ordering with read-only lost-response reconciliation. Removed the
+  ambiguous one-click failure Retry so the recovered editor is the only resend
+  surface.
+- Restored Compose and Flow Send in the command palette after making execution
+  idempotent. Added the session-only API contract, durable design decision, and
+  complete release record.
+
+### Verification
+
+- More focused tests and production frontend build passed. Signed-in read-only
+  production QA measured exact menu/button alignment on Flow and Calendar at
+  1280×720 with no real-data mutation.
+- Final `make check` passed 422 backend tests with 13 opt-in PostgreSQL skips;
+  all 208 frontend tests and the 510-module production build passed.
+- A disposable PostgreSQL 17 full upgrade, four outbound concurrency/race
+  tests, downgrade with table-removal proof, and re-upgrade passed. Generated
+  browser QA then passed lost-response Undo, exact recovery, active-draft
+  non-clobber, explicit review, preserved newer autosave, and durable failure
+  dismissal. Its fake provider audit recorded the exact intentional attempt
+  count with no external calls, unexpected mutations, or unknown routes.
+- Independent UX/backend reviews found no remaining P0. Their final P1 findings
+  led to content-conditional local-draft deletion, user-invoked failure review,
+  safe release ordering/roll-forward guidance, bounded ingress, queue quotas,
+  SQL parameter redaction, immediate non-retryable scrubbing, and a one-hour
+  cron/admission expiry for the only server-authorized retry payloads.
+
+### Production Actions
+
+- Pushed the More-only commit to the feature branch and GitHub `main`,
+  fast-forwarded clean production, and rebuilt only the frontend. No migration,
+  dependency change, service restart, or data mutation was required. All seven
+  services and public health remained healthy.
+- The outbound migration and worker candidate are not deployed yet.
+
+### Next
+
+Close independent findings, complete full and generated verification, then
+back up PostgreSQL and deploy the exact reviewed outbound release with only the
+required API and cron-worker restarts.
+
 ## 2026-08-30 — Session ownership and shell reliability candidate
 
 ### Scope

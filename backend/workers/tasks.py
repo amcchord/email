@@ -7,6 +7,7 @@ from backend.config import get_settings
 from backend.services.sync import EmailSyncService
 from backend.services.calendar_sync import CalendarSyncService
 from backend.services.mail_actions import MAIL_ACTION_QUEUE_NAME, drain_due_mail_actions
+from backend.services.outbound_messages import drain_due_outbound_messages
 from backend.services.ai import AIService
 from backend.database import async_session
 from backend.models.email import Email
@@ -562,6 +563,11 @@ async def sync_account_incremental(ctx, account_id: int):
 async def drain_mail_actions_task(ctx):
     """Drain durable Gmail label mutations from PostgreSQL."""
     return await drain_due_mail_actions()
+
+
+async def drain_outbound_messages_task(ctx):
+    """Drain durable outbound sends from PostgreSQL."""
+    return await drain_due_outbound_messages()
 
 
 def _is_rate_limit_exception(exc: Exception) -> bool:
@@ -1515,6 +1521,7 @@ class CronWorkerSettings:
         sync_account_incremental,
         sync_all_accounts,
         drain_mail_actions_task,
+        drain_outbound_messages_task,
         sync_calendar_full,
         sync_calendar_incremental,
         sync_all_calendars,
@@ -1530,6 +1537,7 @@ class CronWorkerSettings:
     cron_jobs = [
         cron(sync_all_accounts, minute={i for i in range(0, 60)}),
         cron(drain_mail_actions_task, minute={i for i in range(0, 60)}, second=20),
+        cron(drain_outbound_messages_task, minute={i for i in range(0, 60)}, second=30),
         cron(sync_all_calendars, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
         cron(generate_dashboard_snippet_task, minute={2}, run_at_startup=True),
     ]

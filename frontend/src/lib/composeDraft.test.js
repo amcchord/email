@@ -71,14 +71,17 @@ test('reply metadata alone keeps a handoff draft recoverable', () => {
   assert.equal(composeDraftHasContent({ body_html: '<p>Generated draft</p>' }), true);
   assert.equal(composeDraftHasContent({ in_reply_to: '<generated@example.test>' }), true);
   assert.equal(composeDraftHasContent({ thread_id: 'generated-thread' }), true);
+  assert.equal(composeDraftHasContent({ source_email_id: 301 }), true);
 
   assert.deepEqual(composeReplyContext({
     in_reply_to: '<generated@example.test>',
     thread_id: 'generated-thread',
+    source_email_id: 301,
   }), {
     in_reply_to: '<generated@example.test>',
     references: '<generated@example.test>',
     thread_id: 'generated-thread',
+    source_email_id: 301,
   });
 });
 
@@ -90,4 +93,22 @@ test('Compose persists the latest edit before navigation disposes its session gu
   assert.ok(cleanup.indexOf('persistLocalDraft()') < cleanup.indexOf('composeData.set(null)'));
   assert.ok(cleanup.indexOf('persistLocalDraft()') < cleanup.indexOf('sessionGuard?.dispose()'));
   assert.doesNotMatch(text, /onDestroy\(/);
+});
+
+test('Compose hands one restorable draft to the durable send controller', async () => {
+  const text = await readFile(new URL('../pages/Compose.svelte', import.meta.url), 'utf8');
+
+  assert.match(text, /const restoreDraft = \{\s*\.\.\.data,[\s\S]*attachments: attachments\.map/);
+  assert.match(text, /await submitOutboundSend\(data, \{[\s\S]*onAccepted: releaseEditor,[\s\S]*onRestore: restoreEditor/);
+  assert.match(text, /if \(replyContext\.source_email_id\) data\.source_email_id = replyContext\.source_email_id;/);
+  assert.match(text, /if \(Array\.isArray\(data\.attachments\)\) attachments = data\.attachments;/);
+  assert.match(text, /recipientFieldValue\(data\.to\)/);
+  assert.match(text, /recipientFieldValue\(data\.cc\)/);
+  assert.match(text, /recipientFieldValue\(data\.bcc\)/);
+  assert.match(text, /const capturedDraftKey = activeDraftKey;/);
+  assert.match(text, /const capturedDraftFingerprint = persistedDraftFingerprint\(draftSnapshot\(\)\);/);
+  assert.match(text, /removeCapturedDraftIfUnchanged\(capturedDraftKey, capturedDraftFingerprint\);\s*if \(!sessionGuard\?\.isCurrent\(\)\) return;/);
+  assert.match(text, /persistedDraftFingerprint\(stored\) === fingerprint/);
+  assert.match(text, /source_email_id: replyContext\.source_email_id,/);
+  assert.doesNotMatch(text, /await api\.sendEmail\(/);
 });

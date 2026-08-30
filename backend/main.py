@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from backend.config import get_settings
 from backend.database import engine, Base
+from backend.middleware.compose_body_limit import ComposeSendBodyLimitMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from backend.routers import auth, admin, emails, compose, accounts, ai, todos, chat, calendar, events, public_api, terminal, terminal_admin
@@ -60,6 +61,7 @@ app = FastAPI(
 # Rate limiting
 app.state.limiter = auth.limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(ComposeSendBodyLimitMiddleware)
 
 # CORS
 origins = [o.strip() for o in settings.allowed_origins.split(",")]

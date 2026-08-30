@@ -3,6 +3,8 @@
   import { createAuthenticatedSessionGuard, currentPage, composeData, showToast, pendingReplyDraft, accounts, todos, accountColorMap } from '../../lib/stores.js';
   import { commandPaletteOpen, helpModalOpen, registerActions } from '../../lib/shortcutStore.js';
   import { api } from '../../lib/api.js';
+  import { submitOutboundSend } from '../../lib/outboundSend.js';
+  import { restoreOutboundComposeDraft } from '../../lib/outboundDraftRecovery.js';
   import {
     MAX_ACTIVE_ATTACHMENT_REQUESTS,
     canStartAttachmentDownload,
@@ -559,15 +561,19 @@
     const emailIdAtStart = email.id;
     const bodyAtStart = inlineReplyBody;
     const generationAtStart = inlineReplyGeneration;
-    inlineReplySending = true;
-    try {
-      await api.sendEmail({
-        ...replyAtStart.envelope,
-        body_text: bodyAtStart,
-        body_html: `<p>${bodyAtStart.replace(/\n/g, '<br>')}</p>`,
-      });
-      if (!sessionIsCurrent()) return;
-      showToast('Reply sent!', 'success');
+    const payload = {
+      ...replyAtStart.envelope,
+      body_text: bodyAtStart,
+      body_html: `<p>${bodyAtStart.replace(/\n/g, '<br>')}</p>`,
+    };
+    const restoreDraft = {
+      draft_key: `reply:${payload.account_id}:${emailIdAtStart}`,
+      ...payload,
+    };
+    let editorReleased = false;
+    const releaseEditor = () => {
+      if (editorReleased || !sessionIsCurrent()) return;
+      editorReleased = true;
       const sentDraftStillActive = replyCompletionStillCurrent({
         capturedGeneration: generationAtStart,
         currentGeneration: inlineReplyGeneration,
@@ -576,13 +582,25 @@
         capturedBody: bodyAtStart,
         currentBody: inlineReplyBody,
       });
-      if (sentDraftStillActive) {
-        closeInlineReply();
-        // Prompt only for the message that was actually sent, never a newer selection.
-        if (emailAtStart.ai_action_items && emailAtStart.ai_action_items.length > 0) {
-          showTodoPrompt = true;
-        }
-      }
+      if (sentDraftStillActive) closeInlineReply();
+    };
+    inlineReplySending = true;
+    try {
+      const operation = await submitOutboundSend(payload, {
+        onAccepted: releaseEditor,
+        onSent: () => {
+          if (
+            sessionIsCurrent()
+            && email?.id === emailIdAtStart
+            && emailAtStart.ai_action_items?.length > 0
+          ) {
+            showTodoPrompt = true;
+          }
+        },
+        onRestore: (operation, reason) => restoreOutboundComposeDraft(restoreDraft, operation, reason),
+      });
+      if (!sessionIsCurrent()) return;
+      if (operation) releaseEditor();
     } catch (err) {
       if (sessionIsCurrent()) showToast(err.message, 'error');
     } finally {

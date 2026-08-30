@@ -134,8 +134,13 @@ async function request(method, path, body = null, options = {}) {
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Request failed' }));
     assertAuthEpochCurrent(requestEpoch);
-    const requestError = new Error(error.detail || `HTTP ${response.status}`);
+    const detail = error?.detail;
+    const errorMessage = typeof detail === 'string'
+      ? detail
+      : (typeof detail?.message === 'string' ? detail.message : `HTTP ${response.status}`);
+    const requestError = new Error(errorMessage);
     requestError.status = response.status;
+    if (typeof detail?.code === 'string') requestError.code = detail.code;
     throw requestError;
   }
 
@@ -303,7 +308,25 @@ export const api = {
   },
 
   // Compose
-  sendEmail: (data) => request('POST', '/compose/send', data),
+  sendEmail: (data, idempotencyKey = data?.idempotency_key) => {
+    if (typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) {
+      throw new Error('A send idempotency key is required');
+    }
+    return request('POST', '/compose/send', {
+      ...data,
+      idempotency_key: idempotencyKey,
+    });
+  },
+  listRecentOutboundSends: (limit = 20) =>
+    request('GET', `/compose/sends/recent?limit=${encodeURIComponent(limit)}`),
+  getOutboundSendByIdempotency: (idempotencyKey) =>
+    request('GET', `/compose/sends/by-idempotency/${encodeURIComponent(idempotencyKey)}`),
+  getOutboundSend: (sendId) =>
+    request('GET', `/compose/sends/${encodeURIComponent(sendId)}`),
+  undoOutboundSend: (sendId) =>
+    request('POST', `/compose/sends/${encodeURIComponent(sendId)}/undo`, {}),
+  retryOutboundSend: (sendId) =>
+    request('POST', `/compose/sends/${encodeURIComponent(sendId)}/retry`, {}),
   saveDraft: (data) => request('POST', '/compose/draft', data),
 
   // Accounts

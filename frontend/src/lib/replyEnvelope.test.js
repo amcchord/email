@@ -98,6 +98,7 @@ test('incoming Reply uses the exact second account and Reply-To as a send-ready 
     sourceAccount: { id: 22, email: 'second.owner@example.test' },
     envelope: {
       account_id: 22,
+      source_email_id: 3001,
       to: ['reply@example.test'],
       cc: [],
       bcc: [],
@@ -108,7 +109,7 @@ test('incoming Reply uses the exact second account and Reply-To as a send-ready 
     },
   });
   assert.deepEqual(Object.keys(result.envelope).sort(), [
-    'account_id', 'bcc', 'cc', 'in_reply_to', 'references', 'subject', 'thread_id', 'to',
+    'account_id', 'bcc', 'cc', 'in_reply_to', 'references', 'source_email_id', 'subject', 'thread_id', 'to',
   ]);
 });
 
@@ -218,6 +219,15 @@ test('source resolution never falls back for missing, unknown, mismatched, ambig
     assert.equal(result.reason, reason);
     assert.equal(result.envelope, null);
     assert.equal(result.sourceAccount, null);
+  }
+});
+
+test('reply envelopes require a positive authoritative source message id', () => {
+  for (const id of [null, undefined, 0, -1, 'not-an-id']) {
+    const result = buildReplyEnvelope({ message: incoming({ id }), accounts });
+    assert.equal(result.available, false);
+    assert.equal(result.reason, REPLY_ENVELOPE_UNAVAILABLE.SOURCE_MESSAGE_ID_INVALID);
+    assert.equal(result.envelope, null);
   }
 });
 

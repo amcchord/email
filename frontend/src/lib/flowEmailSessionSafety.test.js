@@ -31,8 +31,15 @@ test('Flow rejects stale thread and action completions after an identity change'
   );
   assert.match(
     text,
-    /async function sendReply[\s\S]*await api\.sendEmail[\s\S]*if \(!sessionIsCurrent\(\)\) return false;\s*showToast\('Reply sent!'/,
+    /async function sendReply[\s\S]*await submitOutboundSend\(payload,[\s\S]*onAccepted: releaseEditor[\s\S]*onRestore: \(operation, reason\) => restoreOutboundComposeDraft\(restoreDraft, operation, reason\)/,
   );
+  assert.match(
+    text,
+    /onSent:[\s\S]*isAuthenticatedSessionCurrent\(sendSession\)[\s\S]*archiveSentReply\(email\.id, archiveIdempotencyKey\)/,
+  );
+  assert.match(text, /await api\.getMailActionByIdempotency\(archiveIdempotencyKey\)/);
+  assert.match(text, /selectedReplyEmail = \{[\s\S]*id: latestInbound\.id,[\s\S]*references_header: latestInbound\.references_header \|\| null/);
+  assert.doesNotMatch(text, /async function sendReply[\s\S]*await api\.sendEmail/);
   assert.match(
     text,
     /async function sendReply[\s\S]*finally \{\s*if \(sessionIsCurrent\(\)\) inlineReplySending = false;/,
@@ -60,8 +67,9 @@ test('EmailView gates attachment and message action continuations to its capture
   );
   assert.match(
     text,
-    /async function sendInlineReply[\s\S]*await api\.sendEmail[\s\S]*if \(!sessionIsCurrent\(\)\) return;\s*showToast\('Reply sent!'/,
+    /async function sendInlineReply[\s\S]*await submitOutboundSend\(payload,[\s\S]*onAccepted: releaseEditor[\s\S]*onRestore: \(operation, reason\) => restoreOutboundComposeDraft\(restoreDraft, operation, reason\)/,
   );
+  assert.doesNotMatch(text, /async function sendInlineReply[\s\S]*await api\.sendEmail/);
   assert.match(
     text,
     /async function sendInlineReply[\s\S]*finally \{\s*if \(sessionIsCurrent\(\)\) inlineReplySending = false;/,

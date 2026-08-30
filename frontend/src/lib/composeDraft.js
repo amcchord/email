@@ -59,7 +59,7 @@ export function composeDraftHasContent(draft) {
   if (!draft || typeof draft !== 'object') return false;
   return Boolean(
     draft.to || draft.cc || draft.bcc || draft.subject || draft.body_html
-    || draft.in_reply_to || draft.thread_id,
+    || draft.in_reply_to || draft.thread_id || draft.source_email_id,
   );
 }
 
@@ -68,5 +68,9 @@ export function composeReplyContext(source = {}) {
     in_reply_to: source.in_reply_to || null,
     references: source.references || source.in_reply_to || null,
     thread_id: source.thread_id || null,
+    source_email_id: Number.isSafeInteger(Number(source.source_email_id))
+      && Number(source.source_email_id) > 0
+      ? Number(source.source_email_id)
+      : null,
   });
 }

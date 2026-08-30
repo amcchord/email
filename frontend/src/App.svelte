@@ -22,6 +22,7 @@
   import Login from './pages/Login.svelte';
   import DeviceAuth from './pages/DeviceAuth.svelte';
   import Layout from './components/layout/Layout.svelte';
+  import OutboundSendStatus from './components/email/OutboundSendStatus.svelte';
   import Toast from './components/common/Toast.svelte';
   import LazyRouteState from './components/common/LazyRouteState.svelte';
   import {
@@ -184,6 +185,27 @@
     if ($currentPage !== authenticatedPage) currentPage.set(authenticatedPage);
   });
 
+  // Full Compose is the safe recovery surface for standalone replies. Leave
+  // the pop-out route in-place (without a reload) when a reply is expanded or
+  // restored so its in-memory draft cannot disappear behind the standalone
+  // URL branch.
+  $effect(() => {
+    const page = $currentPage;
+    if (
+      typeof window === 'undefined'
+      || loading
+      || !$user
+      || standaloneEmailId === null
+      || page !== 'compose'
+    ) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('view');
+    url.searchParams.delete('id');
+    url.searchParams.set('page', 'compose');
+    window.history.replaceState({ mailPage: 'compose' }, '', `${url.pathname}${url.search}${url.hash}`);
+    standaloneEmailId = null;
+  });
+
   // Feature screens also navigate directly (for example Todo → message or
   // Compose → Inbox). Preserve focus on shell controls that survive the route,
   // but recover to the named main region when the focused source was removed.
@@ -245,13 +267,18 @@
   <!-- Pop-out email viewer (no layout chrome) -->
   {#if $user}
     {#key $authenticatedSessionGeneration}
-      <LazyRouteState
-        expectedKey={lazyRouteKey}
-        label={lazyRouteLabel}
-        {routeState}
-        componentProps={{ emailId: standaloneEmailId }}
-        onRetry={retryLazyRoute}
-      />
+      <div class="h-screen min-h-0 flex flex-col" style="background: var(--bg-primary)">
+        <OutboundSendStatus />
+        <div class="min-h-0 flex-1">
+          <LazyRouteState
+            expectedKey={lazyRouteKey}
+            label={lazyRouteLabel}
+            {routeState}
+            componentProps={{ emailId: standaloneEmailId }}
+            onRetry={retryLazyRoute}
+          />
+        </div>
+      </div>
     {/key}
   {:else}
     <Login />

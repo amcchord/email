@@ -16,6 +16,8 @@ test('standalone email viewer remounts and suppresses old identity completions',
     app,
     /standaloneEmailId !== null[\s\S]*\{#if \$user\}[\s\S]*\{#key \$authenticatedSessionGeneration\}[\s\S]*<LazyRouteState/,
   );
+  assert.match(app, /standaloneEmailId === null[\s\S]*page !== 'compose'[\s\S]*url\.searchParams\.delete\('view'\)[\s\S]*standaloneEmailId = null/);
+  assert.match(app, /standaloneEmailId !== null[\s\S]*<OutboundSendStatus \/>[\s\S]*<LazyRouteState/);
   assert.match(standalone, /sessionGuard = createAuthenticatedSessionGuard\(\)/);
   assert.match(
     standalone,

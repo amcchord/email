@@ -65,9 +65,7 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'flow.ignore',     key: 'i',          label: 'Ignore needs-reply email', context: 'flow', category: 'Flow' },
   { id: 'flow.snooze',     key: 'z',          label: 'Snooze needs-reply email', context: 'flow', category: 'Flow' },
   { id: 'flow.newChat',    key: 'n',          label: 'New chat',                 context: 'flow', category: 'Flow' },
-  // Sending remains keyboard-accessible, but stays out of the palette until
-  // compose/send has a durable idempotency contract for lost responses.
-  { id: 'flow.send',       key: 'Ctrl+Enter', label: 'Send reply',               context: 'flow', category: 'Flow', palette: false },
+  { id: 'flow.send',       key: 'Ctrl+Enter', label: 'Send reply',               context: 'flow', category: 'Flow' },
   { id: 'flow.back',       key: 'Escape',     label: 'Back to list / deselect',  context: 'flow', category: 'Flow' },
   { id: 'flow.replyOption1', key: '1',       label: 'Select reply option 1',    context: 'flow', category: 'Flow' },
   { id: 'flow.replyOption2', key: '2',       label: 'Select reply option 2',    context: 'flow', category: 'Flow' },
@@ -84,7 +82,7 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'cal.day',   key: 'd', label: 'Day view',        context: 'calendar', category: 'Calendar' },
 
   // ── Compose ──────────────────────────────────────────────────────
-  { id: 'compose.send',    key: 'Ctrl+Enter',   label: 'Send email',  context: 'compose', category: 'Compose', palette: false },
+  { id: 'compose.send',    key: 'Ctrl+Enter',   label: 'Send email',  context: 'compose', category: 'Compose' },
   { id: 'compose.draft',   key: 'Ctrl+s',       label: 'Save draft',  context: 'compose', category: 'Compose' },
   { id: 'compose.discard', key: 'Escape',        label: 'Close and keep draft', context: 'compose', category: 'Compose' },
   { id: 'compose.cc',      key: 'Ctrl+Shift+c', label: 'Toggle Cc',   context: 'compose', category: 'Compose' },

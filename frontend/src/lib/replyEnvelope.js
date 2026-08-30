@@ -2,6 +2,7 @@ export const REPLY_ENVELOPE_UNAVAILABLE = Object.freeze({
   INVALID_INPUT: 'invalid_input',
   INVALID_MODE: 'invalid_mode',
   MESSAGE_DIRECTION_MISSING: 'message_direction_missing',
+  SOURCE_MESSAGE_ID_INVALID: 'source_message_id_invalid',
   OWNED_IDENTITY_INVALID: 'owned_identity_invalid',
   SOURCE_ACCOUNT_IDENTITY_MISSING: 'source_account_identity_missing',
   SOURCE_ACCOUNT_IDENTITY_INVALID: 'source_account_identity_invalid',
@@ -270,6 +271,10 @@ export function buildReplyEnvelope({ message, accounts, mode = REPLY_ENVELOPE_MO
   if (typeof message.is_sent !== 'boolean') {
     return unavailable(REPLY_ENVELOPE_UNAVAILABLE.MESSAGE_DIRECTION_MISSING);
   }
+  const sourceEmailId = Number(message.id);
+  if (!Number.isSafeInteger(sourceEmailId) || sourceEmailId <= 0) {
+    return unavailable(REPLY_ENVELOPE_UNAVAILABLE.SOURCE_MESSAGE_ID_INVALID);
+  }
 
   const resolution = resolveReplySourceAccount({ message, accounts });
   if (!resolution.available) return resolution;
@@ -323,6 +328,7 @@ export function buildReplyEnvelope({ message, accounts, mode = REPLY_ENVELOPE_MO
 
   return success(sourceAccount, {
     account_id: sourceAccount.id,
+    source_email_id: sourceEmailId,
     to,
     cc,
     bcc: [],

@@ -120,7 +120,15 @@ sudo -u mailapp git -C /opt/mail fetch origin
 sudo -u mailapp git -C /opt/mail merge --ff-only <reviewed-commit>
 ```
 
-Then apply only the release steps required by the diff:
+Then apply only the release steps required by the diff.
+
+When frontend code depends on a new schema or API response, do not use the
+generic frontend-first order below. Keep the old built frontend live after the
+Git fast-forward, take the backup, run Alembic while the old processes are
+still serving, restart and verify the new API/workers, and only then build the
+new frontend. This prevents a new browser bundle from calling an old mutation
+contract and prevents new application startup from creating tables outside
+Alembic.
 
 ```bash
 # Python dependency change
@@ -148,6 +156,11 @@ changes, validate before reload:
 caddy validate --config /etc/caddy/Caddyfile
 systemctl reload caddy
 ```
+
+Never downgrade a queue/outbox migration while actionable rows remain. Stop
+every writer and drainer, audit the table using aggregate state counts, and
+prefer rolling the application forward once production has accepted work. A
+downgrade that drops an outbox destroys idempotency and recovery evidence.
 
 ## Post-deploy Verification
 

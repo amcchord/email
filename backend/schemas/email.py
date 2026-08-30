@@ -1,4 +1,8 @@
-from pydantic import BaseModel, Field, StrictInt, field_validator
+import base64
+import re
+from email.utils import formataddr, getaddresses
+
+from pydantic import BaseModel, Field, StrictInt, field_validator, model_validator
 from typing import Literal, Optional
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -161,25 +165,155 @@ class MailActionOperationResponse(BaseModel):
     items: list[MailActionItemResponse]
 
 
+MAX_COMPOSE_RECIPIENTS = 100
+MAX_COMPOSE_ATTACHMENT_COUNT = 10
+MAX_COMPOSE_ATTACHMENT_BYTES = 18 * 1024 * 1024
+MAX_COMPOSE_BODY_CHARS = 10 * 1024 * 1024
+_EMAIL_ADDRESS_RE = re.compile(
+    r"^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?"
+    r"(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$",
+    re.IGNORECASE,
+)
+
+
+def _normalize_mailbox(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("Recipients must be email addresses")
+    raw = value.strip()
+    if not raw or len(raw) > 998 or "\r" in raw or "\n" in raw:
+        raise ValueError("Recipient address is invalid")
+    parsed = getaddresses([raw])
+    if len(parsed) != 1:
+        raise ValueError("Recipient address is invalid")
+    display_name, address = parsed[0]
+    address = address.strip().lower()
+    if not _EMAIL_ADDRESS_RE.fullmatch(address):
+        raise ValueError("Recipient address is invalid")
+    clean_name = display_name.replace("\r", "").replace("\n", "").strip()
+    return formataddr((clean_name, address)) if clean_name else address
+
+
 class ComposeAttachment(BaseModel):
-    filename: str
-    content_type: str = "application/octet-stream"
-    data_base64: str
+    filename: str = Field(min_length=1, max_length=255)
+    content_type: str = Field(default="application/octet-stream", min_length=1, max_length=255)
+    data_base64: str = Field(min_length=1, max_length=25 * 1024 * 1024)
+
+    @field_validator("filename", "content_type")
+    @classmethod
+    def validate_attachment_headers(cls, value: str) -> str:
+        value = value.strip()
+        if not value or "\r" in value or "\n" in value:
+            raise ValueError("Attachment metadata is invalid")
+        return value
+
+    def decoded_size(self) -> int:
+        try:
+            return len(base64.b64decode(self.data_base64, validate=True))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Attachment data is not valid base64") from exc
 
 
-class ComposeRequest(BaseModel):
-    account_id: int
-    to: list[str]
-    cc: list[str] = []
-    bcc: list[str] = []
-    subject: str = ""
-    body_html: str = ""
-    body_text: str = ""
-    in_reply_to: Optional[str] = None
-    references: Optional[str] = None
-    thread_id: Optional[str] = None
+class ComposeMessageBase(BaseModel):
+    account_id: StrictInt = Field(gt=0)
+    to: list[str] = Field(default_factory=list)
+    cc: list[str] = Field(default_factory=list)
+    bcc: list[str] = Field(default_factory=list)
+    subject: str = Field(default="", max_length=998)
+    body_html: str = Field(default="", max_length=MAX_COMPOSE_BODY_CHARS)
+    body_text: str = Field(default="", max_length=MAX_COMPOSE_BODY_CHARS)
+    in_reply_to: Optional[str] = Field(default=None, max_length=998)
+    references: Optional[str] = Field(default=None, max_length=8192)
+    thread_id: Optional[str] = Field(default=None, max_length=255)
+    source_email_id: Optional[StrictInt] = Field(default=None, gt=0)
     is_draft: bool = False
     attachments: list[ComposeAttachment] = Field(default_factory=list)
+
+    @field_validator("to", "cc", "bcc")
+    @classmethod
+    def validate_recipient_list(cls, values: list[str]) -> list[str]:
+        if len(values) > MAX_COMPOSE_RECIPIENTS:
+            raise ValueError(f"A recipient field can include at most {MAX_COMPOSE_RECIPIENTS} addresses")
+        normalized = [_normalize_mailbox(value) for value in values]
+        identities = [getaddresses([value])[0][1].casefold() for value in normalized]
+        if len(set(identities)) != len(identities):
+            raise ValueError("Recipient addresses must be unique within each field")
+        return normalized
+
+    @field_validator("subject", "in_reply_to", "references", "thread_id")
+    @classmethod
+    def reject_header_newlines(cls, value: str | None) -> str | None:
+        if value is not None and ("\r" in value or "\n" in value):
+            raise ValueError("Message headers cannot contain newlines")
+        return value
+
+    @model_validator(mode="after")
+    def validate_message_bounds(self):
+        if len(self.to) + len(self.cc) + len(self.bcc) > MAX_COMPOSE_RECIPIENTS:
+            raise ValueError(f"A message can include at most {MAX_COMPOSE_RECIPIENTS} recipients")
+        identities = []
+        for value in (*self.to, *self.cc, *self.bcc):
+            parsed = getaddresses([value])
+            identities.append(parsed[0][1].casefold())
+        if len(set(identities)) != len(identities):
+            raise ValueError("Recipient addresses must be unique across To, Cc, and Bcc")
+        if len(self.attachments) > MAX_COMPOSE_ATTACHMENT_COUNT:
+            raise ValueError(f"A message can include at most {MAX_COMPOSE_ATTACHMENT_COUNT} attachments")
+        if sum(item.decoded_size() for item in self.attachments) > MAX_COMPOSE_ATTACHMENT_BYTES:
+            raise ValueError("Attachments exceed the 18 MB message limit")
+        return self
+
+
+class ComposeRequest(ComposeMessageBase):
+    idempotency_key: UUID
+
+    @model_validator(mode="after")
+    def require_primary_recipient(self):
+        if not self.to:
+            raise ValueError("A message requires at least one To recipient")
+        if self.is_draft:
+            raise ValueError("The send endpoint does not accept draft payloads")
+        return self
+
+
+class ComposeDraftRequest(ComposeMessageBase):
+    pass
+
+
+OutboundSendState = Literal[
+    "staged",
+    "processing",
+    "retry_wait",
+    "reconciling",
+    "sent",
+    "failed",
+    "cancelled",
+]
+
+
+class OutboundSendResponse(BaseModel):
+    send_id: UUID
+    idempotency_key: UUID
+    account_id: int
+    source_email_id: Optional[int] = None
+    state: OutboundSendState
+    execute_after: datetime
+    undo_until: datetime
+    next_attempt_at: Optional[datetime] = None
+    attempt_count: int
+    max_attempts: int
+    can_undo: bool
+    can_retry: bool
+    provider_message_id: Optional[str] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    sent_at: Optional[datetime] = None
+    failed_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
 
 
 class LabelResponse(BaseModel):

@@ -6,6 +6,7 @@
   import ShortcutOverlay from '../common/ShortcutOverlay.svelte';
   import ShortcutHelpModal from '../common/ShortcutHelpModal.svelte';
   import CommandPalette from '../common/CommandPalette.svelte';
+  import OutboundSendStatus from '../email/OutboundSendStatus.svelte';
   import { sidebarCollapsed, currentPage } from '../../lib/stores.js';
   import { getLazyRouteLabel, normalizeAuthenticatedPage, preloadAuthenticatedPage } from '../../lib/lazyRoutes.js';
   import { openCommandPalette, registerActions, toggleShortcutHelp, loadUserShortcuts } from '../../lib/shortcutStore.js';
@@ -82,6 +83,7 @@
 <div data-app-shell class="h-screen flex flex-col overflow-hidden" style="background: var(--bg-primary)">
   <!-- TopBar always full-width so tabs stay in the same position -->
   <TopBar />
+  <OutboundSendStatus />
   <div class="flex-1 flex overflow-hidden">
     {#if showSidebar}
       {#if !$sidebarCollapsed}

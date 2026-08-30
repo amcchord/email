@@ -113,9 +113,11 @@ test('keyboard normalization matches shifted letters and printable punctuation',
   assert.equal(eventToCombo({ ...baseEvent, key: 'I', shiftKey: true }), normalizeCombo('Shift+i'));
 });
 
-test('non-idempotent send shortcuts stay out of the executable palette', () => {
+test('durable send shortcuts remain palette-visible and keep their existing bindings', () => {
   const byId = Object.fromEntries(SHORTCUT_DEFAULTS.map(shortcut => [shortcut.id, shortcut]));
 
-  assert.equal(byId['compose.send'].palette, false);
-  assert.equal(byId['flow.send'].palette, false);
+  assert.notEqual(byId['compose.send'].palette, false);
+  assert.notEqual(byId['flow.send'].palette, false);
+  assert.equal(byId['compose.send'].key, 'Ctrl+Enter');
+  assert.equal(byId['flow.send'].key, 'Ctrl+Enter');
 });

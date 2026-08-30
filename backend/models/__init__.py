@@ -6,6 +6,7 @@ from backend.models.chat import ChatConversation, ChatMessage
 from backend.models.dashboard import DashboardSnippet
 from backend.models.email import Attachment, Email, EmailLabel
 from backend.models.mail_action import MailAction
+from backend.models.outbound_message import OutboundMessage
 from backend.models.settings import Setting
 from backend.models.terminal import (
     TerminalBatterySample,
@@ -24,6 +25,7 @@ __all__ = [
     "Attachment",
     "EmailLabel",
     "MailAction",
+    "OutboundMessage",
     "AIAnalysis",
     "Setting",
     "TodoItem",

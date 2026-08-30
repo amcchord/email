@@ -503,6 +503,7 @@ class GmailService:
         in_reply_to: str | None = None,
         references: str | None = None,
         attachments: list | None = None,
+        message_id_header: str | None = None,
     ) -> MIMEMultipart:
         """Build a safe multipart message shared by send and draft paths."""
         attachments = attachments or []
@@ -544,6 +545,15 @@ class GmailService:
             msg["Bcc"] = ", ".join(bcc)
         msg["Subject"] = subject.replace("\r", "").replace("\n", "")
         msg["From"] = self.account.email
+        if message_id_header:
+            stable_message_id = message_id_header.strip()
+            if (
+                "\r" in stable_message_id
+                or "\n" in stable_message_id
+                or not re.fullmatch(r"<[^<>\s@]+@[^<>\s@]+>", stable_message_id)
+            ):
+                raise ValueError("Message-ID is invalid")
+            msg["Message-ID"] = stable_message_id
         if in_reply_to:
             msg["In-Reply-To"] = in_reply_to
         if references:
@@ -569,6 +579,8 @@ class GmailService:
         references: Optional[str] = None,
         thread_id: Optional[str] = None,
         attachments: list = None,
+        message_id_header: Optional[str] = None,
+        max_retries: Optional[int] = None,
     ) -> str:
         """Send an email."""
         service = self._get_service()
@@ -578,6 +590,7 @@ class GmailService:
             body_html=body_html, body_text=body_text,
             in_reply_to=in_reply_to, references=references,
             attachments=attachments,
+            message_id_header=message_id_header,
         )
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
@@ -587,9 +600,13 @@ class GmailService:
 
         request = service.users().messages().send(userId="me", body=body)
         try:
-            result = await self._execute_with_retry(request, context="send_email")
+            result = await self._execute_with_retry(
+                request,
+                context="send_email",
+                max_retries=max_retries,
+            )
         except HttpError as e:
-            if e.resp.status == 404 and thread_id:
+            if e.resp.status == 404 and thread_id and max_retries != 1:
                 logger.warning(
                     "send_email got 404 with threadId=%s for %s; "
                     "retrying without threadId",
@@ -600,11 +617,47 @@ class GmailService:
                     userId="me", body=body
                 )
                 result = await self._execute_with_retry(
-                    request, context="send_email_no_thread"
+                    request,
+                    context="send_email_no_thread",
+                    max_retries=max_retries,
                 )
             else:
                 raise
         return result.get("id", "")
+
+    async def find_sent_message_by_rfc_message_id(
+        self,
+        message_id_header: str,
+        *,
+        max_retries: Optional[int] = None,
+    ) -> Optional[str]:
+        """Find an accepted sent message by its stable RFC Message-ID.
+
+        Durable senders use this before the first provider call and after any
+        ambiguous outcome. An empty result is not itself permission to replay
+        a previously attempted send because Gmail search indexing can lag.
+        """
+        normalized = message_id_header.strip()
+        if not re.fullmatch(r"<[^<>\s@]+@[^<>\s@]+>", normalized):
+            raise ValueError("Message-ID is invalid")
+        service = self._get_service()
+        request = service.users().messages().list(
+            userId="me",
+            labelIds=["SENT"],
+            q=f"rfc822msgid:{normalized[1:-1]}",
+            maxResults=10,
+        )
+        result = await self._execute_with_retry(
+            request,
+            context="find_sent_message_by_rfc_message_id",
+            max_retries=max_retries,
+            quota_cost=COST_GET,
+        )
+        for message in result.get("messages", []):
+            provider_id = message.get("id")
+            if provider_id:
+                return str(provider_id)
+        return None
 
     async def create_draft(
         self,

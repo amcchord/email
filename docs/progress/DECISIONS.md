@@ -386,3 +386,31 @@ add a new entry that explicitly supersedes the old one.
   Foreign, missing, and analysis-missing email IDs share a uniform Todo 404;
   historical cross-owner AI-derived Todos are purged, while user-authored
   manual titles are preserved only after detaching unsafe email/draft links.
+
+## D-023 — Outbound email is a durable at-most-once operation
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Accept each browser send into PostgreSQL under one user-scoped
+  client UUID and immutable canonical payload, wait through a server-owned
+  ten-second Undo window, durably mark a provider attempt before calling Gmail,
+  and assign one stable RFC Message-ID. A pre-attempt failure may retry under a
+  lease; any ambiguous or interrupted post-attempt outcome becomes lookup-only
+  reconciliation and is never automatically resent. Reply metadata is accepted
+  only with an exact owned source message/account/thread/header proof.
+- Reason: An HTTP response is not provider delivery truth. Retrying after a
+  lost Gmail response can duplicate external email, while guessing reply
+  provenance can send from the wrong account or attach a response to a foreign
+  thread.
+- Consequence: Interactive Compose, reader, and Flow sends use the shared
+  durable controller, clear editors on durable ownership rather than claiming
+  success, and announce sent only from server state. PostgreSQL is recovery
+  authority; Redis only accelerates draining. Sent and cancelled operations
+  scrub recipients, bodies, and attachment bytes; non-retryable failures scrub
+  immediately, and any authorized pre-provider retry expires and scrubs after
+  one hour. Ambiguous sends tell the user not to resend; unsafe failures cannot
+  be retried. Undo/failure recovery
+  opens a distinct auth-scoped Compose intent, or queues it behind an explicit
+  Review draft action when another composer is active. The global failure UI
+  does not offer one-click Retry beside an editable recovered copy. Public API
+  tokens cannot access these mutation routes.

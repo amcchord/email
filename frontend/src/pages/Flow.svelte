@@ -3,7 +3,7 @@
   import { marked } from 'marked';
   import { api } from '../lib/api.js';
   import { sanitizeMarkdown } from '../lib/sanitize.js';
-  import { chatConversations, createAuthenticatedSessionGuard, currentConversationId, showToast, currentPage, currentMailbox, selectedEmailId, pendingReplyDraft, accounts, composeData, threadOrder, accountColorMap } from '../lib/stores.js';
+  import { chatConversations, createAuthenticatedSessionGuard, captureAuthenticatedSession, isAuthenticatedSessionCurrent, currentConversationId, showToast, currentPage, currentMailbox, selectedEmailId, pendingReplyDraft, accounts, composeData, threadOrder, accountColorMap } from '../lib/stores.js';
   import { get } from 'svelte/store';
   import { registerActions } from '../lib/shortcutStore.js';
   import { lastEvent } from '../lib/realtime.js';
@@ -20,6 +20,9 @@
     resolveReplySourceAccount,
   } from '../lib/replyEnvelope.js';
   import EmailHtmlFrame from '../components/email/EmailHtmlFrame.svelte';
+  import { secureOutboundSendKey, submitOutboundSend } from '../lib/outboundSend.js';
+  import { restoreOutboundComposeDraft } from '../lib/outboundDraftRecovery.js';
+  import { isMailActionNetworkError } from '../lib/mailActionUX.js';
 
   // --- Day Summary State ---
   let summaryLoading = $state(true);
@@ -1063,8 +1066,10 @@
           if (latestInbound) {
             selectedReplyEmail = {
               ...selectedReplyEmail,
+              id: latestInbound.id,
               account_id: latestInbound.account_id,
               account_email: latestInbound.account_email,
+              gmail_thread_id: latestInbound.gmail_thread_id || selectedReplyEmail.gmail_thread_id,
               is_sent: false,
               from_name: latestInbound.from_name || selectedReplyEmail.from_name,
               from_address: latestInbound.from_address || selectedReplyEmail.from_address,
@@ -1072,6 +1077,7 @@
               to_addresses: latestInbound.to_addresses || [],
               cc_addresses: latestInbound.cc_addresses || [],
               message_id_header: latestInbound.message_id_header || null,
+              references_header: latestInbound.references_header || null,
               date: latestInbound.date || selectedReplyEmail.date,
             };
           }
@@ -1381,6 +1387,29 @@
       && Boolean(replyContext?.available);
   }
 
+  function archiveOutcomeCouldBeAmbiguous(error) {
+    const status = Number(error?.status);
+    return isMailActionNetworkError(error)
+      || status === 408
+      || status === 425
+      || status === 429
+      || status >= 500;
+  }
+
+  async function archiveSentReply(emailId, archiveIdempotencyKey) {
+    try {
+      await api.emailActions([emailId], 'archive', archiveIdempotencyKey);
+      return true;
+    } catch (error) {
+      if (!archiveOutcomeCouldBeAmbiguous(error)) throw error;
+      // The action request is idempotent. A read-only lookup distinguishes a
+      // lost response from a request that never reached the server without
+      // issuing a second mailbox mutation.
+      await api.getMailActionByIdempotency(archiveIdempotencyKey);
+      return true;
+    }
+  }
+
   async function sendReply() {
     if (!canSendReply() || !sessionIsCurrent()) return false;
     const email = selectedReplyEmail;
@@ -1396,31 +1425,23 @@
       return false;
     }
     const envelopeAtStart = contextAtStart.envelope;
-
-    inlineReplySending = true;
-    try {
-      await api.sendEmail({
-        ...envelopeAtStart,
-        body_text: plainText,
-        body_html: bodyHtmlAtStart,
-      });
-      if (!sessionIsCurrent()) return false;
-      showToast('Reply sent!', 'success');
-
-      if (sourceAtStart === 'needs_reply') {
-        // Archive if toggled
-        if (archiveAtStart && email.id) {
-          try {
-            await api.emailActions([email.id], 'archive');
-          } catch {
-            // silent fail on archive
-          }
-          if (!sessionIsCurrent()) return false;
-        }
-      }
-
-      // Recheck after every delayed operation. Navigation or additional typing
-      // since Send must never be cleared by completion of the captured draft.
+    const payload = {
+      ...envelopeAtStart,
+      body_text: plainText,
+      body_html: bodyHtmlAtStart,
+    };
+    const restoreDraft = {
+      draft_key: `reply:${envelopeAtStart.account_id}:${email.id || envelopeAtStart.thread_id || 'thread'}`,
+      ...payload,
+    };
+    const sendSession = captureAuthenticatedSession();
+    const archiveIdempotencyKey = archiveAtStart && sourceAtStart === 'needs_reply' && email.id
+      ? secureOutboundSendKey()
+      : null;
+    let editorReleased = false;
+    const releaseEditor = () => {
+      if (editorReleased || !sessionIsCurrent()) return;
+      editorReleased = true;
       const replyStillActive = threadRequestIsCurrent(requestGeneration, {
         emailId: email.id ?? null,
         threadId: email.gmail_thread_id ?? null,
@@ -1435,6 +1456,27 @@
       } else if (sentDraftStillActive) {
         closeReplyView();
       }
+    };
+
+    inlineReplySending = true;
+    try {
+      const operation = await submitOutboundSend(payload, {
+        onAccepted: releaseEditor,
+        onSent: () => {
+          if (!archiveIdempotencyKey || !isAuthenticatedSessionCurrent(sendSession)) return;
+          void archiveSentReply(email.id, archiveIdempotencyKey).catch(error => {
+            if (isAuthenticatedSessionCurrent(sendSession)) {
+              showToast(
+                error?.message || 'Reply sent, but the original email archive status is not confirmed',
+                'error',
+              );
+            }
+          });
+        },
+        onRestore: (operation, reason) => restoreOutboundComposeDraft(restoreDraft, operation, reason),
+      });
+      if (!sessionIsCurrent()) return false;
+      if (operation) releaseEditor();
       return true;
     } catch (err) {
       if (sessionIsCurrent()) showToast(err.message, 'error');

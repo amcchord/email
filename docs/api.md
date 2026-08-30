@@ -38,6 +38,7 @@ free-form questions about your inbox without touching the web UI.
 - [Web session-only structured email search](#web-session-only-structured-email-search)
 - [Web session-only attachment preview and download](#web-session-only-attachment-preview-and-download)
 - [Web session-only durable mail actions](#web-session-only-durable-mail-actions)
+- [Web session-only durable outbound delivery](#web-session-only-durable-outbound-delivery)
 - [Web session-only Todo ownership](#web-session-only-todo-ownership)
 - [At a Glance displays and terminal management](#at-a-glance-displays-and-terminal-management)
 
@@ -839,6 +840,117 @@ is picked up by the next durable cron pass.
 `GET /actions/recent` remains bounded by `limit` (1–100) but prioritizes
 operations with unresolved failed items before newer completed operations, so
 a failure does not silently disappear behind routine successes. Public API
+tokens cannot call these mutation routes.
+
+## Web session-only durable outbound delivery
+
+Interactive email sends use the authenticated browser session and a
+PostgreSQL outbox. HTTP 202 means the server durably owns the logical send; it
+does not mean Gmail has confirmed delivery.
+
+```text
+POST /api/compose/send
+GET  /api/compose/sends/recent?limit=20
+GET  /api/compose/sends/by-idempotency/{idempotency_key}
+GET  /api/compose/sends/{send_id}
+POST /api/compose/sends/{send_id}/undo
+POST /api/compose/sends/{send_id}/retry
+```
+
+Create requires one client-generated UUID for one immutable logical payload:
+
+```json
+{
+  "idempotency_key": "a48e819f-1bd6-4bf6-b2bc-b81e7300f226",
+  "account_id": 3,
+  "to": ["recipient@example.test"],
+  "cc": [],
+  "bcc": [],
+  "subject": "Generated example",
+  "body_text": "Generated fixture content",
+  "body_html": "<p>Generated fixture content</p>",
+  "source_email_id": null,
+  "in_reply_to": null,
+  "references": null,
+  "thread_id": null,
+  "attachments": []
+}
+```
+
+The account must be active and owned by the current user. A message requires a
+To recipient; the server accepts at most 100 unique RFC mailboxes, ten
+attachments, 18 MiB of decoded attachment bytes, and bounded headers/bodies.
+Header newlines, invalid base64, duplicates across To/Cc/Bcc, foreign accounts,
+and inactive accounts fail before persistence. A pure-ASGI guard rejects a
+declared or streamed request body above 50 MiB with 413 before FastAPI parses
+the message JSON.
+
+Admission is serialized transactionally per user. At most 30 active sends may
+consume one account's capacity and 60 may consume one user's capacity; the
+rolling 60-second acceptance limits are 20 per account and 40 per user.
+Same-key/same-payload idempotent lookups do not consume another quota slot.
+Quota rejection returns 429 `outbound_rate_limited` with `Retry-After`.
+
+A reply with `thread_id`, `in_reply_to`, or `references` must include a
+positive `source_email_id`. The source must belong to the same owned account,
+and its Gmail thread, Message-ID, and complete References chain must exactly
+match the request. Missing and foreign reply sources share a non-disclosing
+404.
+
+Reusing an idempotency key with the same canonical payload returns the original
+operation with 202. Reusing it for different content returns 409. After a lost
+create response, the browser looks up the owned key and may replay only the
+same payload with the same key; it never creates a replacement key for that
+logical send.
+
+```json
+{
+  "send_id": "f9801543-45a0-4304-8373-410e6db85438",
+  "idempotency_key": "a48e819f-1bd6-4bf6-b2bc-b81e7300f226",
+  "account_id": 3,
+  "source_email_id": null,
+  "state": "staged",
+  "execute_after": "2026-08-30T12:00:10Z",
+  "undo_until": "2026-08-30T12:00:10Z",
+  "next_attempt_at": "2026-08-30T12:00:10Z",
+  "attempt_count": 0,
+  "max_attempts": 8,
+  "can_undo": true,
+  "can_retry": false,
+  "provider_message_id": null,
+  "error_code": null,
+  "error_message": null,
+  "created_at": "2026-08-30T12:00:00Z",
+  "updated_at": "2026-08-30T12:00:00Z",
+  "sent_at": null,
+  "failed_at": null,
+  "cancelled_at": null
+}
+```
+
+States are `staged`, `processing`, `retry_wait`, `reconciling`, `sent`,
+`failed`, and `cancelled`. Undo succeeds only while the operation remains
+staged and the server's ten-second deadline is open; otherwise it returns 409.
+`can_retry` is authoritative. A failure after any possible Gmail attempt is
+never retryable. A rare pre-provider failure may expose `can_retry=true` for an
+internal one-hour recovery window; the deadline itself is deliberately not
+included in the response. After it expires, `can_retry=false` and admission or
+the minute cron sweep removes the retained payload. A persistence failure while
+accepting work returns safe 503 `outbound_unavailable` with `Retry-After: 5`;
+database parameters and raw exception text are not exposed.
+
+Before Gmail delivery, the worker searches Sent by one stable RFC Message-ID.
+It then durably records the provider-attempt boundary before executing exactly
+one Gmail send request. A response, timeout, worker interruption, or lease loss
+after that boundary which cannot prove the Gmail result enters `reconciling`.
+Reconciliation performs only Sent lookups; it never replays the message.
+Expired pre-attempt work may follow bounded retry policy. Redis only wakes the
+drainer; PostgreSQL and the periodic cron sweep provide recovery.
+
+Status responses contain lifecycle metadata only—never recipients, subject,
+body, or attachments. Provider errors are reduced to safe codes and copy.
+Payload content is removed after `sent`, `cancelled`, every non-retryable
+failure, or expiration of the bounded pre-provider retry window. Public API
 tokens cannot call these mutation routes.
 
 ## Web session-only Todo ownership

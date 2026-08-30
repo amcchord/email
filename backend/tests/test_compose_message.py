@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 import backend.routers.compose as compose_router
-from backend.schemas.email import ComposeRequest
+from backend.schemas.email import ComposeDraftRequest
 from backend.services.gmail import GmailService
 
 
@@ -150,7 +150,7 @@ async def test_save_draft_forwards_reply_headers_to_gmail_service(monkeypatch):
     )
 
     response = await compose_router.save_draft(
-        request=ComposeRequest(
+        request=ComposeDraftRequest(
             account_id=account.id,
             to=["recipient@example.test"],
             subject="Re: Generated thread",

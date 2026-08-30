@@ -4,81 +4,68 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-User-test the deployed session-ownership, Todo-ownership, Compose-lifecycle,
-and Safari shell reliability release without touching real mail or calendar
-data, then continue the next scoped product-improvement cycle. Preserve the
-concurrently owned firmware work in its separate repository.
+Replace every interactive web send path with one durable, idempotent,
+ten-second Undo Send lifecycle. Prove at-most-once Gmail behavior, reply-source
+ownership, draft recovery, session isolation, and truthful status using only
+generated `.example.test` fixtures before promoting the migration and worker.
 
 ## Baseline
 
-- The released application code is
-  `18e80fdd9247c52825b225e55b85aabc240e76d3`; GitHub `main` and production
-  contain that exact application state plus the docs-only closeout.
-- Production Alembic is `c0d1e2f3a4b5 (head)`, all seven checked services are
-  active, the exact frontend asset returns 200, and public health reports `ok`.
-- Production preflight and postflight both found zero Todo rows and zero
-  ownership mismatches. The ownership trigger/function are installed. The
-  validated pre-upgrade backup is
-  `/var/backups/mailapp/maildb-pre-session-ownership-20260830T1559Z.dump`.
-- At the user's request, `austin@mcchord.net` is an active administrator. Google
-  OAuth now accepts the trusted organization domains `@mcchord.net`,
-  `@casanacare.com`, and `@outsidersfund.com`; consumer domains remain
-  exact-address only.
-- The firmware milestone is isolated in the private `reterminal-color`
-  repository and has not changed this Email checkout, migrations, or production.
+- GitHub `main` and production are clean at
+  `9d0d4754a3c1ba3817f1c20244810231b4f8894d`. That small released fix anchors
+  the More dropdown to the More trigger rather than the full navigation row.
+- Signed-in read-only production browser QA measured a 0 px left-edge delta
+  and 8 px vertical gap on both Flow and Calendar. All seven checked services
+  are active, public health is `ok`, and the new 507-module frontend asset is
+  live. No real Sync, send, mail action, calendar write, or Todo action ran.
+- Production Alembic remains `c0d1e2f3a4b5 (head)`. The outbound candidate
+  allocates the next linear revision `d1e2f3a4b5c6`; it is not deployed yet.
+- The firmware repository milestone is independently merged at
+  `1b5364e5d4b48666b3ecfd0cf8ba31ab7f4bd5c4`. Its Email browser-installer
+  task is avoiding this release's shared API and progress documents.
 
 This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
 
-## Release Scope
+## Active Work Item
 
-- One authentication generation owns every user-derived store, request,
-  refresh, stream, poller, timer, and delayed continuation. Identity changes
-  synchronously clear prior-user data, and logout/login use an ordered cookie
-  mutation barrier.
-- Compose drafts and last-sender choices are scoped by user and intent; unsafe
-  unscoped legacy drafts are purged. Navigation flushes the latest edit before
-  teardown even inside the autosave debounce.
-- Todo creation and AI action-item creation validate source email ownership,
-  use a uniform non-disclosing 404, and are backed by a PostgreSQL ownership
-  trigger plus conservative historical cleanup.
-- Safari More and Sync popover backdrops remain transparent at desktop and
-  mobile sizes. Cancel/failure stops browser-assisted bulk unsubscribe queues.
+### P0 — Durable outbound delivery and Undo Send
 
-## Verification State
+- State: release-ready
+- Why: the legacy request sent directly through Gmail, so a lost HTTP response
+  could cause a user retry and duplicate real email; it also reported “sent”
+  before provider truth and had no Undo Send.
+- Scope: PostgreSQL outbound outbox, reply provenance, stable RFC Message-ID,
+  one-attempt Gmail delivery plus lookup-only reconciliation, cron recovery,
+  session-owned API routes, global status, Compose/reader/Flow integration,
+  generated browser QA, API/release/progress documentation.
+- Acceptance: one client UUID maps to one immutable payload; ambiguous provider
+  outcomes are never replayed; Undo works only in the authoritative ten-second
+  window; sent/cancelled payloads are scrubbed; failures restore a distinct
+  draft without overwriting a newer composer; cross-user callbacks are inert;
+  full checks, disposable PostgreSQL rehearsal, and generated browser tests
+  pass before deployment.
+- Next: commit and push the exact reviewed candidate, back up, migrate while
+  the old frontend remains live, restart and verify the API plus cron worker,
+  publish the new frontend, and verify production without sending real email.
 
-- Final `make check`: 399 backend tests passed, 4 opt-in PostgreSQL tests
-  skipped; 183 frontend tests passed; 507 frontend modules built.
-- Disposable PostgreSQL 17 upgrade, trigger enforcement,
-  downgrade, and re-upgrade passed.
-- Generated two-user in-app browser QA passed at 1280×720 and 375×812 with a
-  delayed User A response released after User B login, zero leaked A content,
-  zero mutation attempts, zero unknown routes, and zero console warnings/errors.
-- Independent architecture, generated-QA, and competitive UX reviews approved
-  the final candidate after closure of unsubscribe continuation, post-await
-  toast, standalone/device surface, export/timer, Compose teardown, and
-  auth-cookie races.
-- Production verification passed: exact clean Git, Alembic head, all services,
-  public health, static asset, unauthenticated Todo boundary, aggregate database
-  invariants, and zero new `mailapp` warning-or-higher log entries.
-- Signed-in production browser QA opened More at 1280x720: the fullscreen close
-  target was transparent, the menu and main page remained visible, and no
-  browser warning/error appeared. No real-data mutation was exercised.
+## Near-Term Product Queue
 
-## Known Constraints and Follow-ups
+- Durable Gmail draft identity/upsert and attachment continuity; repeated Save
+  Draft currently creates separate provider drafts.
+- Conversation-native inbox with compound account/thread identity and cursor
+  pagination.
+- General Remind Me/send later, label/move actions, recipient/contact
+  completion, and bulk triage across all filtered results.
+- Flow loading/stale-response truthfulness and mobile Sidebar drawer height,
+  labels, inertness, and 44 px target corrections.
+- Async shortcut rejection handling and broader generated user testing.
 
-- The generated browser harness proves deterministic A-to-B isolation without
-  real mail or calendar access. Ongoing production user testing remains
-  read-only and must not trigger Sync, send, unsubscribe, or Todo mutations.
-- Migration downgrade removes enforcement but cannot restore deleted or
-  scrubbed historical content. The validated pre-upgrade backup is the rollback
-  source.
-- The At a Glance browser-flashing/API/docs slice may rebase after receiving
-  this release's exact landed/deployed docs closeout SHA.
+## Safety Constraints
 
-## Next Safe Action
-
-Have the user verify More and reauthorization for the newly trusted organization
-domains. Continue generated-fixture product improvements and read-only
-production observation; keep real mail, calendar, and Todo mutations out of
-automated QA.
+- Real production mail and calendars remain read-only during automated and
+  browser QA. Sending, Undo, retry, archive-after-send, and failure simulations
+  use only local `.example.test` fixtures and fake Gmail transports.
+- Do not modify the concurrent AI provider/model work or the terminal-specific
+  browser-installer files. Coordinate shared docs and release SHA before that
+  task rebases.
