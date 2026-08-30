@@ -1,6 +1,7 @@
 from backend.models.user import User
 from backend.models.account import GoogleAccount, SyncStatus
 from backend.models.email import Email, Attachment, EmailLabel
+from backend.models.mail_action import MailAction
 from backend.models.ai import AIAnalysis
 from backend.models.settings import Setting
 from backend.models.todo import TodoItem
@@ -17,6 +18,7 @@ __all__ = [
     "Email",
     "Attachment",
     "EmailLabel",
+    "MailAction",
     "AIAnalysis",
     "Setting",
     "TodoItem",

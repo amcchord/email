@@ -5,6 +5,7 @@ import logging
 import random
 import re
 import mimetypes
+import httplib2
 from datetime import datetime, timezone
 from email import encoders
 from email.mime.base import MIMEBase
@@ -13,6 +14,7 @@ from email.mime.multipart import MIMEMultipart
 from typing import Optional
 
 from google.oauth2.credentials import Credentials
+from google_auth_httplib2 import AuthorizedHttp
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -121,11 +123,21 @@ async def _rate_limit_sleep(error, attempt: int, context: str = ""):
 
 
 class GmailService:
-    def __init__(self, account: GoogleAccount, client_id: str = None, client_secret: str = None):
+    def __init__(
+        self,
+        account: GoogleAccount,
+        client_id: str = None,
+        client_secret: str = None,
+        *,
+        transport_timeout: float | None = None,
+    ):
+        if transport_timeout is not None and transport_timeout <= 0:
+            raise ValueError("Gmail transport timeout must be positive")
         self.account = account
         self._service = None
         self._creds = None
         self._original_token = None
+        self._transport_timeout = transport_timeout
         # Use provided credentials, fall back to config
         self._client_id = client_id or settings.google_client_id
         self._client_secret = client_secret or settings.google_client_secret
@@ -154,7 +166,17 @@ class GmailService:
     def _get_service(self):
         if self._service is None:
             creds = self._get_credentials()
-            self._service = build("gmail", "v1", credentials=creds)
+            if self._transport_timeout is None:
+                self._service = build("gmail", "v1", credentials=creds)
+            else:
+                transport = httplib2.Http(timeout=self._transport_timeout)
+                authorized_transport = AuthorizedHttp(creds, http=transport)
+                self._service = build(
+                    "gmail",
+                    "v1",
+                    http=authorized_transport,
+                    cache_discovery=False,
+                )
         return self._service
 
     def get_refreshed_token(self) -> Optional[str]:
@@ -442,8 +464,20 @@ class GmailService:
         data = result.get("data", "")
         return _decode_attachment_data(data, max_bytes=max_bytes)
 
-    async def modify_labels(self, message_id: str, add_labels: list[str] = None, remove_labels: list[str] = None):
-        """Modify labels on a message."""
+    async def modify_labels(
+        self,
+        message_id: str,
+        add_labels: list[str] = None,
+        remove_labels: list[str] = None,
+        *,
+        max_retries: int | None = None,
+    ):
+        """Modify labels and return Gmail's canonical message response.
+
+        Durable callers should pass ``max_retries=1`` and persist retry state
+        rather than sleeping inside one worker lease.  Interactive legacy
+        callers retain the service's normal bounded retry behavior.
+        """
         service = self._get_service()
         body = {}
         if add_labels:
@@ -453,6 +487,7 @@ class GmailService:
         return await self._execute_with_retry(
             service.users().messages().modify(userId="me", id=message_id, body=body),
             context=f"modify_labels({message_id})",
+            max_retries=max_retries,
         )
 
     def _build_compose_message(

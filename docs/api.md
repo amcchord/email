@@ -35,6 +35,7 @@ free-form questions about your inbox without touching the web UI.
   - [Ask Claude from a script](#ask-claude-from-a-script)
 - [Security notes](#security-notes)
 - [Web session-only attachment download](#web-session-only-attachment-download)
+- [Web session-only durable mail actions](#web-session-only-durable-mail-actions)
 
 ## Authentication
 
@@ -626,3 +627,100 @@ Stable error responses are:
 Public API tokens cannot call this route. Attachment bytes are cached only at
 private, canonical ID-derived paths; filenames and Gmail/cache identifiers are
 not accepted as lookup keys.
+
+## Web session-only durable mail actions
+
+Mailbox mutations use the authenticated browser session and a PostgreSQL
+outbox. Acceptance means the local optimistic state and durable Gmail work were
+committed together; it does not falsely claim that Gmail has already confirmed
+every item.
+
+```text
+POST /api/emails/actions
+GET  /api/emails/actions/recent?limit=20
+GET  /api/emails/actions/by-idempotency/{idempotency_key}
+GET  /api/emails/actions/{request_id}
+POST /api/emails/actions/{request_id}/undo
+POST /api/emails/actions/{request_id}/retry
+```
+
+Create accepts 1–200 unique, positive, fully owned email IDs. Mixed owned,
+foreign, or missing targets return a uniform 404 and mutate nothing.
+
+```json
+{
+  "email_ids": [9001, 9002],
+  "action": "archive",
+  "idempotency_key": "e4544fb2-dddf-4323-8e28-fecede02cb72"
+}
+```
+
+Supported actions are `mark_read`, `mark_unread`, `star`, `unstar`, `archive`,
+`trash`, `untrash`, `spam`, and `unspam`. The idempotency key is optional for
+legacy callers, but retry-capable clients should generate one UUID per logical
+operation and reuse it until a response is known. Reusing a key with the same
+payload returns the original operation; reuse with a different payload returns
+409. After a lost or timed-out create response, the authenticated
+`by-idempotency` route returns that exact owned operation or a uniform 404.
+Because a lost POST can still be waiting on a database lock, that 404 is not a
+definitive rejection: clients keep the projection visibly pending and replay
+the same POST with the same key until POST itself returns a definitive result.
+
+Create returns HTTP 202:
+
+```json
+{
+  "request_id": "7e05a7d6-0718-43c3-b220-d8168f85fe87",
+  "idempotency_key": "e4544fb2-dddf-4323-8e28-fecede02cb72",
+  "action": "archive",
+  "state": "staged",
+  "accepted_count": 2,
+  "undo_until": "2026-08-30T12:00:10Z",
+  "created_at": "2026-08-30T12:00:00Z",
+  "items": [
+    {
+      "id": 41,
+      "email_id": 9001,
+      "account_id": 3,
+      "gmail_message_id": "generated-example-id",
+      "sequence": 1,
+      "action": "archive",
+      "state": "staged",
+      "attempt_count": 0,
+      "next_attempt_at": "2026-08-30T12:00:10Z",
+      "error_code": null,
+      "error_message": null,
+      "applied_at": null,
+      "failed_at": null,
+      "cancelled_at": null
+    }
+  ]
+}
+```
+
+Item states are `staged`, `processing`, `retry_wait`, `applied`, `failed`, and
+`cancelled`. An operation containing different item states reports `partial` at
+the top level. Error text is sanitized; callers should use `error_code` for
+behavior and present the supplied generic message.
+
+Undo is all-or-none and restores the exact saved labels and flags only while
+every item remains staged and within its ten-second deadline. Once any item has
+started, Undo returns 409 rather than pretending to reverse an uncertain Gmail
+result. Retry requeues only terminally failed items and returns 409 when a newer
+action exists for one of them.
+
+The database sweeper reclaims expired worker leases and processes the oldest
+active sequence for each email. Redis only accelerates pickup; periodic cron
+draining guarantees recovery if enqueueing or a process fails. Redis enqueue
+and status publication have a short hard deadline, so a stalled Redis service
+cannot hold an API response or the account-locked Gmail worker after the
+durable database commit. One-attempt Gmail mutations use a finite HTTP
+transport timeout and then enter the durable retry policy.
+Each cron job and account-lock tenure processes at most eight actions, keeping
+the worst-case Gmail transport slice well below the worker timeout; later work
+is picked up by the next durable cron pass.
+
+`GET /actions/recent` remains bounded by `limit` (1–100) but prioritizes
+operations with unresolved failed items before newer completed operations, so
+a failure does not silently disappear behind routine successes. Public API
+tokens cannot call these mutation routes.

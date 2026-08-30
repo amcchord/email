@@ -6,6 +6,7 @@ from arq.connections import RedisSettings
 from backend.config import get_settings
 from backend.services.sync import EmailSyncService
 from backend.services.calendar_sync import CalendarSyncService
+from backend.services.mail_actions import MAIL_ACTION_QUEUE_NAME, drain_due_mail_actions
 from backend.services.ai import AIService
 from backend.database import async_session
 from backend.models.email import Email
@@ -556,6 +557,11 @@ async def sync_account_incremental(ctx, account_id: int):
         await _check_llm_thread_merges(account_id, new_email_ids)
     except Exception as e:
         logger.warning(f"Failed LLM thread merge check after sync for account {account_id}: {e}")
+
+
+async def drain_mail_actions_task(ctx):
+    """Drain durable Gmail label mutations from PostgreSQL."""
+    return await drain_due_mail_actions()
 
 
 def _is_rate_limit_exception(exc: Exception) -> bool:
@@ -1424,7 +1430,7 @@ async def shutdown(ctx):
 # manually-triggered account/calendar syncs).  Keeping these off the default
 # queue prevents them from being starved by the long-running
 # `analyze_emails_batch` jobs that occupy the main worker's slots.
-CRON_QUEUE_NAME = "arq:cron"
+CRON_QUEUE_NAME = MAIL_ACTION_QUEUE_NAME
 
 
 class WorkerSettings:
@@ -1471,6 +1477,7 @@ class CronWorkerSettings:
         sync_account_full,
         sync_account_incremental,
         sync_all_accounts,
+        drain_mail_actions_task,
         sync_calendar_full,
         sync_calendar_incremental,
         sync_all_calendars,
@@ -1485,6 +1492,7 @@ class CronWorkerSettings:
     # observation for the upcoming hour shortly after it rolls over.
     cron_jobs = [
         cron(sync_all_accounts, minute={i for i in range(0, 60)}),
+        cron(drain_mail_actions_task, minute={i for i in range(0, 60)}, second=20),
         cron(sync_all_calendars, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
         cron(generate_dashboard_snippet_task, minute={2}, run_at_startup=True),
     ]

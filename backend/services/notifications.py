@@ -37,12 +37,28 @@ async def publish_event(user_id: int, event_type: str, data: dict | None = None)
         **(data or {}),
     }
     channel = _channel_for_user(user_id)
+    redis = None
     try:
-        r = aioredis.from_url(settings.redis_url, decode_responses=True)
-        await r.publish(channel, json.dumps(payload))
-        await r.aclose()
+        redis = aioredis.from_url(
+            settings.redis_url,
+            decode_responses=True,
+            socket_connect_timeout=1,
+            socket_timeout=1,
+        )
+        await redis.publish(channel, json.dumps(payload))
     except Exception:
         logger.warning("Failed to publish event %s for user %s", event_type, user_id, exc_info=True)
+    finally:
+        if redis is not None:
+            try:
+                await redis.aclose()
+            except Exception:
+                logger.warning(
+                    "Failed to close Redis publisher for event %s and user %s",
+                    event_type,
+                    user_id,
+                    exc_info=True,
+                )
 
 
 async def subscribe(user_id: int):

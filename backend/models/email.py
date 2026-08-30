@@ -37,6 +37,7 @@ class Email(Base):
     is_spam: Mapped[bool] = mapped_column(Boolean, default=False)
     is_draft: Mapped[bool] = mapped_column(Boolean, default=False)
     is_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    mail_action_version: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
 
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=True)
     has_attachments: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -54,6 +55,7 @@ class Email(Base):
     account = relationship("GoogleAccount", back_populates="emails")
     attachments = relationship("Attachment", back_populates="email", cascade="all, delete-orphan")
     ai_analysis = relationship("AIAnalysis", back_populates="email", uselist=False, cascade="all, delete-orphan")
+    mail_actions = relationship("MailAction", back_populates="email", passive_deletes=True)
 
     __table_args__ = (
         Index("ix_emails_account_date", "account_id", "date"),

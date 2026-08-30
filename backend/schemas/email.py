@@ -1,6 +1,7 @@
-from pydantic import BaseModel, Field
-from typing import Optional
+from pydantic import BaseModel, Field, StrictInt, field_validator
+from typing import Literal, Optional
 from datetime import datetime
+from uuid import UUID, uuid4
 
 
 class EmailAddress(BaseModel):
@@ -100,9 +101,59 @@ class ThreadResponse(BaseModel):
 
 
 class EmailActionRequest(BaseModel):
-    email_ids: list[int]
-    action: str  # mark_read, mark_unread, star, unstar, archive, trash, spam, unspam, move
+    email_ids: list[StrictInt] = Field(min_length=1, max_length=200)
+    action: Literal[
+        "mark_read",
+        "mark_unread",
+        "star",
+        "unstar",
+        "archive",
+        "trash",
+        "untrash",
+        "spam",
+        "unspam",
+    ]
+    idempotency_key: UUID = Field(default_factory=uuid4)
     label: Optional[str] = None
+
+    @field_validator("email_ids")
+    @classmethod
+    def require_unique_email_ids(cls, value: list[int]) -> list[int]:
+        if any(email_id <= 0 for email_id in value):
+            raise ValueError("email_ids must be positive")
+        if len(set(value)) != len(value):
+            raise ValueError("email_ids must be unique")
+        return value
+
+
+class MailActionItemResponse(BaseModel):
+    id: int
+    email_id: Optional[int] = None
+    account_id: int
+    gmail_message_id: str
+    sequence: int
+    action: str
+    state: str
+    attempt_count: int
+    next_attempt_at: Optional[datetime] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    applied_at: Optional[datetime] = None
+    failed_at: Optional[datetime] = None
+    cancelled_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class MailActionOperationResponse(BaseModel):
+    request_id: UUID
+    idempotency_key: UUID
+    action: str
+    state: str
+    accepted_count: int
+    undo_until: datetime
+    created_at: datetime
+    items: list[MailActionItemResponse]
 
 
 class ComposeAttachment(BaseModel):

@@ -78,3 +78,22 @@ add a new entry that explicitly supersedes the old one.
   changes since its captured baseline before publishing completion. Future
   sync changes must preserve these invariants and add real-database
   interleaving coverage when they alter ownership or transaction boundaries.
+
+## D-007 — Accepted mail actions are durable, ordered work
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Record one ordered outbox item per target email in the same
+  transaction as its optimistic local projection. Gmail execution and sync use
+  one shared account advisory lock; Redis may accelerate work but PostgreSQL is
+  the recovery source of truth.
+- Reason: Inline best-effort Gmail calls can partially succeed, be lost after a
+  process failure, execute opposite actions out of order, and let sync erase
+  user intent while still reporting success.
+- Consequence: API acceptance is distinct from Gmail confirmation. Clients use
+  request status for partial results, exact staged Undo is permitted only
+  before execution, retries preserve per-email order, expired leases are
+  reclaimable, and sync must overlay the newest active action state. Redis
+  publication is bounded best effort, lost create responses are reconciled by
+  owned idempotency-key lookup, and one-attempt Gmail mutations use a finite
+  transport deadline before durable retry policy takes over.

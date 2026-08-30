@@ -15,6 +15,8 @@ from backend.services.gmail import GmailService
 from backend.services.credentials import get_google_credentials
 from backend.utils.security import encrypt_value
 from backend.database import async_session
+from backend.services.account_lock import account_advisory_lock
+from backend.services.mail_actions import overlay_active_mail_actions
 
 
 def _extract_retry_after(error) -> datetime:
@@ -47,7 +49,6 @@ class FullSyncCheckpoint:
 
 
 _FULL_SYNC_CHECKPOINT_PREFIX = "gmail-full:v1:"
-_SYNC_ADVISORY_LOCK_NAMESPACE = 0x4D41494C  # "MAIL"
 
 
 def _validate_history_transition(expected_history_id: str, new_history_id: str):
@@ -168,27 +169,11 @@ class EmailSyncService:
     @asynccontextmanager
     async def _account_sync_lock(self):
         """Hold one PostgreSQL transaction advisory lock for the whole sync."""
-        async with async_session() as lock_db:
-            result = await lock_db.execute(
-                text(
-                    "SELECT pg_try_advisory_xact_lock(:namespace, :account_id)"
-                ),
-                {
-                    "namespace": _SYNC_ADVISORY_LOCK_NAMESPACE,
-                    "account_id": self.account_id,
-                },
-            )
-            acquired = bool(result.scalar_one())
-            if not acquired:
-                yield False
-                return
-
-            try:
-                yield True
-            finally:
-                # Ending this dedicated transaction releases the xact lock
-                # before the connection can return to the pool.
-                await lock_db.rollback()
+        async with account_advisory_lock(
+            self.account_id,
+            session_factory=async_session,
+        ) as acquired:
+            yield acquired
 
     async def _get_account(self, db: AsyncSession) -> GoogleAccount:
         result = await db.execute(
@@ -1055,7 +1040,7 @@ class EmailSyncService:
             select(Email).where(
                 Email.gmail_message_id == parsed["gmail_message_id"],
                 Email.account_id == self.account_id,
-            )
+            ).with_for_update()
         )
         existing = result.scalar_one_or_none()
 
@@ -1071,6 +1056,12 @@ class EmailSyncService:
             db.add(email)
             await db.flush()
             is_new = True
+
+        # Gmail remains authoritative for confirmed state, but it must not
+        # erase a newer local intent while its durable action is staged,
+        # leased, or waiting to retry. Actions orphaned by an authoritative
+        # delete are terminalized separately by the database drainer.
+        await overlay_active_mail_actions(db, email=email)
 
         # Handle attachments
         if attachments_data and not existing:

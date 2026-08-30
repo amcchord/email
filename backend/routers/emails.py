@@ -1,8 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from sqlalchemy import select, func, desc, asc, or_, text, update, literal_column, literal
+from sqlalchemy import select, func, desc, asc, or_, text, literal_column, literal
 from typing import Optional
+from uuid import UUID
 from backend.database import get_db
 
 
@@ -16,7 +17,7 @@ from backend.models.ai import AIAnalysis
 from backend.schemas.email import (
     EmailSummary, EmailDetail, EmailListResponse,
     ThreadResponse, EmailActionRequest, LabelResponse, AttachmentResponse,
-    EmailAddress,
+    EmailAddress, MailActionItemResponse, MailActionOperationResponse,
 )
 from backend.routers.auth import get_current_user
 from backend.services.attachments import (
@@ -26,6 +27,19 @@ from backend.services.attachments import (
     safe_content_type,
 )
 from backend.services.workflow_context import apply_workflow_routing, delegated_scheduling_sql
+from backend.services.mail_actions import (
+    MailActionConflict,
+    MailActionNotFound,
+    MailActionValidationError,
+    aggregate_action_state,
+    get_mail_action_operation_by_idempotency,
+    get_mail_action_operation,
+    recent_mail_action_operations,
+    retry_mail_action_operation,
+    stage_mail_actions,
+    try_enqueue_mail_action_drain,
+    undo_mail_action_operation,
+)
 
 router = APIRouter(prefix="/api/emails", tags=["emails"])
 
@@ -578,116 +592,139 @@ async def get_thread(
     )
 
 
-@router.post("/actions")
+def _mail_action_operation_response(actions) -> MailActionOperationResponse:
+    first = actions[0]
+    return MailActionOperationResponse(
+        request_id=first.request_id,
+        idempotency_key=first.idempotency_key,
+        action=first.action,
+        state=aggregate_action_state(actions),
+        accepted_count=len(actions),
+        undo_until=max(action.undo_until for action in actions),
+        created_at=min(action.created_at for action in actions),
+        items=[MailActionItemResponse.model_validate(action) for action in actions],
+    )
+
+
+def _raise_mail_action_http_error(error: Exception):
+    if isinstance(error, MailActionNotFound):
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    if isinstance(error, MailActionConflict):
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if isinstance(error, MailActionValidationError):
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    raise error
+
+
+@router.post(
+    "/actions",
+    response_model=MailActionOperationResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def email_actions(
     request: EmailActionRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    from backend.services.gmail import GmailService
-
-    # Verify user owns these emails
-    acct_result = await db.execute(
-        select(GoogleAccount.id).where(GoogleAccount.user_id == user.id)
-    )
-    account_ids = [r[0] for r in acct_result.all()]
-
-    base_filter = [
-        Email.id.in_(request.email_ids),
-        Email.account_id.in_(account_ids),
-    ]
-
-    action = request.action
-
-    # Gmail label sync mapping
-    gmail_sync = {
-        "mark_read": {"remove": ["UNREAD"]},
-        "mark_unread": {"add": ["UNREAD"]},
-        "star": {"add": ["STARRED"]},
-        "unstar": {"remove": ["STARRED"]},
-        "trash": {"add": ["TRASH"]},
-        "untrash": {"remove": ["TRASH"]},
-        "spam": {"add": ["SPAM"], "remove": ["INBOX"]},
-        "unspam": {"remove": ["SPAM"], "add": ["INBOX"]},
-        "archive": {"remove": ["INBOX"]},
-    }
-
-    # Apply local DB changes
-    if action == "mark_read":
-        await db.execute(update(Email).where(*base_filter).values(is_read=True))
-    elif action == "mark_unread":
-        await db.execute(update(Email).where(*base_filter).values(is_read=False))
-    elif action == "star":
-        await db.execute(update(Email).where(*base_filter).values(is_starred=True))
-    elif action == "unstar":
-        await db.execute(update(Email).where(*base_filter).values(is_starred=False))
-    elif action == "trash":
-        await db.execute(update(Email).where(*base_filter).values(is_trash=True))
-    elif action == "untrash":
-        await db.execute(update(Email).where(*base_filter).values(is_trash=False))
-    elif action == "spam":
-        await db.execute(update(Email).where(*base_filter).values(is_spam=True))
-    elif action == "unspam":
-        await db.execute(update(Email).where(*base_filter).values(is_spam=False))
-    elif action == "archive":
-        for eid in request.email_ids:
-            result = await db.execute(
-                select(Email).where(Email.id == eid, Email.account_id.in_(account_ids))
-            )
-            email_obj = result.scalar_one_or_none()
-            if email_obj and email_obj.labels:
-                new_labels = [l for l in email_obj.labels if l != "INBOX"]
-                email_obj.labels = new_labels
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
-
-    await db.commit()
-
-    # Sync to Gmail in background (best-effort)
-    sync_info = gmail_sync.get(action)
-    if sync_info:
-        # Fetch emails with their gmail_message_id and account
-        email_result = await db.execute(
-            select(Email.gmail_message_id, Email.account_id).where(
-                Email.id.in_(request.email_ids),
-                Email.account_id.in_(account_ids),
-            )
+    if request.label is not None:
+        raise HTTPException(status_code=422, detail="Custom label actions are not supported")
+    try:
+        actions, created = await stage_mail_actions(
+            db,
+            user_id=user.id,
+            email_ids=request.email_ids,
+            action=request.action,
+            idempotency_key=request.idempotency_key,
         )
-        email_rows = email_result.all()
+    except (MailActionNotFound, MailActionConflict, MailActionValidationError) as error:
+        _raise_mail_action_http_error(error)
+    if created:
+        background_tasks.add_task(try_enqueue_mail_action_drain)
+    return _mail_action_operation_response(actions)
 
-        # Group by account
-        by_account = {}
-        for gmail_msg_id, acct_id in email_rows:
-            if acct_id not in by_account:
-                by_account[acct_id] = []
-            by_account[acct_id].append(gmail_msg_id)
 
-        for acct_id, msg_ids in by_account.items():
-            try:
-                acct_obj = await db.execute(
-                    select(GoogleAccount).where(GoogleAccount.id == acct_id)
-                )
-                account = acct_obj.scalar_one_or_none()
-                if account:
-                    from backend.services.credentials import get_google_credentials
-                    client_id, client_secret = await get_google_credentials(db)
-                    gmail_svc = GmailService(account, client_id=client_id, client_secret=client_secret)
-                    for msg_id in msg_ids:
-                        try:
-                            await gmail_svc.modify_labels(
-                                msg_id,
-                                add_labels=sync_info.get("add"),
-                                remove_labels=sync_info.get("remove"),
-                            )
-                        except Exception as sync_err:
-                            import logging
-                            logging.getLogger(__name__).warning(
-                                f"Gmail sync failed for {msg_id}: {sync_err}"
-                            )
-            except Exception:
-                pass
+@router.get("/actions/recent", response_model=list[MailActionOperationResponse])
+async def recent_email_actions(
+    limit: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    operations = await recent_mail_action_operations(db, user_id=user.id, limit=limit)
+    return [_mail_action_operation_response(actions) for actions in operations]
 
-    return {"message": f"Action '{action}' applied to {len(request.email_ids)} emails"}
+
+@router.get(
+    "/actions/by-idempotency/{idempotency_key}",
+    response_model=MailActionOperationResponse,
+)
+async def get_email_action_by_idempotency(
+    idempotency_key: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        actions = await get_mail_action_operation_by_idempotency(
+            db,
+            user_id=user.id,
+            idempotency_key=idempotency_key,
+        )
+    except MailActionNotFound as error:
+        _raise_mail_action_http_error(error)
+    return _mail_action_operation_response(actions)
+
+
+@router.get("/actions/{request_id}", response_model=MailActionOperationResponse)
+async def get_email_action(
+    request_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        actions = await get_mail_action_operation(
+            db,
+            user_id=user.id,
+            request_id=request_id,
+        )
+    except MailActionNotFound as error:
+        _raise_mail_action_http_error(error)
+    return _mail_action_operation_response(actions)
+
+
+@router.post("/actions/{request_id}/undo", response_model=MailActionOperationResponse)
+async def undo_email_action(
+    request_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        actions = await undo_mail_action_operation(
+            db,
+            user_id=user.id,
+            request_id=request_id,
+        )
+    except (MailActionNotFound, MailActionConflict) as error:
+        _raise_mail_action_http_error(error)
+    return _mail_action_operation_response(actions)
+
+
+@router.post("/actions/{request_id}/retry", response_model=MailActionOperationResponse)
+async def retry_email_action(
+    request_id: UUID,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        actions = await retry_mail_action_operation(
+            db,
+            user_id=user.id,
+            request_id=request_id,
+        )
+    except (MailActionNotFound, MailActionConflict) as error:
+        _raise_mail_action_http_error(error)
+    background_tasks.add_task(try_enqueue_mail_action_drain)
+    return _mail_action_operation_response(actions)
 
 
 @router.get("/labels/all", response_model=list[LabelResponse])
