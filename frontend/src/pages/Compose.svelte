@@ -279,7 +279,7 @@
             style="background: transparent; color: var(--text-primary)"
           >
             {#each accountList as acct}
-              <option value={acct.id}>{acct.description ? `${acct.description} — ` : ''}{acct.email}</option>
+              <option value={acct.id}>{acct.short_label ? `${acct.short_label} — ` : acct.description ? `${acct.description} — ` : ''}{acct.email}</option>
             {/each}
           </select>
           {#if senderAccount}
