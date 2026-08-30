@@ -4,23 +4,21 @@ Last updated: 2026-08-29
 
 ## Active Objective
 
-Prepare the verified OpenAI GPT-5.6 and Anthropic Claude 5 provider expansion
-for review and release. The implementation is complete locally; committing,
-installing the scoped AustinLand credentials on production, and deploying are
-separate follow-up actions.
+Make Google account authorization durable beyond the seven-day lifetime that
+applies while an External OAuth app remains in Testing. The OpenAI GPT-5.6 and
+Anthropic Claude 5 provider expansion is complete in production.
 
 ## Baseline
 
-- Local checkout: `codex/openai-anthropic-model-support`, based on the published
-  workflow release `0500d1a`, with the provider expansion present as reviewed
-  working-tree changes.
+- Local checkout: `codex/openai-anthropic-model-support` at application release
+  `40bbc48`, with only the deployment closeout documentation following it.
 - Repository origin: `https://github.com/amcchord/email.git`.
 - Production host: `root@email.mcchord.net` (host currently reports
   `localhost`; do not rely on the server hostname for identity).
 - Production OS: Debian 13 (trixie).
 - Production checkout: `/opt/mail`, owned by `mailapp:mailapp`.
-- Production Git at observation: clean `main` at `ab33499`, aligned with
-  `origin/main`.
+- Production application release: clean `main` including `40bbc48`, aligned
+  with `origin/main` at verification.
 - Active application services at observation: `mailapp`, `mailworker`,
   `mailworker-cron`, `mailtui`, and `caddy`.
 - Supporting services: PostgreSQL 17 and Redis.
@@ -31,20 +29,6 @@ This is a point-in-time snapshot. Use `make remote-status` before relying on
 live state.
 
 ## Work Queue
-
-### P0 — Release GPT-5.6 and Claude 5 support
-
-- State: ready
-- Why: AI workloads can select the best cost/quality profile instead of being
-  tied to one provider and one reasoning configuration.
-- Scope: provider/model registry, workload defaults, Responses and Messages
-  API adapters, preference API/UI, setup, dependency lock, and documentation.
-- Acceptance: the six requested models and their valid effort levels work in
-  chat, processing, replies, briefings, bundles, and unsubscribe where
-  compatible; scoped credentials are installed securely; post-deploy health
-  and one user-facing AI flow pass.
-- Next: Review and commit the local branch. Deploy and install AustinLand keys
-  only with explicit production authorization.
 
 ### P1 — Durable Google account authorization
 
@@ -83,6 +67,12 @@ live state.
   adapters completed a forced structured-tool call, and OpenAI completed the
   stateless function-result continuation used by chat. No credential was
   printed, committed, or written to project documentation.
+- Production verification for `40bbc48`: OpenAI 2.54.0 and both scoped runtime
+  credentials loaded, the model controls were present in the built frontend,
+  and application-adapter calls succeeded against Terra/medium, Luna/low, and
+  Sol/high. Public health returned `ok`, all seven services were active, the
+  checkout was clean, and the API/worker error-level log count after restart
+  was zero.
 - Focused PostgreSQL compilation passed for the needs-reply and
   awaiting-response queue queries.
 - Post-deploy verification at `ab33499`: production was clean, all application
@@ -118,15 +108,12 @@ live state.
 - The frontend dependency audit reports 11 advisories as of 2026-08-26. Review
   the dependency paths and upgrades before changing lockfiles; do not apply a
   breaking automatic audit fix casually.
-- AustinLand is local to the development Mac. Production cannot consume its
-  vault directly; an authorized deployment must transfer only the two scoped
-  Email provider keys into protected runtime configuration without exposing
-  them in Git, logs, or chat.
+- AustinLand is local to the development Mac. Production now holds only the two
+  scoped Email provider keys in its protected runtime configuration; future
+  rotation must use the same no-log, no-Git transfer path.
 
 ## Next Safe Action
 
-Review and commit the provider-support branch. If production deployment is
-explicitly authorized, identify the exact commit, install the locked OpenAI SDK
-and scoped AustinLand keys, restart only the affected API/worker services, then
-verify health and one AI flow. Otherwise resume the read-only Google OAuth
-publishing-status check.
+Confirm the Google Cloud OAuth application publishing status without changing
+it. If it remains External/Testing, obtain explicit authorization for the
+publishing change and subsequent one-time reauthorization of affected accounts.

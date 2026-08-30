@@ -46,13 +46,28 @@ defaults for quality, speed, and cost.
 
 ### Production Actions
 
-- None. No production files, configuration, dependencies, services, database
-  rows, or deployed code changed.
+- Committed and pushed application release `40bbc48`, then fast-forwarded the
+  clean production checkout from `0500d1a` to that exact commit as `mailapp`.
+- Provisioned the scoped AustinLand entries into `/opt/mail/.env` through an
+  in-memory transfer, after creating protected backup
+  `/opt/mail/.env.pre-ai-models-20260830T025842Z`; the resulting file remained
+  mode `0600`. No key value appeared in Git, command output, logs, or docs.
+- Installed `requirements.lock` (adding OpenAI 2.54.0), ran `npm ci`, rebuilt
+  the frontend, and restarted only `mailapp`, `mailworker`, and
+  `mailworker-cron`. The API restart spent about one minute draining the prior
+  long-lived connection and then completed successfully.
+- No Alembic revision, database backup or migration, Caddy/systemd change,
+  TUI restart, or mailbox-data mutation was required.
+- Verified the production application adapter directly against GPT-5.6
+  Terra/medium, Luna/low, and Sol/high; all three returned the expected
+  response. Public health was `ok`, all seven services were active, the new
+  frontend model controls were present, and the post-restart API/worker
+  error-level journal count was zero.
 
 ### Next
 
-Review and commit the branch. Installing the scoped provider keys and deploying
-the exact commit require separate production authorization.
+The requested provider expansion is complete in production. Resume the
+separately scoped Google OAuth publishing-status work when authorized.
 
 ## 2026-08-29 — Scheduling delegation and trusted-colleague context
 
