@@ -1,4 +1,5 @@
 import { writable, derived } from 'svelte/store';
+export { toastMessages, showToast, dismissToast, clearToasts } from './toasts.js';
 
 // Auth state
 export const user = writable(null);
@@ -228,7 +229,6 @@ export const sidebarCollapsed = writable(
 export const composeOpen = writable(false);
 export const composeData = writable(null);
 export const searchQuery = writable('');
-export const toastMessage = writable(null);
 export const viewMode = writable(localStorage.getItem('viewMode') || 'column');
 
 // Inline reply draft -- set before navigating to inbox to show an inline reply composer
@@ -260,11 +260,3 @@ calendarView.subscribe(v => localStorage.setItem('calendarView', v));
 export const calendarDate = writable(new Date());
 export const calendarEvents = writable([]);
 export const calendarLoading = writable(false);
-
-// Show toast notification
-export function showToast(message, type = 'info', duration = 3000) {
-  toastMessage.set({ message, type, duration });
-  setTimeout(() => {
-    toastMessage.set(null);
-  }, duration);
-}

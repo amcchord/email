@@ -1,26 +1,116 @@
 <script>
-  let { message = '', type = 'info' } = $props();
+  let { toast, onDismiss = () => {} } = $props();
+  let actionRunning = $state(false);
 
   const colors = {
-    success: 'bg-emerald-600 text-white',
-    error: 'bg-red-600 text-white',
+    success: 'bg-emerald-700 text-white',
+    error: 'bg-red-700 text-white',
     info: 'bg-surface-800 text-white dark:bg-surface-200 dark:text-surface-900',
-    warning: 'bg-amber-600 text-white',
+    warning: 'bg-amber-700 text-white',
   };
+
+  async function runAction() {
+    if (!toast.onAction || actionRunning) return;
+    actionRunning = true;
+    try {
+      await toast.onAction();
+      onDismiss();
+    } finally {
+      actionRunning = false;
+    }
+  }
 </script>
 
-<div class="fixed bottom-6 right-6 z-50 animate-in" role="alert">
-  <div class="px-4 py-3 rounded-lg shadow-lg text-sm font-medium {colors[type] || colors.info}">
-    {message}
-  </div>
+<div
+  class="toast animate-in {colors[toast.type] || colors.info}"
+  role={toast.type === 'error' ? 'alert' : 'status'}
+  aria-live={toast.type === 'error' ? 'assertive' : 'polite'}
+  aria-atomic="true"
+>
+  <span class="message">{toast.message}</span>
+  {#if toast.actionLabel && toast.onAction}
+    <button
+      class="action-button"
+      type="button"
+      disabled={actionRunning}
+      aria-busy={actionRunning}
+      onclick={runAction}
+    >
+      {actionRunning ? 'Working…' : toast.actionLabel}
+    </button>
+  {/if}
+  <button
+    class="dismiss-button"
+    type="button"
+    aria-label={toast.dismissLabel}
+    onclick={onDismiss}
+  >
+    <span aria-hidden="true">×</span>
+  </button>
 </div>
 
 <style>
-  .animate-in {
-    animation: slideUp 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  .toast {
+    pointer-events: auto;
+    display: flex;
+    min-height: 3.25rem;
+    align-items: center;
+    gap: 0.75rem;
+    border-radius: 0.75rem;
+    padding: 0.625rem 0.625rem 0.625rem 1rem;
+    box-shadow: 0 14px 35px rgb(0 0 0 / 0.24);
+    font-size: 0.875rem;
+    font-weight: 600;
   }
+
+  .message {
+    min-width: 0;
+    flex: 1;
+  }
+
+  .action-button,
+  .dismiss-button {
+    min-width: 2.75rem;
+    min-height: 2.75rem;
+    border-radius: 0.5rem;
+  }
+
+  .action-button {
+    padding: 0 0.75rem;
+    background: rgb(255 255 255 / 0.18);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .action-button:hover,
+  .dismiss-button:hover {
+    background: rgb(255 255 255 / 0.25);
+  }
+
+  .action-button:disabled {
+    cursor: wait;
+    opacity: 0.75;
+  }
+
+  .dismiss-button {
+    display: grid;
+    place-items: center;
+    font-size: 1.5rem;
+    font-weight: 400;
+  }
+
+  .animate-in {
+    animation: slideUp 180ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
   @keyframes slideUp {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
+  }
+
+  @media (max-width: 767px) {
+    .toast {
+      width: 100%;
+    }
   }
 </style>

@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { api, setUnauthorizedHandler } from './lib/api.js';
-  import { user, currentPage, showToast, toastMessage, startSyncPolling, stopSyncPolling, threadOrder } from './lib/stores.js';
+  import { user, currentPage, showToast, toastMessages, dismissToast, startSyncPolling, stopSyncPolling, threadOrder } from './lib/stores.js';
   import { theme, activeTheme } from './lib/theme.js';
   import { startVersionPolling } from './lib/autoReload.js';
   import { startRealtime, stopRealtime } from './lib/realtime.js';
@@ -156,6 +156,32 @@
   </Layout>
 {/if}
 
-{#if $toastMessage}
-  <Toast message={$toastMessage.message} type={$toastMessage.type} />
+{#if $toastMessages.length}
+  <div class="toast-stack" aria-label="Notifications">
+    {#each $toastMessages as toast (toast.id)}
+      <Toast {toast} onDismiss={() => dismissToast(toast.id)} />
+    {/each}
+  </div>
 {/if}
+
+<style>
+  .toast-stack {
+    position: fixed;
+    right: 1.5rem;
+    bottom: 1.5rem;
+    z-index: 70;
+    display: flex;
+    width: min(28rem, calc(100vw - 2rem));
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.625rem;
+    pointer-events: none;
+  }
+
+  @media (max-width: 767px) {
+    .toast-stack {
+      right: 1rem;
+      bottom: calc(5.25rem + env(safe-area-inset-bottom));
+    }
+  }
+</style>
