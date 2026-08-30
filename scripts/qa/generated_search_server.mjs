@@ -1164,13 +1164,22 @@ async function handleGet(request, response, url) {
     return writeJson(response, { id: 1, username: 'generated-search-qa', is_admin: false });
   }
   if (pathname === '/api/auth/ui-preferences') {
-    return writeJson(response, { thread_order: 'asc', theme: 'default', color_scheme: 'light' });
+    return writeJson(response, { thread_order: 'newest_first', theme: 'amber', color_scheme: 'light' });
   }
   if (pathname === '/api/auth/keyboard-shortcuts') {
     return writeJson(response, { shortcuts: {} });
   }
   if (pathname === '/api/auth/ai-preferences') {
-    return writeJson(response, { allowed_models: [], labels: {} });
+    return writeJson(response, {
+      chat_plan_model: 'generated-model',
+      chat_execute_model: 'generated-model',
+      chat_verify_model: 'generated-model',
+      agentic_model: 'generated-model',
+      custom_prompt_model: 'generated-model',
+      unsubscribe_model: 'generated-model',
+      allowed_models: ['generated-model'],
+      labels: { 'generated-model': 'Generated QA model' },
+    });
   }
   if (pathname === '/api/auth/about-me') return writeJson(response, { about_me: '' });
   if (pathname === '/api/auth/api-tokens') return writeJson(response, []);
@@ -1181,8 +1190,22 @@ async function handleGet(request, response, url) {
   if (pathname === '/api/terminal/settings') {
     return writeJson(response, {
       code: 'generated-route-qa',
+      schedule_url_template: '/terminal/generated-route-qa/schedule.json',
+      image_url_template: '/terminal/generated-route-qa/image.bmp',
       home_assistant_url: '',
+      home_assistant_token_set: false,
       timezone: 'America/New_York',
+      variants: [{
+        key: 'generated-800x480',
+        query: 'variant=generated-800x480',
+        image_format: 'PNG',
+        width: 800,
+        height: 480,
+        next_checkin_sec: 900,
+      }],
+      content_types: [],
+      designs: [],
+      refresh_interval_presets: [],
     });
   }
   if (pathname === '/api/terminal/devices') return writeJson(response, []);
@@ -1234,7 +1257,12 @@ async function handleGet(request, response, url) {
     return writeJson(response, { summary: '', needs_attention: [] });
   }
   if (pathname === '/api/ai/stats') {
-    return writeJson(response, { analyzed: 0, total: 0, categorized: 0 });
+    return writeJson(response, {
+      total_emails: 0,
+      total_analyzed: 0,
+      models: {},
+      unanalyzed: { '30d': 0, '90d': 0, '1y': 0, all: 0 },
+    });
   }
   if (pathname === '/api/ai/processing/status') {
     return writeJson(response, { active: false, just_finished: false });
