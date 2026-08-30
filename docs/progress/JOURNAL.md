@@ -38,22 +38,46 @@ Compose, Subscriptions, Stats, loading states, and accessibility.
 
 - `make check`: passed; 128 tests passed and the production frontend build
   completed with no Svelte accessibility diagnostics.
+- Three focused follow-up frontend builds passed after authenticated visual QA
+  found and corrected a narrow-screen Compose sender overflow; the final sender
+  control fits at 390px and uses a concise primary-account label.
 - Added three tests covering attachment MIME construction, invalid attachment
   data, and header-newline stripping.
 - `git diff --check`: passed before release review.
+- Saved final authenticated screenshots for desktop Flow, More, Compose,
+  Calendar, Subscriptions, and Stats plus mobile Flow, Inbox, Calendar, and
+  Compose under the task's `post-deploy/` visualization directory.
+- Loaded subscription rows showed high-confidence unsubscribe actions and
+  separate review-only rows; unavailable dates rendered as unavailable rather
+  than negative relative ages.
 - No Alembic revision, Caddy change, systemd change, or database migration is
   part of this release.
 
 ### Production Actions
 
-- Deployment was explicitly authorized and is pending the reviewed Git commit.
-- The parallel Andrea/Angie workflow task remains unstaged and is excluded from
-  this release.
+- Pushed the reviewed release to `origin/main`: `07d1110` for the app-wide UX
+  implementation, followed by `296aa51`, `db6d883`, and `d0ba84d` for the
+  mobile Compose correction discovered during production visual QA.
+- Fast-forwarded production from `15ff041` through `d0ba84d`, installed the
+  locked dependencies, built the frontend, and restarted only `mailapp` for the
+  backend portion. No migration, data mutation, Caddy change, or worker restart
+  was required.
+- The old Uvicorn process retained one long-lived connection past its 90-second
+  stop timeout and systemd terminated that old process before immediately
+  starting the new one. The replacement service is active, public health is
+  `ok`, all seven checked services are active, and the post-release mailapp
+  error log has no entries.
+- Rebuilt the static frontend after each visual-QA correction without another
+  service restart. Final production Git was clean and aligned with
+  `origin/main` at `d0ba84d` before this worklog-only follow-up.
+- The parallel Andrea/Angie workflow files remained unstaged and were excluded
+  from every release commit.
 
 ### Next
 
-Push the exact reviewed commit, fast-forward production, rebuild the frontend,
-restart only the API service, and verify health, logs, and desktop/mobile UI.
+Confirm Google Cloud OAuth publishing status as the next separately authorized
+work item; if it remains in Testing, publish it and reauthorize affected
+accounts once.
 
 ## 2026-08-29 — External account authorization diagnosis
 

@@ -4,21 +4,22 @@ Last updated: 2026-08-29
 
 ## Active Objective
 
-Ship and deploy the app-wide user experience release identified by the
-2026-08-29 production UI audit: responsive mobile layouts, consistent global
-navigation and page states, trustworthy account health, clearer mail/Flow/
-calendar/compose interactions, safer subscription cleanup, corrected stats,
-and accessibility improvements.
+Make Google account authorization durable beyond the seven-day lifetime that
+applies while an External OAuth app remains in Testing. The application now
+preserves refresh tokens and presents structured reconnect guidance; the
+remaining step is an explicitly separate Google Cloud publishing change and
+one-time reauthorization of affected accounts.
 
 ## Baseline
 
-- Local checkout: `main` at `15ff041`, tracking `origin/main`.
+- Local checkout: release branch containing the UX code through `d0ba84d`;
+  the reviewed commits are published on `origin/main`.
 - Repository origin: `https://github.com/amcchord/email.git`.
 - Production host: `root@email.mcchord.net` (host currently reports
   `localhost`; do not rely on the server hostname for identity).
 - Production OS: Debian 13 (trixie).
 - Production checkout: `/opt/mail`, owned by `mailapp:mailapp`.
-- Production Git at observation: clean `main` at `15ff041`, aligned with
+- Production Git at observation: clean `main` at `d0ba84d`, aligned with
   `origin/main`.
 - Active application services at observation: `mailapp`, `mailworker`,
   `mailworker-cron`, `mailtui`, and `caddy`.
@@ -31,24 +32,6 @@ live state.
 
 ## Work Queue
 
-### P0 — App-wide UX release
-
-- State: verifying
-- Why: The authenticated production audit found the mobile shell unusable at
-  390px, contradictory sync health, hidden feature pages, unsafe account
-  defaults in Compose, misleading subscription/statistics data, dense AI and
-  calendar surfaces, and accessibility/loading gaps.
-- Scope: frontend application shell, navigation, responsive layouts, page
-  states, account status, inbox previews, Flow triage, Calendar, Compose,
-  Subscriptions, Stats, accessibility, focused backend data normalization, and
-  tests.
-- Acceptance: all ten audited improvements are implemented; desktop and mobile
-  screenshots are verified; `make check` passes; the reviewed commit is pushed
-  to `origin/main`; production is backed up when needed, deployed, and passes
-  health, service, log, and user-flow verification.
-- Next: Commit and push the reviewed UX-only file set, deploy the exact commit,
-  then verify authenticated desktop/mobile flows and production health.
-
 ### P1 — Durable Google account authorization
 
 - State: ready
@@ -59,8 +42,9 @@ live state.
 - Scope: Google Cloud OAuth publishing status plus refresh-token reliability.
 - Acceptance: External accounts remain connected beyond seven days and
   permanent authorization failures present a clear reconnect path.
-- Next: After this release, confirm and change the Google Cloud OAuth publishing
-  status with separate authorization if it is still in Testing.
+- Next: Confirm the Google Cloud OAuth publishing status and, with separate
+  authorization, move it out of Testing if needed before reauthorizing affected
+  accounts once.
 
 ## Baseline Verification
 
@@ -71,8 +55,13 @@ live state.
 - `make check` after the UX implementation: 128 tests passed and the frontend
   production build completed with no Svelte accessibility diagnostics. The
   remaining build notice is the existing large JavaScript chunk advisory.
-- `make remote-status`: production Git was clean and aligned at `15ff041`, all
-  seven checked services were active, and `/api/health` returned status `ok`.
+- Three follow-up `make frontend-build` runs passed for the mobile Compose
+  overflow correction and concise sender label found during visual QA.
+- Authenticated production screenshots passed at 1440×900 and 390×844 for
+  Flow, Inbox, Calendar, Compose, Subscriptions, Stats, and the More menu.
+- `make remote-status` after deployment: production Git was clean and aligned
+  at `d0ba84d`, all seven checked services were active, and `/api/health`
+  returned status `ok`; the post-release mailapp error log had no entries.
 - `npm ci`: reported 11 dependency advisories (4 moderate, 6 high, 1 critical).
   Dependency review is future scoped work; no automatic audit fix was applied.
 
@@ -97,6 +86,6 @@ live state.
 
 ## Next Safe Action
 
-Commit the explicit UX file set without staging the parallel workflow-context
-task, push the reviewed commit to `origin/main`, deploy without a database
-migration, and complete health plus authenticated visual verification.
+Confirm the Google Cloud OAuth application publishing status without changing
+it. If it remains External/Testing, obtain explicit authorization for the
+publishing change and subsequent one-time reauthorization of affected accounts.
