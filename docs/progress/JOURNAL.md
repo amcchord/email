@@ -20,7 +20,7 @@ mobile Chat, editor, and PDF paths using generated data only.
   and Underline registration, rebuilt Chat's narrow-screen sidebar/download
   controls, and made PDF cleanup exception-safe.
 - Replaced fixed PDF raster cuts with structured heading/block boundaries plus
-  whitespace and tainted-canvas fallbacks. Iterative Poppler rendering caught
+  whitespace and pixel-inspection fallbacks. Iterative Poppler rendering caught
   and eliminated text, heading, and blockquote page-boundary defects.
 - Extended the immutable localhost harness with generated hostile email HTML,
   hostile Chat Markdown, long Unicode PDF content, exact 375 px wrappers, and
@@ -45,13 +45,21 @@ mobile Chat, editor, and PDF paths using generated data only.
 
 ### Production Actions
 
-- None yet. Candidate deployment is the next step; no schema change or service
-  restart is planned. The concurrent AI worktree remains untouched.
+- Pushed `3f9e743` to `origin/codex/frontend-dependency-security` and
+  fast-forwarded GitHub `main` from `413d763` without rewriting history.
+- Fast-forwarded clean production `/opt/mail` to exact full commit
+  `3f9e743a4027a1c66b8e416bd3b6291a2c0b084b` as `mailapp`, then ran only the
+  locked frontend install and 500-module build. The production audit is zero.
+- No database backup/migration, Python install, service restart, Caddy/systemd
+  change, real-message open, or mailbox mutation occurred. Post-deploy health,
+  seven service states, zero restart counts, five representative static assets,
+  recent error-level logs, and clean Git state all passed. The concurrent AI
+  worktree remains untouched.
 
 ### Next
 
-Commit and push the verified candidate, fast-forward production, run the locked
-frontend build, verify health/assets/audit, and record the exact release commit.
+Pause for production user testing. Next, design a deliberate remote-content
+and tracking-control policy before changing email image or stylesheet behavior.
 
 ## 2026-08-30 — Consolidated product release and deployment
 

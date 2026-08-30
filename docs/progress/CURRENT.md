@@ -4,32 +4,32 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Ship the isolated, locally verified frontend security refresh to production for
-user testing. Preserve the clean AI-provider worktree, use generated messages
-for rendered-content/browser QA, and do not open or change real production mail.
+Pause the deployed frontend security refresh for explicit production user
+testing. Preserve the clean AI-provider worktree, keep rendered-content/browser
+QA on generated messages, and do not open or change real production mail.
 
 ## Baseline
 
-- Application release: `834eade`, pushed to
-  `origin/codex/product-polish-cycle-1` and `origin/main`, then deployed by
-  clean fast-forward from `41d2898`.
-- Production runs application release `834eade`; a docs-only closeout commit
-  follows it with no runtime delta. Alembic is at `z7a8b9c0d1e2 (head)`, all
-  seven checked services are active, and public `/api/health` returns `ok`.
+- Production and GitHub `main` run frontend security release `3f9e743`, built
+  from a clean fast-forward over application release `834eade` and docs
+  baseline `413d763`. Alembic remains at `z7a8b9c0d1e2 (head)`, all seven
+  checked services are active with zero restarts, and public `/api/health`
+  returns `ok`.
 - The original AI worktree remains clean at `41d2898` and is not being edited;
   its provider/model work is incorporated through Git history only.
 - A validated 1.38 GB custom-format backup is protected at
   `/var/backups/mailapp/maildb-pre-product-polish-20260830T1031Z.dump`, mode
   `0600`, owned by `postgres`.
-- The frontend security candidate is isolated on
-  `codex/frontend-dependency-security`. Its compatible lock refresh clears all
-  11 production advisories, and its DOMPurify/jsPDF/Svelte/editor/browser gates
-  pass locally and in clean Linux x86_64 Node 20.
+- The frontend security release is also preserved on
+  `origin/codex/frontend-dependency-security`. Its compatible lock refresh
+  clears all 11 production advisories, and its DOMPurify/jsPDF/Svelte/editor/
+  browser gates pass locally, in clean Linux x86_64 Node 20, and in the locked
+  production build.
 
 This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
 
-## Frontend Security Candidate Scope
+## Frontend Security Release Scope
 
 - Compatible npm lock refresh from 11 production advisories to zero.
 - Explicit display-only sanitizer policy for email HTML and AI Markdown.
@@ -41,7 +41,7 @@ live state.
 - Generated hostile email/Markdown and multi-page PDF browser fixtures with
   dedicated read/mutation/unknown-route auditing.
 
-## Verification Result
+## Deployment Result
 
 - `make check` passed with 303 backend tests, 4 opt-in PostgreSQL skips, 108
   frontend tests, and a successful production build.
@@ -52,8 +52,12 @@ live state.
   export. Mutation and unknown-route audits are empty.
 - The four-page generated PDF was byte-checked and Poppler-rendered page by
   page; final pagination has no clipped or split content.
-- Production deployment is the next action. No schema change, backup, service
-  restart, real-mail read, or mailbox mutation is required.
+- Production fast-forwarded cleanly from `413d763` to exact `3f9e743`, then
+  passed locked install, zero-vulnerability audit, and the 500-module build.
+- Post-deploy checks found clean Git state, health `ok`, all seven services
+  active with zero restarts, zero recent error-level log lines, and HTTP 200 for
+  the eager, Chat, sanitizer, rich-editor, and jsPDF assets. No schema change,
+  backup, service restart, real-mail read, or mailbox mutation occurred.
 
 ## Known Constraints and Follow-ups
 

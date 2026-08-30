@@ -1,6 +1,6 @@
 # Frontend Security Refresh — 2026-08-30
 
-Status: verified release candidate; production deployment pending.
+Status: deployed and verified in production at `3f9e743`.
 
 ## Purpose
 
@@ -51,8 +51,9 @@ declared dependency ranges and application API contracts remain unchanged.
   and resetting progress state in `finally`.
 - Replace fixed raster page slicing with section-aware pagination. Heading gaps
   are preferred, top-level block boundaries are the next fallback, and a
-  whitespace scan is used when structure is unavailable. Cross-origin-tainted
-  canvases retain the legacy fixed-height fallback rather than failing export.
+  whitespace scan is used when structure is unavailable. Non-CORS images may
+  be omitted so they cannot poison the canvas; if pixel inspection is still
+  unavailable, export retains the legacy fixed-height fallback.
 - Extend the localhost-only, mutation-rejecting browser harness with generated
   hostile email HTML, hostile Chat Markdown, a long multi-page/non-ASCII Chat
   answer, exact-width mobile wrappers, Chat read auditing, and a dedicated
@@ -98,12 +99,20 @@ declared dependency ranges and application API contracts remain unchanged.
 - `node --check scripts/qa/generated_search_server.mjs`,
   `npm audit --omit=dev`, and `git diff --check` passed.
 
-## Production Plan and Rollback
+## Production Deployment and Rollback
 
-This is a frontend-only release: no Python dependency, API, schema, migration,
-worker, Caddy, systemd, or production data change is required. After an exact
-Git fast-forward, production needs only `npm ci` and `npm run build`; no service
-restart is planned because Caddy serves the static build directly.
+This frontend-only release was pushed to the security branch and GitHub `main`,
+then production fast-forwarded cleanly from `413d763` to exact commit
+`3f9e743a4027a1c66b8e416bd3b6291a2c0b084b`. The locked production install
+reported zero vulnerabilities and the 500-module frontend build completed.
+No Python dependency, API, schema, migration, worker, Caddy, systemd, or
+production data change was made, and no service was restarted.
+
+Post-deploy verification confirmed a clean local/origin/production Git state,
+public health `ok`, all seven checked services active with `NRestarts=0`, zero
+recent error-level application/worker log lines, and HTTP 200 for the eager
+entry, Chat, sanitizer, rich-editor, and jsPDF assets. No real message was
+opened and no mailbox mutation was performed.
 
 Rollback is a Git fast-forward/revert to the prior production baseline
 `413d763`, followed by the same locked frontend install/build. No database
