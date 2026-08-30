@@ -13,6 +13,7 @@
   import {
     canActOnInboxEmails,
     createDatasetActionReconciler,
+    createInitialDirectOpenGuard,
     createLatestRequestGuard,
     normalizeInboxDatasetSnapshot,
   } from '../lib/inboxDataset.js';
@@ -58,6 +59,7 @@
 
   const listRequests = createLatestRequestGuard();
   const emailRequests = createLatestRequestGuard();
+  const initialDirectOpen = createInitialDirectOpenGuard();
   const actionSubmissions = createMailActionSubmissionQueue();
   const acceptedActionReconciler = createDatasetActionReconciler({
     isCurrent: datasetKey => mounted
@@ -282,6 +284,10 @@
     if (append) {
       loadingMore = true;
     } else {
+      // A source screen may set selectedEmailId before this lazy component
+      // mounts. Hold that one-time navigation intent across the normal
+      // selection reset, then restore it only after trusted results commit.
+      initialDirectOpen.capture(get(selectedEmailId));
       datasetAuthoritative = false;
       datasetUpdating = true;
       datasetError = false;
@@ -346,6 +352,8 @@
         datasetAuthoritative = !actionReconciliationRequired;
         datasetError = false;
         datasetErrorMessage = '';
+        const directOpenEmailId = initialDirectOpen.commit(datasetAuthoritative);
+        if (directOpenEmailId !== null) selectedEmailId.set(directOpenEmailId);
       }
       emailsTotal.set(result.total);
       hasMore = (snapshot.page * snapshot.pageSize) < result.total;

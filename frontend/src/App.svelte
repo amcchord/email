@@ -6,24 +6,77 @@
   import { startVersionPolling } from './lib/autoReload.js';
   import { startRealtime, stopRealtime } from './lib/realtime.js';
   import Login from './pages/Login.svelte';
-  import Inbox from './pages/Inbox.svelte';
-  import Admin from './pages/Admin.svelte';
-  import Compose from './pages/Compose.svelte';
-  import Stats from './pages/Stats.svelte';
-  import AIInsights from './pages/AIInsights.svelte';
-  import Todos from './pages/Todos.svelte';
-  import Chat from './pages/Chat.svelte';
-  import Calendar from './pages/Calendar.svelte';
-  import Flow from './pages/Flow.svelte';
-  import Subscriptions from './pages/Subscriptions.svelte';
   import DeviceAuth from './pages/DeviceAuth.svelte';
-  import EmailViewStandalone from './pages/EmailViewStandalone.svelte';
   import Layout from './components/layout/Layout.svelte';
   import Toast from './components/common/Toast.svelte';
+  import LazyRouteState from './components/common/LazyRouteState.svelte';
+  import {
+    DEFAULT_AUTHENTICATED_PAGE,
+    createLazyRouteCoordinator,
+    getLazyRouteLabel,
+    normalizeAuthenticatedPage,
+  } from './lib/lazyRoutes.js';
 
   let loading = $state(true);
   let standaloneEmailId = $state(null);
   let deviceAuthCode = $state(null);
+  let historyInitialized = false;
+  let historyNavigationPage = null;
+  let focusObservedPage = null;
+  let routeState = $state({ key: null, status: 'idle', component: null, error: null });
+
+  let authenticatedPage = $derived(normalizeAuthenticatedPage($currentPage));
+  let lazyRouteKey = $derived.by(() => {
+    if (loading || !$user || deviceAuthCode !== null) return null;
+    if (standaloneEmailId !== null) return 'standalone-email';
+    return authenticatedPage;
+  });
+  let lazyRouteLabel = $derived(getLazyRouteLabel(lazyRouteKey));
+
+  const routeCoordinator = createLazyRouteCoordinator({
+    onState: nextState => { routeState = nextState; },
+  });
+
+  function parseStandaloneEmailId(params) {
+    if (params.get('view') !== 'email' || !params.get('id')) return null;
+    const parsed = Number(params.get('id'));
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  function canonicalPageLocation(page) {
+    const url = new URL(window.location.href);
+    if (page === DEFAULT_AUTHENTICATED_PAGE) url.searchParams.delete('page');
+    else url.searchParams.set('page', page);
+    if (page !== 'admin') url.searchParams.delete('tab');
+    return `${url.pathname}${url.search}${url.hash}`;
+  }
+
+  function retryLazyRoute() {
+    // Native module import failures remain memoized for this document in
+    // Chromium. Reloading preserves the canonical route and fetches the fresh
+    // entry graph, including new hashes after a deployment.
+    window.location.reload();
+  }
+
+  function focusMainRegion() {
+    requestAnimationFrame(() => {
+      document.querySelector('main')?.focus({ preventScroll: true });
+    });
+  }
+
+  function focusMainRegionIfLost() {
+    requestAnimationFrame(() => {
+      const activeElement = document.activeElement;
+      if (!activeElement || activeElement === document.body || !activeElement.isConnected) {
+        document.querySelector('main')?.focus({ preventScroll: true });
+      }
+    });
+  }
+
+  function goToFlow() {
+    currentPage.set(DEFAULT_AUTHENTICATED_PAGE);
+    focusMainRegion();
+  }
 
   onMount(async () => {
     setUnauthorizedHandler(() => {
@@ -37,9 +90,7 @@
     if (window.location.pathname === '/auth/device') {
       deviceAuthCode = params.get('code') || '';
     }
-    if (params.get('view') === 'email' && params.get('id')) {
-      standaloneEmailId = parseInt(params.get('id'));
-    }
+    standaloneEmailId = parseStandaloneEmailId(params);
 
     try {
       const me = await api.me();
@@ -65,24 +116,24 @@
     } catch {
       user.set(null);
     }
-    loading = false;
-
     // Poll for build version changes and auto-reload when restart.sh runs
     startVersionPolling();
 
-    if (params.get('page')) {
-      currentPage.set(params.get('page'));
-    }
+    if (params.has('page')) currentPage.set(normalizeAuthenticatedPage(params.get('page')));
 
     if (params.get('connected') === 'true') {
       showToast('Google account connected successfully', 'success');
-      window.history.replaceState({}, '', '/');
+      const connectedUrl = new URL(window.location.href);
+      connectedUrl.searchParams.delete('connected');
+      window.history.replaceState({}, '', `${connectedUrl.pathname}${connectedUrl.search}${connectedUrl.hash}`);
     }
+
+    loading = false;
 
     // Listen for Electron menu commands (Cmd+N → compose, Cmd+, → settings)
     if (window.electronAPI?.isElectron) {
       window.addEventListener('electron-navigate', (e) => {
-        currentPage.set(e.detail?.page);
+        currentPage.set(normalizeAuthenticatedPage(e.detail?.page));
       });
     }
   });
@@ -90,39 +141,86 @@
   onMount(() => {
     const handlePopState = () => {
       const nextParams = new URLSearchParams(window.location.search);
-      currentPage.set(nextParams.get('page') || 'flow');
+      const nextPage = normalizeAuthenticatedPage(nextParams.get('page') || DEFAULT_AUTHENTICATED_PAGE);
+      historyNavigationPage = nextPage;
+      currentPage.set(nextPage);
+      focusMainRegion();
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   });
 
-  // Keep feature navigation deep-linkable and shareable without forcing a
-  // full reload.
+  // Normalize any navigation source before it reaches the route loader.
   $effect(() => {
-    const page = $currentPage;
-    if (typeof window === 'undefined' || loading || !$user) return;
-    const url = new URL(window.location.href);
-    if (page === 'flow') url.searchParams.delete('page');
-    else url.searchParams.set('page', page);
-    const next = `${url.pathname}${url.search}${url.hash}`;
+    if (loading || !$user || deviceAuthCode !== null || standaloneEmailId !== null) return;
+    if ($currentPage !== authenticatedPage) currentPage.set(authenticatedPage);
+  });
+
+  // Feature screens also navigate directly (for example Todo → message or
+  // Compose → Inbox). Preserve focus on shell controls that survive the route,
+  // but recover to the named main region when the focused source was removed.
+  $effect(() => {
+    const page = authenticatedPage;
+    if (loading || !$user || deviceAuthCode !== null || standaloneEmailId !== null) return;
+    if (focusObservedPage === null) {
+      focusObservedPage = page;
+      return;
+    }
+    if (page === focusObservedPage) return;
+    focusObservedPage = page;
+    focusMainRegionIfLost();
+  });
+
+  // Keep feature navigation deep-linkable. Initial normalization and popstate
+  // replace the current entry; user-initiated navigation creates real browser
+  // history so Back and Forward move between app sections.
+  $effect(() => {
+    const page = authenticatedPage;
+    if (typeof window === 'undefined' || loading || !$user || deviceAuthCode !== null || standaloneEmailId !== null) return;
+    const next = canonicalPageLocation(page);
     const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-    if (next !== current) window.history.replaceState({}, '', next);
+    const fromHistory = historyNavigationPage === page;
+    historyNavigationPage = null;
+
+    if (!historyInitialized || fromHistory) {
+      historyInitialized = true;
+      if (next !== current) window.history.replaceState({ mailPage: page }, '', next);
+    } else if (next !== current) {
+      window.history.pushState({ mailPage: page }, '', next);
+    }
+  });
+
+  // Request only the active feature chunk. The coordinator clears the old
+  // component immediately and ignores any late result from superseded routes.
+  $effect(() => {
+    const key = lazyRouteKey;
+    if (!key) {
+      routeCoordinator.cancel();
+      return;
+    }
+    void routeCoordinator.open(key);
   });
 </script>
 
 {#if loading}
-  <div class="h-screen flex items-center justify-center" style="background: var(--bg-primary)">
-    <div class="flex flex-col items-center gap-3">
+  <div class="h-screen flex items-center justify-center" style="background: var(--bg-primary)" aria-busy="true">
+    <div class="flex flex-col items-center gap-3" role="status" aria-live="polite">
       <div class="w-8 h-8 border-2 rounded-full animate-spin" style="border-color: var(--border-color); border-top-color: var(--color-accent-500)"></div>
-      <span class="text-sm" style="color: var(--text-secondary)">Loading...</span>
+      <span class="text-sm" style="color: var(--text-secondary)">Opening your mailbox…</span>
     </div>
   </div>
 {:else if deviceAuthCode !== null}
   <DeviceAuth />
-{:else if standaloneEmailId}
+{:else if standaloneEmailId !== null}
   <!-- Pop-out email viewer (no layout chrome) -->
   {#if $user}
-    <EmailViewStandalone emailId={standaloneEmailId} />
+    <LazyRouteState
+      expectedKey={lazyRouteKey}
+      label={lazyRouteLabel}
+      {routeState}
+      componentProps={{ emailId: standaloneEmailId }}
+      onRetry={retryLazyRoute}
+    />
   {:else}
     <Login />
   {/if}
@@ -130,29 +228,15 @@
   <Login />
 {:else}
   <Layout>
-    {#if $currentPage === 'flow'}
-      <Flow />
-    {:else if $currentPage === 'admin'}
-      <Admin />
-    {:else if $currentPage === 'compose'}
-      <Compose />
-    {:else if $currentPage === 'stats'}
-      <Stats />
-    {:else if $currentPage === 'ai-insights'}
-      <AIInsights />
-    {:else if $currentPage === 'todos'}
-      <Todos />
-    {:else if $currentPage === 'calendar'}
-      <Calendar />
-    {:else if $currentPage === 'chat'}
-      <Chat />
-    {:else if $currentPage === 'subscriptions'}
-      <Subscriptions />
-    {:else if $currentPage === 'inbox'}
-      <Inbox />
-    {:else}
-      <Flow />
-    {/if}
+    <LazyRouteState
+      expectedKey={lazyRouteKey}
+      label={lazyRouteLabel}
+      {routeState}
+      inShell
+      canGoHome={lazyRouteKey !== DEFAULT_AUTHENTICATED_PAGE}
+      onRetry={retryLazyRoute}
+      onGoHome={goToFlow}
+    />
   </Layout>
 {/if}
 

@@ -5,7 +5,7 @@
 // built frontend, makes no outbound requests, and rejects every mutation.
 
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +15,12 @@ const port = Number.parseInt(process.env.QA_PORT || '4178', 10);
 const fixtureNow = new Date('2026-08-30T14:00:00Z');
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const frontendDist = resolve(scriptDirectory, '../../frontend/dist');
+const frontendManifest = resolve(frontendDist, '.vite/manifest.json');
+const forcedRouteCase = ['slow', 'fail-once'].includes(process.env.QA_ROUTE_CASE)
+  ? process.env.QA_ROUTE_CASE
+  : null;
+const forcedRouteTarget = process.env.QA_ROUTE_TARGET || null;
+const forcedRouteRun = process.env.QA_ROUTE_RUN || null;
 
 const compoundQuery = 'from:renee+launch@example.test subject:"Quarterly & Planning" has:attachment -is:read in:inbox';
 const removalQuery = 'from:renee+launch@example.test subject:"Quarterly & Planning" -is:read in:inbox';
@@ -337,6 +343,16 @@ const generatedEmails = deepFreeze([
   }),
 ]);
 
+const generatedTodos = deepFreeze([{
+  id: 9101,
+  title: 'Review the generated attachment preview message',
+  status: 'pending',
+  source: 'generated_route_qa',
+  email_id: 313,
+  created_at: '2026-08-30T13:50:00Z',
+  ai_draft_status: null,
+}]);
+
 const emailsById = new Map(generatedEmails.map(email => [email.id, email]));
 
 const scenarios = deepFreeze({
@@ -414,6 +430,9 @@ const audit = {
   mutation_attempts: [],
   unknown_routes: [],
 };
+const routeAssetReads = [];
+const routeAssetAttempts = new Map();
+let routeAssetsPromise = null;
 const attachmentAttempts = new Map();
 const attachmentPreviewAttempts = new Map();
 let receivedSequence = 0;
@@ -457,6 +476,87 @@ function writeHtml(response, body, status = 200) {
     'Cache-Control': 'no-store',
   });
   response.end(body);
+}
+
+function mobileRouteQaFrame(response, url) {
+  const routeCase = ['slow', 'fail-once'].includes(url.searchParams.get('case'))
+    ? url.searchParams.get('case')
+    : 'slow';
+  const frameHeight = url.searchParams.get('short') === '1' ? 390 : 812;
+  const run = url.searchParams.get('run') || `generated-mobile-${routeCase}`;
+  const frameQuery = new URLSearchParams({
+    page: 'inbox',
+    qa_route_case: routeCase,
+    qa_route_target: 'calendar',
+    qa_route_run: run,
+  });
+  const expectedState = routeCase === 'slow' ? 'loading' : 'error';
+  const body = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Generated mobile lazy-route QA</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #111827; }
+    body { display: grid; min-height: 100vh; place-items: start center; padding: 12px; }
+    iframe { width: 375px; height: ${frameHeight}px; max-width: 100%; border: 0; border-radius: 14px; background: white; box-shadow: 0 22px 70px rgb(0 0 0 / .4); }
+  </style>
+</head>
+<body data-qa-ready="false">
+  <iframe id="mobile-route-app" src="/?${frameQuery.toString()}" title="Generated lazy-route mail at 375 by ${frameHeight} pixels"></iframe>
+  <script>
+    const frame = document.getElementById('mobile-route-app');
+    const routeCase = ${JSON.stringify(routeCase)};
+    const expectedState = ${JSON.stringify(expectedState)};
+    const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+    frame.addEventListener('load', async () => {
+      const doc = frame.contentDocument;
+      let calendarTab = null;
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        calendarTab = doc.querySelector('[aria-label="Calendar tab"]');
+        const inboxReady = doc.querySelector('main[aria-label="Email content"]')
+          && !doc.querySelector('[data-route-key="inbox"][data-route-state="loading"]');
+        if (calendarTab && inboxReady) {
+          calendarTab.click();
+          break;
+        }
+        await delay(25);
+      }
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        const routeState = doc.querySelector('[data-route-key="calendar"][data-route-state="' + expectedState + '"]');
+        if (routeState) {
+          await delay(routeCase === 'slow' ? 220 : 80);
+          const controls = [...routeState.querySelectorAll('button, a[href]')];
+          const topbarControls = [...doc.querySelectorAll('.primary-nav > button:not(.fixed)')];
+          document.body.dataset.qaMetrics = JSON.stringify({
+            innerWidth: frame.contentWindow.innerWidth,
+            innerHeight: frame.contentWindow.innerHeight,
+            clientWidth: doc.documentElement.clientWidth,
+            scrollWidth: doc.documentElement.scrollWidth,
+            routeState: routeState.dataset.routeState,
+            routeKey: routeState.dataset.routeKey,
+            statusText: routeState.querySelector('[role="status"]')?.textContent?.trim() || null,
+            alertText: routeState.getAttribute('role') === 'alert' ? routeState.textContent?.trim() : null,
+            minRouteControlHeight: controls.length
+              ? Math.min(...controls.map(element => element.getBoundingClientRect().height))
+              : null,
+            minTopbarControlHeight: topbarControls.length
+              ? Math.min(...topbarControls.map(element => element.getBoundingClientRect().height))
+              : null,
+            calendarCurrent: calendarTab.getAttribute('aria-current'),
+          });
+          document.body.dataset.qaReady = 'true';
+          break;
+        }
+        await delay(25);
+      }
+    });
+  </script>
+</body>
+</html>`;
+  return writeHtml(response, body);
 }
 
 function mobileQaFrame(response, url) {
@@ -844,6 +944,125 @@ async function existingFile(pathname) {
   }
 }
 
+const routeSourceByPage = Object.freeze({
+  flow: 'src/pages/Flow.svelte',
+  inbox: 'src/pages/Inbox.svelte',
+  calendar: 'src/pages/Calendar.svelte',
+  compose: 'src/pages/Compose.svelte',
+  stats: 'src/pages/Stats.svelte',
+  'ai-insights': 'src/pages/AIInsights.svelte',
+  todos: 'src/pages/Todos.svelte',
+  chat: 'src/pages/Chat.svelte',
+  subscriptions: 'src/pages/Subscriptions.svelte',
+  admin: 'src/pages/Admin.svelte',
+});
+
+async function loadRouteAssets() {
+  if (!routeAssetsPromise) {
+    routeAssetsPromise = readFile(frontendManifest, 'utf8')
+      .then(contents => {
+        const manifest = JSON.parse(contents);
+        return Object.fromEntries(Object.entries(routeSourceByPage).map(([page, source]) => {
+          const asset = manifest[source]?.file;
+          return [page, asset ? `/${asset}` : null];
+        }));
+      })
+      .catch(async error => {
+        if (error?.code !== 'ENOENT') throw error;
+        const assetNames = await readdir(resolve(frontendDist, 'assets'));
+        return Object.fromEntries(Object.entries(routeSourceByPage).map(([page, source]) => {
+          const componentName = source.split('/').at(-1).replace(/\.svelte$/, '');
+          const asset = assetNames.find(name => name.startsWith(`${componentName}-`) && name.endsWith('.js'));
+          return [page, asset ? `/assets/${asset}` : null];
+        }));
+      });
+  }
+  return routeAssetsPromise;
+}
+
+async function routeAssetScenario(request, url) {
+  const routeAssets = await loadRouteAssets();
+  if (
+    forcedRouteCase
+    && routeSourceByPage[forcedRouteTarget]
+    && forcedRouteRun
+    && /^[a-zA-Z0-9._-]{1,100}$/.test(forcedRouteRun)
+    && url.pathname === routeAssets[forcedRouteTarget]
+  ) {
+    return {
+      routeCase: forcedRouteCase,
+      route: forcedRouteTarget,
+      run: forcedRouteRun,
+    };
+  }
+
+  const referrer = request.headers.referer;
+  if (!referrer) return null;
+
+  let referrerUrl;
+  try {
+    referrerUrl = new URL(referrer);
+  } catch {
+    return null;
+  }
+
+  const routeCase = referrerUrl.searchParams.get('qa_route_case');
+  const route = referrerUrl.searchParams.get('qa_route_target');
+  const run = referrerUrl.searchParams.get('qa_route_run');
+  if (!['slow', 'fail-once'].includes(routeCase) || !routeSourceByPage[route] || !run) return null;
+  if (!/^[a-zA-Z0-9._-]{1,100}$/.test(run)) return null;
+
+  if (url.pathname !== routeAssets[route]) return null;
+  return { routeCase, route, run };
+}
+
+async function applyRouteAssetScenario(request, response, url) {
+  const routeAssets = await loadRouteAssets();
+  const requestedRoute = Object.entries(routeAssets).find(([, path]) => path === url.pathname)?.[0];
+  if (!requestedRoute) return false;
+  const scenario = await routeAssetScenario(request, url) || {
+    routeCase: 'normal',
+    route: requestedRoute,
+    run: null,
+  };
+
+  const attemptKey = `${scenario.run || 'normal'}:${scenario.route}:${url.pathname}`;
+  const attempt = (routeAssetAttempts.get(attemptKey) || 0) + 1;
+  routeAssetAttempts.set(attemptKey, attempt);
+  const startedAt = Date.now();
+  const entry = {
+    sequence: routeAssetReads.length + 1,
+    route: scenario.route,
+    case: scenario.routeCase,
+    run: scenario.run,
+    path: url.pathname,
+    attempt,
+    status: null,
+    duration_ms: null,
+    aborted: false,
+  };
+  routeAssetReads.push(entry);
+  request.once('aborted', () => { entry.aborted = true; });
+
+  if (scenario.routeCase === 'slow') await wait(1200);
+  if (scenario.routeCase === 'fail-once' && attempt === 1) {
+    entry.status = 503;
+    entry.duration_ms = Date.now() - startedAt;
+    const body = 'Generated transient lazy-route failure';
+    response.writeHead(503, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Length': Buffer.byteLength(body),
+      'Cache-Control': 'no-store',
+    });
+    response.end(body);
+    return true;
+  }
+
+  entry.status = 200;
+  entry.duration_ms = Date.now() - startedAt;
+  return false;
+}
+
 async function serveFrontend(request, response, url) {
   let decodedPath;
   try {
@@ -880,6 +1099,8 @@ async function serveFrontend(request, response, url) {
     return;
   }
 
+  if (await applyRouteAssetScenario(request, response, url)) return;
+
   response.writeHead(200, {
     'Content-Type': mimeTypes[extname(candidate).toLowerCase()] || 'application/octet-stream',
     'Content-Length': fileStat.size,
@@ -898,6 +1119,11 @@ const eventStreams = new Set();
 async function handleGet(request, response, url) {
   const { pathname } = url;
 
+  if (pathname === '/favicon.ico') {
+    response.writeHead(204, { 'Cache-Control': 'no-store' });
+    response.end();
+    return;
+  }
   if (pathname === '/__qa/mobile') return mobileQaFrame(response, url);
   if (pathname === '/__qa/attachment-mobile') return mobileAttachmentQaFrame(response);
   if (pathname === '/__qa/attachment-preview-mobile') {
@@ -908,6 +1134,16 @@ async function handleGet(request, response, url) {
         actionPrefix: 'Download generated-preview-script.js',
       }
       : undefined);
+  }
+  if (pathname === '/__qa/route-mobile') return mobileRouteQaFrame(response, url);
+  if (pathname === '/api/test/route-audit') {
+    return writeJson(response, {
+      fixture: 'generated-lazy-routes',
+      route_assets: await loadRouteAssets(),
+      asset_reads: routeAssetReads,
+      mutation_attempts: audit.mutation_attempts,
+      unknown_routes: audit.unknown_routes,
+    });
   }
   if (pathname === '/api/test/audit') {
     return writeJson(response, {
@@ -933,7 +1169,23 @@ async function handleGet(request, response, url) {
   if (pathname === '/api/auth/keyboard-shortcuts') {
     return writeJson(response, { shortcuts: {} });
   }
+  if (pathname === '/api/auth/ai-preferences') {
+    return writeJson(response, { allowed_models: [], labels: {} });
+  }
+  if (pathname === '/api/auth/about-me') return writeJson(response, { about_me: '' });
+  if (pathname === '/api/auth/api-tokens') return writeJson(response, []);
   if (pathname === '/api/accounts/') return writeJson(response, generatedAccounts);
+  if (pathname === '/api/admin/feature-flags') {
+    return writeJson(response, { desktop_app_enabled: false });
+  }
+  if (pathname === '/api/terminal/settings') {
+    return writeJson(response, {
+      code: 'generated-route-qa',
+      home_assistant_url: '',
+      timezone: 'America/New_York',
+    });
+  }
+  if (pathname === '/api/terminal/devices') return writeJson(response, []);
   if (pathname === '/api/build-version') {
     return writeJson(response, { version: 'generated-structured-search-qa' });
   }
@@ -974,12 +1226,18 @@ async function handleGet(request, response, url) {
     return writeJson(response, { events: [], total: 0 });
   }
   if (pathname === '/api/calendar/upcoming') return writeJson(response, { events: [] });
-  if (pathname === '/api/todos/') return writeJson(response, { todos: [] });
+  if (pathname === '/api/todos/') return writeJson(response, { todos: generatedTodos });
   if (pathname === '/api/ai/needs-reply') {
     return writeJson(response, { emails: [], total: 0 });
   }
   if (pathname === '/api/ai/trends') {
     return writeJson(response, { summary: '', needs_attention: [] });
+  }
+  if (pathname === '/api/ai/stats') {
+    return writeJson(response, { analyzed: 0, total: 0, categorized: 0 });
+  }
+  if (pathname === '/api/ai/processing/status') {
+    return writeJson(response, { active: false, just_finished: false });
   }
   if (pathname === '/api/ai/awaiting-response') {
     return writeJson(response, { emails: [], total: 0 });

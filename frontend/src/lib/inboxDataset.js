@@ -17,6 +17,34 @@ export function createLatestRequestGuard() {
   };
 }
 
+/**
+ * Preserve a cross-screen "open this message" intent until the first
+ * authoritative Inbox dataset is ready. Inbox clears selection whenever its
+ * result shape changes, so a cold lazy mount otherwise erases an id supplied
+ * by Flow, Todos, or Insights before the detail request can begin.
+ */
+export function createInitialDirectOpenGuard() {
+  let pendingEmailId = null;
+  let initialDatasetCommitted = false;
+
+  return {
+    capture(emailId) {
+      if (initialDatasetCommitted || pendingEmailId !== null) return pendingEmailId;
+      const candidate = Number(emailId);
+      if (Number.isSafeInteger(candidate) && candidate > 0) pendingEmailId = candidate;
+      return pendingEmailId;
+    },
+
+    commit(authoritative) {
+      if (!authoritative) return null;
+      initialDatasetCommitted = true;
+      const emailId = pendingEmailId;
+      pendingEmailId = null;
+      return emailId;
+    },
+  };
+}
+
 export function inboxDatasetKey({
   mailbox = 'INBOX',
   accountId = null,

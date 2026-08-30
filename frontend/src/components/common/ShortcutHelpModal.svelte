@@ -144,12 +144,12 @@
 
   function goToSettings() {
     helpModalOpen.set(false);
-    currentPage.set('admin');
-    // Set the tab via URL param
+    // The URL is durable across a cold lazy Admin mount. The event handles the
+    // already-mounted case without making first-load navigation timing-based.
     const url = new URL(window.location.href);
-    url.searchParams.set('tab', 'shortcuts');
+    url.searchParams.set('tab', 'preferences');
     window.history.replaceState({}, '', url.toString());
-    // Dispatch a custom event so Admin.svelte picks up the tab change
+    currentPage.set('admin');
     window.dispatchEvent(new CustomEvent('shortcut-settings-navigate'));
   }
 </script>

@@ -4,11 +4,15 @@
   import Icon from '../common/Icon.svelte';
   import { activeShortcuts, formatComboForDisplay, openCommandPalette } from '../../lib/shortcutStore.js';
   import { api } from '../../lib/api.js';
+  import { preloadAuthenticatedPage } from '../../lib/lazyRoutes.js';
   import { user, sidebarCollapsed, currentPage, currentMailbox, viewMode, overallSyncState, syncStatus, showToast, forceSyncPoll, selectedAccountId, accounts, accountColorMap, hideIgnored } from '../../lib/stores.js';
   import EmailSearchBox from '../email/EmailSearchBox.svelte';
 
   let syncDropdownOpen = $state(false);
   let moreMenuOpen = $state(false);
+  let moreButton = $state(null);
+  let moreMenu = $state(null);
+  let observedPage = $currentPage;
   let commandShortcut = $derived(
     formatComboForDisplay($activeShortcuts['nav.commands']?.key || 'Ctrl+k')
   );
@@ -35,8 +39,25 @@
     { id: 'todos', label: 'Todos', icon: 'check-circle' },
     { id: 'stats', label: 'Stats', icon: 'bar-chart-2' },
   ];
+  const settingsTab = { id: 'admin', label: 'Settings', icon: 'settings' };
 
-  let secondaryPageActive = $derived(secondaryTabs.some(tab => tab.id === $currentPage));
+  let activeSecondaryTab = $derived(
+    secondaryTabs.find(tab => tab.id === $currentPage)
+      || ($currentPage === settingsTab.id ? settingsTab : null)
+  );
+  let secondaryPageActive = $derived(Boolean(activeSecondaryTab));
+
+  function warmRoute(page) {
+    void preloadAuthenticatedPage(page);
+  }
+
+  function closeMoreMenu({ restoreFocus = false } = {}) {
+    if (!moreMenuOpen) return;
+    moreMenuOpen = false;
+    if (restoreFocus) {
+      requestAnimationFrame(() => moreButton?.focus({ preventScroll: true }));
+    }
+  }
 
   function updateCountdown() {
     const ra = $overallSyncState.retryAfter;
@@ -63,9 +84,27 @@
 
   onMount(() => {
     countdownInterval = setInterval(updateCountdown, 1000);
+    const handleEscape = event => {
+      if (event.key !== 'Escape' || !moreMenuOpen) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeMoreMenu({ restoreFocus: true });
+    };
+    window.addEventListener('keydown', handleEscape, true);
     return () => {
       if (countdownInterval) clearInterval(countdownInterval);
+      window.removeEventListener('keydown', handleEscape, true);
     };
+  });
+
+  // Keyboard navigation can replace a focused menu item. Close the popover
+  // and return focus to its persistent trigger instead of dropping to body.
+  $effect(() => {
+    const page = $currentPage;
+    if (page === observedPage) return;
+    const focusWasInMenu = Boolean(moreMenu?.contains(document.activeElement));
+    observedPage = page;
+    closeMoreMenu({ restoreFocus: focusWasInMenu });
   });
 
   // Also update countdown whenever sync state changes
@@ -83,9 +122,9 @@
     user.set(null);
   }
 
-  function switchTab(tabId) {
+  function switchTab(tabId, { restoreMoreFocus = false } = {}) {
     currentPage.set(tabId);
-    moreMenuOpen = false;
+    closeMoreMenu({ restoreFocus: restoreMoreFocus });
     syncDropdownOpen = false;
   }
 
@@ -202,10 +241,13 @@
     {#each tabs as tab}
       <button
         onclick={() => switchTab(tab.id)}
-        class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-150"
+        onpointerenter={() => warmRoute(tab.id)}
+        onfocus={() => warmRoute(tab.id)}
+        class="min-h-11 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-150"
         class:tab-active={$currentPage === tab.id}
         class:tab-inactive={$currentPage !== tab.id}
         aria-label="{tab.label} tab"
+        aria-current={$currentPage === tab.id ? 'page' : undefined}
         data-shortcut={tab.id === 'flow' ? 'nav.flow' : tab.id === 'inbox' ? 'nav.inbox' : tab.id === 'calendar' ? 'nav.calendar' : undefined}
       >
         {#if tab.icon === 'sparkles'}
@@ -219,23 +261,33 @@
       </button>
     {/each}
     <button
-      onclick={() => moreMenuOpen = !moreMenuOpen}
-      class="more-button flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-150"
+      bind:this={moreButton}
+      onclick={() => moreMenuOpen ? closeMoreMenu() : moreMenuOpen = true}
+      class="more-button min-h-11 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-150"
       class:tab-active={secondaryPageActive}
       class:tab-inactive={!secondaryPageActive}
-      aria-label="More app sections"
+      aria-label={activeSecondaryTab ? `More app sections, current: ${activeSecondaryTab.label}` : 'More app sections'}
       aria-expanded={moreMenuOpen}
+      aria-controls="more-app-sections-menu"
+      aria-current={secondaryPageActive ? 'page' : undefined}
     >
       <Icon name="more-horizontal" size={16} />
       <span class="primary-tab-label">More</span>
     </button>
     {#if moreMenuOpen}
-      <button class="fixed inset-0 z-40 cursor-default" onclick={() => moreMenuOpen = false} aria-label="Close navigation menu"></button>
-      <div class="more-menu absolute left-0 top-full mt-2 z-50 w-56 rounded-xl border p-1.5 shadow-xl" style="background: var(--bg-secondary); border-color: var(--border-color)">
+      <button
+        class="fixed inset-0 z-40 cursor-default"
+        onclick={() => closeMoreMenu({ restoreFocus: true })}
+        tabindex="-1"
+        aria-hidden="true"
+      ></button>
+      <div bind:this={moreMenu} id="more-app-sections-menu" class="more-menu absolute left-0 top-full mt-2 z-50 w-56 rounded-xl border p-1.5 shadow-xl" style="background: var(--bg-secondary); border-color: var(--border-color)">
         {#each secondaryTabs as tab}
           <button
-            onclick={() => switchTab(tab.id)}
-            class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left"
+            onclick={() => switchTab(tab.id, { restoreMoreFocus: true })}
+            onpointerenter={() => warmRoute(tab.id)}
+            onfocus={() => warmRoute(tab.id)}
+            class="min-h-11 w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left"
             class:menu-item-active={$currentPage === tab.id}
             aria-current={$currentPage === tab.id ? 'page' : undefined}
           >
@@ -244,14 +296,21 @@
           </button>
         {/each}
         <div class="mobile-menu-utilities border-t mt-1 pt-1" style="border-color: var(--border-color)">
-          <button onclick={() => switchTab('admin')} class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left">
+          <button
+            onclick={() => switchTab('admin', { restoreMoreFocus: true })}
+            onpointerenter={() => warmRoute('admin')}
+            onfocus={() => warmRoute('admin')}
+            class="min-h-11 w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left"
+            class:menu-item-active={$currentPage === 'admin'}
+            aria-current={$currentPage === 'admin' ? 'page' : undefined}
+          >
             <Icon name="settings" size={16} /> Settings
           </button>
-          <button onclick={() => { theme.toggle(); moreMenuOpen = false; }} class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left">
+          <button onclick={() => { theme.toggle(); closeMoreMenu({ restoreFocus: true }); }} class="min-h-11 w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left">
             <Icon name={getEffectiveMode($theme) === 'dark' ? 'sun' : 'moon'} size={16} />
             {getEffectiveMode($theme) === 'dark' ? 'Light theme' : 'Dark theme'}
           </button>
-          <button onclick={handleLogout} class="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left">
+          <button onclick={handleLogout} class="min-h-11 w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-left">
             <Icon name="log-out" size={16} /> Log out
           </button>
         </div>
@@ -498,9 +557,12 @@
     <!-- Settings gear -->
     <button
       onclick={() => currentPage.set('admin')}
+      onpointerenter={() => warmRoute('admin')}
+      onfocus={() => warmRoute('admin')}
       class="desktop-utility p-1.5 rounded-md transition-fast"
       style="color: {$currentPage === 'admin' ? 'var(--color-accent-500)' : 'var(--text-secondary)'}"
       aria-label="Settings"
+      aria-current={$currentPage === 'admin' ? 'page' : undefined}
       title="Settings"
       data-shortcut="nav.settings"
     >
@@ -592,6 +654,9 @@
       left: 0.5rem;
       right: 0.5rem;
       width: auto;
+      max-height: calc(100dvh - 3.75rem - env(safe-area-inset-bottom));
+      overflow-y: auto;
+      overscroll-behavior: contain;
     }
     .topbar-utilities {
       margin-left: auto;

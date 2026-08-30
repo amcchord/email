@@ -4,11 +4,32 @@ import test from 'node:test';
 import {
   canActOnInboxEmails,
   createDatasetActionReconciler,
+  createInitialDirectOpenGuard,
   createLatestRequestGuard,
   inboxDatasetKey,
   normalizeInboxDatasetSnapshot,
   selectedBooleanState,
 } from './inboxDataset.js';
+
+test('a direct-open intent survives selection invalidation until the first authoritative dataset', () => {
+  const intent = createInitialDirectOpenGuard();
+
+  assert.equal(intent.capture(313), 313);
+  assert.equal(intent.capture(null), 313, 'an overlapping refresh cannot erase the pending intent');
+  assert.equal(intent.commit(false), null, 'a non-authoritative result keeps the intent pending');
+  assert.equal(intent.commit(true), 313);
+  assert.equal(intent.capture(314), null, 'later dataset refreshes do not revive initial-navigation state');
+  assert.equal(intent.commit(true), null);
+});
+
+test('a direct-open intent rejects invalid message ids', () => {
+  const intent = createInitialDirectOpenGuard();
+
+  assert.equal(intent.capture(0), null);
+  assert.equal(intent.capture(-1), null);
+  assert.equal(intent.capture('not-an-id'), null);
+  assert.equal(intent.capture(Number.MAX_SAFE_INTEGER + 1), null);
+});
 
 test('only the newest overlapping request remains current', () => {
   const requests = createLatestRequestGuard();
