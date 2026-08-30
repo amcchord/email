@@ -102,7 +102,7 @@ const generatedEmails = deepFreeze([
     is_starred: true,
     has_attachments: true,
     attachments: [{
-      id: 'attachment-301',
+      id: 8301,
       filename: 'quarterly-planning-generated.txt',
       content_type: 'text/plain',
       size_bytes: 43,
@@ -122,7 +122,7 @@ const generatedEmails = deepFreeze([
     is_starred: true,
     has_attachments: true,
     attachments: [{
-      id: 'attachment-302',
+      id: 8302,
       filename: 'near-miss-generated.txt',
       content_type: 'text/plain',
       size_bytes: 37,
@@ -139,12 +139,38 @@ const generatedEmails = deepFreeze([
     is_read: true,
     is_starred: true,
     has_attachments: true,
-    attachments: [{
-      id: 'attachment-303',
-      filename: 'read-peer-generated.txt',
-      content_type: 'text/plain',
-      size_bytes: 31,
-    }],
+    attachments: [
+      {
+        id: 8303,
+        filename: 'delayed-read-peer-generated.txt',
+        content_type: 'text/plain',
+        size_bytes: 68,
+      },
+      {
+        id: 8304,
+        filename: 'retryable-generated.txt',
+        content_type: 'text/plain',
+        size_bytes: 64,
+      },
+      {
+        id: 8305,
+        filename: 'too-large-generated.zip',
+        content_type: 'application/zip',
+        size_bytes: 34 * 1024 * 1024,
+      },
+      {
+        id: 8306,
+        filename: 'unavailable-generated.txt',
+        content_type: 'text/plain',
+        size_bytes: 1,
+      },
+      {
+        id: 8307,
+        filename: `../Résumé-${'非常に長い'.repeat(18)}-\u0000-final.txt`,
+        content_type: 'text/plain',
+        size_bytes: 2048,
+      },
+    ],
   }),
   generatedEmail({
     id: 304,
@@ -248,7 +274,7 @@ const generatedEmails = deepFreeze([
     is_starred: true,
     has_attachments: true,
     attachments: [{
-      id: 'attachment-312',
+      id: 8312,
       filename: 'secondary-account-generated.txt',
       content_type: 'text/plain',
       size_bytes: 45,
@@ -328,9 +354,11 @@ const generatedLabels = deepFreeze([
 const audit = {
   queries: [],
   action_status_reads: [],
+  attachment_reads: [],
   mutation_attempts: [],
   unknown_routes: [],
 };
+const attachmentAttempts = new Map();
 let receivedSequence = 0;
 let respondedSequence = 0;
 
@@ -454,6 +482,88 @@ function mobileQaFrame(response, url) {
             await delay(80);
           }
           publishMetrics(doc, input);
+          document.body.dataset.qaReady = 'true';
+          break;
+        }
+        await delay(25);
+      }
+    });
+  </script>
+</body>
+</html>`;
+  return writeHtml(response, body);
+}
+
+function mobileAttachmentQaFrame(response) {
+  const body = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Generated mobile attachment QA</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #111827; }
+    body { display: grid; min-height: 100vh; place-items: start center; padding: 12px; }
+    iframe { width: 375px; height: 812px; max-width: 100%; border: 0; border-radius: 14px; background: white; box-shadow: 0 22px 70px rgb(0 0 0 / .4); }
+  </style>
+</head>
+<body data-qa-ready="false">
+  <iframe id="mobile-app" src="/" title="Generated attachment mail at 375 by 812 pixels"></iframe>
+  <script>
+    const frame = document.getElementById('mobile-app');
+    const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+    frame.addEventListener('load', async () => {
+      const doc = frame.contentDocument;
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        const emailTab = doc.querySelector('[aria-label="Email tab"]');
+        if (emailTab) {
+          emailTab.click();
+          break;
+        }
+        await delay(25);
+      }
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        const emailButton = [...doc.querySelectorAll('button')].find(element =>
+          element.getAttribute('aria-label') === 'Open email: Quarterly & Planning'
+        );
+        if (emailButton) {
+          emailButton.click();
+          break;
+        }
+        await delay(25);
+      }
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        const terminalButton = [...doc.querySelectorAll('button')].find(element =>
+          element.getAttribute('aria-label')?.includes('final.txt')
+        );
+        if (terminalButton) {
+          terminalButton.click();
+          await delay(180);
+          const interactive = [...doc.querySelectorAll('button')];
+          const attachmentButtons = interactive.filter(element =>
+            element.getAttribute('aria-label')?.startsWith('Download ')
+          );
+          const alert = doc.querySelector('[role="alert"]');
+          document.body.dataset.qaMetrics = JSON.stringify({
+            innerWidth: frame.contentWindow.innerWidth,
+            innerHeight: frame.contentWindow.innerHeight,
+            clientWidth: doc.documentElement.clientWidth,
+            scrollWidth: doc.documentElement.scrollWidth,
+            attachmentCount: attachmentButtons.length,
+            minAttachmentHeight: attachmentButtons.length
+              ? Math.min(...attachmentButtons.map(element => element.getBoundingClientRect().height))
+              : null,
+            widestAttachmentRight: attachmentButtons.length
+              ? Math.max(...attachmentButtons.map(element => element.getBoundingClientRect().right))
+              : null,
+            alertRight: alert?.getBoundingClientRect().right || null,
+            alertText: alert?.textContent?.trim() || null,
+            terminalRetryCount: [...doc.querySelectorAll('button')].filter(element =>
+              element.getAttribute('aria-label')?.includes('Retry download')
+              && element.getAttribute('aria-label')?.includes('final.txt')
+            ).length,
+          });
           document.body.dataset.qaReady = 'true';
           break;
         }
@@ -628,6 +738,7 @@ async function handleGet(request, response, url) {
   const { pathname } = url;
 
   if (pathname === '/__qa/mobile') return mobileQaFrame(response, url);
+  if (pathname === '/__qa/attachment-mobile') return mobileAttachmentQaFrame(response);
   if (pathname === '/api/test/audit') {
     return writeJson(response, {
       fixture: 'generated-structured-search',
@@ -637,6 +748,7 @@ async function handleGet(request, response, url) {
       scenarios: scenarioQueries,
       queries: audit.queries,
       action_status_reads: audit.action_status_reads,
+      attachment_reads: audit.attachment_reads,
       mutation_attempts: audit.mutation_attempts,
       unknown_routes: audit.unknown_routes,
     });
@@ -712,13 +824,70 @@ async function handleGet(request, response, url) {
     return writeJson(response, email || { detail: 'Generated email not found' }, email ? 200 : 404);
   }
 
-  const attachmentMatch = pathname.match(/^\/api\/emails\/(\d+)\/attachments\/([^/]+)\/download$/);
+  const attachmentMatch = pathname.match(/^\/api\/emails\/(\d+)\/attachments\/(\d+)\/download$/);
   if (attachmentMatch) {
-    const email = emailsById.get(Number(attachmentMatch[1]));
-    const attachmentId = decodeURIComponent(attachmentMatch[2]);
+    const emailId = Number(attachmentMatch[1]);
+    const attachmentId = Number(attachmentMatch[2]);
+    const email = emailsById.get(emailId);
     const attachment = email?.attachments?.find(item => item.id === attachmentId);
-    if (!attachment) return writeJson(response, { detail: 'Generated attachment not found' }, 404);
+    const attempt = (attachmentAttempts.get(attachmentId) || 0) + 1;
+    attachmentAttempts.set(attachmentId, attempt);
+    const entry = beginAudit(request, url, {
+      email_id: emailId,
+      attachment_id: attachmentId,
+      attempt,
+      aborted: false,
+      request_closed: false,
+      response_finished: false,
+      response_closed: false,
+      closed_before_finish: false,
+    });
+    audit.attachment_reads.push(entry);
+    request.once('aborted', () => { entry.aborted = true; });
+    request.once('close', () => { entry.request_closed = true; });
+    response.once('finish', () => { entry.response_finished = true; });
+    response.once('close', () => {
+      entry.response_closed = true;
+      entry.closed_before_finish = !entry.response_finished;
+    });
+
+    if (!attachment) {
+      completeAudit(entry, 404);
+      return writeJson(response, { detail: 'Generated attachment not found' }, 404);
+    }
+    if (attachmentId === 8303) await wait(650);
+    if (request.aborted || response.destroyed) {
+      completeAudit(entry, 499);
+      return;
+    }
+    if (attachmentId === 8304 && attempt % 2 === 1) {
+      completeAudit(entry, 503);
+      return writeJson(
+        response,
+        { detail: 'Generated transient attachment service failure' },
+        503,
+      );
+    }
+    if (attachmentId === 8305) {
+      completeAudit(entry, 413);
+      return writeJson(response, { detail: 'Attachment is too large to download' }, 413);
+    }
+    if (attachmentId === 8306) {
+      completeAudit(entry, 409);
+      return writeJson(response, { detail: 'Attachment content is unavailable' }, 409);
+    }
+    if (attachmentId === 8307) {
+      completeAudit(entry, 422);
+      return writeJson(
+        response,
+        {
+          detail: 'Generated terminal attachment validation detail stays readable even when the filename and explanation are intentionally very long on a narrow screen.',
+        },
+        422,
+      );
+    }
     const body = Buffer.from(`Generated attachment ${attachment.id} for ${email.message_id_header}\n`);
+    completeAudit(entry, 200);
     response.writeHead(200, {
       'Content-Type': attachment.content_type,
       'Content-Length': body.length,

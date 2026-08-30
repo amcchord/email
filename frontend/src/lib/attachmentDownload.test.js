@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   canStartAttachmentDownload,
   isCurrentAttachmentRequest,
+  isRetryableAttachmentError,
   safeClientFilename,
   saveAttachmentBlob,
 } from './attachmentDownload.js';
@@ -79,4 +80,15 @@ test('attachment results become stale after the email or generation changes', ()
     currentEmailId: 41,
     currentGeneration: 4,
   }), false);
+});
+
+test('terminal attachment failures are not presented as retryable', () => {
+  for (const status of [400, 401, 403, 404, 409, 413, 422]) {
+    assert.equal(isRetryableAttachmentError(status), false);
+  }
+  assert.equal(isRetryableAttachmentError(408), true);
+  assert.equal(isRetryableAttachmentError(425), true);
+  assert.equal(isRetryableAttachmentError(429), true);
+  assert.equal(isRetryableAttachmentError(503), true);
+  assert.equal(isRetryableAttachmentError(undefined), true);
 });

@@ -3,20 +3,34 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
 import os
 import re
-import tempfile
+import secrets
+import stat
 import unicodedata
 from pathlib import Path
 from typing import Awaitable, Callable
 from urllib.parse import quote
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
 from backend.models.account import GoogleAccount
 from backend.models.email import Attachment, Email
+from backend.services.attachment_cache import (
+    AttachmentCachePolicy,
+    CacheKey,
+    acquire_entry_lease,
+    canonical_cache_path,
+    ensure_private_cache_parent,
+    open_canonical_cache_file,
+    open_canonical_cache_parent,
+    reserve_cache_capacity,
+    run_blocking_cache_operation,
+)
 from backend.services.credentials import get_google_credentials
 from backend.services.gmail import GmailService
 
@@ -93,21 +107,6 @@ def attachment_content_disposition(filename: str | None) -> str:
     )
 
 
-def _cache_target(
-    storage_root: Path,
-    email: Email,
-    attachment: Attachment,
-    account: GoogleAccount,
-) -> Path:
-    return (
-        storage_root
-        / str(account.user_id)
-        / str(email.account_id)
-        / str(email.id)
-        / f"{attachment.id}.blob"
-    )
-
-
 def _validate_content_size(content: bytes, expected_size: int | None) -> bytes:
     if not content:
         raise AttachmentDownloadError(
@@ -128,32 +127,121 @@ def _validate_content_size(content: bytes, expected_size: int | None) -> bytes:
     return content
 
 
-def _read_bounded_file(path: Path, expected_size: int | None) -> bytes:
-    with path.open("rb") as file_handle:
-        content = file_handle.read(MAX_ATTACHMENT_DOWNLOAD_BYTES + 1)
-    return _validate_content_size(content, expected_size)
-
-
-def _write_private_file_atomic(path: Path, content: bytes) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(path.parent, 0o700)
-    temporary_path = None
+def _read_bounded_file(
+    storage_root: Path,
+    user_id: int,
+    account_id: int,
+    email_id: int,
+    attachment_id: int,
+    expected_size: int | None,
+) -> bytes:
+    descriptor = open_canonical_cache_file(
+        storage_root,
+        user_id,
+        account_id,
+        email_id,
+        attachment_id,
+    )
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            dir=path.parent,
-            prefix=f".{path.name}-",
-            delete=False,
-        ) as file_handle:
-            temporary_path = Path(file_handle.name)
-            os.chmod(temporary_path, 0o600)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise OSError("Attachment cache entry is not a regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as file_handle:
+            content = file_handle.read(MAX_ATTACHMENT_DOWNLOAD_BYTES + 1)
+        validated = _validate_content_size(content, expected_size)
+        try:
+            os.utime(descriptor, None)
+        except OSError:
+            logger.warning("Attachment cache access-time update failed", exc_info=True)
+        return validated
+    finally:
+        os.close(descriptor)
+
+
+def _write_private_file_atomic(
+    storage_root: Path,
+    user_id: int,
+    account_id: int,
+    email_id: int,
+    attachment_id: int,
+    content: bytes,
+) -> None:
+    parent_descriptor = open_canonical_cache_parent(
+        storage_root,
+        user_id,
+        account_id,
+        email_id,
+    )
+    filename = f"{attachment_id}.blob"
+    temporary_name = f".{filename}-{secrets.token_hex(8)}"
+    temporary_descriptor = None
+    try:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        temporary_descriptor = os.open(
+            temporary_name,
+            flags,
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+        os.fchmod(temporary_descriptor, 0o600)
+        with os.fdopen(temporary_descriptor, "wb", closefd=False) as file_handle:
             file_handle.write(content)
             file_handle.flush()
             os.fsync(file_handle.fileno())
-        os.replace(temporary_path, path)
+        try:
+            existing_metadata = os.stat(
+                filename,
+                dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            existing_metadata = None
+        if existing_metadata is not None and (
+            stat.S_ISLNK(existing_metadata.st_mode)
+            or not stat.S_ISREG(existing_metadata.st_mode)
+        ):
+            raise OSError("Unsafe attachment cache replacement target")
+        os.replace(
+            temporary_name,
+            filename,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+        temporary_name = ""
     finally:
-        if temporary_path and temporary_path.exists():
-            temporary_path.unlink()
+        if temporary_descriptor is not None:
+            os.close(temporary_descriptor)
+        if temporary_name:
+            try:
+                os.unlink(temporary_name, dir_fd=parent_descriptor)
+            except FileNotFoundError:
+                pass
+        os.close(parent_descriptor)
+
+
+async def _load_live_cache_keys(
+    db: AsyncSession,
+    user_id: int,
+) -> set[CacheKey] | None:
+    """Return the canonical entries currently owned by one user, or fail closed."""
+    try:
+        result = await db.execute(
+            select(Email.account_id, Email.id, Attachment.id)
+            .select_from(Attachment)
+            .join(Email, Email.id == Attachment.email_id)
+            .join(GoogleAccount, GoogleAccount.id == Email.account_id)
+            .where(GoogleAccount.user_id == user_id)
+        )
+        return {
+            (int(account_id), int(email_id), int(attachment_id))
+            for account_id, email_id, attachment_id in result.all()
+        }
+    except Exception:
+        # A database outage must never be interpreted as an empty ownership set.
+        logger.warning("Attachment cache ownership snapshot unavailable", exc_info=True)
+        return None
 
 
 async def load_attachment_bytes(
@@ -165,6 +253,7 @@ async def load_attachment_bytes(
     storage_root: str | Path | None = None,
     credential_resolver: Callable[[AsyncSession], Awaitable[tuple[str, str]]] | None = None,
     gmail_service_factory: Callable[..., GmailService] | None = None,
+    cache_policy: AttachmentCachePolicy | None = None,
 ) -> bytes:
     """Return attachment bytes from the private cache or the owning Gmail account."""
     configured_root = storage_root or get_settings().attachment_storage_path
@@ -186,108 +275,170 @@ async def load_attachment_bytes(
             public_detail="Attachment content is unavailable",
         )
 
-    # Deliberately ignore the legacy filename-keyed storage_path. Cache reads
-    # use only an ID-derived canonical location beneath the configured root.
-    cache_path = _cache_target(root, email, attachment, account)
     try:
-        resolved_cache_path = cache_path.resolve()
-    except (OSError, RuntimeError) as exc:
+        cache_path = canonical_cache_path(
+            root,
+            int(account.user_id),
+            int(email.account_id),
+            int(email.id),
+            int(attachment.id),
+        )
+    except (TypeError, ValueError) as exc:
         raise AttachmentDownloadError("Attachment cache path is invalid") from exc
-    if not resolved_cache_path.is_relative_to(root):
-        raise AttachmentDownloadError("Attachment cache path is invalid")
-    if resolved_cache_path != cache_path:
-        raise AttachmentDownloadError("Attachment cache path is invalid")
 
-    if cache_path.is_file() and not cache_path.is_symlink():
-        try:
-            cached_content = await asyncio.to_thread(
-                _read_bounded_file,
-                cache_path,
-                attachment.size_bytes,
-            )
-            if attachment.storage_path != str(cache_path):
-                previous_storage_path = attachment.storage_path
-                try:
-                    attachment.storage_path = str(cache_path)
-                    await db.commit()
-                except Exception:
-                    attachment.storage_path = previous_storage_path
-                    logger.warning(
-                        "Attachment cache path normalization failed for attachment_id=%s",
-                        attachment.id,
-                        exc_info=True,
-                    )
-                    try:
-                        await db.rollback()
-                    except Exception:
-                        logger.warning("Attachment cache rollback failed", exc_info=True)
-            return cached_content
-        except (OSError, AttachmentDownloadError):
-            logger.warning(
-                "Attachment cache read failed; falling back to Gmail",
-                exc_info=True,
-            )
-
-    if not attachment.gmail_attachment_id:
-        raise AttachmentDownloadError(
-            "Attachment content is unavailable",
-            status_code=409,
-            public_detail="Attachment content is unavailable",
-        )
-
-    resolve_credentials = credential_resolver or get_google_credentials
-    create_gmail_service = gmail_service_factory or GmailService
     try:
-        client_id, client_secret = await resolve_credentials(db)
-        gmail = create_gmail_service(
-            account,
-            client_id=client_id,
-            client_secret=client_secret,
+        entry_lease = await run_blocking_cache_operation(
+            acquire_entry_lease,
+            root,
+            int(account.user_id),
+            int(email.account_id),
+            int(email.id),
+            int(attachment.id),
+            release_result_on_cancel=True,
         )
-        raw_bytes = await asyncio.wait_for(
-            gmail.get_attachment(
-                email.gmail_message_id,
-                attachment.gmail_attachment_id,
-                max_bytes=MAX_ATTACHMENT_DOWNLOAD_BYTES,
-            ),
-            timeout=ATTACHMENT_DOWNLOAD_TIMEOUT_SECONDS,
-        )
-    except Exception as exc:
-        logger.warning(
-            "Gmail attachment retrieval failed for email_id=%s attachment_id=%s",
-            email.id,
-            attachment.id,
-            exc_info=True,
-        )
+    except OSError as exc:
         raise AttachmentDownloadError(
-            "Attachment could not be downloaded",
+            "Attachment cache lease is unavailable",
             status_code=503,
             public_detail="Attachment download is temporarily unavailable",
         ) from exc
-
-    if not isinstance(raw_bytes, bytes):
+    if entry_lease is None:
         raise AttachmentDownloadError(
-            "Attachment service returned invalid content",
-            public_detail="Attachment data is invalid",
+            "Attachment cache entry is busy",
+            status_code=503,
+            public_detail="Attachment download is temporarily unavailable",
         )
-    _validate_content_size(raw_bytes, attachment.size_bytes)
 
     try:
-        resolved_parent = cache_path.parent.resolve()
-        if not resolved_parent.is_relative_to(root):
-            raise OSError("Attachment cache target escaped configured storage root")
-        await asyncio.to_thread(_write_private_file_atomic, cache_path, raw_bytes)
-        attachment.storage_path = str(cache_path)
-        await db.commit()
-    except Exception:
-        logger.warning(
-            "Attachment download succeeded but private caching failed for attachment_id=%s",
-            attachment.id,
-            exc_info=True,
-        )
         try:
-            await db.rollback()
-        except Exception:
-            logger.warning("Attachment cache rollback failed", exc_info=True)
+            await run_blocking_cache_operation(ensure_private_cache_parent, cache_path, root)
+            try:
+                return await run_blocking_cache_operation(
+                    _read_bounded_file,
+                    root,
+                    int(account.user_id),
+                    int(email.account_id),
+                    int(email.id),
+                    int(attachment.id),
+                    attachment.size_bytes,
+                )
+            except FileNotFoundError:
+                pass
+            except AttachmentDownloadError:
+                logger.warning(
+                    "Attachment cache validation failed; falling back to Gmail",
+                    exc_info=True,
+                )
+            except OSError as exc:
+                if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+                    raise AttachmentDownloadError("Attachment cache path is invalid") from exc
+                logger.warning(
+                    "Attachment cache read failed; falling back to Gmail",
+                    exc_info=True,
+                )
+        except AttachmentDownloadError:
+            raise
+        except OSError as exc:
+            raise AttachmentDownloadError("Attachment cache path is invalid") from exc
 
-    return raw_bytes
+        if not attachment.gmail_attachment_id:
+            raise AttachmentDownloadError(
+                "Attachment content is unavailable",
+                status_code=409,
+                public_detail="Attachment content is unavailable",
+            )
+
+        resolve_credentials = credential_resolver or get_google_credentials
+        create_gmail_service = gmail_service_factory or GmailService
+        try:
+            client_id, client_secret = await resolve_credentials(db)
+            gmail = create_gmail_service(
+                account,
+                client_id=client_id,
+                client_secret=client_secret,
+                transport_timeout=ATTACHMENT_DOWNLOAD_TIMEOUT_SECONDS,
+            )
+        except Exception as exc:
+            logger.warning("Gmail attachment client setup failed", exc_info=True)
+            raise AttachmentDownloadError(
+                "Attachment could not be downloaded",
+                status_code=503,
+                public_detail="Attachment download is temporarily unavailable",
+            ) from exc
+
+        try:
+            raw_bytes = await asyncio.wait_for(
+                gmail.get_attachment(
+                    email.gmail_message_id,
+                    attachment.gmail_attachment_id,
+                    max_bytes=MAX_ATTACHMENT_DOWNLOAD_BYTES,
+                ),
+                timeout=ATTACHMENT_DOWNLOAD_TIMEOUT_SECONDS,
+            )
+        except ValueError as exc:
+            if "size limit" in str(exc).lower():
+                raise AttachmentDownloadError(
+                    "Attachment exceeds the download size limit",
+                    status_code=413,
+                    public_detail="Attachment is too large to download",
+                ) from exc
+            raise AttachmentDownloadError(
+                "Attachment service returned invalid content",
+                public_detail="Attachment data is invalid",
+            ) from exc
+        except Exception as exc:
+            logger.warning("Gmail attachment retrieval failed", exc_info=True)
+            raise AttachmentDownloadError(
+                "Attachment could not be downloaded",
+                status_code=503,
+                public_detail="Attachment download is temporarily unavailable",
+            ) from exc
+
+        if not isinstance(raw_bytes, bytes):
+            raise AttachmentDownloadError(
+                "Attachment service returned invalid content",
+                public_detail="Attachment data is invalid",
+            )
+        _validate_content_size(raw_bytes, attachment.size_bytes)
+
+        live_keys = await _load_live_cache_keys(db, int(account.user_id))
+        try:
+            reservation = await run_blocking_cache_operation(
+                reserve_cache_capacity,
+                root,
+                int(account.user_id),
+                reservation_bytes=len(raw_bytes),
+                live_keys=live_keys,
+                protected_key=(
+                    int(email.account_id),
+                    int(email.id),
+                    int(attachment.id),
+                ),
+                policy=cache_policy,
+                release_result_on_cancel=True,
+            )
+            try:
+                if reservation.can_store:
+                    await run_blocking_cache_operation(
+                        _write_private_file_atomic,
+                        root,
+                        int(account.user_id),
+                        int(email.account_id),
+                        int(email.id),
+                        int(attachment.id),
+                        raw_bytes,
+                    )
+                else:
+                    logger.warning(
+                        "Attachment download succeeded but cache capacity was unavailable"
+                    )
+            finally:
+                reservation.release()
+        except Exception:
+            logger.warning(
+                "Attachment download succeeded but private caching failed",
+                exc_info=True,
+            )
+        return raw_bytes
+    finally:
+        entry_lease.release()

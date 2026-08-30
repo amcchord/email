@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { currentPage, composeData, showToast, pendingReplyDraft, accounts, todos, accountColorMap } from '../../lib/stores.js';
   import { registerActions } from '../../lib/shortcutStore.js';
   import { theme } from '../../lib/theme.js';
@@ -7,6 +7,7 @@
   import {
     canStartAttachmentDownload,
     isCurrentAttachmentRequest,
+    isRetryableAttachmentError,
     saveAttachmentBlob,
   } from '../../lib/attachmentDownload.js';
   import { sanitizeHtml } from '../../lib/sanitize.js';
@@ -21,10 +22,10 @@
   let addingTodos = $state(false);
   let showTodoPrompt = $state(false);
   let downloadingAttachmentIds = $state(new Set());
-  let attachmentStatus = $state(null);
-  let attachmentError = $state(null);
+  let attachmentFeedback = $state(new Map());
   let attachmentRequestGeneration = 0;
   let attachmentEmailId = null;
+  let attachmentAbortControllers = new Map();
 
   onMount(() => registerActions({
     'inbox.reply': {
@@ -39,14 +40,21 @@
     },
   }));
 
+  onDestroy(() => abortAttachmentRequests());
+
+  function abortAttachmentRequests() {
+    for (const controller of attachmentAbortControllers.values()) controller.abort();
+    attachmentAbortControllers = new Map();
+  }
+
   $effect(() => {
     const nextEmailId = email?.id ?? null;
     if (nextEmailId !== attachmentEmailId) {
+      abortAttachmentRequests();
       attachmentEmailId = nextEmailId;
       attachmentRequestGeneration += 1;
       downloadingAttachmentIds = new Set();
-      attachmentStatus = null;
-      attachmentError = null;
+      attachmentFeedback = new Map();
     }
   });
 
@@ -56,11 +64,17 @@
     return `${Math.max(1, Math.ceil(sizeBytes / 1024))} KB`;
   }
 
-  function attachmentAccessibleLabel(attachment, isDownloading) {
-    const action = isDownloading ? 'Downloading' : 'Download';
+  function attachmentAccessibleLabel(attachment, isDownloading, isTerminal) {
+    const action = isDownloading
+      ? 'Downloading'
+      : (isTerminal ? 'Download unavailable for' : 'Download');
     const filename = attachment.filename || 'attachment';
     const contentType = attachment.content_type || 'unknown file type';
     return `${action} ${filename}, ${contentType}, ${formatAttachmentSize(attachment.size_bytes)}`;
+  }
+
+  function setAttachmentFeedback(attachmentId, feedback) {
+    attachmentFeedback = new Map(attachmentFeedback).set(attachmentId, feedback);
   }
 
   async function downloadAttachment(attachment) {
@@ -68,13 +82,17 @@
     const requestedEmailId = email.id;
     const requestGeneration = attachmentRequestGeneration;
     const filename = attachment.filename || 'attachment';
+    const abortController = new AbortController();
+    attachmentAbortControllers = new Map(attachmentAbortControllers).set(
+      attachment.id,
+      abortController,
+    );
     downloadingAttachmentIds = new Set(downloadingAttachmentIds).add(attachment.id);
-    attachmentError = null;
-    attachmentStatus = {
+    setAttachmentFeedback(attachment.id, {
       emailId: requestedEmailId,
-      attachmentId: attachment.id,
+      type: 'status',
       message: `Downloading ${filename}…`,
-    };
+    });
     const requestIsCurrent = () => isCurrentAttachmentRequest({
       requestedEmailId,
       requestGeneration,
@@ -82,25 +100,33 @@
       currentGeneration: attachmentRequestGeneration,
     });
     try {
-      const content = await api.downloadAttachment(requestedEmailId, attachment.id);
+      const content = await api.downloadAttachment(
+        requestedEmailId,
+        attachment.id,
+        { signal: abortController.signal },
+      );
+      if (!requestIsCurrent()) return;
       saveAttachmentBlob(content, attachment.filename);
-      if (requestIsCurrent()) {
-        attachmentStatus = {
-          emailId: requestedEmailId,
-          attachmentId: attachment.id,
-          message: `Downloaded ${filename}`,
-        };
-      }
+      setAttachmentFeedback(attachment.id, {
+        emailId: requestedEmailId,
+        type: 'status',
+        message: `Download started for ${filename}`,
+      });
     } catch (err) {
-      if (requestIsCurrent()) {
-        attachmentStatus = null;
-        attachmentError = {
+      if (err?.name !== 'AbortError' && requestIsCurrent()) {
+        setAttachmentFeedback(attachment.id, {
           emailId: requestedEmailId,
-          attachmentId: attachment.id,
+          type: 'error',
+          retryable: isRetryableAttachmentError(err?.status),
           message: `Couldn’t download ${filename}. ${err.message || 'Try again.'}`,
-        };
+        });
       }
     } finally {
+      if (attachmentAbortControllers.get(attachment.id) === abortController) {
+        const nextControllers = new Map(attachmentAbortControllers);
+        nextControllers.delete(attachment.id);
+        attachmentAbortControllers = nextControllers;
+      }
       if (requestIsCurrent()) {
         const nextIds = new Set(downloadingAttachmentIds);
         nextIds.delete(attachment.id);
@@ -758,61 +784,66 @@
           <div class="text-xs font-semibold mb-2" style="color: var(--text-secondary)">
             {email.attachments.length} attachment{email.attachments.length !== 1 ? 's' : ''}
           </div>
-          <p
-            class="text-xs"
-            class:mb-2={attachmentStatus?.emailId === email.id}
-            style="color: var(--text-secondary)"
-            aria-live="polite"
-            aria-atomic="true"
-          >{attachmentStatus?.emailId === email.id ? attachmentStatus.message : ''}</p>
-          {#if attachmentError?.emailId === email.id}
-            <div
-              class="mb-2 flex items-center justify-between gap-3 rounded-md border px-3 py-2 text-xs"
-              style="border-color: var(--status-error); color: var(--status-error); background: var(--bg-tertiary)"
-              role="alert"
-            >
-              <span>{attachmentError.message}</span>
-              <button
-                type="button"
-                class="min-h-11 shrink-0 rounded-md border px-3 font-medium"
-                style="border-color: currentColor"
-                aria-label="Retry download {email.attachments.find(item => item.id === attachmentError.attachmentId)?.filename || 'attachment'}"
-                onclick={() => {
-                  const retryAttachment = email.attachments.find(item => item.id === attachmentError.attachmentId);
-                  if (retryAttachment) downloadAttachment(retryAttachment);
-                }}
-              >Retry</button>
-            </div>
-          {/if}
           <div class="flex flex-wrap gap-2">
             {#each email.attachments as att (att.id)}
+              {@const feedback = attachmentFeedback.get(att.id)}
               {@const isDownloading = downloadingAttachmentIds.has(att.id)}
-              <button
-                type="button"
-                onclick={() => downloadAttachment(att)}
-                disabled={isDownloading}
-                class="group min-h-11 flex items-center gap-2 px-3 py-2 rounded-lg border text-sm text-left transition-fast disabled:cursor-wait disabled:opacity-70"
-                style="border-color: var(--border-color); background: var(--bg-tertiary)"
-                aria-label={attachmentAccessibleLabel(att, isDownloading)}
-                aria-busy={isDownloading}
-              >
-                <span class="shrink-0" style="color: var(--text-tertiary)">
-                  <span class:animate-spin={isDownloading}>
-                    <Icon name={isDownloading ? 'loader' : 'paperclip'} size={16} />
+              {@const isTerminal = feedback?.type === 'error' && !feedback.retryable}
+              <div class="min-w-0 max-w-full">
+                <button
+                  type="button"
+                  onclick={() => downloadAttachment(att)}
+                  disabled={isDownloading || isTerminal}
+                  class="group min-h-11 max-w-full flex items-center gap-2 px-3 py-2 rounded-lg border text-sm text-left transition-fast disabled:opacity-70"
+                  class:cursor-wait={isDownloading}
+                  class:cursor-not-allowed={isTerminal}
+                  style="border-color: var(--border-color); background: var(--bg-tertiary)"
+                  aria-label={attachmentAccessibleLabel(att, isDownloading, isTerminal)}
+                  aria-busy={isDownloading}
+                >
+                  <span class="shrink-0" style="color: var(--text-tertiary)">
+                    <span class:animate-spin={isDownloading}>
+                      <Icon name={isDownloading ? 'loader' : 'paperclip'} size={16} />
+                    </span>
                   </span>
-                </span>
-                <span class="truncate max-w-[200px] group-hover:underline" style="color: var(--text-primary)">
-                  {isDownloading ? 'Downloading…' : (att.filename || 'Attachment')}
-                </span>
-                {#if att.size_bytes}
-                  <span class="text-xs" style="color: var(--text-tertiary)">
-                    {formatAttachmentSize(att.size_bytes)}
+                  <span class="truncate max-w-[200px] group-hover:underline" style="color: var(--text-primary)">
+                    {isDownloading ? 'Downloading…' : (att.filename || 'Attachment')}
                   </span>
+                  {#if att.size_bytes}
+                    <span class="text-xs" style="color: var(--text-tertiary)">
+                      {formatAttachmentSize(att.size_bytes)}
+                    </span>
+                  {/if}
+                  <span class="shrink-0 opacity-60 group-hover:opacity-100" aria-hidden="true">
+                    <Icon name="download" size={14} />
+                  </span>
+                </button>
+                {#if feedback?.emailId === email.id}
+                  <div
+                    class="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 px-1 text-xs"
+                    class:rounded-md={feedback.type === 'error'}
+                    class:border={feedback.type === 'error'}
+                    class:py-1={feedback.type === 'error'}
+                    style={feedback.type === 'error'
+                      ? 'border-color: var(--status-error); color: var(--status-error); background: var(--bg-tertiary)'
+                      : 'color: var(--text-secondary)'}
+                    role={feedback.type === 'error' ? 'alert' : 'status'}
+                    aria-live={feedback.type === 'error' ? 'assertive' : 'polite'}
+                    aria-atomic="true"
+                  >
+                    <span class="min-w-0 break-words">{feedback.message}</span>
+                    {#if feedback.type === 'error' && feedback.retryable}
+                      <button
+                        type="button"
+                        class="min-h-11 shrink-0 rounded-md border px-3 font-medium"
+                        style="border-color: currentColor"
+                        aria-label="Retry download {att.filename || 'attachment'}"
+                        onclick={() => downloadAttachment(att)}
+                      >Retry</button>
+                    {/if}
+                  </div>
                 {/if}
-                <span class="shrink-0 opacity-60 group-hover:opacity-100" aria-hidden="true">
-                  <Icon name="download" size={14} />
-                </span>
-              </button>
+              </div>
             {/each}
           </div>
         </div>

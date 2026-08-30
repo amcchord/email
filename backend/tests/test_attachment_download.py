@@ -1,6 +1,8 @@
 import base64
 import asyncio
 import stat
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +18,11 @@ from backend.services.attachments import (
     load_attachment_bytes,
     safe_attachment_filename,
     safe_content_type,
+)
+from backend.services.attachment_cache import (
+    AttachmentCachePolicy,
+    acquire_entry_lease,
+    reserve_cache_capacity,
 )
 from backend.services.gmail import _decode_attachment_data
 
@@ -39,9 +46,21 @@ class _RouteDb:
 
 
 class _CacheDb:
-    def __init__(self):
+    def __init__(self, live_rows=None):
         self.commits = 0
         self.rollbacks = 0
+        self.executes = 0
+        self.live_rows = live_rows or [(7, 41, 83)]
+
+    async def execute(self, _statement):
+        self.executes += 1
+        rows = self.live_rows
+
+        class _Result:
+            def all(self):
+                return rows
+
+        return _Result()
 
     async def commit(self):
         self.commits += 1
@@ -235,8 +254,91 @@ async def test_load_attachment_reads_only_the_canonical_bounded_cache(tmp_path):
     )
 
     assert content == cached_content
-    assert attachment.storage_path == str(canonical_path)
-    assert db.commits == 1
+    assert attachment.storage_path == str(legacy_path)
+    assert db.commits == 0
+    assert db.rollbacks == 0
+
+
+@pytest.mark.asyncio
+async def test_cache_hit_survives_access_time_update_failure(tmp_path, monkeypatch):
+    cached_content = b"generated readable cache hit"
+    email, attachment, account = _generated_records(size_bytes=len(cached_content))
+    canonical_path = _canonical_cache_path(tmp_path, email, attachment, account)
+    canonical_path.parent.mkdir(parents=True)
+    canonical_path.write_bytes(cached_content)
+
+    async def credentials_should_not_run(_db):
+        raise AssertionError("A verified cache hit must not require Gmail")
+
+    def fail_touch(*_args, **_kwargs):
+        raise PermissionError("generated read-only metadata")
+
+    monkeypatch.setattr("backend.services.attachments.os.utime", fail_touch)
+    content = await load_attachment_bytes(
+        _CacheDb(),
+        email,
+        attachment,
+        account,
+        storage_root=tmp_path,
+        credential_resolver=credentials_should_not_run,
+    )
+
+    assert content == cached_content
+    assert canonical_path.read_bytes() == cached_content
+
+
+@pytest.mark.asyncio
+async def test_interactive_parent_swap_cannot_read_delete_or_replace_outside_cache(
+    tmp_path,
+    monkeypatch,
+):
+    gmail_content = b"generated safe fallback"
+    email, attachment, account = _generated_records(size_bytes=len(gmail_content))
+    canonical_path = _canonical_cache_path(tmp_path, email, attachment, account)
+    canonical_path.parent.mkdir(parents=True)
+    canonical_path.write_bytes(b"generated invalid cache")
+    outside_account = tmp_path / "outside-account"
+    outside_blob = outside_account / str(email.id) / canonical_path.name
+    outside_blob.parent.mkdir(parents=True)
+    outside_blob.write_bytes(b"outside sentinel")
+    from backend.services import attachments as attachment_service
+
+    original_read = attachment_service._read_bounded_file
+    swapped = False
+
+    def swap_then_fail(*args, **kwargs):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            account_path = tmp_path / str(account.user_id) / str(email.account_id)
+            account_path.rename(account_path.with_name(f"{account_path.name}-original"))
+            account_path.symlink_to(outside_account, target_is_directory=True)
+        raise AttachmentDownloadError("generated invalid cached bytes")
+
+    monkeypatch.setattr(attachment_service, "_read_bounded_file", swap_then_fail)
+
+    async def fake_credentials(_db):
+        return "generated-client", "generated-secret"
+
+    class FakeGmail:
+        async def get_attachment(self, *_args, **_kwargs):
+            return gmail_content
+
+    try:
+        content = await load_attachment_bytes(
+            _CacheDb(),
+            email,
+            attachment,
+            account,
+            storage_root=tmp_path,
+            credential_resolver=fake_credentials,
+            gmail_service_factory=lambda *_args, **_kwargs: FakeGmail(),
+        )
+    finally:
+        monkeypatch.setattr(attachment_service, "_read_bounded_file", original_read)
+
+    assert content == gmail_content
+    assert outside_blob.read_bytes() == b"outside sentinel"
 
 
 @pytest.mark.asyncio
@@ -284,9 +386,16 @@ async def test_load_attachment_uses_gmail_fallback_and_atomic_private_cache(tmp_
             gmail_calls.append((message_id, attachment_id))
             return gmail_content
 
-    def fake_gmail_factory(account_arg, *, client_id, client_secret):
+    def fake_gmail_factory(
+        account_arg,
+        *,
+        client_id,
+        client_secret,
+        transport_timeout,
+    ):
         assert account_arg is account
         assert (client_id, client_secret) == ("generated-client", "generated-secret")
+        assert transport_timeout == 30
         return FakeGmail()
 
     content = await load_attachment_bytes(
@@ -303,10 +412,11 @@ async def test_load_attachment_uses_gmail_fallback_and_atomic_private_cache(tmp_
     assert content == gmail_content
     assert gmail_calls == [(email.gmail_message_id, attachment.gmail_attachment_id)]
     assert canonical_path.read_bytes() == content
-    assert Path(attachment.storage_path) == canonical_path
+    assert Path(attachment.storage_path) != canonical_path
+    assert Path(attachment.storage_path).read_bytes() == b"outside root"
     assert stat.S_IMODE(canonical_path.stat().st_mode) == 0o600
     assert list(canonical_path.parent.glob(f".{attachment.id}.blob-*")) == []
-    assert db.commits == 1
+    assert db.commits == 0
     assert db.rollbacks == 0
 
 
@@ -430,6 +540,324 @@ async def test_load_attachment_bounds_interactive_gmail_wait(tmp_path, monkeypat
 
     assert exc_info.value.status_code == 503
     assert exc_info.value.public_detail == "Attachment download is temporarily unavailable"
+
+
+@pytest.mark.asyncio
+async def test_load_attachment_collapses_concurrent_cache_misses(tmp_path):
+    gmail_content = b"one generated upstream fetch"
+    email, attachment, account = _generated_records(size_bytes=len(gmail_content))
+    gmail_calls = 0
+
+    async def fake_credentials(_db):
+        return "generated-client", "generated-secret"
+
+    class FakeGmail:
+        async def get_attachment(self, _message_id, _attachment_id, *, max_bytes):
+            nonlocal gmail_calls
+            assert max_bytes == MAX_ATTACHMENT_DOWNLOAD_BYTES
+            gmail_calls += 1
+            await asyncio.sleep(0.05)
+            return gmail_content
+
+    def fake_gmail_factory(*_args, **_kwargs):
+        return FakeGmail()
+
+    first_db = _CacheDb()
+    second_db = _CacheDb()
+    first, second = await asyncio.gather(
+        load_attachment_bytes(
+            first_db,
+            email,
+            attachment,
+            account,
+            storage_root=tmp_path,
+            credential_resolver=fake_credentials,
+            gmail_service_factory=fake_gmail_factory,
+        ),
+        load_attachment_bytes(
+            second_db,
+            email,
+            attachment,
+            account,
+            storage_root=tmp_path,
+            credential_resolver=fake_credentials,
+            gmail_service_factory=fake_gmail_factory,
+        ),
+    )
+
+    assert first == second == gmail_content
+    assert gmail_calls == 1
+    assert _canonical_cache_path(tmp_path, email, attachment, account).read_bytes() == gmail_content
+    assert first_db.commits == second_db.commits == 0
+    assert first_db.rollbacks == second_db.rollbacks == 0
+
+
+@pytest.mark.asyncio
+async def test_parallel_attachment_writes_never_exceed_per_user_quota(tmp_path):
+    content = b"123456"
+    email, first_attachment, account = _generated_records(size_bytes=len(content))
+    _, second_attachment, _ = _generated_records(id=84, size_bytes=len(content))
+    started = 0
+    both_started = asyncio.Event()
+
+    async def fake_credentials(_db):
+        return "generated-client", "generated-secret"
+
+    class FakeGmail:
+        async def get_attachment(self, _message_id, _attachment_id, *, max_bytes):
+            nonlocal started
+            assert max_bytes == MAX_ATTACHMENT_DOWNLOAD_BYTES
+            started += 1
+            if started == 2:
+                both_started.set()
+            await asyncio.wait_for(both_started.wait(), timeout=1)
+            return content
+
+    policy = AttachmentCachePolicy(
+        hard_limit_bytes=10,
+        target_bytes=6,
+        idle_retention_seconds=10_000,
+        orphan_grace_seconds=1_000,
+        temp_grace_seconds=100,
+    )
+    live_rows = [(7, 41, 83), (7, 41, 84)]
+    results = await asyncio.gather(
+        load_attachment_bytes(
+            _CacheDb(live_rows),
+            email,
+            first_attachment,
+            account,
+            storage_root=tmp_path,
+            credential_resolver=fake_credentials,
+            gmail_service_factory=lambda *_args, **_kwargs: FakeGmail(),
+            cache_policy=policy,
+        ),
+        load_attachment_bytes(
+            _CacheDb(live_rows),
+            email,
+            second_attachment,
+            account,
+            storage_root=tmp_path,
+            credential_resolver=fake_credentials,
+            gmail_service_factory=lambda *_args, **_kwargs: FakeGmail(),
+            cache_policy=policy,
+        ),
+    )
+
+    assert results == [content, content]
+    cached_files = list((tmp_path / "501").glob("*/*/*.blob"))
+    assert sum(path.stat().st_size for path in cached_files) <= policy.hard_limit_bytes
+    assert len(cached_files) == 1
+
+
+@pytest.mark.asyncio
+async def test_cache_lifecycle_failure_never_discards_downloaded_bytes(tmp_path, monkeypatch):
+    content = b"generated cache failure bytes"
+    email, attachment, account = _generated_records(size_bytes=len(content))
+    db = _CacheDb()
+
+    async def fake_credentials(_db):
+        return "generated-client", "generated-secret"
+
+    class FakeGmail:
+        async def get_attachment(self, *_args, **_kwargs):
+            return content
+
+    def fail_cache_reservation(*_args, **_kwargs):
+        raise PermissionError("generated cache reservation failure")
+
+    monkeypatch.setattr(
+        "backend.services.attachments.reserve_cache_capacity",
+        fail_cache_reservation,
+    )
+
+    result = await load_attachment_bytes(
+        db,
+        email,
+        attachment,
+        account,
+        storage_root=tmp_path,
+        credential_resolver=fake_credentials,
+        gmail_service_factory=lambda *_args, **_kwargs: FakeGmail(),
+    )
+
+    assert result == content
+    assert not _canonical_cache_path(tmp_path, email, attachment, account).exists()
+    assert db.commits == 0
+    assert db.rollbacks == 0
+
+
+@pytest.mark.asyncio
+async def test_cancellation_releases_an_entry_lease_acquired_in_a_worker_thread(
+    tmp_path,
+    monkeypatch,
+):
+    email, attachment, account = _generated_records()
+    started = threading.Event()
+    original_acquire = acquire_entry_lease
+
+    def delayed_acquire(*args, **kwargs):
+        started.set()
+        time.sleep(0.05)
+        return original_acquire(*args, **kwargs)
+
+    monkeypatch.setattr("backend.services.attachments.acquire_entry_lease", delayed_acquire)
+    task = asyncio.create_task(load_attachment_bytes(
+        _CacheDb(),
+        email,
+        attachment,
+        account,
+        storage_root=tmp_path,
+    ))
+    assert await asyncio.to_thread(started.wait, 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    probe = original_acquire(
+        tmp_path.resolve(),
+        account.user_id,
+        email.account_id,
+        email.id,
+        attachment.id,
+        blocking=False,
+    )
+    assert probe is not None
+    probe.release()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_releases_a_completed_quota_reservation(tmp_path, monkeypatch):
+    content = b"generated quota cancellation"
+    email, attachment, account = _generated_records(size_bytes=len(content))
+    started = threading.Event()
+    original_reserve = reserve_cache_capacity
+
+    async def fake_credentials(_db):
+        return "generated-client", "generated-secret"
+
+    class FakeGmail:
+        async def get_attachment(self, *_args, **_kwargs):
+            return content
+
+    def delayed_reserve(*args, **kwargs):
+        started.set()
+        time.sleep(0.05)
+        return original_reserve(*args, **kwargs)
+
+    monkeypatch.setattr("backend.services.attachments.reserve_cache_capacity", delayed_reserve)
+    task = asyncio.create_task(load_attachment_bytes(
+        _CacheDb(),
+        email,
+        attachment,
+        account,
+        storage_root=tmp_path,
+        credential_resolver=fake_credentials,
+        gmail_service_factory=lambda *_args, **_kwargs: FakeGmail(),
+    ))
+    assert await asyncio.to_thread(started.wait, 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    probe = original_reserve(
+        tmp_path.resolve(),
+        account.user_id,
+        reservation_bytes=0,
+        live_keys={(email.account_id, email.id, attachment.id)},
+        protected_key=None,
+        timeout_seconds=0.1,
+    )
+    assert probe.can_store
+    probe.release()
+
+
+@pytest.mark.asyncio
+async def test_cancellation_waits_for_atomic_cache_write_before_unlocking(tmp_path, monkeypatch):
+    content = b"generated cancellation-safe write"
+    email, attachment, account = _generated_records(size_bytes=len(content))
+    started = threading.Event()
+    from backend.services import attachments as attachment_service
+
+    original_write = attachment_service._write_private_file_atomic
+
+    async def fake_credentials(_db):
+        return "generated-client", "generated-secret"
+
+    class FakeGmail:
+        async def get_attachment(self, *_args, **_kwargs):
+            return content
+
+    def delayed_write(*args, **kwargs):
+        started.set()
+        time.sleep(0.05)
+        return original_write(*args, **kwargs)
+
+    monkeypatch.setattr(attachment_service, "_write_private_file_atomic", delayed_write)
+    task = asyncio.create_task(load_attachment_bytes(
+        _CacheDb(),
+        email,
+        attachment,
+        account,
+        storage_root=tmp_path,
+        credential_resolver=fake_credentials,
+        gmail_service_factory=lambda *_args, **_kwargs: FakeGmail(),
+    ))
+    assert await asyncio.to_thread(started.wait, 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    canonical_path = _canonical_cache_path(tmp_path, email, attachment, account)
+    assert canonical_path.read_bytes() == content
+    probe = acquire_entry_lease(
+        tmp_path.resolve(),
+        account.user_id,
+        email.account_id,
+        email.id,
+        attachment.id,
+        blocking=False,
+    )
+    assert probe is not None
+    probe.release()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("upstream_message", "expected_status", "expected_public_detail"),
+    [
+        ("Attachment exceeds size limit", 413, "Attachment is too large to download"),
+        ("Attachment data is invalid", 502, "Attachment data is invalid"),
+    ],
+)
+async def test_gmail_decoder_failures_have_stable_public_status(
+    tmp_path,
+    upstream_message,
+    expected_status,
+    expected_public_detail,
+):
+    email, attachment, account = _generated_records()
+
+    async def fake_credentials(_db):
+        return "generated-client", "generated-secret"
+
+    class FakeGmail:
+        async def get_attachment(self, *_args, **_kwargs):
+            raise ValueError(upstream_message)
+
+    with pytest.raises(AttachmentDownloadError) as exc_info:
+        await load_attachment_bytes(
+            _CacheDb(),
+            email,
+            attachment,
+            account,
+            storage_root=tmp_path,
+            credential_resolver=fake_credentials,
+            gmail_service_factory=lambda *_args, **_kwargs: FakeGmail(),
+        )
+
+    assert exc_info.value.status_code == expected_status
+    assert exc_info.value.public_detail == expected_public_detail
 
 
 def test_attachment_headers_remove_paths_controls_and_invalid_mime_data():

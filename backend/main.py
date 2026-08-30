@@ -1,6 +1,7 @@
+import asyncio
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -10,6 +11,7 @@ from backend.database import engine, Base
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from backend.routers import auth, admin, emails, compose, accounts, ai, todos, chat, calendar, events, public_api, terminal, terminal_admin
+from backend.services.attachment_cache_maintenance import attachment_cache_maintenance_loop
 
 # Import all models so they register with Base
 import backend.models  # noqa: F401
@@ -28,8 +30,25 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables created/verified")
-    yield
-    await engine.dispose()
+    attachment_maintenance_stop = asyncio.Event()
+    attachment_maintenance_task = asyncio.create_task(
+        attachment_cache_maintenance_loop(attachment_maintenance_stop),
+        name="attachment-cache-maintenance",
+    )
+    try:
+        yield
+    finally:
+        attachment_maintenance_stop.set()
+        try:
+            await asyncio.wait_for(attachment_maintenance_task, timeout=5)
+        except TimeoutError:
+            attachment_maintenance_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await attachment_maintenance_task
+        except Exception:
+            logger.exception("Attachment cache maintenance task stopped unexpectedly")
+        finally:
+            await engine.dispose()
 
 
 app = FastAPI(

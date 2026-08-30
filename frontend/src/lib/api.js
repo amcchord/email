@@ -79,7 +79,9 @@ async function request(method, path, body = null, options = {}) {
       if (onUnauthorized) {
         onUnauthorized();
       }
-      throw new Error('Unauthorized');
+      const unauthorizedError = new Error('Unauthorized');
+      unauthorizedError.status = 401;
+      throw unauthorizedError;
     }
   }
 
@@ -143,12 +145,12 @@ export const api = {
     return request('GET', `/emails/?${searchParams.toString()}`);
   },
   getEmail: (id) => request('GET', `/emails/${id}`),
-  downloadAttachment: (emailId, attachmentId) =>
+  downloadAttachment: (emailId, attachmentId, options = {}) =>
     request(
       'GET',
       `/emails/${emailId}/attachments/${attachmentId}/download`,
       null,
-      { responseType: 'blob' },
+      { ...options, responseType: 'blob' },
     ),
   getThread: (threadId, order = null) => {
     const params = order ? `?order=${order}` : '';

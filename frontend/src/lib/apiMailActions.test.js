@@ -64,3 +64,34 @@ test('API errors retain the HTTP status needed for authoritative reconciliation'
     error => error.message === 'Mail action not found' && error.status === 404,
   );
 });
+
+test('attachment downloads forward cancellation signals to fetch', async t => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let call = null;
+  globalThis.fetch = async (url, options) => {
+    call = { url, options };
+    return new Response('generated attachment', {
+      status: 200,
+      headers: { 'Content-Type': 'text/plain' },
+    });
+  };
+  const controller = new AbortController();
+
+  const result = await api.downloadAttachment(41, 83, { signal: controller.signal });
+
+  assert.equal(call.url, '/api/emails/41/attachments/83/download');
+  assert.equal(call.options.signal, controller.signal);
+  assert.equal(await result.text(), 'generated attachment');
+});
+
+test('attachment authorization failures retain terminal HTTP status', async t => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => jsonResponse({ detail: 'Unauthorized' }, 401);
+
+  await assert.rejects(
+    api.downloadAttachment(41, 83),
+    error => error.message === 'Unauthorized' && error.status === 401,
+  );
+});

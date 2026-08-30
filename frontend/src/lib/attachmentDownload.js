@@ -20,6 +20,11 @@ export function isCurrentAttachmentRequest({
   return requestedEmailId === currentEmailId && requestGeneration === currentGeneration;
 }
 
+export function isRetryableAttachmentError(status) {
+  if (!Number.isInteger(status)) return true;
+  return [408, 425, 429].includes(status) || status >= 500;
+}
+
 export function saveAttachmentBlob(
   blob,
   filename,
