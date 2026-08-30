@@ -3,6 +3,57 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Durable Scheduled Send release
+
+### Scope
+
+Deliver future email scheduling as one durable outbound workflow across
+Compose, the message reader, and Flow, without a schema change or real-mail QA.
+
+### Completed
+
+- Added explicit zoned quick choices, DST-safe custom scheduling, accessible
+  desktop/mobile split-send controls, sparse status polling, and a persistent
+  reload/cross-device Scheduled mail manager with Send now and Cancel & edit.
+- Extended the PostgreSQL outbox with exact deferred delivery, idempotent
+  cancellation, due-time row-lock ownership, draft restoration/reuse, Send-now
+  advancement, and prompt sent-draft discard.
+- Made Flow's default archive-after-send intent a deterministic durable mail
+  action staged after provider confirmation and before terminal outbound truth,
+  so browser reload cannot drop it.
+- Expanded the localhost-only `.example.test` provider fixture with fake time,
+  scheduled lifecycle routes, provider-call counters, and a deterministic
+  exact-boundary/cancel/recovery/Send-now self-test.
+
+### Verification
+
+- The corrected consolidated gate passed 563 backend tests with 39 intentional
+  opt-in skips, all 313 frontend tests, and a 529-module local production build.
+- All 13 disposable-PostgreSQL outbound tests passed, including cancel-edit-
+  resend, due-time, early Send now, terminal preflight recovery, and idempotent
+  post-send archive coverage.
+- Generated desktop and 390-by-844 browser QA scheduled, navigated/reloaded,
+  cancelled, and recovered the exact draft with zero provider lookups/sends,
+  unknown routes, unexpected mutations, or external fixture calls. No real
+  mailbox, calendar, provider draft, or email send was used.
+
+### Production Actions
+
+- Pushed and deployed exact application/runtime
+  `8b0f1c974ecc3c52a0a5e48a0cbe3e61c5eb2ae6` from clean baseline
+  `f0f80919b63cc18bc98e47f3bab05df3f29a327c`.
+- Restarted `mailapp`, `mailworker`, and `mailworker-cron`, then built the exact
+  529-module frontend. The retired API exceeded its graceful-stop deadline;
+  replacement API/workers are active with zero restarts and no post-start
+  warning-or-higher entries.
+- Exact clean Git, all seven services, public health `ok`, anonymous scheduled
+  endpoint 401, and unchanged Alembic `f3a4b5c6d7e8 (head)` were verified.
+
+### Next
+
+Resume product improvements from this shared-shell baseline. Preserve the
+terminal-owned follow-on files while its isolated battery/firmware work lands.
+
 ## 2026-08-30 — First-class At a Glance release
 
 ### Scope

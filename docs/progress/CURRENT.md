@@ -12,6 +12,10 @@ experience separate from destructive terminal management.
 
 ## Baseline
 
+- The deployed Scheduled Send application/runtime commit is
+  `8b0f1c974ecc3c52a0a5e48a0cbe3e61c5eb2ae6`; the following closeout is docs
+  only. Compose, reader, and Flow share one durable future-delivery workflow,
+  including reload-safe management and server-owned Flow archive follow-up.
 - The deployed first-class At a Glance application/runtime commit is
   `945b71860e08d79e6ddeb5e3faccffe372418ff1`. The authenticated primary route,
   canonical 16:9/9:16 previews, terminal battery/charge overview, and
@@ -83,6 +87,19 @@ live state.
   real production mail remained read-only.
 - Complete behavior, code, verification, production, and rollback evidence is
   in `DURABLE_INLINE_REPLIES_RELEASE_2026-08-30.md`.
+
+## Recent Scheduled Send Release
+
+- Compose, reader replies, and Flow now share an accessible split Send control
+  with explicit zoned quick choices and DST-safe custom times.
+- Scheduled mail survives reload and device changes in a persistent manager
+  with **Send now** and **Cancel & edit**. Cancel atomically restores the exact
+  durable draft; Flow's archive-after-send intent is also server-durable.
+- The release added no migration. Consolidated checks passed 563 backend and
+  313 frontend tests; 13 disposable-PostgreSQL lifecycle tests and generated
+  desktop/narrow browser QA also passed without real provider operations.
+- Complete behavior, API, safety, verification, production, and rollback
+  evidence is in `SCHEDULED_SEND_RELEASE_2026-08-30.md`.
 
 ## Recent Calendar Reliability Fix
 

@@ -115,9 +115,15 @@ No real mailbox, calendar, provider draft, or email send was used for this QA.
 
 ## Production and Rollback
 
-The exact application and documentation commits, production build result,
-service health, and post-deploy log evidence are recorded after deployment in
-this section and in `JOURNAL.md`.
+Exact application/runtime
+`8b0f1c974ecc3c52a0a5e48a0cbe3e61c5eb2ae6` was fast-forwarded from clean
+baseline `f0f80919b63cc18bc98e47f3bab05df3f29a327c`. `mailapp`, `mailworker`, and
+`mailworker-cron` were restarted, then production built the same 529 frontend
+modules. The retired API exceeded its graceful-stop deadline; the replacement
+API and both workers are active with zero restarts and no post-start
+warning-or-higher entries. All seven services and public health are healthy,
+anonymous Scheduled mail access returns 401, Git is clean, and Alembic remains
+exactly `f3a4b5c6d7e8 (head)`.
 
 This release has no schema or dependency change. The rollback is a reviewed
 Git revert followed by rebuilding the frontend and restarting the API and both
