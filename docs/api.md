@@ -38,6 +38,7 @@ free-form questions about your inbox without touching the web UI.
 - [Web session-only structured email search](#web-session-only-structured-email-search)
 - [Web session-only attachment preview and download](#web-session-only-attachment-preview-and-download)
 - [Web session-only durable mail actions](#web-session-only-durable-mail-actions)
+- [At a Glance displays and terminal management](#at-a-glance-displays-and-terminal-management)
 
 ## Authentication
 
@@ -838,3 +839,67 @@ is picked up by the next durable cron pass.
 operations with unresolved failed items before newer completed operations, so
 a failure does not silently disappear behind routine successes. Public API
 tokens cannot call these mutation routes.
+
+## At a Glance displays and terminal management
+
+At a Glance has two delivery adapters backed by the same view/design catalog:
+pre-quantized BMP files for e-ink firmware and fullscreen browser pages for
+ordinary landscape or portrait displays. These routes do not use `/api/v1`
+tokens. Firmware retains its opaque per-user terminal `code`. Each browser
+display instead has a separate high-entropy credential bound server-side to
+one view/design/profile, so a leaked Clock URL cannot be changed into a Day
+Ahead URL. All of these URLs should still be handled like private unlisted
+links.
+
+```text
+GET /terminal/{code}/schedule.json
+GET /terminal/{code}/image.bmp
+GET /terminal/display/{token}.html
+GET /terminal/display/{token}/frame.png
+```
+
+The firmware endpoints retain the version-1 schedule and BMP contracts in
+[`docs/terminal/server-protocol.md`](terminal/server-protocol.md). Both the BMP
+and PNG frame endpoints return stable `ETag` values and honor
+`If-None-Match`; clients should revalidate rather than append cache-busting
+query values.
+
+`display.html` is a no-store fullscreen shell. It refreshes the canonical PNG
+frame on a bounded cadence. View, design, and profile are bound to the token;
+the public URL cannot override them. It accepts only:
+
+| param | values | default |
+|-------|--------|---------|
+| `refresh` | 30–3600 seconds (values are clamped) | 300 |
+
+Current layout contracts keep the Home Dashboard on 16:9 and Day Ahead on
+9:16; the Clock supports both. PNG responses are marked private and must be
+revalidated by clients.
+
+The authenticated Settings UI uses the normal browser-session API:
+
+```text
+GET    /api/terminal/settings
+GET    /api/terminal/devices
+PATCH  /api/terminal/devices/{device_id}
+DELETE /api/terminal/devices/{device_id}
+POST   /api/terminal/displays/{display_id}/regenerate
+```
+
+`GET /api/terminal/settings` now includes the shared `views`, `designs`,
+`display_profiles`, and ready-to-open `web_displays` catalogs in addition to
+the existing firmware variants. Regenerating the terminal code immediately
+invalidates old firmware URLs without disrupting browser displays. Regenerating
+one browser display rotates only that credential and immediately invalidates
+its old URL.
+
+Each device response includes additive `battery_health` data. The server stores
+sparse samples on meaningful percentage/voltage changes plus a six-hour
+heartbeat, with a five-minute ingestion floor and 90-day retention. It
+estimates discharge only after at least three samples spanning 12 hours with a
+measurable drop. Until then, low-battery notices use the current percentage
+without pretending a runtime estimate is known. Prediction fields include
+rate, estimated days remaining, expected charge-threshold time, confidence,
+status, and a human-readable notice; any estimate may be `null`. A single
+percentage rise is reported as possible charging; two corroborating rises are
+required to claim charging, and low-charge notices always take precedence.

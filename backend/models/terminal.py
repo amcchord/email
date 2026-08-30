@@ -1,7 +1,17 @@
 from datetime import datetime, timezone
-from sqlalchemy import String, DateTime, Integer, Text, ForeignKey, UniqueConstraint, Index
+
+from sqlalchemy import (
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from backend.database import Base
 
 
@@ -72,4 +82,76 @@ class TerminalDevice(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "mac", name="uq_terminal_devices_user_mac"),
         Index("ix_terminal_devices_user_last_seen", "user_id", "last_seen_at"),
+    )
+
+
+class TerminalBatterySample(Base):
+    """Sparse battery history used for runtime and charging prediction."""
+
+    __tablename__ = "terminal_battery_samples"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    device_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("terminal_devices.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    battery_pct: Mapped[int] = mapped_column(Integer, nullable=True)
+    battery_mv: Mapped[int] = mapped_column(Integer, nullable=True)
+    boot_count: Mapped[int] = mapped_column(Integer, nullable=True)
+
+    device = relationship("TerminalDevice", backref="battery_samples")
+
+    __table_args__ = (
+        Index(
+            "ix_terminal_battery_samples_device_observed",
+            "device_id",
+            "observed_at",
+        ),
+    )
+
+
+class TerminalWebDisplay(Base):
+    """Revocable browser-display credential bound to one catalog view."""
+
+    __tablename__ = "terminal_web_displays"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    token: Mapped[str] = mapped_column(String(64), nullable=False)
+    view_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Empty string represents a design-less view (for example, Clock). Keeping
+    # this non-null lets PostgreSQL enforce one credential per combination.
+    design_key: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    profile_key: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    user = relationship("User", backref="terminal_web_displays")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "view_key",
+            "design_key",
+            "profile_key",
+            name="uq_terminal_web_displays_user_view",
+        ),
+        Index("ix_terminal_web_displays_user_id", "user_id"),
+        Index("ix_terminal_web_displays_token", "token", unique=True),
     )

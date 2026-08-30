@@ -2,37 +2,52 @@
 
 Mounted at /api/terminal/* (so it sits next to the rest of the JSON API and
 uses the same session cookie auth as the Svelte UI). Read by the new
-"E-Ink Terminals" section in `frontend/src/pages/Admin.svelte`.
+"At a Glance" section in `frontend/src/pages/Admin.svelte`.
 """
 from __future__ import annotations
 
 import logging
 import secrets
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
-from typing import Any, Optional
+from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
-from backend.models.terminal import TerminalDevice, TerminalSettings
+from backend.models.terminal import (
+    TerminalBatterySample,
+    TerminalDevice,
+    TerminalSettings,
+    TerminalWebDisplay,
+)
 from backend.models.user import User
 from backend.routers.auth import get_current_user
 from backend.services.eink.ha_client import (
     HAClientError,
     fetch_ha_states,
 )
+from backend.services.terminal.battery import BatteryReading, estimate_battery_health
+from backend.services.terminal.catalog import (
+    content_type_options,
+    design_options,
+    display_profile_options,
+    view_options,
+    web_display_definitions,
+    web_display_options,
+)
 from backend.services.terminal.renderer import (
-    _palette_for_variant,
     render_dashboard_bmp,
     render_day_ahead_bmp,
 )
-from backend.services.terminal.variants import VARIANTS, parse_variant
+from backend.services.terminal.variants import VARIANTS
 from backend.utils.security import decrypt_value, encrypt_value
 
 logger = logging.getLogger(__name__)
@@ -42,20 +57,12 @@ router = APIRouter(prefix="/api/terminal", tags=["terminal-admin"])
 
 # Content types the UI can pick. `eink_dashboard` requires Home Assistant
 # credentials to be useful but renders the calm/empty design either way.
-SUPPORTED_CONTENT_TYPES: list[dict] = [
-    {"key": "clock", "label": "Clock", "available": True},
-    {"key": "eink_dashboard", "label": "E-Ink Dashboard (HA)", "available": True},
-    {"key": "day_ahead", "label": "Day Ahead (Editorial, portrait)", "available": True},
-    {"key": "calendar", "label": "Calendar (coming soon)", "available": False},
-]
+SUPPORTED_CONTENT_TYPES: list[dict] = content_type_options()
 _VALID_CONTENT_KEYS = {c["key"] for c in SUPPORTED_CONTENT_TYPES if c["available"]}
 
 
 # Available designs for content_type=eink_dashboard. Both ship at 800x480.
-DESIGN_OPTIONS: list[dict] = [
-    {"key": "editorial", "label": "Editorial (newspaper / serif)"},
-    {"key": "swiss", "label": "Swiss (modular / mono)"},
-]
+DESIGN_OPTIONS: list[dict] = design_options()
 _VALID_DESIGN_KEYS = {d["key"] for d in DESIGN_OPTIONS}
 
 
@@ -98,12 +105,16 @@ class TerminalSettingsResponse(BaseModel):
     code: str
     schedule_url_template: str  # for UI display, e.g. /terminal/CODE/schedule.json[?variant=...]
     image_url_template: str
+    display_url_template: str
     timezone: str
     home_assistant_url: Optional[str] = None
     home_assistant_token_set: bool = False
     variants: list[VariantInfo]
     content_types: list[dict]
     designs: list[dict]
+    views: list[dict]
+    display_profiles: list[dict]
+    web_displays: list[dict]
     refresh_interval_presets: list[dict]
 
 
@@ -115,6 +126,21 @@ class HomeAssistantUpdate(BaseModel):
 
 class TimezoneUpdate(BaseModel):
     timezone: str = Field(..., min_length=1, max_length=100)
+
+
+class BatteryHealthResponse(BaseModel):
+    status: str
+    current_pct: Optional[int] = None
+    current_mv: Optional[int] = None
+    observed_at: Optional[datetime] = None
+    sample_count: int = 0
+    trend_days: Optional[float] = None
+    drain_pct_per_day: Optional[float] = None
+    estimated_days_remaining: Optional[float] = None
+    estimated_empty_at: Optional[datetime] = None
+    estimated_charge_at: Optional[datetime] = None
+    confidence: Optional[str] = None
+    notice: Optional[str] = None
 
 
 class TerminalDeviceResponse(BaseModel):
@@ -135,6 +161,7 @@ class TerminalDeviceResponse(BaseModel):
     last_boot_count: Optional[int]
     last_fw_version: Optional[str]
     last_image_etag: Optional[str]
+    battery_health: BatteryHealthResponse
     created_at: datetime
 
 
@@ -160,6 +187,11 @@ def _generate_code() -> str:
     return secrets.token_urlsafe(8)
 
 
+def _generate_display_token() -> str:
+    """Return a high-entropy credential used by exactly one browser view."""
+    return secrets.token_urlsafe(24)
+
+
 async def _get_or_create_settings(db: AsyncSession, user: User) -> TerminalSettings:
     result = await db.execute(
         select(TerminalSettings).where(TerminalSettings.user_id == user.id)
@@ -173,12 +205,67 @@ async def _get_or_create_settings(db: AsyncSession, user: User) -> TerminalSetti
     return settings
 
 
-def _settings_response(s: TerminalSettings) -> TerminalSettingsResponse:
+async def _ensure_web_displays(
+    db: AsyncSession,
+    settings: TerminalSettings,
+) -> list[TerminalWebDisplay]:
+    result = await db.execute(
+        select(TerminalWebDisplay).where(
+            TerminalWebDisplay.user_id == settings.user_id
+        )
+    )
+    displays = list(result.scalars().all())
+    identities = {
+        (display.view_key, display.design_key or None, display.profile_key)
+        for display in displays
+    }
+    created = False
+    for definition in web_display_definitions():
+        identity = (
+            definition["view"],
+            definition["design"],
+            definition["profile"],
+        )
+        if identity in identities:
+            continue
+        db.add(
+            TerminalWebDisplay(
+                user_id=settings.user_id,
+                token=_generate_display_token(),
+                view_key=definition["view"],
+                design_key=definition["design"] or "",
+                profile_key=definition["profile"],
+            )
+        )
+        identities.add(identity)
+        created = True
+    if created:
+        try:
+            await db.commit()
+        except IntegrityError:
+            # Concurrent settings requests may race to provision the same
+            # catalog entries. The unique identity wins; reload the result.
+            await db.rollback()
+        result = await db.execute(
+            select(TerminalWebDisplay).where(
+                TerminalWebDisplay.user_id == settings.user_id
+            )
+        )
+        displays = list(result.scalars().all())
+    return displays
+
+
+async def _settings_response(
+    db: AsyncSession,
+    s: TerminalSettings,
+) -> TerminalSettingsResponse:
     decoded_url: Optional[str] = s.home_assistant_url or None
+    web_displays = await _ensure_web_displays(db, s)
     return TerminalSettingsResponse(
         code=s.code,
         schedule_url_template=f"/terminal/{s.code}/schedule.json",
         image_url_template=f"/terminal/{s.code}/image.bmp",
+        display_url_template="/terminal/display/{token}.html",
         timezone=s.timezone or "UTC",
         home_assistant_url=decoded_url,
         home_assistant_token_set=bool(s.home_assistant_token_encrypted),
@@ -195,6 +282,9 @@ def _settings_response(s: TerminalSettings) -> TerminalSettingsResponse:
         ],
         content_types=SUPPORTED_CONTENT_TYPES,
         designs=DESIGN_OPTIONS,
+        views=view_options(),
+        display_profiles=display_profile_options(),
+        web_displays=web_display_options(web_displays),
         refresh_interval_presets=REFRESH_INTERVAL_PRESETS,
     )
 
@@ -210,7 +300,22 @@ def _effective_interval(d: TerminalDevice) -> int:
     return next(iter(VARIANTS.values())).next_checkin_sec
 
 
-def _serialize_device(d: TerminalDevice) -> TerminalDeviceResponse:
+def _serialize_device(
+    d: TerminalDevice,
+    samples: list[TerminalBatterySample] | tuple = (),
+) -> TerminalDeviceResponse:
+    now = datetime.now(timezone.utc)
+    health = estimate_battery_health(samples, now=now)
+    # A deployment starts with no historical rows. Preserve the current
+    # device snapshot in the health payload until its first sampled check-in.
+    if health.current_pct is None and (d.last_battery_pct is not None or d.last_battery_mv is not None):
+        synthetic = BatteryReading(
+            observed_at=d.last_seen_at or d.created_at,
+            battery_pct=d.last_battery_pct,
+            battery_mv=d.last_battery_mv,
+            boot_count=d.last_boot_count,
+        )
+        health = estimate_battery_health([synthetic], now=now)
     return TerminalDeviceResponse(
         id=d.id,
         mac=d.mac,
@@ -229,6 +334,7 @@ def _serialize_device(d: TerminalDevice) -> TerminalDeviceResponse:
         last_boot_count=d.last_boot_count,
         last_fw_version=d.last_fw_version,
         last_image_etag=d.last_image_etag,
+        battery_health=BatteryHealthResponse(**health.__dict__),
         created_at=d.created_at,
     )
 
@@ -242,7 +348,7 @@ async def get_settings(
     user: User = Depends(get_current_user),
 ):
     settings = await _get_or_create_settings(db, user)
-    return _settings_response(settings)
+    return await _settings_response(db, settings)
 
 
 @router.post("/settings/regenerate", response_model=TerminalSettingsResponse)
@@ -250,14 +356,39 @@ async def regenerate_code(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Roll the per-user short code. Existing devices will start 404'ing until
-    their firmware config is updated to the new URL."""
+    """Rotate the firmware code without changing scoped browser links."""
     settings = await _get_or_create_settings(db, user)
     settings.code = _generate_code()
     settings.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(settings)
-    return _settings_response(settings)
+    return await _settings_response(db, settings)
+
+
+@router.post(
+    "/displays/{display_id}/regenerate",
+    response_model=TerminalSettingsResponse,
+)
+async def regenerate_web_display(
+    display_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Revoke one leaked browser URL by rotating only its bound token."""
+    result = await db.execute(
+        select(TerminalWebDisplay).where(
+            TerminalWebDisplay.id == display_id,
+            TerminalWebDisplay.user_id == user.id,
+        )
+    )
+    display = result.scalar_one_or_none()
+    if display is None:
+        raise HTTPException(status_code=404, detail="Browser display not found")
+    display.token = _generate_display_token()
+    display.updated_at = datetime.now(timezone.utc)
+    await db.commit()
+    settings = await _get_or_create_settings(db, user)
+    return await _settings_response(db, settings)
 
 
 @router.put("/settings/timezone", response_model=TerminalSettingsResponse)
@@ -285,7 +416,7 @@ async def set_timezone(
     settings.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(settings)
-    return _settings_response(settings)
+    return await _settings_response(db, settings)
 
 
 @router.put("/settings/home-assistant", response_model=TerminalSettingsResponse)
@@ -323,7 +454,7 @@ async def set_home_assistant(
     settings.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(settings)
-    return _settings_response(settings)
+    return await _settings_response(db, settings)
 
 
 @router.get("/devices", response_model=list[TerminalDeviceResponse])
@@ -336,7 +467,25 @@ async def list_devices(
         .where(TerminalDevice.user_id == user.id)
         .order_by(TerminalDevice.last_seen_at.desc().nullslast(), TerminalDevice.id.desc())
     )
-    return [_serialize_device(d) for d in result.scalars().all()]
+    devices = list(result.scalars().all())
+    if not devices:
+        return []
+    cutoff = datetime.now(timezone.utc) - timedelta(days=45)
+    samples_result = await db.execute(
+        select(TerminalBatterySample)
+        .where(
+            TerminalBatterySample.device_id.in_([device.id for device in devices]),
+            TerminalBatterySample.observed_at >= cutoff,
+        )
+        .order_by(
+            TerminalBatterySample.device_id.asc(),
+            TerminalBatterySample.observed_at.asc(),
+        )
+    )
+    samples_by_device: dict[int, list[TerminalBatterySample]] = defaultdict(list)
+    for sample in samples_result.scalars().all():
+        samples_by_device[sample.device_id].append(sample)
+    return [_serialize_device(d, samples_by_device[d.id]) for d in devices]
 
 
 @router.patch("/devices/{device_id}", response_model=TerminalDeviceResponse)
@@ -414,7 +563,16 @@ async def update_device(
 
     await db.commit()
     await db.refresh(device)
-    return _serialize_device(device)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=45)
+    samples_result = await db.execute(
+        select(TerminalBatterySample)
+        .where(
+            TerminalBatterySample.device_id == device.id,
+            TerminalBatterySample.observed_at >= cutoff,
+        )
+        .order_by(TerminalBatterySample.observed_at.asc())
+    )
+    return _serialize_device(device, list(samples_result.scalars().all()))
 
 
 @router.delete("/devices/{device_id}", status_code=204)

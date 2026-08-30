@@ -1,15 +1,20 @@
-from backend.models.user import User
 from backend.models.account import GoogleAccount, SyncStatus
-from backend.models.email import Email, Attachment, EmailLabel
-from backend.models.mail_action import MailAction
 from backend.models.ai import AIAnalysis
-from backend.models.settings import Setting
-from backend.models.todo import TodoItem
-from backend.models.chat import ChatConversation, ChatMessage
-from backend.models.calendar import CalendarEvent, CalendarSyncStatus
 from backend.models.api_token import ApiToken
-from backend.models.terminal import TerminalSettings, TerminalDevice
+from backend.models.calendar import CalendarEvent, CalendarSyncStatus
+from backend.models.chat import ChatConversation, ChatMessage
 from backend.models.dashboard import DashboardSnippet
+from backend.models.email import Attachment, Email, EmailLabel
+from backend.models.mail_action import MailAction
+from backend.models.settings import Setting
+from backend.models.terminal import (
+    TerminalBatterySample,
+    TerminalDevice,
+    TerminalSettings,
+    TerminalWebDisplay,
+)
+from backend.models.todo import TodoItem
+from backend.models.user import User
 
 __all__ = [
     "User",
@@ -29,5 +34,7 @@ __all__ = [
     "ApiToken",
     "TerminalSettings",
     "TerminalDevice",
+    "TerminalBatterySample",
+    "TerminalWebDisplay",
     "DashboardSnippet",
 ]

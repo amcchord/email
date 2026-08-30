@@ -27,6 +27,7 @@ from backend.services.terminal.bmp import (
     encode_gray16,
     encode_spectra6,
 )
+from backend.services.terminal.catalog import DESIGNS
 from backend.services.terminal.variants import Variant
 
 logger = logging.getLogger(__name__)
@@ -146,20 +147,9 @@ def render_bmp(
     Returns (bmp_bytes, etag). The ETag is sha1 over the BMP body so it's
     stable while the bucketed render input is stable.
     """
-    rendered_at = _bucketed_now(variant)
-
-    # Pick an accent color the panel can actually display. BW + Gray panels
-    # only do black; Spectra-6 has red, which reads well as a clock accent.
-    if variant.image_format.startswith("bmp4-spectra6"):
-        accent = (255, 0, 0)
-    else:
-        accent = (0, 0, 0)
-
-    canvas = _render_canvas(
+    canvas = render_clock_image(
         variant,
         device_name=device_name,
-        rendered_at=rendered_at,
-        accent_rgb=accent,
         tz_name=tz_name,
     )
 
@@ -176,6 +166,30 @@ def render_bmp(
 
     etag = '"img-' + hashlib.sha1(body).hexdigest()[:16] + '"'
     return body, etag
+
+
+def render_clock_image(
+    variant: Variant,
+    *,
+    device_name: str = "",
+    tz_name: Optional[str] = None,
+) -> Image.Image:
+    """Render the clock at any catalog/profile geometry without encoding it."""
+    rendered_at = _bucketed_now(variant)
+    # Browser RGB profiles and Spectra-6 can use the established red accent;
+    # BW and Gray panel encoders receive black.
+    accent = (
+        (255, 0, 0)
+        if variant.image_format.startswith(("bmp4-spectra6", "rgb-web"))
+        else (0, 0, 0)
+    )
+    return _render_canvas(
+        variant,
+        device_name=device_name,
+        rendered_at=rendered_at,
+        accent_rgb=accent,
+        tz_name=tz_name,
+    )
 
 
 # ── Portrait "Day Ahead" renderer (Editorial) ──────────────────────────
@@ -259,7 +273,7 @@ async def render_day_ahead_bmp(
 # ── E-ink dashboard renderer (Editorial / Swiss + HA) ──────────────────
 
 
-_VALID_DESIGNS = {"editorial", "swiss"}
+_VALID_DESIGNS = set(DESIGNS)
 
 
 def _resolve_design(device: Optional[TerminalDevice]) -> str:
@@ -286,6 +300,7 @@ async def render_dashboard_bmp(
     *,
     device: Optional[TerminalDevice],
     settings: TerminalSettings,
+    design_override: Optional[str] = None,
 ) -> tuple[bytes, str]:
     """Render the e-ink dashboard for `device` and encode it as a panel BMP.
 
@@ -302,7 +317,9 @@ async def render_dashboard_bmp(
     if ha_shape is None:
         ha_shape = empty_ha_shape()
 
-    design = _resolve_design(device)
+    design = (design_override or _resolve_design(device)).strip().lower()
+    if design not in _VALID_DESIGNS:
+        design = "editorial"
     palette = _palette_for_variant(variant)
     tz_name = (settings.timezone or "UTC").strip() or "UTC"
 

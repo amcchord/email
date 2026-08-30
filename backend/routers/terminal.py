@@ -4,22 +4,43 @@ Implements the wire protocol from `docs/terminal/`:
 - `GET /terminal/{code}/schedule.json` -- check-in metadata
 - `GET /terminal/{code}/image.bmp`     -- pre-dithered BMP for the device's panel
 
-Auth = the per-user short `code` in the path. Devices auto-register on first
-check-in via `X-Device-MAC`. Per the docs, missing `X-*` headers are treated
-as 'unknown' rather than 4xx'd.
+Firmware auth = the per-user short `code` in the path. Browser displays use a
+separate credential bound to one catalog view. Devices auto-register on first
+check-in via `X-Device-MAC`. Per the docs, missing `X-*` headers are treated as
+'unknown' rather than 4xx'd.
 """
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from sqlalchemy import select
+from fastapi.responses import HTMLResponse
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
-from backend.models.terminal import TerminalDevice, TerminalSettings
+from backend.models.terminal import (
+    TerminalBatterySample,
+    TerminalDevice,
+    TerminalSettings,
+    TerminalWebDisplay,
+)
+from backend.services.terminal.battery import (
+    BATTERY_RETENTION,
+    normalize_battery_mv,
+    normalize_battery_pct,
+    should_record_sample,
+)
+from backend.services.terminal.catalog import (
+    VIEWS,
+    CatalogError,
+    resolve_design,
+    resolve_profile,
+    resolve_view,
+)
 from backend.services.terminal.renderer import (
     render_bmp,
     render_dashboard_bmp,
@@ -30,6 +51,7 @@ from backend.services.terminal.variants import (
     aligned_next_checkin_sec,
     parse_variant,
 )
+from backend.services.terminal.web_display import build_display_html, render_web_frame
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +92,45 @@ async def _resolve_settings(db: AsyncSession, code: str) -> TerminalSettings:
     return settings
 
 
+def _resolve_bound_web_request(display: TerminalWebDisplay):
+    try:
+        resolved_profile = resolve_profile(display.profile_key)
+        resolved_view = resolve_view(display.view_key, profile=resolved_profile)
+        resolved_design = resolve_design(
+            resolved_view,
+            display.design_key or None,
+        )
+    except CatalogError as exc:
+        logger.warning(
+            "Invalid catalog binding for terminal_web_display id=%s: %s",
+            display.id,
+            exc,
+        )
+        raise HTTPException(status_code=404, detail="Unknown browser display") from exc
+    return resolved_view, resolved_design, resolved_profile
+
+
+async def _resolve_web_display(
+    db: AsyncSession,
+    token: str,
+) -> tuple[TerminalSettings, TerminalWebDisplay]:
+    if not token or len(token) < 20 or len(token) > 64:
+        raise HTTPException(status_code=404, detail="Unknown browser display")
+    result = await db.execute(
+        select(TerminalWebDisplay).where(TerminalWebDisplay.token == token)
+    )
+    display = result.scalar_one_or_none()
+    if display is None:
+        raise HTTPException(status_code=404, detail="Unknown browser display")
+    settings_result = await db.execute(
+        select(TerminalSettings).where(TerminalSettings.user_id == display.user_id)
+    )
+    settings = settings_result.scalar_one_or_none()
+    if settings is None:
+        raise HTTPException(status_code=404, detail="Unknown browser display")
+    return settings, display
+
+
 async def _upsert_device(
     db: AsyncSession,
     *,
@@ -108,11 +169,21 @@ async def _upsert_device(
     device.variant = variant.key
     device.last_seen_at = now
     device.last_wake_reason = (h.get("x-wake-reason") or "").strip()[:32] or device.last_wake_reason
-    device.last_battery_mv = _safe_int(h.get("x-battery-mv")) or device.last_battery_mv
-    device.last_battery_pct = _safe_int(h.get("x-battery-pct")) or device.last_battery_pct
-    device.last_rssi_dbm = _safe_int(h.get("x-rssi-dbm")) or device.last_rssi_dbm
-    device.last_uptime_sec = _safe_int(h.get("x-uptime-sec")) or device.last_uptime_sec
-    device.last_boot_count = _safe_int(h.get("x-boot-count")) or device.last_boot_count
+    battery_mv = normalize_battery_mv(_safe_int(h.get("x-battery-mv")))
+    battery_pct = normalize_battery_pct(_safe_int(h.get("x-battery-pct")))
+    rssi_dbm = _safe_int(h.get("x-rssi-dbm"))
+    uptime_sec = _safe_int(h.get("x-uptime-sec"))
+    boot_count = _safe_int(h.get("x-boot-count"))
+    if battery_mv is not None:
+        device.last_battery_mv = battery_mv
+    if battery_pct is not None:
+        device.last_battery_pct = battery_pct
+    if rssi_dbm is not None:
+        device.last_rssi_dbm = rssi_dbm
+    if uptime_sec is not None:
+        device.last_uptime_sec = uptime_sec
+    if boot_count is not None:
+        device.last_boot_count = boot_count
     fw = (h.get("x-fw-version") or "").strip()
     if fw:
         device.last_fw_version = fw[:64]
@@ -120,6 +191,41 @@ async def _upsert_device(
         device.last_image_etag = image_etag[:128]
 
     try:
+        # Flush first so a newly auto-registered device has an id. Battery
+        # sampling is deliberately sparse: meaningful changes plus a six-hour
+        # heartbeat, never duplicate schedule/image requests seconds apart.
+        await db.flush()
+        if battery_pct is not None or battery_mv is not None:
+            sample_result = await db.execute(
+                select(TerminalBatterySample)
+                .where(TerminalBatterySample.device_id == device.id)
+                .order_by(TerminalBatterySample.observed_at.desc())
+                .limit(1)
+            )
+            latest_sample = sample_result.scalar_one_or_none()
+            if should_record_sample(
+                latest_sample,
+                observed_at=now,
+                battery_pct=battery_pct,
+                battery_mv=battery_mv,
+            ):
+                db.add(
+                    TerminalBatterySample(
+                        device_id=device.id,
+                        observed_at=now,
+                        battery_pct=battery_pct,
+                        battery_mv=battery_mv,
+                        boot_count=boot_count,
+                    )
+                )
+                # The five-minute ingestion floor bounds short-term growth;
+                # this per-device cleanup bounds it over the long term.
+                await db.execute(
+                    delete(TerminalBatterySample).where(
+                        TerminalBatterySample.device_id == device.id,
+                        TerminalBatterySample.observed_at < now - BATTERY_RETENTION,
+                    )
+                )
         await db.commit()
         await db.refresh(device)
     except Exception:
@@ -130,6 +236,57 @@ async def _upsert_device(
 
 
 # ── Endpoints ───────────────────────────────────────────────────────
+
+
+DeviceRenderer = Callable[
+    [Variant, Optional[TerminalDevice], TerminalSettings],
+    Awaitable[tuple[bytes, str]],
+]
+
+
+async def _render_dashboard_for_device(
+    variant: Variant,
+    device: Optional[TerminalDevice],
+    settings: TerminalSettings,
+) -> tuple[bytes, str]:
+    return await render_dashboard_bmp(variant, device=device, settings=settings)
+
+
+async def _render_day_ahead_for_device(
+    variant: Variant,
+    device: Optional[TerminalDevice],
+    settings: TerminalSettings,
+) -> tuple[bytes, str]:
+    return await render_day_ahead_bmp(variant, device=device, settings=settings)
+
+
+async def _render_clock_for_device(
+    variant: Variant,
+    device: Optional[TerminalDevice],
+    settings: TerminalSettings,
+) -> tuple[bytes, str]:
+    device_name = (device.name if device else "") or ""
+    return render_bmp(
+        variant,
+        device_name=device_name,
+        tz_name=settings.timezone or "UTC",
+    )
+
+
+DEVICE_RENDERERS: dict[str, DeviceRenderer] = {
+    "eink_dashboard": _render_dashboard_for_device,
+    "day_ahead": _render_day_ahead_for_device,
+    "clock": _render_clock_for_device,
+}
+
+_MISSING_DEVICE_RENDERERS = {
+    view.content_type for view in VIEWS.values()
+} - DEVICE_RENDERERS.keys()
+if _MISSING_DEVICE_RENDERERS:
+    raise RuntimeError(
+        "At a Glance catalog has no device renderer for "
+        f"{sorted(_MISSING_DEVICE_RENDERERS)}"
+    )
 
 
 async def _render_for_device(
@@ -143,28 +300,17 @@ async def _render_for_device(
     Defaults to the placeholder clock when no device is known yet (first
     check-in with no MAC) or when the content type isn't recognised.
     """
-    tz_name = settings.timezone or "UTC"
     content_type = (device.content_type if device else None) or "clock"
-    device_name = (device.name if device else "") or ""
-    if content_type == "eink_dashboard":
-        try:
-            return await render_dashboard_bmp(variant, device=device, settings=settings)
-        except Exception:
-            logger.exception(
-                "eink_dashboard render failed; falling back to clock for device_id=%s",
-                getattr(device, "id", None),
-            )
-            return render_bmp(variant, device_name=device_name, tz_name=tz_name)
-    if content_type == "day_ahead":
-        try:
-            return await render_day_ahead_bmp(variant, device=device, settings=settings)
-        except Exception:
-            logger.exception(
-                "day_ahead render failed; falling back to clock for device_id=%s",
-                getattr(device, "id", None),
-            )
-            return render_bmp(variant, device_name=device_name, tz_name=tz_name)
-    return render_bmp(variant, device_name=device_name, tz_name=tz_name)
+    renderer = DEVICE_RENDERERS.get(content_type, _render_clock_for_device)
+    try:
+        return await renderer(variant, device, settings)
+    except Exception:
+        logger.exception(
+            "%s render failed; falling back to clock for device_id=%s",
+            content_type,
+            getattr(device, "id", None),
+        )
+        return await _render_clock_for_device(variant, device, settings)
 
 
 @router.get("/{code}/schedule.json")
@@ -275,3 +421,62 @@ async def image_bmp(
         "Cache-Control": "no-cache",
     }
     return Response(content=body, status_code=200, headers=headers, media_type="image/bmp")
+
+
+@router.get("/display/{token}.html", response_class=HTMLResponse)
+async def display_html(
+    token: str,
+    refresh: int = 300,
+    db: AsyncSession = Depends(get_db),
+):
+    """Fullscreen At a Glance page for browser-powered 16:9/9:16 displays."""
+    _settings, display = await _resolve_web_display(db, token)
+    resolved_view, resolved_design, resolved_profile = _resolve_bound_web_request(
+        display
+    )
+    refresh_sec = max(30, min(int(refresh), 3600))
+    body = build_display_html(
+        token=token,
+        view=resolved_view,
+        design=resolved_design,
+        profile=resolved_profile,
+        refresh_sec=refresh_sec,
+    )
+    return HTMLResponse(
+        content=body,
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Security-Policy": (
+                "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; "
+                "base-uri 'none'; form-action 'none'"
+            ),
+        },
+    )
+
+
+@router.get("/display/{token}/frame.png")
+async def display_frame_png(
+    token: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """PNG frame used by browser displays, generated by the panel renderer."""
+    settings, display = await _resolve_web_display(db, token)
+    resolved_view, resolved_design, resolved_profile = _resolve_bound_web_request(
+        display
+    )
+    frame = await render_web_frame(
+        settings=settings,
+        view=resolved_view,
+        design=resolved_design,
+        profile=resolved_profile,
+    )
+    headers = {
+        "ETag": frame.etag,
+        "Cache-Control": "private, no-cache",
+        "X-Frame-Width": str(frame.width),
+        "X-Frame-Height": str(frame.height),
+    }
+    if (request.headers.get("if-none-match") or "").strip() == frame.etag:
+        return Response(status_code=304, headers=headers)
+    return Response(content=frame.body, media_type="image/png", headers=headers)

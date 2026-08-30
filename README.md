@@ -12,6 +12,7 @@ A self-hosted, AI-augmented email client built on Svelte 5, FastAPI, and Postgre
 - "Talk to your Emails" AI chat -- conversational assistant that can search emails, read attachments, access calendar, and browse the web; exportable as Markdown or PDF
 - Todo management -- manual and AI-extracted action items with AI-drafted replies you can approve and send directly
 - Flow daily dashboard -- day summary with upcoming events, pending todos, needs-reply queue, awaiting-response tracking, active thread digests, and inline AI reply generation
+- At a Glance displays -- shared Editorial, Swiss, Day Ahead, and Clock views delivered as e-ink-ready BMPs or fullscreen 16:9/9:16 browser pages, with terminal telemetry and battery-life prediction
 - AI Insights -- thread digests, topic-based email bundles, conversation type detection, trending topics, and a "needs attention" queue with snooze/ignore
 - AI reply generation -- suggested replies (accept, decline, defer) and custom-prompt replies
 - Google Calendar integration -- month, week, and day views with multi-account support
@@ -72,6 +73,7 @@ Browser (Svelte 5 SPA)
         +-- OpenAI + Claude APIs (categorization, summarization, chat, reply generation)
         +-- Playwright (headless browser for AI-powered unsubscribe automation)
         +-- Brave Search API (optional, web search for AI chat)
+        +-- At a Glance (HTML/PNG display adapter + e-ink BMP protocol)
 ```
 
 Caddy terminates TLS and serves the built frontend static files. All `/api/*` requests are reverse-proxied to the FastAPI backend running on `localhost:8000`. Background work (email sync, AI batch analysis) is handled by an ARQ worker process connected to Redis. Real-time notifications (new emails, AI analysis completion) flow from workers through Redis Pub/Sub to a per-user SSE endpoint, which pushes events to all connected browser tabs. The Playwright headless browser is used on-demand for AI-powered URL-based unsubscribe automation.

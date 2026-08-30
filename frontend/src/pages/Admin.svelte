@@ -75,7 +75,7 @@
     { id: 'profile', label: 'Profile & Accounts', adminOnly: false },
     { id: 'ai-models', label: 'AI Models', adminOnly: false },
     { id: 'preferences', label: 'Preferences', adminOnly: false },
-    { id: 'terminals', label: 'E-Ink Terminals', adminOnly: false },
+    { id: 'terminals', label: 'At a Glance', adminOnly: false },
     { id: 'data', label: 'Data Management', adminOnly: false },
     { id: 'dashboard', label: 'Dashboard', adminOnly: true },
     { id: 'apikeys', label: 'API Keys', adminOnly: true },
@@ -791,6 +791,7 @@
   let haTokenInput = $state('');
   let haSaving = $state(false);
   let regenLoading = $state(false);
+  let displayRotateLoading = $state({});
   let copyHint = $state('');
   let tzInput = $state('');
   let tzSaving = $state(false);
@@ -828,6 +829,13 @@
     return `${base}/schedule.json?variant=${encodeURIComponent(variantQuery)}`;
   }
 
+  function browserDisplayUrl(display) {
+    const path = display?.url || '';
+    if (!path || typeof window === 'undefined') return path;
+    if (/^https?:\/\//i.test(path)) return path;
+    return `${window.location.origin}${path.startsWith('/') ? '' : '/'}${path}`;
+  }
+
   async function loadTerminalSettings() {
     try {
       const s = await api.getTerminalSettings();
@@ -856,7 +864,7 @@
   }
 
   async function regenerateTerminalCode() {
-    if (!confirm('Regenerate the terminal short code? All existing devices will need their firmware URL updated to the new code before they can check in again.')) return;
+    if (!confirm('Regenerate the At a Glance firmware code? Existing e-ink devices will need a new firmware URL. Browser display links will remain valid.')) return;
     regenLoading = true;
     try {
       const s = await api.regenerateTerminalCode();
@@ -866,6 +874,18 @@
       showToast(err.message, 'error');
     }
     regenLoading = false;
+  }
+
+  async function regenerateDisplayToken(display) {
+    if (!confirm(`Rotate the link for ${display.label}? The current link for this display will stop working.`)) return;
+    displayRotateLoading = { ...displayRotateLoading, [display.id]: true };
+    try {
+      terminalSettings = await api.post(`/terminal/displays/${display.id}/regenerate`);
+      showToast(`${display.label} link rotated`, 'success');
+    } catch (err) {
+      showToast(err.message, 'error');
+    }
+    displayRotateLoading = { ...displayRotateLoading, [display.id]: false };
   }
 
   async function copyToClipboard(text, hint = 'Copied') {
@@ -983,6 +1003,35 @@
     if (sec < 3600) return `${Math.round(sec / 60)}m`;
     if (sec < 86400) return `${Math.round(sec / 360) / 10}h`.replace('.0h', 'h');
     return `${Math.round(sec / 8640) / 10}d`;
+  }
+
+  function formatBatteryReading(device) {
+    const health = device.battery_health || {};
+    const pct = health.current_pct ?? device.last_battery_pct;
+    const mv = health.current_mv ?? device.last_battery_mv;
+    if (pct == null && mv == null) return '—';
+    if (pct == null) return `${mv} mV`;
+    if (mv == null) return `${pct}%`;
+    return `${pct}% (${mv} mV)`;
+  }
+
+  function formatBatteryRuntime(days) {
+    if (days == null || !Number.isFinite(Number(days))) return '';
+    const value = Math.max(0, Number(days));
+    if (value < 1) return `about ${Math.max(1, Math.round(value * 24))}h to empty`;
+    if (value < 2) return 'about 1 day to empty';
+    if (value < 14) return `about ${Math.round(value * 10) / 10} days to empty`;
+    return `about ${Math.round(value)} days to empty`;
+  }
+
+  function batteryNoticeStyle(status) {
+    if (status === 'charge_now') {
+      return 'background: var(--status-error-bg); border-color: var(--status-error-border); color: var(--status-error-text)';
+    }
+    if (status === 'charging') {
+      return 'background: var(--status-success-bg); border-color: var(--status-success-border); color: var(--status-success-text)';
+    }
+    return 'background: var(--status-warning-bg); border-color: var(--status-warning-border); color: var(--status-warning-text)';
   }
 
   async function deleteTerminal(device) {
@@ -1457,14 +1506,14 @@
       </div>
 
     {:else if activeTab === 'terminals'}
-      <!-- E-Ink Terminals (per-user short URL + Home Assistant settings + device cards) -->
+      <!-- At a Glance browser displays, firmware URLs, and terminal controls -->
       <div class="space-y-6">
         <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
-          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">E-Ink Terminals</h3>
+          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">At a Glance</h3>
           <p class="text-xs" style="color: var(--text-tertiary)">
-            Point a SeeedStudio reTerminal (E1001 / E1002 / E1004) at your personal short URL below.
-            All of your devices share one URL; the server identifies each panel by its MAC address.
-            See <code style="color: var(--text-secondary)">docs/terminal/</code> for the firmware-side protocol.
+            Put your day, dashboard, or clock on a browser display or a SeeedStudio reTerminal (E1001 / E1002 / E1004).
+            Browser displays use ready-to-open links; e-ink devices share one firmware URL and are identified by MAC address.
+            See <code style="color: var(--text-secondary)">docs/terminal/</code> for the terminal protocol.
           </p>
         </div>
 
@@ -1500,6 +1549,61 @@
                 </div>
               {/each}
             </div>
+          </div>
+
+          <!-- Browser displays -->
+          <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+            <h4 class="text-sm font-semibold" style="color: var(--text-primary)">Browser displays</h4>
+            <p class="text-[11px] mt-0.5 mb-3" style="color: var(--text-tertiary)">
+              Open one of these links on a TV, wall display, tablet, or dedicated browser. Each page fits its listed aspect ratio and refreshes automatically.
+            </p>
+
+            {#if (terminalSettings.web_displays || []).length > 0}
+              <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                {#each terminalSettings.web_displays as display (display.id)}
+                  {@const displayUrl = browserDisplayUrl(display)}
+                  {@const copiedHint = `Copied display ${display.key}`}
+                  <div class="rounded-lg border p-3 min-w-0" style="background: var(--bg-primary); border-color: var(--border-color)">
+                    <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 mb-2">
+                      <div class="text-xs font-semibold" style="color: var(--text-primary)">{display.label}</div>
+                      <div class="text-[11px] capitalize" style="color: var(--text-tertiary)">{display.orientation} · {display.aspect_ratio}</div>
+                    </div>
+                    <code class="block w-full px-2 py-1.5 rounded-md text-[11px] break-all border" style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary)">{displayUrl}</code>
+                    <div class="flex flex-wrap gap-2 mt-2">
+                      <a
+                        href={displayUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="inline-flex min-h-9 items-center justify-center px-3 rounded-lg border text-xs font-medium hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2"
+                        style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary)"
+                      >
+                        Open <span class="sr-only">{display.label} display in a new tab</span>
+                      </a>
+                      <button
+                        type="button"
+                        onclick={() => copyToClipboard(displayUrl, copiedHint)}
+                        aria-label="Copy {display.label} display URL"
+                        class="inline-flex min-h-9 items-center justify-center px-3 rounded-lg border text-xs font-medium hover:opacity-80 focus-visible:outline-2 focus-visible:outline-offset-2"
+                        style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary)"
+                      >
+                        {copyHint === copiedHint ? 'Copied' : 'Copy URL'}
+                      </button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        onclick={() => regenerateDisplayToken(display)}
+                        disabled={displayRotateLoading[display.id]}
+                      >
+                        {displayRotateLoading[display.id] ? 'Rotating…' : 'Rotate link'}
+                        <span class="sr-only"> for {display.label}</span>
+                      </Button>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <p class="text-xs" style="color: var(--text-tertiary)">No browser display views are available yet.</p>
+            {/if}
           </div>
 
           <!-- Timezone -->
@@ -1622,6 +1726,7 @@
                 {@const isEink = d.content_type === 'eink_dashboard'}
                 {@const designKey = (d.content_config && d.content_config.design) || 'editorial'}
                 {@const fieldsGridCols = einkFieldsGridCols(isEink)}
+                {@const battery = d.battery_health || null}
                 <div class="rounded-lg border p-4" style="background: var(--bg-primary); border-color: var(--border-color)">
                   <!-- Header: name + variant + Forget -->
                   <div class="flex items-start justify-between gap-3 mb-3">
@@ -1709,14 +1814,37 @@
                     </div>
                   </div>
 
+                  {#if battery?.notice}
+                    <div
+                      class="mt-3 rounded-lg border px-3 py-2 text-xs"
+                      style={batteryNoticeStyle(battery.status)}
+                      role="status"
+                    >
+                      {battery.notice}
+                    </div>
+                  {/if}
+
                   <!-- Telemetry footer -->
                   <div class="flex flex-wrap gap-x-4 gap-y-1 mt-3 pt-3 text-[11px] border-t" style="border-color: var(--border-color); color: var(--text-tertiary)">
                     <span>
                       Battery:
                       <span style="color: var(--text-secondary)">
-                        {d.last_battery_pct != null ? `${d.last_battery_pct}% (${d.last_battery_mv} mV)` : '—'}
+                        {formatBatteryReading(d)}
                       </span>
                     </span>
+                    {#if battery?.estimated_days_remaining != null}
+                      <span>
+                        Predicted runtime:
+                        <span style="color: var(--text-secondary)">
+                          {formatBatteryRuntime(battery.estimated_days_remaining)}{battery.confidence ? ` · ${battery.confidence} confidence` : ''}
+                        </span>
+                      </span>
+                    {:else if battery?.current_pct != null && battery?.status !== 'stale'}
+                      <span>
+                        Prediction:
+                        <span style="color: var(--text-secondary)">collecting discharge history ({battery.sample_count || 0} samples)</span>
+                      </span>
+                    {/if}
                     <span>
                       RSSI:
                       <span style="color: var(--text-secondary)">{d.last_rssi_dbm != null ? `${d.last_rssi_dbm} dBm` : '—'}</span>
@@ -1739,7 +1867,7 @@
         </div>
       </div>
 
-      <!-- E-Ink Preview modal -->
+      <!-- E-Ink device preview modal -->
       {#if previewDevice}
         {@const isPortraitPreview = (previewDevice.content_type || '') === 'day_ahead'}
         <div
@@ -1760,8 +1888,8 @@
                   Preview · {previewDevice.name || previewDevice.mac}
                 </h3>
                 <p class="text-[11px] mt-0.5" style="color: var(--text-tertiary)">
-                  Live HTML refreshes every 30s. The "Device view" PNG is the post-quantization image
-                  the panel actually renders -- click Refresh to re-render with current HA state.
+                  This post-quantization device preview refreshes every 30s and shows the image the panel actually renders.
+                  Select a palette or use Re-render to update it with the current Home Assistant state.
                 </p>
               </div>
               <div class="flex items-center gap-2">
