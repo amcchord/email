@@ -3,6 +3,57 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Product safety cycle 1
+
+### Scope
+
+Audit the current mail client against modern email workflows, then implement
+the highest-confidence safety improvements without overlapping the concurrent
+AI-model task or mutating real mail.
+
+### Completed
+
+- Created a separate product-polish worktree and kept all AI-model files owned
+  by the other active process untouched.
+- Added an ownership check to account sync-status reads so foreign and missing
+  account IDs both return 404.
+- Made Inbox results authoritative per mailbox, account, search, smart filter,
+  focused mode, page size, request generation, and component lifetime.
+- Invalidated selection and disabled actions while replacement results load;
+  late list/detail responses can no longer overwrite or authorize the active
+  dataset.
+- Added persistent update and retry feedback, direct-open action validation,
+  infinite-scroll rollback after failure, and a compact mobile fallback for a
+  saved desktop table preference.
+- Added frontend safety tests to `make check`.
+- Completed read-only feature, UX, and safety audits. The next prioritized
+  slices are attachment download, mutation reconciliation/undo, incremental
+  sync checkpoint safety, and a command/search surface.
+
+### Verification
+
+- `make check`: 131 backend tests passed, 6 frontend safety tests passed, and
+  the production frontend build passed with only the existing large-chunk
+  advisory.
+- Browser QA and independent synthetic user testing passed at 1440×900 and
+  390×844 across column/table preferences, rapid mailbox/search changes,
+  component recreation, loading feedback, and selection/action invalidation.
+- Browser console errors: none. The generated mock API recorded zero actions.
+- `git diff --check`: passed.
+
+### Production Actions
+
+- None. `make remote-status` was read-only and reported production clean at
+  `0500d1a`, all checked services active, and public health `ok`.
+- Pushed `c3fb912` and `278dfef` to
+  `origin/codex/product-polish-cycle-1`; did not push or merge `main` and did
+  not deploy.
+
+### Next
+
+Implement authenticated received-attachment download with generated fixtures
+and browser verification, continuing to isolate all AI-model work.
+
 ## 2026-08-29 — Scheduling delegation and trusted-colleague context
 
 ### Scope
