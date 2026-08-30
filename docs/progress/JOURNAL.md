@@ -37,12 +37,25 @@ without touching the concurrent AI-provider worktree or mutating real mail.
 
 ### Production Actions
 
-- Pending commit, push, and authorized deployment.
+- Committed application release
+  `70c67a3b1cde9266c6d6d87e15695d778c198bca`, pushed it to GitHub `main` and
+  `codex/reply-envelope-integrity`, and fast-forwarded the clean `/opt/mail`
+  checkout to that exact commit.
+- Reinstalled locked frontend packages with zero reported vulnerabilities,
+  rebuilt the 504-module frontend as `mailapp`, and restarted only `mailapp`.
+  No dependency lock, migration, database data, configuration, Google grant,
+  worker, Caddy/systemd, real mailbox, or AI-provider file/service was changed.
+- Post-deploy verification passed: production Git was clean and exact, public
+  health was `ok`, `/` returned 200, all seven checked services were active,
+  five application-edge services reported zero restarts, Alembic remained at
+  `z7a8b9c0d1e2 (head)`, the five-minute mailapp warning-or-higher count was
+  zero, and a read-only in-app browser shell check loaded `Mail` with one main
+  landmark.
 
 ### Next
 
-Deploy the exact validated commit, verify health/services/logs/public UI, and
-record the release commit and production baseline.
+User-test with an explicitly generated multi-recipient conversation; do not
+send or mutate real mail. Then continue with the next isolated product slice.
 
 ## 2026-08-30 — Google OAuth callback reliability candidate
 

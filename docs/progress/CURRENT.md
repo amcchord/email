@@ -4,25 +4,25 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Eliminate wrong-sender and recipient-envelope ambiguity across Inbox and Flow
-reply workflows. Resolve the exact active source account without first-account
-fallback, derive Reply/Reply All recipients once, and make the visible
-From/To/Cc envelope identical to the send payload. Use generated two-account
-fixtures only and preserve the separately owned AI-provider worktree.
+User-test the deployed exact-account Reply and Reply All workflow, then select
+the next product slice without touching the separately owned AI-provider
+worktree. The strongest audited follow-ups are Calendar false-empty/race
+states, saved views, and the subscription favicon privacy leak.
 
 ## Baseline
 
-- Production and GitHub `main` include OAuth application release
-  `1ded3ccba22b0d300123a080fe25adae77dcc8df`. The production frontend was built
-  from that release. Public health is `ok`, all seven checked services are
-  active, the five application-edge services report zero restarts, and the
-  post-deploy mailapp warning-or-higher count is zero. Alembic remains at
-  `z7a8b9c0d1e2 (head)`; this release contains no schema change.
+- Production and GitHub `main` include reply-envelope application release
+  `70c67a3b1cde9266c6d6d87e15695d778c198bca` (including the prior OAuth
+  release). The production frontend was built from that release. Public health
+  is `ok`, all seven checked services are active, the five application-edge
+  services report zero restarts, and the post-deploy mailapp warning-or-higher
+  count is zero. Alembic remains at `z7a8b9c0d1e2 (head)`; this release contains
+  no schema change.
 - The original AI worktree remains clean at `41d2898` on
   `codex/openai-anthropic-model-support` and has not been edited by this work.
-- The reply-envelope slice is isolated in
+- The deployed reply-envelope slice remains isolated in
   `/Users/austinmcchord/Development/Email-reply-envelope-integrity` on
-  `codex/reply-envelope-integrity`, based on GitHub `main` at `2b534f3`.
+  `codex/reply-envelope-integrity` at application commit `70c67a3`.
 - The deployed remote-content release was developed in the isolated worktree
   `/Users/austinmcchord/Development/Email-remote-content-controls` on
   `codex/remote-content-controls`.
@@ -59,7 +59,7 @@ live state.
 
 ## Verification State
 
-- The reply-envelope candidate passes `make check`: 325 backend tests passed,
+- The deployed reply-envelope release passes `make check`: 325 backend tests passed,
   4 opt-in PostgreSQL tests skipped, 132 frontend tests passed, and the
   504-module production frontend built.
 - Generated two-account browser QA verifies distinct Reply/Reply All, exact
@@ -122,8 +122,8 @@ live state.
 
 ## Next Safe Action
 
-Commit and push the validated reply-envelope release, deploy the exact commit
-with a frontend rebuild and only the required `mailapp` restart, then verify
-health, service state, logs, and the public UI. The prior OAuth release still
-awaits a fresh user reauthorization; its failed one-time authorization code
-must not be reused.
+User-test Reply and Reply All on an explicitly generated test conversation;
+confirm the visible source account and recipient list without clicking Send on
+real mail. Separately, retry Calendar reauthorization with a fresh one-time
+authorization code. Then take the Calendar false-empty/race audit as the next
+isolated product slice unless user feedback reprioritizes it.

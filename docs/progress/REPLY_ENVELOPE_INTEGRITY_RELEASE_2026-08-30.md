@@ -95,6 +95,19 @@ Screenshots are stored outside the repository at:
 - Rollback is a Git revert/fast-forward to the pre-release commit, a frontend
   rebuild, and a `mailapp` restart. No database rollback is required.
 
+## Deployment
+
+- Application commit: `70c67a3b1cde9266c6d6d87e15695d778c198bca`.
+- Pushed to GitHub `main` and `codex/reply-envelope-integrity`.
+- Production `/opt/mail` fast-forwarded cleanly to the exact commit.
+- Locked frontend packages installed with zero reported vulnerabilities; the
+  504-module production frontend rebuilt successfully; only `mailapp` was
+  restarted.
+- Post-deploy: public health `ok`, root HTTP 200, seven checked services active,
+  five application-edge restart counters zero, mailapp warning-or-higher count
+  zero, Alembic unchanged at `z7a8b9c0d1e2 (head)`, and read-only browser shell
+  title `Mail` with one main landmark.
+
 ## User Testing
 
 Use a conversation with multiple visible participants and confirm Reply and
