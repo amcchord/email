@@ -3,6 +3,76 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Bounded attachment cache lifecycle
+
+### Scope
+
+Bound received-attachment storage and improve download recovery UX using only
+generated mail, while leaving the separately owned AI checkout and Chat files
+untouched.
+
+### Completed
+
+- Added an ID-derived per-user cache namespace with 512 MiB hard and 384 MiB
+  low-water limits, 30-day idle retention, 24-hour orphan grace, and one-hour
+  temporary-file grace. Fresh temporary bytes participate in reservations, and
+  uncertain capacity fails closed for caching while downloaded bytes still
+  reach the user.
+- Added fixed sharded cross-process entry/user locks, cancellation-draining
+  blocking-operation wrappers, entry-to-user lock ordering, atomic private
+  writes, and no-follow directory-descriptor traversal for reads, scans, and
+  inode-checked deletes. Cleanup cannot follow swapped parents or remove an
+  in-flight download.
+- Added a duplicate-safe daily maintenance loop that inventories canonical
+  positive-numeric user roots, uses database ownership snapshots when
+  available, preserves orphans on database failure, and reports aggregate
+  counts without paths or mailbox content.
+- Removed request-session commits and legacy `storage_path` writes from the
+  browser download path, bounded Gmail transport and coroutine time, and made
+  post-download cache/touch failures nonfatal.
+- Added per-file concurrent loading/error state, abort-on-navigation, freshness
+  checks before browser save, HTTP-status retry classification, disabled
+  terminal chips, accessible alerts/Retry targets, and narrow-screen wrapping.
+- Extended the generated localhost harness with delayed abort, repeatable 503
+  recovery, terminal 409/413/422 errors, adversarial filenames/details, and a
+  read/mutation audit.
+
+### Verification
+
+- `make check`: 267 backend tests passed, 4 opt-in PostgreSQL tests skipped,
+  82 frontend tests passed, and the production frontend build completed with
+  only the existing large-chunk advisory.
+- Forty focused attachment tests passed across quota pressure, retention,
+  orphans, temporary files, database outages, cross-process contention,
+  cancellation, parent/leaf link swaps, downloader collapse, response mapping,
+  and scheduled cleanup. Python compilation, harness syntax, and
+  `git diff --check` passed.
+- Generated browser QA passed at 1280px desktop and exact 375x812 mobile. The
+  narrow page had no horizontal overflow and at least 44px attachment targets;
+  long adversarial text stayed contained; 409/413/422 failures were terminal;
+  a 503 retried to 200; and navigation aborted a delayed request without stale
+  UI. The audit contained no mutation attempts or unknown routes.
+- Independent backend and UX agents reported no remaining P0/P1 blocker for
+  the canonical browser-download lifecycle. They confirmed that the legacy
+  Chat attachment path remains outside this contract and must be migrated with
+  its separate AI owner.
+- The concurrent AI checkout remained clean and untouched at `41d2898`.
+
+### Production Actions
+
+- None. No deploy, migration, restart, configuration change, production write,
+  real-mail read, message open, attachment fetch, or mailbox mutation occurred.
+- Committed the implementation as `fe57077` and pushed it to
+  `origin/codex/product-polish-cycle-1` without rebasing or editing the AI
+  owner's checkout.
+
+### Next
+
+Coordinate the legacy Chat attachment migration after the AI owner releases
+those files. Until then, keep its unbounded `storage_path` path explicit as a
+release caveat and choose another isolated product slice such as attachment
+preview/risk cues or frontend bundle splitting.
+
 ## 2026-08-30 — Composable structured email search
 
 ### Scope

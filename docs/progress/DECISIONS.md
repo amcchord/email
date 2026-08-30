@@ -135,3 +135,26 @@ add a new entry that explicitly supersedes the old one.
   parser errors return stable 422 details; plain search retains complete
   literal fallbacks when full-text vectors are stale; and clearing browser
   search restores the unchanged mailbox and filter stores.
+
+## D-010 — Canonical attachment caching is bounded and ID-derived
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Cache browser-downloaded received attachments only at canonical
+  positive-ID-derived paths under a per-user namespace. Enforce a 512 MiB hard
+  limit with a 384 MiB low-water target, 30-day idle retention, 24-hour orphan
+  grace, and one-hour temporary-file grace using fixed sharded file locks,
+  no-follow directory-descriptor operations, and duplicate-safe daily
+  maintenance.
+- Reason: Persisted `storage_path` values, unbounded filenames, path-based
+  cleanup, and process-local coordination cannot prove cross-user isolation,
+  quota compliance, or in-flight safety under concurrent workers and
+  cancellation.
+- Consequence: The browser download handler derives identity from owned
+  database IDs, never trusts or mutates `Attachment.storage_path`, counts fresh
+  temporary bytes before writes, and skips caching whenever a stable capacity
+  proof or lease is unavailable while still returning verified downloaded
+  bytes. Cleanup uses database ownership only when its snapshot succeeds and
+  reports aggregates rather than cache paths. The separately owned legacy Chat
+  attachment path is explicitly excluded until a coordinated migration brings
+  it into this namespace and policy.

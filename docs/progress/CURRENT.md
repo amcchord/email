@@ -13,7 +13,7 @@ continue without overlapping files or Git state.
 
 - Product worktree: `codex/product-polish-cycle-1`, pushed to
   `origin/codex/product-polish-cycle-1`; product implementation is complete
-  through composable structured email search at `0e8f8fd`.
+  through the bounded attachment-cache lifecycle at `fe57077`.
 - Repository source baseline: `origin/main` at `41d2898`.
 - Concurrent AI-model work is owned by another process in the original
   checkout; do not edit, stage, or reconcile its files from this worktree.
@@ -71,14 +71,15 @@ live state.
 
 ### P2 — Attachment cache lifecycle
 
-- State: ready
+- State: locally verified, independently reviewed, committed, and pushed
 - Why: secure received-attachment downloads now work, but cached blobs need an
   explicit retention and quota policy.
 - Scope: bounded per-user retention, orphan cleanup, observability, and safe
   retry behavior during cleanup.
 - Acceptance: cleanup cannot cross users or delete an in-flight download, and
   generated cache-pressure tests keep storage within policy.
-- Next: choose retention and per-user quota defaults before adding cleanup.
+- Next: coordinate migration of the separate AI-owned Chat attachment path
+  before claiming that all attachment consumers share this lifecycle.
 
 ## Completed This Cycle
 
@@ -123,11 +124,17 @@ live state.
   fail-closed ownership, bound JSONB/recipient predicates, deterministic
   sorting, truthful mixed-folder actions, and generated desktop/mobile/race
   verification (`0e8f8fd`).
+- Bounded canonical received-attachment caching per user with 512 MiB hard and
+  384 MiB low-water limits, 30-day idle retention, orphan/temp grace periods,
+  fixed sharded cross-process locks, no-follow directory-descriptor I/O,
+  cancellation-safe download/write behavior, duplicate-safe daily cleanup,
+  aggregate observability, terminal/retryable UI states, and generated
+  pressure/browser verification (`fe57077`).
 
 ## Verification
 
-- Latest `make check`: 245 backend tests passed, 4 disposable-PostgreSQL tests
-  skipped by default, and 79 frontend tests passed; the production build
+- Latest `make check`: 267 backend tests passed, 4 disposable-PostgreSQL tests
+  skipped by default, and 82 frontend tests passed; the production build
   passed with only the existing large-chunk advisory.
 - Forty-three generated durable-action tests cover every supported transition,
   strict request validation, cross-account staging, idempotency, exact bulk
@@ -181,6 +188,16 @@ live state.
   ownership, recipient JSON, OR scope, action reconciliation, protected-folder
   action, and scope-truth P0/P1 findings were corrected; the final safety pass
   found no remaining P0/P1 blocker.
+- Generated attachment QA passed at 1280px desktop and exact 375x812 mobile.
+  The mobile page had no horizontal overflow, every attachment target measured
+  at least 44px, long Unicode/path/control filenames remained contained, and
+  terminal 409/413/422 failures disabled the primary chip without showing a
+  misleading Retry. A transient 503 recovered on Retry, while navigation
+  cancelled a delayed request and suppressed stale feedback.
+- The attachment harness audit recorded the expected 422, 503-to-200, 409, and
+  aborted 499 reads, with empty mutation attempts and unknown routes. It used
+  generated `.example.test` mail only. Independent backend and UX reviewers
+  reported no remaining P0/P1 blocker in the canonical lifecycle.
 - Independent feature and safety reviews identified and then cleared command
   lifecycle, modal ownership, duplicate-send, inaccessible disabled-state, and
   delayed Flow mutation blockers. The generated-user agent validated the
@@ -209,6 +226,15 @@ live state.
 - Shortcut override reset/reset-all still uses a merge-only persistence API;
   a removed override can reappear after reload. Coordinate the shared
   authentication preference contract with the AI owner before correcting it.
+- The new attachment lifecycle covers only the canonical ID-derived browser
+  download namespace. The separately AI-owned Chat path in
+  `backend/services/chat.py` still reads `Attachment.storage_path`, performs an
+  unbounded Gmail download, and writes a legacy non-user-scoped filename. It
+  remains outside the quota, retention, locking, and no-follow guarantees and
+  must be migrated in coordination with that owner.
+- Attachment quota is per user, not a global disk-cap/minimum-free-space
+  policy. Canonical cache integrity is checked structurally and by recorded
+  size, not by a stored content digest; both are future hardening opportunities.
 - Failed full-sync attempts can commit new mail before a later page fails; the
   mail is retained safely, but durable notification/analysis handoff remains a
   follow-up.
@@ -218,8 +244,9 @@ live state.
 ## Next Safe Action
 
 Preserve the reviewed, pushed product branch without rebasing it onto the
-separately owned AI work. Audit the attachment cache lifecycle and choose
-bounded per-user retention/quota defaults as the next isolated product slice.
-Defer saved-view and shortcut-reset persistence until the shared authentication
-ownership boundary is explicitly coordinated, and repeat all checks before any
-merge or explicitly authorized deployment.
+separately owned AI work. Coordinate the legacy Chat attachment migration only
+after its owner releases those files; until then, keep that path explicitly out
+of the canonical lifecycle claim. The next isolated product slice should avoid
+shared authentication/AI files and can address attachment preview/risk cues or
+frontend bundle splitting. Repeat all checks before any merge or explicitly
+authorized deployment.
