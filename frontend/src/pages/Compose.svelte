@@ -235,7 +235,7 @@
   }
 </script>
 
-<div class="h-full flex flex-col" style="background: var(--bg-secondary)">
+<div class="h-full w-full min-w-0 overflow-x-hidden flex flex-col" style="background: var(--bg-secondary)">
   <!-- Header -->
   <div class="compose-header min-h-14 flex items-center justify-between px-6 border-b shrink-0" style="border-color: var(--border-color)">
     <div class="flex items-center gap-3">
@@ -275,7 +275,7 @@
           <select
             id="compose-from"
             bind:value={selectedAccountId}
-            class="min-w-0 flex-1 h-full text-sm outline-none border-0"
+            class="w-0 min-w-0 flex-1 h-full text-sm outline-none border-0"
             style="background: transparent; color: var(--text-primary)"
           >
             {#each accountList as acct}
