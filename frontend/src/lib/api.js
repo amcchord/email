@@ -141,6 +141,7 @@ async function request(method, path, body = null, options = {}) {
     const requestError = new Error(errorMessage);
     requestError.status = response.status;
     if (typeof detail?.code === 'string') requestError.code = detail.code;
+    if (detail && typeof detail === 'object') requestError.detail = detail;
     throw requestError;
   }
 
@@ -343,6 +344,10 @@ export const api = {
     request('GET', `/compose/drafts/by-client-id/${encodeURIComponent(clientDraftId)}`),
   getComposeDraftByEmail: (emailId) =>
     request('GET', `/compose/drafts/by-email/${encodeURIComponent(emailId)}`),
+  getComposeDraftBySource: (emailId, accountId) => {
+    const params = new URLSearchParams({ account_id: String(accountId) });
+    return request('GET', `/compose/drafts/by-source-email/${encodeURIComponent(emailId)}?${params}`);
+  },
   listRecentComposeDrafts: (limit = 20) =>
     request('GET', `/compose/drafts/recent?limit=${encodeURIComponent(limit)}`),
   discardComposeDraft: (clientDraftId, mutationId) =>

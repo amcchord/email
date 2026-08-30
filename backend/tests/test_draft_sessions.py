@@ -151,6 +151,7 @@ def test_draft_models_routes_migration_and_worker_are_complete():
     assert ("/api/compose/draft", "POST") in route_contract
     assert ("/api/compose/drafts/recent", "GET") in route_contract
     assert ("/api/compose/drafts/by-client-id/{client_draft_id}", "GET") in route_contract
+    assert ("/api/compose/drafts/by-source-email/{source_email_id}", "GET") in route_contract
     assert ("/api/compose/drafts/by-email/{email_id}", "GET") in route_contract
     assert ("/api/compose/drafts/{client_draft_id}/discard", "POST") in route_contract
     assert ("/api/compose/drafts/{client_draft_id}/undo-discard", "POST") in route_contract

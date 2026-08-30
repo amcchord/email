@@ -132,6 +132,7 @@
       {#each mailboxes as mb}
         <button
           onclick={() => selectMailbox(mb.id)}
+          aria-current={$currentMailbox === mb.id ? 'page' : undefined}
           class="w-full flex items-center gap-3 px-3 h-8 rounded-md text-sm transition-fast"
           class:font-medium={$currentMailbox === mb.id}
           style="color: {$currentMailbox === mb.id ? 'var(--text-primary)' : 'var(--text-secondary)'}; background: {$currentMailbox === mb.id ? 'var(--bg-hover)' : 'transparent'}"

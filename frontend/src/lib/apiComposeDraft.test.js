@@ -53,6 +53,7 @@ test('draft lifecycle helpers encode client IDs and preserve action identity', a
 
   await api.getComposeDraft('draft/with spaces');
   await api.getComposeDraftByEmail('email/with spaces');
+  await api.getComposeDraftBySource('email/with spaces', 17);
   await api.listRecentComposeDrafts(7);
   await api.discardComposeDraft('draft/with spaces', 'mutation-7');
   await api.undoComposeDraftDiscard('draft/with spaces', 'mutation-8');
@@ -60,6 +61,7 @@ test('draft lifecycle helpers encode client IDs and preserve action identity', a
   assert.deepEqual(calls, [
     { url: '/api/compose/drafts/by-client-id/draft%2Fwith%20spaces', method: 'GET', body: null },
     { url: '/api/compose/drafts/by-email/email%2Fwith%20spaces', method: 'GET', body: null },
+    { url: '/api/compose/drafts/by-source-email/email%2Fwith%20spaces?account_id=17', method: 'GET', body: null },
     { url: '/api/compose/drafts/recent?limit=7', method: 'GET', body: null },
     {
       url: '/api/compose/drafts/draft%2Fwith%20spaces/discard',

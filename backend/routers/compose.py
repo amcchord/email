@@ -23,11 +23,13 @@ from backend.services.drafts import (
     DraftNotFound,
     DraftPersistenceError,
     DraftQuotaExceeded,
+    DraftSourceExists,
     DraftValidationError,
     discard_draft_session,
     draft_can_undo_discard,
     get_draft_session,
     get_draft_session_for_email,
+    get_draft_session_for_source_email,
     recent_draft_sessions,
     stage_draft_upsert,
     try_enqueue_draft_drain,
@@ -181,9 +183,10 @@ def _raise_draft_http_error(error: Exception) -> None:
             detail={"code": "draft_not_found", "message": str(error)},
         ) from error
     if isinstance(error, DraftConflict):
+        code = "draft_source_exists" if isinstance(error, DraftSourceExists) else "draft_conflict"
         raise HTTPException(
             status_code=409,
-            detail={"code": "draft_conflict", "message": str(error)},
+            detail={"code": code, "message": str(error)},
         ) from error
     if isinstance(error, DraftValidationError):
         raise HTTPException(
@@ -362,6 +365,28 @@ async def get_draft_by_client_id(
             include_attachments=True,
         )
     except DraftNotFound as error:
+        _raise_draft_http_error(error)
+    return _draft_detail_response(draft)
+
+
+@router.get(
+    "/drafts/by-source-email/{source_email_id}",
+    response_model=DraftSessionDetailResponse,
+)
+async def get_draft_by_source_email(
+    source_email_id: int,
+    account_id: int = Query(..., gt=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        draft = await get_draft_session_for_source_email(
+            db,
+            user_id=user.id,
+            account_id=account_id,
+            source_email_id=source_email_id,
+        )
+    except (DraftNotFound, DraftConflict) as error:
         _raise_draft_http_error(error)
     return _draft_detail_response(draft)
 

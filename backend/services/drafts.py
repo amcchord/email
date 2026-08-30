@@ -23,7 +23,7 @@ from arq.connections import RedisSettings
 from googleapiclient.errors import HttpError
 from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import load_only, selectinload
 
 from backend.config import get_settings
 from backend.database import async_session
@@ -76,6 +76,10 @@ class DraftNotFound(DraftError):
 
 class DraftConflict(DraftError):
     pass
+
+
+class DraftSourceExists(DraftConflict):
+    """A different active draft already owns this exact reply source."""
 
 
 class DraftValidationError(DraftError):
@@ -498,6 +502,24 @@ async def _stage_draft_upsert(
             account_id=account.id,
             request=request,
         )
+        if source is not None:
+            occupied = (
+                await db.execute(
+                    select(DraftSession.id).where(
+                        DraftSession.user_id == user_id,
+                        DraftSession.account_id == account.id,
+                        DraftSession.source_email_id_snapshot == source.id,
+                        DraftSession.client_draft_id != request.client_draft_id,
+                        DraftSession.state != "discarded",
+                    ).limit(1)
+                )
+            ).scalar_one_or_none()
+            if occupied is not None:
+                # _lock_draft_acceptance serializes competing first saves for
+                # different client UUIDs. The loser discovers the winner via
+                # the exact owned-source lookup instead of creating another
+                # provider draft.
+                raise DraftSourceExists("A reply draft already exists for this message")
 
     await _enforce_quotas(
         db,
@@ -592,6 +614,54 @@ async def get_draft_session(
     return draft
 
 
+async def get_draft_session_for_source_email(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    account_id: int,
+    source_email_id: int,
+) -> DraftSession:
+    """Resolve one active app draft for an exact owned reply source.
+
+    This lookup is intentionally distinct from ``by-email``: that endpoint
+    maps a Gmail Draft mailbox row back to an app-managed draft, while this
+    endpoint resumes a reply from its original received message.
+    """
+    source = (
+        await db.execute(
+            select(Email.id)
+            .join(GoogleAccount, GoogleAccount.id == Email.account_id)
+            .where(
+                Email.id == source_email_id,
+                Email.account_id == account_id,
+                GoogleAccount.user_id == user_id,
+            )
+        )
+    ).scalar_one_or_none()
+    if source is None:
+        raise DraftNotFound("Draft not found")
+
+    matches = list((await db.execute(
+        select(DraftSession)
+        .options(selectinload(DraftSession.attachments))
+        .where(
+            DraftSession.user_id == user_id,
+            DraftSession.account_id == account_id,
+            DraftSession.source_email_id_snapshot == source_email_id,
+            DraftSession.state != "discarded",
+        )
+        .order_by(DraftSession.updated_at.desc(), DraftSession.id.desc())
+        .limit(2)
+    )).scalars().all())
+    if not matches:
+        raise DraftNotFound("Draft not found")
+    if len(matches) > 1:
+        # Do not silently choose between legacy duplicates. That could reopen
+        # or send content from a different writing session.
+        raise DraftConflict("Multiple reply drafts require review")
+    return matches[0]
+
+
 async def recent_draft_sessions(
     db: AsyncSession,
     *,
@@ -600,6 +670,28 @@ async def recent_draft_sessions(
 ) -> list[DraftSession]:
     result = await db.execute(
         select(DraftSession)
+        .options(load_only(
+            DraftSession.id,
+            DraftSession.client_draft_id,
+            DraftSession.account_id,
+            DraftSession.source_email_id_snapshot,
+            DraftSession.revision,
+            DraftSession.synced_revision,
+            DraftSession.state,
+            DraftSession.next_attempt_at,
+            DraftSession.attempt_count,
+            DraftSession.discard_at,
+            DraftSession.discard_undo_until,
+            DraftSession.linked_send_id,
+            DraftSession.error_code,
+            DraftSession.error_message,
+            DraftSession.attachment_count,
+            DraftSession.attachment_bytes,
+            DraftSession.created_at,
+            DraftSession.updated_at,
+            DraftSession.synced_at,
+            DraftSession.discarded_at,
+        ))
         .where(
             DraftSession.user_id == user_id,
             DraftSession.state != "discarded",

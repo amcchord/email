@@ -218,6 +218,38 @@ test('conflicts preserve local content until an explicit resolution', async () =
   assert.equal(controller.revision, 5);
 });
 
+test('keeping local content rebases above a much newer server revision', async () => {
+  const randomUUID = uuidFactory();
+  const revisions = [];
+  let conflict = true;
+  const controller = createDraftSessionController(controllerOptions({
+    randomUUID,
+    api: {
+      async saveDraft(payload) {
+        revisions.push(payload.revision);
+        if (conflict) {
+          const error = new Error('generated newer server conflict');
+          error.status = 409;
+          error.detail = {
+            server_revision: 10,
+            server_snapshot: { subject: 'Server', body_html: '<p>Server</p>' },
+          };
+          throw error;
+        }
+        return { ...payload, state: 'synced', synced_revision: payload.revision };
+      },
+    },
+  }));
+  await controller.create({ intent: newComposeIntent({}, { randomUUID }) });
+  controller.update({ subject: 'Keep local', body_html: '<p>Local</p>' });
+  await controller.flush();
+  conflict = false;
+  await controller.resolveConflict('local');
+  assert.deepEqual(revisions, [1, 11]);
+  assert.equal(controller.revision, 11);
+  assert.equal(controller.getState().snapshot.subject, 'Keep local');
+});
+
 test('server discard starts immediately, Undo is authoritative, and bytes scrub only after GET confirms discarded', async () => {
   const randomUUID = uuidFactory();
   const timers = fakeTimers();
@@ -341,6 +373,68 @@ test('a late A completion updates only A storage and never clobbers active B sta
   assert.equal((await storage.get(7, intentA.client_draft_id)).server.draft_id, 'provider-a');
 });
 
+test('B receives a trailing flush when its timer fires during a slow A save', async () => {
+  const randomUUID = uuidFactory();
+  const storage = createMemoryDraftStorage();
+  const timers = fakeTimers();
+  const firstSave = deferred();
+  const savedIds = [];
+  const controller = createDraftSessionController(controllerOptions({
+    randomUUID,
+    storage,
+    timers,
+    api: {
+      saveDraft(payload) {
+        savedIds.push(payload.client_draft_id);
+        if (savedIds.length === 1) return firstSave.promise;
+        return Promise.resolve({ ...payload, state: 'synced', synced_revision: payload.revision });
+      },
+    },
+  }));
+  const intentA = newComposeIntent({}, { randomUUID });
+  const intentB = newComposeIntent({}, { randomUUID });
+  await controller.create({ intent: intentA, initialSnapshot: { body_html: '<p>A</p>' } });
+  const flushingA = controller.flush();
+  await Promise.resolve();
+
+  await controller.create({ intent: intentB, initialSnapshot: { body_html: '<p>B</p>' } });
+  assert.equal(timers.runNext(), true);
+  await Promise.resolve();
+  firstSave.resolve({
+    client_draft_id: intentA.client_draft_id,
+    revision: 1,
+    state: 'synced',
+    synced_revision: 1,
+  });
+  await flushingA;
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.deepEqual(savedIds, [intentA.client_draft_id, intentB.client_draft_id]);
+  assert.equal(controller.getState().status, 'synced');
+});
+
+test('an update is durable locally before the remote debounce expires', async () => {
+  const randomUUID = uuidFactory();
+  const storage = createMemoryDraftStorage();
+  const timers = fakeTimers();
+  const controller = createDraftSessionController(controllerOptions({
+    randomUUID,
+    storage,
+    timers,
+    isOnline: () => false,
+  }));
+  const intent = newComposeIntent({}, { randomUUID });
+  await controller.create({ intent });
+  controller.update({ body_html: '<p>Immediate local copy</p>' });
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(
+    (await storage.get(7, intent.client_draft_id)).snapshot.body_html,
+    '<p>Immediate local copy</p>',
+  );
+  assert.equal(timers.size, 1);
+});
+
 test('responses from a stale authenticated session are suppressed before storage or UI commit', async () => {
   const randomUUID = uuidFactory();
   const storage = createMemoryDraftStorage();
@@ -357,7 +451,7 @@ test('responses from a stale authenticated session are suppressed before storage
   await controller.create({ intent });
   controller.update({ subject: 'A', body_html: '<p>A</p>' });
   const pending = controller.flush();
-  await Promise.resolve();
+  await new Promise(resolve => setImmediate(resolve));
   generation = 2;
   response.resolve({
     client_draft_id: intent.client_draft_id,
@@ -512,6 +606,45 @@ test('discard keeps the content revision stable and local-only drafts never call
   assert.equal(timers.runNext(), true);
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(controller.getState().status, 'discarded');
+});
+
+test('discard finalization and Undo survive UI controller teardown', async () => {
+  const randomUUID = uuidFactory();
+  const storage = createMemoryDraftStorage();
+  const timers = fakeTimers();
+  const first = createDraftSessionController(controllerOptions({
+    randomUUID,
+    storage,
+    timers,
+    isOnline: () => false,
+  }));
+  await first.create({ intent: newComposeIntent({}, { randomUUID }) });
+  first.update({ body_html: '<p>Scrub after close</p>' });
+  await first.flush();
+  const firstId = first.clientDraftId;
+  await first.discard({ delayMs: 5000 });
+  first.dispose();
+  assert.equal(timers.size, 1);
+  assert.equal(timers.runNext(), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await storage.get(7, firstId)).status, 'discarded');
+  assert.deepEqual((await storage.get(7, firstId)).snapshot, {});
+
+  const second = createDraftSessionController(controllerOptions({
+    randomUUID,
+    storage,
+    timers,
+    isOnline: () => false,
+  }));
+  await second.create({ intent: newComposeIntent({}, { randomUUID }) });
+  second.update({ body_html: '<p>Undo after close</p>' });
+  await second.flush();
+  await second.discard({ delayMs: 5000 });
+  second.dispose();
+  assert.equal(await second.undoDiscard(), true);
+  assert.equal(second.getState().status, 'offline');
+  assert.equal(second.getState().snapshot.body_html, '<p>Undo after close</p>');
+  assert.equal(timers.size, 0);
 });
 
 test('ambiguous Send survives reload, remains locked, and terminal failure restores retained bytes', async () => {

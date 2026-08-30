@@ -24,6 +24,7 @@
     createComposeDraftIntent,
     ensureComposeDraftIntent,
     isComposeDraftUuid,
+    knownServerRevisionRequiresRefresh,
     newComposeIntent,
   } from '../lib/composeDraft.js';
   import {
@@ -271,10 +272,15 @@
     });
     activeDraftKey = intent.client_draft_id;
     if (data?.client_draft_id !== intent.client_draft_id) composeData.set(intent);
-    const state = suppliedClientId
+    let state = suppliedClientId
       ? await draftController.load({ clientDraftId: intent.client_draft_id, intent, initialSnapshot: draftSnapshot() })
       : await draftController.load({ intent, initialSnapshot: draftSnapshot() });
     if (requestGeneration !== openingDraftGeneration || !sessionGuard.isCurrent()) return;
+    if (suppliedClientId && knownServerRevisionRequiresRefresh(data, state)) {
+      await draftController.refresh();
+      if (requestGeneration !== openingDraftGeneration || !sessionGuard.isCurrent()) return;
+      state = draftController.getState();
+    }
     activeDraftKey = state.clientDraftId || intent.client_draft_id;
     hydrateDraftSnapshot(state.snapshot);
     if (recoverySourceClientId && recoverySourceClientId !== activeDraftKey) {

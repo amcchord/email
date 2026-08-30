@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import func, inspect as sa_inspect, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import backend.services.drafts as draft_module
@@ -25,10 +25,13 @@ from backend.schemas.email import ComposeDraftRequest, ComposeRequest
 from backend.services.drafts import (
     DraftConflict,
     DraftNotFound,
+    DraftSourceExists,
     _claim_due_drafts,
     _process_discard,
     discard_draft_session,
     get_draft_session_for_email,
+    get_draft_session_for_source_email,
+    recent_draft_sessions,
     stage_draft_upsert,
     undo_discard_draft_session,
 )
@@ -106,6 +109,25 @@ def _request(account_id, *, client_draft_id=None, mutation_id=None, revision=1, 
             "content_type": "application/octet-stream",
             "data_base64": base64.b64encode(content).decode(),
         }],
+    )
+
+
+def _reply_request(account_id, source_id, *, client_draft_id=None):
+    return ComposeDraftRequest(
+        client_draft_id=client_draft_id or uuid4(),
+        revision=1,
+        mutation_id=uuid4(),
+        account_id=account_id,
+        source_email_id=source_id,
+        to=["recipient@example.test"],
+        subject="Re: Generated source",
+        body_text="Generated reply",
+        thread_id="source-thread-reply-convergence",
+        in_reply_to="<source-message-reply-convergence@example.test>",
+        references=(
+            "<source-root-reply-convergence@example.test> "
+            "<source-message-reply-convergence@example.test>"
+        ),
     )
 
 
@@ -218,6 +240,102 @@ async def test_foreign_reply_source_is_non_disclosing_and_atomic(monkeypatch):
                 )
         async with sessions() as db:
             assert await db.scalar(select(func.count()).select_from(DraftSession)) == 0
+    finally:
+        await engine.dispose()
+
+
+async def test_concurrent_reply_first_create_converges_and_source_lookup_is_exact(monkeypatch):
+    engine, sessions = _session_factory()
+    monkeypatch.setattr(draft_module, "async_session", sessions)
+    try:
+        await _reset_database(engine)
+        user_id, account_id, source_id = await _seed_account(
+            sessions,
+            suffix="reply-convergence",
+            with_source=True,
+        )
+        first_request = _reply_request(account_id, source_id)
+        second_request = _reply_request(account_id, source_id)
+
+        async def submit(request):
+            async with sessions() as db:
+                try:
+                    return await stage_draft_upsert(
+                        db,
+                        user_id=user_id,
+                        request=request,
+                        now=NOW,
+                    )
+                except DraftSourceExists as error:
+                    return error
+
+        outcomes = await asyncio.gather(submit(first_request), submit(second_request))
+        winners = [outcome for outcome in outcomes if isinstance(outcome, tuple)]
+        occupied = [outcome for outcome in outcomes if isinstance(outcome, DraftSourceExists)]
+        assert len(winners) == 1 and winners[0][1] is True
+        assert len(occupied) == 1
+        async with sessions() as db:
+            assert await db.scalar(select(func.count()).select_from(DraftSession)) == 1
+            resolved = await get_draft_session_for_source_email(
+                db,
+                user_id=user_id,
+                account_id=account_id,
+                source_email_id=source_id,
+            )
+            assert resolved.client_draft_id == winners[0][0].client_draft_id
+            with pytest.raises(DraftNotFound, match="Draft not found"):
+                await get_draft_session_for_source_email(
+                    db,
+                    user_id=user_id,
+                    account_id=account_id + 999,
+                    source_email_id=source_id,
+                )
+    finally:
+        await engine.dispose()
+
+
+async def test_source_lookup_and_recent_list_are_user_isolated_and_metadata_only(monkeypatch):
+    engine, sessions = _session_factory()
+    monkeypatch.setattr(draft_module, "async_session", sessions)
+    try:
+        await _reset_database(engine)
+        first_user, first_account, _first_source = await _seed_account(
+            sessions, suffix="recent-first", with_source=True
+        )
+        second_user, second_account, second_source = await _seed_account(
+            sessions, suffix="reply-convergence", with_source=True
+        )
+        first_active = _request(first_account)
+        first_discarded = _request(first_account)
+        second_reply = _reply_request(second_account, second_source)
+        async with sessions() as db:
+            await stage_draft_upsert(
+                db, user_id=first_user, request=first_active, now=NOW
+            )
+            discarded, _created = await stage_draft_upsert(
+                db, user_id=first_user, request=first_discarded, now=NOW
+            )
+            discarded.state = "discarded"
+            discarded.payload = None
+            discarded.discarded_at = NOW + timedelta(seconds=1)
+            await db.commit()
+        async with sessions() as db:
+            await stage_draft_upsert(
+                db, user_id=second_user, request=second_reply, now=NOW
+            )
+
+        async with sessions() as db:
+            recent = await recent_draft_sessions(db, user_id=first_user, limit=20)
+            assert [draft.client_draft_id for draft in recent] == [first_active.client_draft_id]
+            unloaded = sa_inspect(recent[0]).unloaded
+            assert {"payload", "provider_draft_id", "provider_message_id"} <= unloaded
+            with pytest.raises(DraftNotFound, match="Draft not found"):
+                await get_draft_session_for_source_email(
+                    db,
+                    user_id=first_user,
+                    account_id=second_account,
+                    source_email_id=second_source,
+                )
     finally:
         await engine.dispose()
 

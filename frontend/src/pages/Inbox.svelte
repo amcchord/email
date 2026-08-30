@@ -34,6 +34,7 @@
   import EmailTable from '../components/email/EmailTable.svelte';
   import EmailView from '../components/email/EmailView.svelte';
   import MailActionStatus from '../components/email/MailActionStatus.svelte';
+  import WorkingDrafts from '../components/email/WorkingDrafts.svelte';
   import EmailSearchSummary from '../components/email/EmailSearchSummary.svelte';
   import Icon from '../components/common/Icon.svelte';
 
@@ -73,6 +74,30 @@
   let latestUndo = null;
   let uncertainActionTimer = null;
   let actionReconciliationVersion = 0;
+  let committedDatasetSnapshot = null;
+  let emailViewTransitionGuard = null;
+
+  function registerEmailViewTransitionGuard(guard) {
+    emailViewTransitionGuard = typeof guard === 'function' ? guard : null;
+  }
+
+  async function canLeaveSelectedEmail() {
+    if (!emailViewTransitionGuard) return true;
+    return (await emailViewTransitionGuard()) !== false;
+  }
+
+  function restoreCommittedDatasetControls() {
+    const snapshot = committedDatasetSnapshot;
+    if (!snapshot) return;
+    requestedDatasetKey = snapshot.key;
+    currentMailbox.set(snapshot.mailbox);
+    selectedAccountId.set(snapshot.accountId);
+    searchQuery.set(snapshot.search);
+    smartFilter.set(snapshot.smartFilter);
+    hideIgnored.set(snapshot.hideIgnored);
+    pageSize.set(snapshot.pageSize);
+    currentPageNum.set(snapshot.page);
+  }
 
   // Resizable panel splits (persisted)
   let columnListWidth = $state(parseInt(localStorage.getItem('columnListWidth') || '380', 10));
@@ -185,6 +210,7 @@
     uncertainActions = new Map();
     datasetAuthoritative = false;
     datasetUpdating = false;
+    emailViewTransitionGuard = null;
     selectedEmailId.set(null);
     selectedEmail = null;
     emailLoading = false;
@@ -192,7 +218,7 @@
     emailsLoading.set(false);
   });
 
-  function navigateEmails(direction) {
+  async function navigateEmails(direction) {
     if (!inboxSessionIsCurrent() || !datasetAuthoritative) return;
     const list = get(emails);
     if (!list || list.length === 0) return;
@@ -205,7 +231,7 @@
       nextIdx = currentIdx + direction;
     }
     if (nextIdx >= 0 && nextIdx < list.length) {
-      selectedEmailId.set(list[nextIdx].id);
+      await handleSelect(list[nextIdx].id);
     }
   }
 
@@ -291,6 +317,15 @@
 
   async function loadEmails(append, snapshot = currentDatasetSnapshot()) {
     if (!inboxSessionIsCurrent()) return false;
+    if (
+      !append
+      && committedDatasetSnapshot
+      && snapshot.key !== committedDatasetSnapshot.key
+      && !(await canLeaveSelectedEmail())
+    ) {
+      restoreCommittedDatasetControls();
+      return false;
+    }
     const actionReconciliationVersionAtStart = actionReconciliationVersion;
     const requestId = listRequests.begin();
     if (append) {
@@ -358,6 +393,7 @@
       } else {
         emails.set(result.emails);
         committedDatasetKey = snapshot.key;
+        committedDatasetSnapshot = snapshot;
         if (actionReconciliationVersionAtStart === actionReconciliationVersion) {
           actionReconciliationRequired = false;
         }
@@ -394,6 +430,7 @@
 
   async function handleRestoreFromIgnored(emailId) {
     if (!canActOnEmails([emailId])) return;
+    if (get(selectedEmailId) === emailId && !(await canLeaveSelectedEmail())) return;
     const actionEpoch = selectionEpoch;
     try {
       await api.unignoreNeedsReply(emailId);
@@ -412,6 +449,7 @@
 
   async function handleRestoreFromSnoozed(emailId) {
     if (!canActOnEmails([emailId])) return;
+    if (get(selectedEmailId) === emailId && !(await canLeaveSelectedEmail())) return;
     const actionEpoch = selectionEpoch;
     try {
       await api.unsnoozeNeedsReply(emailId);
@@ -465,10 +503,16 @@
       && get(selectedEmailId) === emailId;
   }
 
-  function handleSelect(emailId) {
+  async function handleSelect(emailId) {
     if (!inboxSessionIsCurrent() || !datasetAuthoritative) return;
     if (!get(emails).some(email => email.id === emailId)) return;
+    if (get(selectedEmailId) !== emailId && !(await canLeaveSelectedEmail())) return;
     selectedEmailId.set(emailId);
+  }
+
+  async function closeSelectedEmail() {
+    if (!(await canLeaveSelectedEmail())) return;
+    selectedEmailId.set(null);
   }
 
   function canActOnEmails(emailIds, notify = true) {
@@ -659,6 +703,7 @@
       action,
       mailbox: datasetSnapshot.mailbox,
     });
+    if (optimistic.removed && !(await canLeaveSelectedEmail())) return false;
     const removedCount = optimistic.removed ? snapshot.items.length : 0;
 
     emails.set(optimistic.emails);
@@ -854,6 +899,9 @@
     checkingPending={checkingUncertainActions}
     onCheckPending={reconcileUncertainActions}
   />
+  {#if !$searchQuery && $currentMailbox === 'DRAFTS'}
+    <WorkingDrafts />
+  {/if}
   <div class="inbox-split flex-1 min-h-0 flex" class:results-stale={datasetUpdating || showingPreviousResults}>
   {#if useTableLayout}
     <!-- Table view: vertical split (table on top, preview below) -->
@@ -891,7 +939,8 @@
             email={selectedEmail}
             loading={emailLoading}
             onAction={handleAction}
-            onClose={() => selectedEmailId.set(null)}
+            onClose={closeSelectedEmail}
+            onGuardChange={registerEmailViewTransitionGuard}
           />
         </div>
       {/if}
@@ -935,7 +984,8 @@
           email={selectedEmail}
           loading={emailLoading}
           onAction={handleAction}
-          onClose={() => selectedEmailId.set(null)}
+          onClose={closeSelectedEmail}
+          onGuardChange={registerEmailViewTransitionGuard}
         />
       </div>
     {/if}

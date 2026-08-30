@@ -273,6 +273,9 @@ export function createDraftSession({
   let debounceTimer = null;
   let discardTimer = null;
   let pollTimer = null;
+  let localWriteTail = Promise.resolve();
+  let activeFlushPromise = null;
+  let activeFlushStartedPromise = null;
   let lastAnnouncementKey = '';
   let latestState = publicState(null, attachmentGate, sending);
 
@@ -433,8 +436,13 @@ export function createDraftSession({
   async function create({ intent, initialSnapshot = {} } = {}) {
     if (disposed) throw new Error('Draft session is disposed');
     if (!intent?.intent_key) throw new TypeError('An explicit draft intent key is required');
-    const resolvedIntent = createComposeDraftIntent(intent, { randomUUID });
     const session = captureSession();
+    const previousFlushStarted = activeFlushStartedPromise;
+    if (previousFlushStarted) await previousFlushStarted;
+    await localWriteTail;
+    if (disposed) throw new Error('Draft session is disposed');
+    if (!isSessionCurrent(session)) return latestState;
+    const resolvedIntent = createComposeDraftIntent(intent, { randomUUID });
     const record = baseRecord(resolvedIntent, initialSnapshot, session);
     const createdGeneration = activate(record, session);
     await putRecord(record);
@@ -448,6 +456,11 @@ export function createDraftSession({
     if (disposed) throw new Error('Draft session is disposed');
     if (!clientDraftId && !intent?.intent_key) throw new TypeError('Draft ID or explicit intent is required');
     const session = captureSession();
+    const previousFlushStarted = activeFlushStartedPromise;
+    if (previousFlushStarted) await previousFlushStarted;
+    await localWriteTail;
+    if (disposed) throw new Error('Draft session is disposed');
+    if (!isSessionCurrent(session)) return latestState;
     let loaded = clientDraftId
       ? await storage.get(safeUserId, clientDraftId)
       : await storage.findByIntent?.(safeUserId, intent.intent_key);
@@ -523,6 +536,37 @@ export function createDraftSession({
     active.error = null;
     if (active.status !== 'conflict') active.conflict = null;
     publish(active.status === 'conflict' ? 'conflict' : 'dirty');
+    const queuedRecord = persistentRecord(cloneDraftValue({
+      ...active,
+      status: active.status === 'conflict' ? 'conflict' : 'local-only',
+    }));
+    const queuedGeneration = generation;
+    const queuedSession = active.session;
+    const queuedDraftId = active.client_draft_id;
+    const queuedRevision = active.revision;
+    // Commit every changed snapshot to IndexedDB immediately. Remote sync is
+    // still debounced, but a close, route change, or hard reload must not have
+    // a 650 ms silent-loss window. Serialize writes so an older transaction
+    // can never finish after and overwrite a newer revision.
+    localWriteTail = localWriteTail.catch(() => {}).then(async () => {
+      if (!isSessionCurrent(queuedSession)) return;
+      const stored = await storage.get(safeUserId, queuedDraftId);
+      if (Number(stored?.revision || 0) > queuedRevision) return;
+      await putRecord(queuedRecord);
+      if (
+        currentAuthority(queuedGeneration, queuedSession, queuedDraftId)
+        && active.revision === queuedRevision
+        && active.status === 'dirty'
+      ) publish('local-only', String(queuedRevision));
+    }).catch(error => {
+      if (!currentAuthority(queuedGeneration, queuedSession, queuedDraftId)) return;
+      active.error = {
+        phase: 'local',
+        message: errorMessage(error, 'Local draft storage failed'),
+        retryable: true,
+      };
+      publish('failed', String(queuedRevision));
+    });
     scheduleFlush();
     return latestState;
   }
@@ -683,14 +727,53 @@ export function createDraftSession({
     const conflict = cloneDraftValue(error?.detail || error?.conflict || {
       message: errorMessage(error, 'Draft changed elsewhere'),
     });
+    const sourceServer = conflict?.source_server_draft;
+    const sourceClientId = String(
+      conflict?.source_client_draft_id || sourceServer?.client_draft_id || '',
+    );
+    const sourceState = serverDraftState(sourceServer);
+    // A source winner that is already being sent or discarded cannot accept
+    // another content revision. Keep the offline/local UUID in that case so
+    // the user can retry it after the terminal server transition completes.
+    // Adopting the winner UUID would strand the retained local content on a
+    // permanently non-editable draft.
+    const sourceWinnerEditable = !['sending', 'discard-pending', 'discarded'].includes(sourceState);
+    const adoptsSourceWinner = Boolean(
+      sourceClientId
+      && sourceClientId !== request.clientDraftId
+      && sourceWinnerEditable,
+    );
     const stored = await storage.get(safeUserId, request.clientDraftId);
     if (stored) {
-      stored.status = 'conflict';
-      stored.conflict = conflict;
-      stored.error = null;
-      await putRecord(stored);
+      const next = adoptsSourceWinner
+        ? { ...stored, client_draft_id: sourceClientId }
+        : stored;
+      next.status = 'conflict';
+      next.conflict = conflict;
+      next.error = null;
+      if (adoptsSourceWinner) {
+        next.server = {
+          draft_id: sourceServer?.draft_id || null,
+          revision: Number(sourceServer?.synced_revision || sourceServer?.revision || 0),
+          state: serverDraftState(sourceServer),
+          account_email: sourceServer?.account_email || null,
+        };
+        next.synced_revision = Number(sourceServer?.synced_revision || 0);
+      }
+      await putRecord(next);
+      if (adoptsSourceWinner) await storage.delete?.(safeUserId, request.clientDraftId);
     }
     if (!currentAuthority(capturedGeneration, capturedSession, request.clientDraftId)) return;
+    if (adoptsSourceWinner) {
+      active.client_draft_id = sourceClientId;
+      active.server = {
+        draft_id: sourceServer?.draft_id || null,
+        revision: Number(sourceServer?.synced_revision || sourceServer?.revision || 0),
+        state: serverDraftState(sourceServer),
+        account_email: sourceServer?.account_email || null,
+      };
+      active.synced_revision = Number(sourceServer?.synced_revision || 0);
+    }
     active.conflict = conflict;
     active.error = null;
     publish('conflict', String(request.revision));
@@ -767,9 +850,11 @@ export function createDraftSession({
     }
   }
 
-  async function flush() {
+  async function flushActive(markStarted = () => {}) {
     if (!active || disposed) return latestState;
     clearDebounce();
+    await localWriteTail;
+    if (!active || disposed) return latestState;
     if (
       active.status === 'discard-pending'
       || active.status === 'discarded'
@@ -822,9 +907,36 @@ export function createDraftSession({
       serverDraftId: active.server?.draft_id || null,
       serverRevision: active.server?.revision || 0,
     };
+    // A navigation may activate another draft while this request is in flight.
+    // Signal only after this draft's immutable request snapshot is captured;
+    // callers need not wait for a slow provider acknowledgement.
+    markStarted();
     publish('saving');
     await syncActive(capturedGeneration, capturedSession, request);
     return latestState;
+  }
+
+  function flush() {
+    if (activeFlushPromise) {
+      const inFlight = activeFlushPromise;
+      // The active identity may change while an older immutable request is
+      // awaiting its acknowledgement. Always run a trailing pass so the new
+      // draft cannot be left local-only merely because its timer fired during
+      // the older request.
+      return inFlight.then(() => flush());
+    }
+    let resolveStarted;
+    const started = new Promise(resolve => { resolveStarted = resolve; });
+    const pending = flushActive(resolveStarted).finally(() => {
+      resolveStarted();
+      if (activeFlushPromise === pending) {
+        activeFlushPromise = null;
+        activeFlushStartedPromise = null;
+      }
+    });
+    activeFlushPromise = pending;
+    activeFlushStartedPromise = started;
+    return pending;
   }
 
   async function refresh() {
@@ -977,11 +1089,14 @@ export function createDraftSession({
 
   async function resolveConflict(choice) {
     if (!active || active.status !== 'conflict') return latestState;
+    const serverRevision = Number(active.conflict?.server_revision || 0);
+    if (Number.isSafeInteger(serverRevision) && serverRevision > active.revision) {
+      active.revision = serverRevision;
+    }
     if (choice === 'server') {
       const serverSnapshot = active.conflict?.server_snapshot;
       if (!serverSnapshot) throw new Error('Server draft content is unavailable');
       active.snapshot = cloneDraftValue(serverSnapshot);
-      active.revision = Math.max(active.revision, Number(active.conflict?.server_revision || 0));
     } else if (choice !== 'local') {
       throw new TypeError('Conflict choice must be local or server');
     }
@@ -1303,6 +1418,11 @@ export function createDraftSession({
     publish();
     if (value) {
       await flush();
+      if (active.status === 'conflict' || active.conflict) {
+        sending = false;
+        publish();
+        throw new Error('Resolve the draft conflict before sending');
+      }
       if (Number(active.server?.revision || 0) < active.revision) {
         sending = false;
         publish();
@@ -1357,6 +1477,16 @@ export function createDraftSession({
 
   function dispose() {
     if (disposed) return;
+    // Discard owns an Undo deadline and, for local-only drafts, the only
+    // finalizer that scrubs retained bytes. Detach UI listeners but keep that
+    // bounded lifecycle alive across route/component teardown. The captured
+    // controller may also service the already-visible Undo action.
+    if (active?.tombstone && active.status !== 'discarded') {
+      clearDebounce();
+      clearPollTimer();
+      listeners.clear();
+      return;
+    }
     disposed = true;
     generation += 1;
     clearDebounce();

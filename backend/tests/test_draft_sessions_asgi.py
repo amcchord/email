@@ -10,7 +10,7 @@ from fastapi import FastAPI
 import backend.routers.compose as compose_router
 from backend.database import get_db
 from backend.routers.auth import get_current_user
-from backend.services.drafts import DraftNotFound
+from backend.services.drafts import DraftNotFound, DraftSourceExists
 
 
 NOW = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
@@ -152,6 +152,64 @@ async def test_owned_detail_is_resumable_but_unknown_email_draft_is_404(app, mon
     assert base64.b64decode(body["attachments"][0]["data_base64"]) == b"generated attachment"
     assert unknown.status_code == 404
     assert unknown.json()["detail"]["code"] == "draft_not_found"
+
+
+@pytest.mark.asyncio
+async def test_exact_owned_source_lookup_and_metadata_only_recent_list(app, monkeypatch):
+    detail = _draft(state="synced")
+    detail.source_email_id_snapshot = 812
+
+    async def get_source(_db, *, user_id, account_id, source_email_id):
+        assert (user_id, account_id, source_email_id) == (5, 7, 812)
+        return detail
+
+    async def recent(_db, *, user_id, limit):
+        assert (user_id, limit) == (5, 4)
+        return [detail]
+
+    monkeypatch.setattr(compose_router, "get_draft_session_for_source_email", get_source)
+    monkeypatch.setattr(compose_router, "recent_draft_sessions", recent)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://test",
+    ) as client:
+        source = await client.get("/api/compose/drafts/by-source-email/812?account_id=7")
+        summary = await client.get("/api/compose/drafts/recent?limit=4")
+
+    assert source.status_code == 200
+    assert source.json()["client_draft_id"] == str(detail.client_draft_id)
+    assert summary.status_code == 200
+    assert summary.json()[0]["client_draft_id"] == str(detail.client_draft_id)
+    assert "subject" not in summary.json()[0]
+    assert "body_preview" not in summary.json()[0]
+    assert "to" not in summary.json()[0]
+    assert "provider_message_id" not in summary.json()[0]
+    assert "attachments" not in summary.json()[0]
+
+
+@pytest.mark.asyncio
+async def test_source_convergence_uses_stable_conflict_code(app, monkeypatch):
+    async def occupied(*_args, **_kwargs):
+        raise DraftSourceExists("A reply draft already exists for this message")
+
+    monkeypatch.setattr(compose_router, "stage_draft_upsert", occupied)
+    payload = {
+        "client_draft_id": str(uuid4()),
+        "revision": 1,
+        "mutation_id": str(uuid4()),
+        "account_id": 7,
+        "to": ["recipient@example.test"],
+        "subject": "Re: Generated",
+        "body_text": "Generated reply",
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://test",
+    ) as client:
+        response = await client.post("/api/compose/draft", json=payload)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "draft_source_exists"
 
 
 @pytest.mark.asyncio

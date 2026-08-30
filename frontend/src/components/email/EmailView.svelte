@@ -1,10 +1,16 @@
 <script>
-  import { onDestroy, onMount } from 'svelte';
-  import { createAuthenticatedSessionGuard, currentPage, composeData, showToast, pendingReplyDraft, accounts, todos, accountColorMap } from '../../lib/stores.js';
+  import { onDestroy, onMount, tick } from 'svelte';
+  import { captureAuthenticatedSession, createAuthenticatedSessionGuard, currentPage, composeData, isAuthenticatedSessionCurrent, showToast, pendingReplyDraft, accounts, todos, accountColorMap } from '../../lib/stores.js';
   import { commandPaletteOpen, helpModalOpen, registerActions } from '../../lib/shortcutStore.js';
   import { api } from '../../lib/api.js';
   import { submitOutboundSend } from '../../lib/outboundSend.js';
   import { restoreOutboundComposeDraft } from '../../lib/outboundDraftRecovery.js';
+  import { createIndexedDbDraftStorage } from '../../lib/draftStorage.js';
+  import {
+    createDurableReplyController,
+    replyBodyText,
+    replyTextHtml,
+  } from '../../lib/durableReply.js';
   import {
     MAX_ACTIVE_ATTACHMENT_REQUESTS,
     canStartAttachmentDownload,
@@ -33,9 +39,17 @@
   import Button from '../common/Button.svelte';
   import Icon from '../common/Icon.svelte';
   import AttachmentPreview from './AttachmentPreview.svelte';
+  import DraftStatus from './DraftStatus.svelte';
   import EmailHtmlFrame from './EmailHtmlFrame.svelte';
 
-  let { email = null, loading = false, onAction = null, onClose = null, standalone = false } = $props();
+  let {
+    email = null,
+    loading = false,
+    onAction = null,
+    onClose = null,
+    onGuardChange = null,
+    standalone = false,
+  } = $props();
 
   let unsubscribing = $state(false);
   let addingTodos = $state(false);
@@ -50,6 +64,8 @@
   let attachmentPreview = $state(null);
   let attachmentPreviewReturnFocus = $state(null);
   let inlineReplyMode = $state(REPLY_ENVELOPE_MODES.REPLY);
+  let inlineReplyTextarea = $state(null);
+  let primaryReplyButton = $state(null);
   let openingManagedDraft = $state(false);
   let draftOpenMessage = $state('');
 
@@ -80,6 +96,17 @@
     accounts: $accounts,
   }));
   const sessionGuard = createAuthenticatedSessionGuard();
+  let durableDraftStorage = null;
+  let durableReply = $state.raw(null);
+  let durableReplyController = $state.raw(null);
+  let unsubscribeDurableReply = null;
+  let durableReplyState = $state({ status: 'pristine', canSend: false, snapshot: {} });
+  let durableReplyOpening = $state(false);
+  let durableReplyError = $state('');
+  let durableReplyEmailId = null;
+  let durableReplyMode = null;
+  let replyReturnFocus = null;
+  let durableReplyRelease = Promise.resolve();
 
   function sessionIsCurrent() {
     return sessionGuard.isCurrent();
@@ -123,7 +150,10 @@
   }));
 
   onDestroy(() => {
+    const release = releaseDurableReply({ flush: true });
+    onGuardChange?.(null);
     sessionGuard.dispose();
+    void Promise.resolve(release).finally(() => durableDraftStorage?.close?.());
     closeAttachmentPreview();
     abortAttachmentRequests();
   });
@@ -488,10 +518,183 @@
   let inlineReplyOpen = $state(false);
   let inlineReplyBody = $state('');
   let inlineReplySending = $state(false);
-  let lastDraftEmailId = $state(null);
+  let lastDraftEmailId = null;
+  let observedInlineReplyEmailId = null;
   let replyFromSuggestion = $state(false);
   let replyIntent = $state(null); // tracks which reply option intent was selected
   let inlineReplyGeneration = 0;
+
+  function releaseDurableReply({ flush = false } = {}) {
+    const controller = durableReplyController;
+    unsubscribeDurableReply?.();
+    unsubscribeDurableReply = null;
+    durableReply = null;
+    durableReplyController = null;
+    durableReplyEmailId = null;
+    durableReplyMode = null;
+    if (!controller) return durableReplyRelease;
+    if (flush) {
+      durableReplyRelease = controller.flush().catch(() => {}).finally(() => controller.dispose());
+      return durableReplyRelease;
+    }
+    controller.dispose();
+    durableReplyRelease = Promise.resolve();
+    return durableReplyRelease;
+  }
+
+  async function prepareInlineReplyTransition() {
+    const controller = durableReplyController;
+    if (!controller) return true;
+    if (durableReplyOpening) {
+      showToast('Wait for the saved reply to finish opening.', 'info');
+      return false;
+    }
+    const before = controller.getState();
+    if (before.discardInProgress) {
+      showToast('Undo the discard or wait for it to finish before leaving this reply.', 'info');
+      return false;
+    }
+    if (before.sendInProgress) {
+      showToast('Wait while the send is being confirmed.', 'info');
+      return false;
+    }
+    persistInlineReply();
+    if (durableReplyError) {
+      showToast('Reply is only in this open editor. Copy it or retry before leaving.', 'error');
+      return false;
+    }
+    try {
+      await controller.flush();
+    } catch (error) {
+      durableReplyError = error?.message || 'Reply could not be saved safely.';
+      showToast('Reply is not safely saved yet. Retry before leaving.', 'error');
+      return false;
+    }
+    const state = controller.getState();
+    if (state?.error?.phase === 'local') {
+      durableReplyError = state.error.message || 'Local draft storage failed.';
+      showToast('Reply is only in this open editor. Copy it or retry before leaving.', 'error');
+      return false;
+    }
+    return true;
+  }
+
+  $effect(() => {
+    if (typeof onGuardChange !== 'function') return;
+    onGuardChange(prepareInlineReplyTransition);
+    return () => onGuardChange(null);
+  });
+
+  function ensureDurableStorage() {
+    if (durableDraftStorage) return durableDraftStorage;
+    durableDraftStorage = createIndexedDbDraftStorage();
+    return durableDraftStorage;
+  }
+
+  function persistInlineReply() {
+    if (!durableReplyController || durableReplyOpening || durableReplyError) return false;
+    try {
+      durableReplyController.update(durableReply.snapshot(
+        replyTextHtml(inlineReplyBody),
+        inlineReplyBody,
+      ));
+      return true;
+    } catch (error) {
+      durableReplyError = error?.message || 'Reply could not be saved safely.';
+      return false;
+    }
+  }
+
+  async function focusInlineReply() {
+    await tick();
+    inlineReplyTextarea?.focus();
+  }
+
+  async function openDurableReply(mode, { seedBody = null } = {}) {
+    if (!email || !sessionIsCurrent()) return false;
+    const reply = mode === REPLY_ENVELOPE_MODES.REPLY_ALL
+      ? replyAllEnvelopeResult
+      : replyEnvelopeResult;
+    if (!reply.available) {
+      showToast(replyUnavailableMessage(reply.reason), 'error');
+      return false;
+    }
+    if (
+      durableReplyController
+      && durableReplyEmailId === email.id
+      && durableReplyMode === mode
+    ) {
+      inlineReplyOpen = true;
+      await focusInlineReply();
+      return true;
+    }
+
+    const emailAtStart = email;
+    const generationAtStart = ++inlineReplyGeneration;
+    const priorBody = inlineReplyBody;
+    if (!(await prepareInlineReplyTransition())) return false;
+    releaseDurableReply();
+    if (!sessionIsCurrent() || email?.id !== emailAtStart.id) return false;
+    durableReplyOpening = true;
+    durableReplyError = '';
+    inlineReplyOpen = true;
+    inlineReplyMode = mode;
+    lastDraftEmailId = email.id;
+    replyReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    try {
+      const storage = ensureDurableStorage();
+      const owner = createDurableReplyController({
+        userId: sessionGuard.userId,
+        storage,
+        api,
+        envelope: reply.envelope,
+        captureSession: captureAuthenticatedSession,
+        isSessionCurrent: isAuthenticatedSessionCurrent,
+        onDiscard: () => {
+          if (email?.id !== emailAtStart.id) return;
+          const focusTarget = replyReturnFocus;
+          inlineReplyBody = '';
+          inlineReplyOpen = false;
+          lastDraftEmailId = null;
+          releaseDurableReply();
+          replyReturnFocus = null;
+          void tick().then(() => {
+            if (focusTarget?.isConnected) focusTarget.focus();
+          });
+        },
+      });
+      durableReply = owner;
+      durableReplyController = owner.controller;
+      durableReplyEmailId = email.id;
+      durableReplyMode = mode;
+      unsubscribeDurableReply = owner.controller.subscribe(state => {
+        if (durableReplyController !== owner.controller || !sessionIsCurrent()) return;
+        durableReplyState = state;
+      });
+      const initialBody = seedBody ?? priorBody;
+      const state = await owner.open(owner.snapshot(replyTextHtml(initialBody), initialBody));
+      if (
+        !sessionIsCurrent()
+        || durableReplyController !== owner.controller
+        || email?.id !== emailAtStart.id
+        || generationAtStart !== inlineReplyGeneration
+      ) return false;
+      const savedBody = state.snapshot?.body_text || replyBodyText(state.snapshot?.body_html || '');
+      inlineReplyBody = savedBody || initialBody || '';
+      if (!savedBody && initialBody) persistInlineReply();
+      durableReplyState = owner.controller.getState();
+      durableReplyOpening = false;
+      await focusInlineReply();
+      return true;
+    } catch (error) {
+      if (sessionIsCurrent() && email?.id === emailAtStart.id) {
+        durableReplyOpening = false;
+        durableReplyError = error?.message || 'Reply drafts are unavailable.';
+        showToast('Couldn’t open a safely saved reply. Try again.', 'error');
+      }
+      return false;
+    }
+  }
 
   function advanceInlineReplyGeneration() {
     inlineReplyGeneration += 1;
@@ -499,8 +702,12 @@
 
   // When the email changes, check if there's a pending reply draft for it
   $effect(() => {
+    const emailId = email?.id ?? null;
+    if (emailId === observedInlineReplyEmailId) return;
+    observedInlineReplyEmailId = emailId;
     advanceInlineReplyGeneration();
     if (!email) {
+      releaseDurableReply({ flush: true });
       inlineReplyOpen = false;
       inlineReplyBody = '';
       lastDraftEmailId = null;
@@ -512,15 +719,15 @@
 
     const draft = get(pendingReplyDraft);
     if (draft && draft.emailId === email.id) {
-      inlineReplyOpen = true;
-      inlineReplyBody = draft.body || '';
       replyFromSuggestion = !!draft.body;
       inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
       lastDraftEmailId = email.id;
       // Clear the pending draft so it doesn't re-trigger
       pendingReplyDraft.set(null);
+      void openDurableReply(REPLY_ENVELOPE_MODES.REPLY, { seedBody: draft.body || '' });
     } else if (email.id !== lastDraftEmailId) {
       // Different email selected, close the inline reply
+      releaseDurableReply({ flush: true });
       inlineReplyOpen = false;
       inlineReplyBody = '';
       lastDraftEmailId = null;
@@ -530,30 +737,45 @@
     }
   });
 
-  function openInlineReply() {
+  async function openInlineReply() {
     advanceInlineReplyGeneration();
     inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
     if (!replyEnvelopeResult.available) {
       showToast(replyUnavailableMessage(replyEnvelopeResult.reason), 'error');
       return;
     }
-    inlineReplyOpen = true;
-    lastDraftEmailId = email.id;
+    await openDurableReply(REPLY_ENVELOPE_MODES.REPLY);
     // If empty and there's no text yet, don't pre-fill (user is manually replying)
   }
 
-  function closeInlineReply() {
+  async function closeInlineReply() {
     advanceInlineReplyGeneration();
+    const controller = durableReplyController;
+    const focusTarget = replyReturnFocus;
+    if (!(await prepareInlineReplyTransition())) return false;
     inlineReplyOpen = false;
-    inlineReplyBody = '';
     lastDraftEmailId = null;
     replyFromSuggestion = false;
     replyIntent = null;
     inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
+    releaseDurableReply();
+    inlineReplyBody = '';
+    const finalState = controller?.getState();
+    showToast(
+      finalState?.status === 'conflict'
+        ? 'Reply kept. Review its versions from Drafts.'
+        : finalState?.status === 'offline' || finalState?.status === 'failed'
+          ? 'Reply saved on this device. Sync still needs attention.'
+          : 'Reply saved. Continue it from Drafts.',
+      'success',
+    );
+    await tick();
+    if (focusTarget?.isConnected) focusTarget.focus();
+    return true;
   }
 
   async function sendInlineReply() {
-    if (!email || !inlineReplyBody.trim() || !sessionIsCurrent()) return;
+    if (!email || !inlineReplyBody.trim() || !sessionIsCurrent() || !durableReplyController) return;
     const replyAtStart = activeReplyEnvelopeResult;
     if (!replyAtStart.available) {
       showToast(replyUnavailableMessage(replyAtStart.reason), 'error');
@@ -563,13 +785,19 @@
     const emailIdAtStart = email.id;
     const bodyAtStart = inlineReplyBody;
     const generationAtStart = inlineReplyGeneration;
-    const payload = {
-      ...replyAtStart.envelope,
-      body_text: bodyAtStart,
-      body_html: `<p>${bodyAtStart.replace(/\n/g, '<br>')}</p>`,
-    };
+    if (!persistInlineReply()) return;
+    try {
+      await durableReplyController.markSending(true);
+    } catch (error) {
+      if (sessionIsCurrent()) showToast(error?.message || 'Reply must be saved before sending.', 'error');
+      return;
+    }
+    const controllerAtStart = durableReplyController;
+    const replyOwnerAtStart = durableReply;
+    const sendReturnFocus = replyReturnFocus;
+    const payload = replyOwnerAtStart.sendPayload();
     const restoreDraft = {
-      draft_key: `reply:${payload.account_id}:${emailIdAtStart}`,
+      draft_key: `client:${payload.client_draft_id}`,
       ...payload,
     };
     let editorReleased = false;
@@ -584,13 +812,23 @@
         capturedBody: bodyAtStart,
         currentBody: inlineReplyBody,
       });
-      if (sentDraftStillActive) closeInlineReply();
+      if (sentDraftStillActive) {
+        inlineReplyOpen = false;
+        inlineReplyBody = '';
+        releaseDurableReply();
+        replyReturnFocus = null;
+        void tick().then(() => {
+          if (sendReturnFocus?.isConnected) sendReturnFocus.focus();
+          else primaryReplyButton?.focus?.();
+        });
+      }
     };
     inlineReplySending = true;
     try {
       const operation = await submitOutboundSend(payload, {
-        onAccepted: releaseEditor,
+        onAccepted: () => {},
         onSent: () => {
+          void durableDraftStorage?.delete?.(sessionGuard.userId, payload.client_draft_id);
           if (
             sessionIsCurrent()
             && email?.id === emailIdAtStart
@@ -602,11 +840,17 @@
         onRestore: (operation, reason) => restoreOutboundComposeDraft(restoreDraft, operation, reason),
       });
       if (!sessionIsCurrent()) return;
-      if (operation) releaseEditor();
+      if (operation) {
+        await controllerAtStart.markSendUncertain(operation);
+        releaseEditor();
+      }
     } catch (err) {
       if (sessionIsCurrent()) showToast(err.message, 'error');
     } finally {
-      if (sessionIsCurrent()) inlineReplySending = false;
+      if (sessionIsCurrent()) {
+        inlineReplySending = false;
+        await controllerAtStart?.markSending(false);
+      }
     }
   }
 
@@ -632,7 +876,7 @@
     }).join(', ');
   }
 
-  function handleReply() {
+  async function handleReply() {
     if (!email) return;
     advanceInlineReplyGeneration();
     inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
@@ -640,16 +884,18 @@
       showToast(replyUnavailableMessage(replyEnvelopeResult.reason), 'error');
       return;
     }
-    inlineReplyOpen = true;
-    lastDraftEmailId = email.id;
+    const suggested = !inlineReplyBody.trim() && email.suggested_reply ? email.suggested_reply : null;
+    const opened = await openDurableReply(REPLY_ENVELOPE_MODES.REPLY, { seedBody: suggested });
+    if (!opened) return;
     // If user hasn't typed anything yet, pre-fill with suggested reply if available
     if (!inlineReplyBody.trim() && email.suggested_reply) {
       inlineReplyBody = email.suggested_reply;
       replyFromSuggestion = true;
+      persistInlineReply();
     }
   }
 
-  function handleReplyAll() {
+  async function handleReplyAll() {
     if (!email) return;
     advanceInlineReplyGeneration();
     inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY_ALL;
@@ -657,15 +903,17 @@
       showToast(replyUnavailableMessage(replyAllEnvelopeResult.reason), 'error');
       return;
     }
-    inlineReplyOpen = true;
-    lastDraftEmailId = email.id;
+    const suggested = !inlineReplyBody.trim() && email.suggested_reply ? email.suggested_reply : null;
+    const opened = await openDurableReply(REPLY_ENVELOPE_MODES.REPLY_ALL, { seedBody: suggested });
+    if (!opened) return;
     if (!inlineReplyBody.trim() && email.suggested_reply) {
       inlineReplyBody = email.suggested_reply;
       replyFromSuggestion = true;
+      persistInlineReply();
     }
   }
 
-  function handleReplyOption(option) {
+  async function handleReplyOption(option) {
     if (!email || !option) return;
     advanceInlineReplyGeneration();
     inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
@@ -673,11 +921,12 @@
       showToast(replyUnavailableMessage(replyEnvelopeResult.reason), 'error');
       return;
     }
-    inlineReplyOpen = true;
-    lastDraftEmailId = email.id;
+    const opened = await openDurableReply(REPLY_ENVELOPE_MODES.REPLY, { seedBody: option.body || '' });
+    if (!opened) return;
     inlineReplyBody = option.body || '';
     replyFromSuggestion = true;
     replyIntent = option.intent || null;
+    persistInlineReply();
   }
 
   // Intent label mapping for the suggestion banner
@@ -698,20 +947,69 @@
     custom: 'bg-blue-50 dark:bg-blue-500/20 border-blue-200 dark:border-blue-500/30 text-blue-700 dark:text-blue-300',
   };
 
-  function handleFullCompose() {
+  async function handleFullCompose() {
     if (!email) return;
     const reply = activeReplyEnvelopeResult;
     if (!reply.available) {
       showToast(replyUnavailableMessage(reply.reason), 'error');
       return;
     }
-    composeData.set({
-      draft_key: `reply:${email.account_id || 'account'}:${email.id}`,
-      ...reply.envelope,
-      body_html: inlineReplyBody ? `<p>${inlineReplyBody.replace(/\n/g, '<br>')}</p>` : '',
-    });
-    closeInlineReply();
+    if (!durableReplyController || !durableReply) {
+      const opened = await openDurableReply(inlineReplyMode);
+      if (!opened) return;
+    }
+    persistInlineReply();
+    try {
+      await durableReplyController.flush();
+    } catch (error) {
+      showToast(error?.message || 'Reply must be safely saved before opening full Compose.', 'error');
+      return;
+    }
+    const state = durableReplyController.getState();
+    if (state?.error?.phase === 'local') {
+      durableReplyError = state.error.message || 'Local draft storage failed.';
+      showToast('Reply is only in this open editor. Retry before opening full Compose.', 'error');
+      return;
+    }
+    composeData.set(durableReply.composeData());
+    inlineReplyOpen = false;
+    releaseDurableReply();
     currentPage.set('compose');
+  }
+
+  async function discardInlineReply() {
+    if (!durableReplyController) return;
+    const discardOwner = durableReplyController;
+    await discardOwner.discard({ delayMs: 10000 });
+    showToast('Reply discarded', 'info', 10000, {
+      actionLabel: 'Undo',
+      onAction: () => discardOwner.undoDiscard(),
+    });
+  }
+
+  async function requestEmailClose() {
+    if (await prepareInlineReplyTransition()) onClose?.();
+  }
+
+  function retryInlineDraft() {
+    durableReplyError = '';
+    void durableReplyController?.retry();
+  }
+
+  function undoInlineDiscard() {
+    void durableReplyController?.undoDiscard();
+  }
+
+  function handleInlineReplyKeydown(event) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      void closeInlineReply();
+      return;
+    }
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      if (durableReplyState.canSend && inlineReplyBody.trim()) void sendInlineReply();
+    }
   }
 
   async function openManagedDraft() {
@@ -925,7 +1223,7 @@
               <Icon name="external-link" size={20} />
             </button>
             <button
-              onclick={onClose}
+              onclick={requestEmailClose}
               class="min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast ml-1"
               style="color: var(--text-tertiary)"
               title="Close"
@@ -1243,9 +1541,9 @@
 
     <!-- Inline Reply Composer -->
     {#if inlineReplyOpen}
-      <div class="px-6 py-4 border-t shrink-0" style="border-color: var(--border-color); background: var(--bg-tertiary)">
+      <div class="inline-reply px-6 py-4 border-t shrink-0" style="border-color: var(--border-color); background: var(--bg-tertiary)" data-durable-reply data-client-draft-id={durableReplyState.clientDraftId || undefined}>
         <div class="flex items-start justify-between gap-3 mb-2">
-          <div class="flex items-center gap-2">
+          <div class="flex min-w-0 items-center gap-2">
             <span style="color: var(--color-accent-500)">
               <Icon name="corner-up-left" size={16} />
             </span>
@@ -1275,8 +1573,18 @@
           </div>
           <div class="flex items-center gap-1">
             <button
+              onclick={discardInlineReply}
+              disabled={!durableReplyController || durableReplyOpening || durableReplyState.discardInProgress || durableReplyState.sendInProgress}
+              class="inline-flex min-h-11 min-w-11 items-center justify-center rounded transition-fast disabled:opacity-50"
+              style="color: var(--text-tertiary)"
+              aria-label="Discard reply"
+              title="Discard reply · Undo available for 10 seconds"
+            >
+              <Icon name="trash-2" size={16} />
+            </button>
+            <button
               onclick={handleFullCompose}
-              disabled={!activeReplyEnvelopeResult.available}
+              disabled={!activeReplyEnvelopeResult.available || durableReplyOpening || Boolean(durableReplyError)}
               class="inline-flex min-h-11 min-w-11 items-center justify-center rounded transition-fast"
               class:opacity-50={!activeReplyEnvelopeResult.available}
               style="color: var(--text-tertiary)"
@@ -1289,14 +1597,33 @@
             </button>
             <button
               onclick={closeInlineReply}
+              disabled={durableReplyOpening}
               class="inline-flex min-h-11 min-w-11 items-center justify-center rounded transition-fast"
               style="color: var(--text-tertiary)"
-              aria-label="Close reply composer"
-              title="Close reply"
+              aria-label="Close and keep reply"
+              title="Close and keep reply · Escape"
             >
               <Icon name="x" size={16} />
             </button>
           </div>
+        </div>
+        <div class="mb-2 min-h-5">
+          {#if durableReplyOpening}
+            <span class="text-xs" style="color: var(--text-secondary)" role="status">Opening saved reply…</span>
+          {:else if durableReplyError}
+            <span id="inline-reply-save-error" class="inline-flex flex-wrap items-center gap-2 text-xs" style="color: var(--status-error)" role="alert">
+              <span>Not safely saved. Copy your reply before leaving.</span>
+              <button type="button" class="min-h-11 rounded-lg border px-3 font-semibold" onclick={retryInlineDraft}>Retry</button>
+            </span>
+          {:else}
+            <DraftStatus
+              state={durableReplyState}
+              compact
+              onretry={retryInlineDraft}
+              onundo={undoInlineDiscard}
+              onreview={handleFullCompose}
+            />
+          {/if}
         </div>
         {#if replyFromSuggestion}
           <div class="flex items-center gap-1.5 mb-2 px-1">
@@ -1313,21 +1640,25 @@
           </div>
         {/if}
         <textarea
+          bind:this={inlineReplyTextarea}
           bind:value={inlineReplyBody}
-          oninput={advanceInlineReplyGeneration}
+          oninput={() => { advanceInlineReplyGeneration(); persistInlineReply(); }}
+          onkeydown={handleInlineReplyKeydown}
           placeholder="Write your reply..."
           aria-label="Reply message"
-          disabled={!activeReplyEnvelopeResult.available}
+          aria-describedby={durableReplyError ? 'inline-reply-save-error' : undefined}
+          disabled={!activeReplyEnvelopeResult.available || durableReplyOpening || durableReplyState.discardInProgress || durableReplyState.sendInProgress || durableReplyState.status === 'conflict'}
           class="w-full rounded-lg border p-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-accent-500/40"
           style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary); min-height: 100px; max-height: 200px"
           rows="4"
         ></textarea>
-        <div class="flex items-center gap-2 mt-2">
+        <div class="reply-actions flex items-center gap-2 mt-2">
           <button
             onclick={sendInlineReply}
-            disabled={inlineReplySending || !inlineReplyBody.trim() || !activeReplyEnvelopeResult.available}
-            class="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-medium transition-fast disabled:opacity-50"
+            disabled={inlineReplySending || !inlineReplyBody.trim() || !activeReplyEnvelopeResult.available || !durableReplyState.canSend || Boolean(durableReplyError)}
+            class="flex min-h-11 items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium transition-fast disabled:opacity-50"
             style="background: var(--color-accent-500); color: white"
+            title="Send reply · Command or Control Enter"
           >
             {#if inlineReplySending}
               <div class="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
@@ -1337,6 +1668,7 @@
               {inlineReplyActionLabel}
             {/if}
           </button>
+          <span class="text-[11px]" style="color: var(--text-tertiary)">⌘↵ Send · Esc Close and keep</span>
         </div>
       </div>
     {/if}
@@ -1354,7 +1686,7 @@
           </p>
         {/if}
       {:else}
-        <Button size="sm" class="min-h-11" onclick={handleReply} disabled={!replyEnvelopeResult.available}>
+        <Button bind:element={primaryReplyButton} size="sm" class="min-h-11" onclick={handleReply} disabled={!replyEnvelopeResult.available}>
         <Icon name="corner-up-left" size={16} />
         Reply
         </Button>

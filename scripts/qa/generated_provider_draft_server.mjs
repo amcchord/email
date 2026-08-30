@@ -212,6 +212,7 @@ function newCounters() {
     stale_revision_rejections: 0,
     mutation_conflicts: 0,
     account_conflicts: 0,
+    source_conflicts: 0,
     lost_responses_after_persist: 0,
     retries_after_lost_response: 0,
     held_responses: 0,
@@ -785,6 +786,23 @@ export function createGeneratedProviderDraftFixture({
       counters.attachment_upserts += existing.payload.attachments.length;
       counters.attachment_bytes_upserted += existing.attachment_bytes;
     } else {
+      if (payload.source_email_id !== null) {
+        const sourceOwner = [...drafts.values()].find(candidate => (
+          candidate.owner_user_id === currentUser.id
+          && candidate.account_id === payload.account_id
+          && candidate.payload.source_email_id === payload.source_email_id
+          && candidate.state !== 'discarded'
+        ));
+        if (sourceOwner) {
+          counters.source_conflicts += 1;
+          return writeError(
+            response,
+            409,
+            'draft_source_exists',
+            'A generated reply draft already owns this exact source',
+          );
+        }
+      }
       providerSequence += 1;
       const timestamp = new Date().toISOString();
       drafts.set(key, {
@@ -912,6 +930,41 @@ export function createGeneratedProviderDraftFixture({
       client_draft_id: record.client_draft_id,
       revision: record.revision,
       payload_hash: record.payload_hash,
+      state: record.state,
+    });
+    return writeJson(response, draftResponse(record, { includeContent: true }));
+  }
+
+  function handleDraftGetBySource(request, response, pathname, sourceEmailId, accountId) {
+    if (!requireUser(response)) return;
+    counters.draft_get_requests += 1;
+    const source = sourceForUser(currentUser.id, sourceEmailId);
+    if (!source || source.account_id !== accountId || !accountForUser(currentUser.id, accountId)) {
+      return writeError(response, 404, 'draft_not_found', 'Generated provider draft not found');
+    }
+    const matches = [...drafts.values()].filter(candidate => (
+      candidate.owner_user_id === currentUser.id
+      && candidate.account_id === accountId
+      && candidate.payload.source_email_id === sourceEmailId
+      && candidate.state !== 'discarded'
+    ));
+    if (matches.length === 0) {
+      return writeError(response, 404, 'draft_not_found', 'Generated provider draft not found');
+    }
+    if (matches.length > 1) {
+      return writeError(response, 409, 'draft_conflict', 'Multiple generated replies require review');
+    }
+    const record = matches[0];
+    advanceDiscard(request, pathname, record);
+    if (record.state === 'discarded') {
+      return writeError(response, 404, 'draft_not_found', 'Generated provider draft not found');
+    }
+    counters.attachment_rehydrates += record.payload.attachments.length;
+    counters.attachment_bytes_rehydrated += record.attachment_bytes;
+    recordEvent('draft_rehydrated_by_source', request, pathname, {
+      client_draft_id: record.client_draft_id,
+      revision: record.revision,
+      source_email_id: sourceEmailId,
       state: record.state,
     });
     return writeJson(response, draftResponse(record, { includeContent: true }));
@@ -1302,6 +1355,18 @@ export function createGeneratedProviderDraftFixture({
         response,
         pathname,
         decodeURIComponent(detailMatch[1]),
+      );
+    }
+    const sourceDraftMatch = pathname.match(
+      /^\/api\/compose\/drafts\/by-source-email\/(\d+)$/,
+    );
+    if (request.method === 'GET' && sourceDraftMatch) {
+      return handleDraftGetBySource(
+        request,
+        response,
+        pathname,
+        Number(sourceDraftMatch[1]),
+        Number(url.searchParams.get('account_id')),
       );
     }
     const emailDraftMatch = pathname.match(

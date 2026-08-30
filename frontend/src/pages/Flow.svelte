@@ -1,5 +1,5 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { marked } from 'marked';
   import { api } from '../lib/api.js';
   import { sanitizeMarkdown } from '../lib/sanitize.js';
@@ -9,7 +9,7 @@
   import { lastEvent } from '../lib/realtime.js';
   import Icon from '../components/common/Icon.svelte';
   import DaySummaryStrip from '../lib/flow/DaySummaryStrip.svelte';
-  import { addPendingReplyId, capturedReplyStillActive, flowReplyDraftKey, isCurrentFlowThreadRequest, newestThreadMessage, reconcileNeedsReplyRemoval, removePendingReplyId, replyDraftAccountKey } from '../lib/flow/replyActionState.js';
+  import { addPendingReplyId, capturedReplyStillActive, isCurrentFlowThreadRequest, newestThreadMessage, reconcileNeedsReplyRemoval, removePendingReplyId, replyDraftAccountKey } from '../lib/flow/replyActionState.js';
   import DeferredRichEditor from '../components/email/DeferredRichEditor.svelte';
   import { cleanEmailText } from '../lib/emailText.js';
   import {
@@ -23,6 +23,9 @@
   import { secureOutboundSendKey, submitOutboundSend } from '../lib/outboundSend.js';
   import { restoreOutboundComposeDraft } from '../lib/outboundDraftRecovery.js';
   import { isMailActionNetworkError } from '../lib/mailActionUX.js';
+  import { createIndexedDbDraftStorage } from '../lib/draftStorage.js';
+  import { createDurableReplyController } from '../lib/durableReply.js';
+  import DraftStatus from '../components/email/DraftStatus.svelte';
 
   // --- Day Summary State ---
   let summaryLoading = $state(true);
@@ -85,7 +88,16 @@
   let editorKey = $state(0);
   let writingSurfaceReady = $state(false);
   let threadLoadGeneration = 0;
-  let replyDrafts = $state({});
+  let durableReplyStorage = null;
+  let durableReply = $state.raw(null);
+  let durableReplyController = $state.raw(null);
+  let durableReplyState = $state({ status: 'pristine', canSend: false, snapshot: {} });
+  let durableReplyOpening = $state(false);
+  let durableReplyError = $state('');
+  let durableReplySourceId = null;
+  let unsubscribeDurableReply = null;
+  let durableReplyRelease = Promise.resolve();
+  let replyReturnFocus = null;
 
   function replyUnavailableMessage(reason) {
     if (reason === REPLY_ENVELOPE_UNAVAILABLE.SOURCE_ACCOUNT_INACTIVE) {
@@ -329,11 +341,15 @@
           navigateHighlight(-1);
         }
       },
-      'flow.nextSection': () => {
-        if (!replyViewOpen) cycleSectionForward();
+      'flow.nextSection': {
+        run: cycleSectionForward,
+        isEnabled: () => !replyViewOpen,
+        disabledReason: 'Close the reply editor before moving between sections',
       },
-      'flow.prevSection': () => {
-        if (!replyViewOpen) cycleSectionBackward();
+      'flow.prevSection': {
+        run: cycleSectionBackward,
+        isEnabled: () => !replyViewOpen,
+        disabledReason: 'Close the reply editor before moving between sections',
       },
       'flow.open': () => {
         if (replyViewOpen) return;
@@ -412,8 +428,16 @@
       loadActiveThreads(),
     ]);
 
+    try {
+      durableReplyStorage = createIndexedDbDraftStorage();
+    } catch (error) {
+      durableReplyError = error?.message || 'Draft storage is unavailable.';
+    }
+
     return () => {
+      const release = releaseFlowDurableReply({ flush: true });
       sessionGuard.dispose();
+      void Promise.resolve(release).finally(() => durableReplyStorage?.close?.());
       conversationLoadGeneration += 1;
       streamAbortController?.abort();
       streamAbortController = null;
@@ -883,17 +907,140 @@
   // ============ Reply View Logic ============
 
   function rememberCurrentReplyDraft() {
-    const key = flowReplyDraftKey(selectedReplyEmail);
-    if (!key || !replyBodyHtml) return;
-    replyDrafts = { ...replyDrafts, [key]: replyBodyHtml };
+    if (!durableReplyController || durableReplyOpening || durableReplyError) return false;
+    if (
+      durableReplyState.status === 'conflict'
+      || durableReplyState.discardInProgress
+      || durableReplyState.sendInProgress
+    ) return false;
+    try {
+      durableReplyController.update(durableReply.snapshot(replyBodyHtml));
+      return true;
+    } catch (error) {
+      durableReplyError = error?.message || 'Reply could not be saved safely.';
+      return false;
+    }
   }
 
-  function forgetReplyDraft(email = selectedReplyEmail) {
-    const key = flowReplyDraftKey(email);
-    if (!key || !Object.hasOwn(replyDrafts, key)) return;
-    const nextDrafts = { ...replyDrafts };
-    delete nextDrafts[key];
-    replyDrafts = nextDrafts;
+  function releaseFlowDurableReply({ flush = false } = {}) {
+    const controller = durableReplyController;
+    unsubscribeDurableReply?.();
+    unsubscribeDurableReply = null;
+    durableReply = null;
+    durableReplyController = null;
+    durableReplySourceId = null;
+    if (!controller) return durableReplyRelease;
+    if (flush) {
+      durableReplyRelease = controller.flush().catch(() => {}).finally(() => controller.dispose());
+      return durableReplyRelease;
+    }
+    controller.dispose();
+    durableReplyRelease = Promise.resolve();
+    return durableReplyRelease;
+  }
+
+  async function prepareFlowReplyTransition() {
+    const controller = durableReplyController;
+    if (!controller) return true;
+    if (durableReplyOpening) {
+      showToast('Wait for the saved reply to finish opening.', 'info');
+      return false;
+    }
+    const before = controller.getState();
+    if (before.discardInProgress) {
+      showToast('Undo the discard or wait for it to finish before leaving this reply.', 'info');
+      return false;
+    }
+    if (before.sendInProgress) {
+      showToast('Wait while the send is being confirmed.', 'info');
+      return false;
+    }
+    rememberCurrentReplyDraft();
+    if (durableReplyError) {
+      showToast('Reply is only in this open editor. Copy it or retry before leaving.', 'error');
+      return false;
+    }
+    try {
+      await controller.flush();
+    } catch (error) {
+      durableReplyError = error?.message || 'Reply could not be saved safely.';
+      showToast('Reply is not safely saved yet. Retry before leaving.', 'error');
+      return false;
+    }
+    const state = controller.getState();
+    if (state?.error?.phase === 'local') {
+      durableReplyError = state.error.message || 'Local draft storage failed.';
+      showToast('Reply is only in this open editor. Copy it or retry before leaving.', 'error');
+      return false;
+    }
+    return true;
+  }
+
+  async function openFlowDurableReply(requestGeneration, initialHtml = '') {
+    if (
+      !sessionIsCurrent()
+      || requestGeneration !== threadLoadGeneration
+      || !replyContext?.available
+      || !durableReplyStorage
+    ) return false;
+    const context = replyContext;
+    const sourceId = Number(context.envelope.source_email_id);
+    if (
+      durableReplyController
+      && durableReplySourceId === sourceId
+    ) return true;
+
+    await releaseFlowDurableReply({ flush: true });
+    if (!threadRequestIsCurrent(requestGeneration, {
+      emailId: selectedReplyEmail?.id ?? null,
+      threadId: selectedReplyEmail?.gmail_thread_id ?? null,
+      source: viewSource,
+    })) return false;
+    durableReplyOpening = true;
+    durableReplyError = '';
+    const owner = createDurableReplyController({
+      userId: sessionGuard.userId,
+      storage: durableReplyStorage,
+      api,
+      envelope: context.envelope,
+      captureSession: captureAuthenticatedSession,
+      isSessionCurrent: isAuthenticatedSessionCurrent,
+      onDiscard: () => {
+        if (requestGeneration !== threadLoadGeneration || !sessionIsCurrent()) return;
+        replyBodyHtml = '';
+        initialReplyContent = '';
+        void finishCloseReplyView();
+      },
+    });
+    durableReply = owner;
+    durableReplyController = owner.controller;
+    durableReplySourceId = sourceId;
+    unsubscribeDurableReply = owner.controller.subscribe(state => {
+      if (durableReplyController !== owner.controller || !sessionIsCurrent()) return;
+      durableReplyState = state;
+    });
+    try {
+      const state = await owner.open(owner.snapshot(initialHtml));
+      if (
+        durableReplyController !== owner.controller
+        || requestGeneration !== threadLoadGeneration
+        || !sessionIsCurrent()
+      ) return false;
+      replyBodyHtml = state.snapshot?.body_html || initialHtml || '';
+      initialReplyContent = replyBodyHtml;
+      durableReplyState = owner.controller.getState();
+      durableReplyOpening = false;
+      remountReplyEditor();
+      await tick();
+      return true;
+    } catch (error) {
+      if (requestGeneration === threadLoadGeneration && sessionIsCurrent()) {
+        durableReplyOpening = false;
+        durableReplyError = error?.message || 'Reply drafts are unavailable.';
+        showToast('Couldn’t open a safely saved reply. Try again.', 'error');
+      }
+      return false;
+    }
   }
 
   function remountReplyEditor() {
@@ -917,7 +1064,14 @@
 
   async function openReplyView(email, index, option) {
     if (!sessionIsCurrent()) return;
-    rememberCurrentReplyDraft();
+    if (!(await prepareFlowReplyTransition())) return false;
+    if (!replyViewOpen) {
+      replyReturnFocus = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    }
+    releaseFlowDurableReply();
+    if (!sessionIsCurrent()) return;
     const requestGeneration = ++threadLoadGeneration;
     const emailId = email.id;
     selectedReplyEmail = {
@@ -949,7 +1103,7 @@
         if (optIdx >= 0) selectedOptionIndex = optIdx;
       }
     } else {
-      initialReplyContent = replyDrafts[flowReplyDraftKey(selectedReplyEmail)] || '';
+      initialReplyContent = '';
       replyBodyHtml = initialReplyContent;
     }
     remountReplyEditor();
@@ -978,12 +1132,23 @@
         }
       }
     }
-    if (threadRequestIsCurrent(requestGeneration, { emailId })) threadLoading = false;
+    if (threadRequestIsCurrent(requestGeneration, { emailId })) {
+      threadLoading = false;
+      await tick();
+      await openFlowDurableReply(requestGeneration, initialReplyContent);
+    }
   }
 
   async function openThreadInFlow(threadId, metadata, source) {
     if (!sessionIsCurrent()) return;
-    rememberCurrentReplyDraft();
+    if (!(await prepareFlowReplyTransition())) return false;
+    if (!replyViewOpen) {
+      replyReturnFocus = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    }
+    releaseFlowDurableReply();
+    if (!sessionIsCurrent()) return;
     const requestGeneration = ++threadLoadGeneration;
     viewSource = source;
     replyViewOpen = true;
@@ -1024,7 +1189,7 @@
       category: null,
       reply_draft_account_key: replyDraftAccountKey(metadata),
     };
-    initialReplyContent = replyDrafts[flowReplyDraftKey(selectedReplyEmail)] || '';
+    initialReplyContent = '';
     replyBodyHtml = initialReplyContent;
     remountReplyEditor();
 
@@ -1088,11 +1253,16 @@
         }
       }
     }
-    if (threadRequestIsCurrent(requestGeneration, { threadId, source })) threadLoading = false;
+    if (threadRequestIsCurrent(requestGeneration, { threadId, source })) {
+      threadLoading = false;
+      await tick();
+      await openFlowDurableReply(requestGeneration, initialReplyContent);
+    }
   }
 
-  function closeReplyView() {
-    rememberCurrentReplyDraft();
+  async function finishCloseReplyView({ toastMessage = '' } = {}) {
+    const focusTarget = replyReturnFocus;
+    const focusIndex = activeReplyIndex;
     threadLoadGeneration += 1;
     replyViewOpen = false;
     viewSource = 'needs_reply';
@@ -1109,6 +1279,28 @@
     lastCustomPrompt = '';
     editingCustomPrompt = false;
     writingSurfaceReady = false;
+    releaseFlowDurableReply();
+    if (toastMessage) showToast(toastMessage, 'success');
+    await tick();
+    if (focusTarget?.isConnected) focusTarget.focus();
+    else document.querySelector(`[data-flow-item="needs_reply-${focusIndex}"]`)?.focus?.();
+    replyReturnFocus = null;
+    return true;
+  }
+
+  async function closeReplyView() {
+    const hadDurableDraft = Boolean(durableReplyController);
+    if (!(await prepareFlowReplyTransition())) return false;
+    const state = durableReplyController?.getState();
+    const toastMessage = hadDurableDraft
+      ? state?.status === 'conflict'
+        ? 'Reply kept. Review its versions from Drafts.'
+        : state?.status === 'offline' || state?.status === 'failed'
+          ? 'Reply saved on this device. Sync still needs attention.'
+          : 'Reply saved. Continue it from Drafts.'
+      : '';
+    await finishCloseReplyView({ toastMessage });
+    return true;
   }
 
   function selectReplyOption(option, optIdx) {
@@ -1129,7 +1321,7 @@
     customPromptText = '';
     lastCustomPrompt = '';
     editingCustomPrompt = false;
-    forgetReplyDraft();
+    rememberCurrentReplyDraft();
     remountReplyEditor();
   }
 
@@ -1192,8 +1384,7 @@
 
   function handleEditorUpdate(html) {
     replyBodyHtml = html;
-    const key = flowReplyDraftKey(selectedReplyEmail);
-    if (key) replyDrafts = { ...replyDrafts, [key]: html };
+    rememberCurrentReplyDraft();
   }
 
   function useSuggestedReply() {
@@ -1230,6 +1421,7 @@
 
   async function archiveCurrentEmail() {
     if (!selectedReplyEmail || !sessionIsCurrent()) return;
+    if (!(await prepareFlowReplyTransition())) return;
     const emailId = selectedReplyEmail.id;
     try {
       await api.emailActions([emailId], 'archive');
@@ -1243,6 +1435,7 @@
 
   async function trashCurrentEmail() {
     if (!selectedReplyEmail || !sessionIsCurrent()) return;
+    if (!(await prepareFlowReplyTransition())) return;
     const emailId = selectedReplyEmail.id;
     try {
       await api.emailActions([emailId], 'trash');
@@ -1256,6 +1449,7 @@
 
   async function ignoreCurrentEmail() {
     if (!selectedReplyEmail || !sessionIsCurrent()) return false;
+    if (!(await prepareFlowReplyTransition())) return false;
     const emailId = selectedReplyEmail.id;
     const sourceAtStart = viewSource;
     const nextPending = addPendingReplyId(ignoringReplyEmailIds, emailId);
@@ -1312,6 +1506,7 @@
 
   async function snoozeEmail(emailId, duration, fromReplyView) {
     if (!sessionIsCurrent()) return;
+    if (fromReplyView && !(await prepareFlowReplyTransition())) return;
     const labels = { '1h': '1 hour', '3h': '3 hours', 'tomorrow': 'tomorrow morning', 'next_week': 'next week' };
     try {
       await api.snoozeNeedsReply(emailId, duration);
@@ -1360,7 +1555,7 @@
     openReplyView(needsReplyEmails[result.activeIndex], result.activeIndex);
   }
 
-  function openInCompose() {
+  async function openInCompose() {
     if (!selectedReplyEmail || threadLoading) return;
     const context = replyContext;
     if (!context?.available) {
@@ -1368,11 +1563,26 @@
       return;
     }
 
-    composeData.set({
-      draft_key: `reply:${context.envelope.account_id}:${context.message.id || context.envelope.thread_id || 'thread'}`,
-      ...context.envelope,
-      body_html: replyBodyHtml || '',
-    });
+    if (!durableReplyController || !durableReply) {
+      showToast('Wait for the saved reply to finish opening.', 'error');
+      return;
+    }
+    rememberCurrentReplyDraft();
+    try {
+      await durableReplyController.flush();
+    } catch (error) {
+      durableReplyError = error?.message || 'Reply could not be saved safely.';
+      showToast('Reply must be safely saved before opening full Compose.', 'error');
+      return;
+    }
+    const state = durableReplyController.getState();
+    if (state?.error?.phase === 'local') {
+      durableReplyError = state.error.message || 'Local draft storage failed.';
+      showToast('Reply is only in this open editor. Retry before opening full Compose.', 'error');
+      return;
+    }
+    composeData.set(durableReply.composeData());
+    releaseFlowDurableReply();
     currentPage.set('compose');
   }
 
@@ -1384,7 +1594,11 @@
       && writingSurfaceReady
       && !threadLoading
       && !inlineReplySending
-      && Boolean(replyContext?.available);
+      && Boolean(replyContext?.available)
+      && Boolean(durableReplyController)
+      && Boolean(durableReplyState.canSend)
+      && !durableReplyOpening
+      && !durableReplyError;
   }
 
   function archiveOutcomeCouldBeAmbiguous(error) {
@@ -1424,14 +1638,18 @@
       showToast(replyUnavailableMessage(contextAtStart?.reason), 'error');
       return false;
     }
-    const envelopeAtStart = contextAtStart.envelope;
-    const payload = {
-      ...envelopeAtStart,
-      body_text: plainText,
-      body_html: bodyHtmlAtStart,
-    };
+    if (!rememberCurrentReplyDraft()) return false;
+    const controllerAtStart = durableReplyController;
+    const ownerAtStart = durableReply;
+    try {
+      await controllerAtStart.markSending(true);
+    } catch (error) {
+      if (sessionIsCurrent()) showToast(error?.message || 'Reply must be saved before sending.', 'error');
+      return false;
+    }
+    const payload = ownerAtStart.sendPayload();
     const restoreDraft = {
-      draft_key: `reply:${envelopeAtStart.account_id}:${email.id || envelopeAtStart.thread_id || 'thread'}`,
+      draft_key: `client:${payload.client_draft_id}`,
       ...payload,
     };
     const sendSession = captureAuthenticatedSession();
@@ -1448,8 +1666,8 @@
         source: sourceAtStart,
       });
       const sentDraftStillActive = replyStillActive && replyBodyHtml === bodyHtmlAtStart;
-      if (!replyStillActive || sentDraftStillActive) forgetReplyDraft(email);
       if (sentDraftStillActive) replyBodyHtml = '';
+      releaseFlowDurableReply();
 
       if (sourceAtStart === 'needs_reply') {
         if (!replyStillActive || sentDraftStillActive) removeEmailAndAdvance(email.id);
@@ -1461,8 +1679,9 @@
     inlineReplySending = true;
     try {
       const operation = await submitOutboundSend(payload, {
-        onAccepted: releaseEditor,
+        onAccepted: () => {},
         onSent: () => {
+          void durableReplyStorage?.delete?.(sessionGuard.userId, payload.client_draft_id);
           if (!archiveIdempotencyKey || !isAuthenticatedSessionCurrent(sendSession)) return;
           void archiveSentReply(email.id, archiveIdempotencyKey).catch(error => {
             if (isAuthenticatedSessionCurrent(sendSession)) {
@@ -1476,14 +1695,39 @@
         onRestore: (operation, reason) => restoreOutboundComposeDraft(restoreDraft, operation, reason),
       });
       if (!sessionIsCurrent()) return false;
-      if (operation) releaseEditor();
+      if (operation) {
+        await controllerAtStart.markSendUncertain(operation);
+        releaseEditor();
+      }
       return true;
     } catch (err) {
       if (sessionIsCurrent()) showToast(err.message, 'error');
       return false;
     } finally {
-      if (sessionIsCurrent()) inlineReplySending = false;
+      if (sessionIsCurrent()) {
+        inlineReplySending = false;
+        await controllerAtStart?.markSending(false);
+      }
     }
+  }
+
+  async function discardFlowReply() {
+    if (!durableReplyController) return;
+    const discardOwner = durableReplyController;
+    await discardOwner.discard({ delayMs: 10000 });
+    showToast('Reply discarded', 'info', 10000, {
+      actionLabel: 'Undo',
+      onAction: () => discardOwner.undoDiscard(),
+    });
+  }
+
+  function retryFlowDraft() {
+    durableReplyError = '';
+    void durableReplyController?.retry();
+  }
+
+  function undoFlowDiscard() {
+    void durableReplyController?.undoDiscard();
   }
 
   function formatEmailDate(dateStr) {
@@ -1930,8 +2174,9 @@
               <button
                 onclick={goToPrevReply}
                 disabled={activeReplyIndex <= 0}
-                class="p-1 rounded-md transition-fast"
+                class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md transition-fast"
                 style="color: {activeReplyIndex <= 0 ? 'var(--border-color)' : 'var(--text-secondary)'}"
+                aria-label="Previous email"
                 title="Previous email"
               >
                 <Icon name="chevron-left" size={16} />
@@ -1939,8 +2184,9 @@
               <button
                 onclick={goToNextReply}
                 disabled={activeReplyIndex >= needsReplyEmails.length - 1}
-                class="p-1 rounded-md transition-fast"
+                class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md transition-fast"
                 style="color: {activeReplyIndex >= needsReplyEmails.length - 1 ? 'var(--border-color)' : 'var(--text-secondary)'}"
+                aria-label="Next email"
                 title="Next email"
               >
                 <Icon name="chevron-right" size={16} />
@@ -2298,7 +2544,19 @@
             <div class="m-5 rounded-lg border p-4 text-sm" style="border-color: var(--border-color); color: var(--text-secondary)" role="status">
               Loading and verifying the full conversation…
             </div>
-          {:else if replyContext?.available}
+          {:else if replyContext?.available && durableReplyOpening}
+            <div class="m-5 rounded-lg border p-4 text-sm" style="border-color: var(--border-color); color: var(--text-secondary)" role="status">
+              Opening and reconciling the saved reply…
+            </div>
+          {:else if replyContext?.available && (
+            durableReplyState.status === 'conflict'
+            || durableReplyState.discardInProgress
+            || durableReplyState.sendInProgress
+          )}
+            <div class="m-5 rounded-lg border p-4 text-sm" style="border-color: var(--border-color); color: var(--text-secondary)" role="status">
+              This reply is temporarily locked while its saved state is resolved.
+            </div>
+          {:else if replyContext?.available && durableReplyController}
             <div class="flex flex-col">
               {#key editorKey}
                 <DeferredRichEditor
@@ -2313,6 +2571,10 @@
                 />
               {/key}
             </div>
+          {:else if replyContext?.available}
+            <div class="m-5 rounded-lg border p-4 text-sm" style="border-color: var(--border-color); color: var(--text-secondary)" role="status">
+              Preparing a safely saved reply…
+            </div>
           {:else}
             <div
               class="m-5 rounded-lg border p-4 text-sm"
@@ -2324,6 +2586,25 @@
           {/if}
 
           </div><!-- end scrollable area -->
+
+          <div class="min-h-8 border-t px-4 py-1.5" style="border-color: var(--border-color); background: var(--bg-secondary)">
+            {#if durableReplyOpening}
+              <span class="text-xs" style="color: var(--text-secondary)" role="status">Opening saved reply…</span>
+            {:else if durableReplyError}
+              <span class="inline-flex flex-wrap items-center gap-2 text-xs" style="color: var(--status-error)" role="alert">
+                <span>Not safely saved. Copy your reply before leaving.</span>
+                <button type="button" class="min-h-11 rounded-lg border px-3 font-semibold" onclick={retryFlowDraft}>Retry</button>
+              </span>
+            {:else if durableReplyController}
+              <DraftStatus
+                state={durableReplyState}
+                compact
+                onretry={retryFlowDraft}
+                onundo={undoFlowDiscard}
+                onreview={openInCompose}
+              />
+            {/if}
+          </div>
 
           <!-- Action Bar -->
           <div class="flow-reply-actions px-4 py-2.5 border-t shrink-0 flex items-center justify-between" style="border-color: var(--border-color); background: var(--bg-secondary)">
@@ -2477,9 +2758,19 @@
 
             <div class="flow-send-actions flex items-center gap-2">
               <button
+                onclick={discardFlowReply}
+                disabled={!durableReplyController || durableReplyOpening || durableReplyState.discardInProgress || durableReplyState.sendInProgress}
+                class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg border transition-fast disabled:opacity-50"
+                style="border-color: var(--border-color); color: var(--text-secondary)"
+                aria-label="Discard reply"
+                title="Discard reply · Undo available for 10 seconds"
+              >
+                <Icon name="trash-2" size={14} />
+              </button>
+              <button
                 onclick={openInCompose}
-                disabled={threadLoading || !replyContext?.available}
-                class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium transition-fast border"
+                disabled={threadLoading || !replyContext?.available || !durableReplyController || Boolean(durableReplyError)}
+                class="flex min-h-11 items-center gap-1 px-3 py-2 rounded-lg text-xs font-medium transition-fast border"
                 style="border-color: var(--border-color); color: var(--text-secondary); opacity: {threadLoading || !replyContext?.available ? 0.5 : 1}"
                 title={threadLoading
                   ? 'Wait for the thread to finish loading'
@@ -2493,7 +2784,7 @@
               <button
                 onclick={sendReply}
                 disabled={!canSendReply()}
-                class="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-medium transition-fast"
+                class="flex min-h-11 items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium transition-fast"
                 style="background: {!canSendReply() ? 'var(--border-color)' : 'var(--color-accent-500)'}; color: white"
                 title={replyContext?.available
                   ? replyActionLabel

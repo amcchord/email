@@ -63,6 +63,15 @@ export function applyComposeDraftRoute(url, page, data = null) {
   return url;
 }
 
+export function knownServerRevisionRequiresRefresh(data = {}, state = {}) {
+  const knownServerRevision = Number(data?.known_server_revision || 0);
+  const loadedRevision = Number(state?.revision || 0);
+  return Number.isSafeInteger(knownServerRevision)
+    && knownServerRevision > 0
+    && Number.isSafeInteger(loadedRevision)
+    && knownServerRevision > loadedRevision;
+}
+
 function defaultRandomUuid() {
   if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
   throw new Error('Secure random UUID generation is unavailable');

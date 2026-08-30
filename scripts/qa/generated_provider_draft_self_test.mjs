@@ -28,6 +28,7 @@ const ids = Object.freeze({
   guard: '00000000-0000-4000-8000-000000000109',
   mailboxA: '00000000-0000-4000-8000-000000000111',
   mailboxB: '00000000-0000-4000-8000-000000000112',
+  sourceRace: '00000000-0000-4000-8000-000000000113',
 });
 
 let mutationSequence = 200;
@@ -284,6 +285,19 @@ try {
     provenanceDetail.references,
     '<generated-root-a@example.test> <generated-parent-a@example.test>',
   );
+  const provenanceBySource = await get(
+    '/api/compose/drafts/by-source-email/1301?account_id=1101',
+  );
+  assert.equal(provenanceBySource.client_draft_id, ids.provenance);
+  const recentMetadata = await get('/api/compose/drafts/recent?limit=20');
+  assert.equal(recentMetadata.length, 1);
+  for (const forbidden of ['to', 'cc', 'bcc', 'subject', 'body_html', 'body_text', 'attachments']) {
+    assert.equal(Object.hasOwn(recentMetadata[0], forbidden), false);
+  }
+  await postDraft(draftPayload({
+    clientDraftId: ids.sourceRace,
+    sourceEmailId: 1301,
+  }), { expectedStatus: 409 });
   const draftMailbox = await get('/api/emails/?mailbox=DRAFTS');
   assert.equal(draftMailbox.emails.length, 1);
   const reopenedByEmail = await get(
@@ -300,19 +314,32 @@ try {
     undefined,
     { expectedStatus: 404 },
   );
+  await request(
+    'GET',
+    '/api/compose/drafts/by-source-email/1301?account_id=1101',
+    undefined,
+    { expectedStatus: 404 },
+  );
   await post('/api/auth/login', {
     username: 'generated-a',
     password: 'generated-only',
   });
+  await request(
+    'GET',
+    '/api/compose/drafts/by-source-email/1301?account_id=1102',
+    undefined,
+    { expectedStatus: 404 },
+  );
   await postDraft(draftPayload({
     clientDraftId: ids.provenance,
     revision: 2,
     accountId: 1102,
   }), { expectedStatus: 409 });
   snapshot = await audit();
-  assert.equal(snapshot.counters.provenance_checks, 2);
+  assert.equal(snapshot.counters.provenance_checks, 3);
   assert.equal(snapshot.counters.provenance_rejections, 1);
   assert.equal(snapshot.counters.account_conflicts, 1);
+  assert.equal(snapshot.counters.source_conflicts, 1);
   assert.equal(snapshot.counters.provider_draft_creates, 1);
   assert.equal(snapshot.counters.provider_draft_updates, 0);
   assert.match(snapshot.logical_drafts[0].provider_draft_id_hash, /^[0-9a-f]{64}$/);

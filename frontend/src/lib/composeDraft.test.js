@@ -12,6 +12,7 @@ import {
   composeReplyContext,
   createComposeDraftIntent,
   ensureComposeDraftIntent,
+  knownServerRevisionRequiresRefresh,
   newComposeIntent,
 } from './composeDraft.js';
 
@@ -133,6 +134,18 @@ test('Compose deep links retain only a valid stable draft identity', () => {
   assert.equal(composeUrl.searchParams.get('draft'), id);
   const inboxUrl = applyComposeDraftRoute(composeUrl, 'inbox', intent);
   assert.equal(inboxUrl.searchParams.has('draft'), false);
+});
+
+test('a newer revision advertised by Working Drafts forces authoritative comparison', () => {
+  assert.equal(knownServerRevisionRequiresRefresh(
+    { known_server_revision: 10 },
+    { revision: 2 },
+  ), true);
+  assert.equal(knownServerRevisionRequiresRefresh(
+    { known_server_revision: 2 },
+    { revision: 2 },
+  ), false);
+  assert.equal(knownServerRevisionRequiresRefresh({}, { revision: 2 }), false);
 });
 
 test('attachment-only snapshots remain recoverable', () => {
