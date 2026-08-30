@@ -1243,13 +1243,17 @@ its old URL.
 Each device response includes additive `battery_health` data. The server stores
 sparse samples on meaningful percentage/voltage changes plus a six-hour
 heartbeat, with a five-minute ingestion floor and 90-day retention. It
-estimates discharge only after at least three samples spanning 12 hours with a
-measurable drop. Until then, low-battery notices use the current percentage
-without pretending a runtime estimate is known. Prediction fields include
-rate, estimated days remaining, expected charge-threshold time, confidence,
-status, and a human-readable notice; any estimate may be `null`. A single
-percentage rise is reported as possible charging; two corroborating rises are
-required to claim charging, and low-charge notices always take precedence.
+estimates discharge only after at least three percentage samples spanning 12
+hours with a measurable, directionally consistent drop. Six-hour medians and a
+bounded robust slope reduce ADC spikes and oscillation; inconsistent or
+greater-than-one-year projections remain `null`. Percentage freshness follows
+the latest percentage-bearing sample, so a newer voltage-only check-in cannot
+make stale percentage data look current. Prediction fields include rate,
+estimated days remaining, expected charge-threshold time, confidence, status,
+and a human-readable notice. Because firmware does not report an
+external-power signal, a corroborated rise resets the discharge segment but is
+described only as `possible_charging`; the API never claims active charging
+from inferred voltage rise. Low-charge notices always take precedence.
 
 ### Authenticated firmware catalog and artifacts
 
@@ -1258,6 +1262,7 @@ Public API tokens and anonymous callers cannot use these routes:
 
 ```text
 GET /api/terminal/firmware/catalog
+GET /api/terminal/firmware/ota/capabilities
 GET /api/terminal/firmware/releases/{release_id}/manifest.json
 GET /api/terminal/firmware/releases/{release_id}/manifest.sig
 GET /api/terminal/firmware/releases/{release_id}/models/{model}/artifacts/{role}
@@ -1278,11 +1283,25 @@ positive minimum signed-catalog generation, signed release evidence, explicit
 hardware qualification, and model policy all agree. The browser applies a
 second exact-schema and flash-range audit before presenting metadata.
 
-The current browser installer is intentionally catalog-only. Its three
-independent write gates—browser signature verification, secure serial
-provisioning, and hardware recovery qualification—are fixed false in shipped
-code. It never calls `navigator.serial.requestPort`, downloads firmware bytes,
-erases a device, or invokes a flashing library.
+The browser now fetches the exact manifest and detached signature bytes for a
+second, independent SHA-256/Ed25519 verification against a source-pinned public
+key map, strict duplicate-free JSON, the authenticated catalog, the pinned
+toolchain, and exact model/partition contracts. The production browser key map
+is intentionally empty, so this preflight remains locked until a reviewed key
+is shipped in application source. It fetches no firmware artifact bytes.
+
+`GET /api/terminal/firmware/ota/capabilities` is an authenticated, read-only
+status surface. It reports the independent server enablement, exact HIL
+allowlist, positive catalog-generation, signed parent/model eligibility, and
+durable idempotent event-store blockers. This milestone wires no OTA release
+evidence or event ledger, so `effective_offer_enabled` remains false even if a
+single configuration flag is changed. There is no schedule offer, device
+artifact route, or acknowledgement endpoint.
+
+The current browser installer remains physically write-locked. Its serial
+transport, secure provisioning, and hardware recovery gates are fixed false in
+shipped code. It never calls `navigator.serial.requestPort`, downloads firmware
+artifacts, erases a device, or invokes a flashing library.
 
 All responses use `Cache-Control: private, no-store`, `nosniff`, and same-origin
 resource policy. Artifact responses also include an exact `Content-Length`, a

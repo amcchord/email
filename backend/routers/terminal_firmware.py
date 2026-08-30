@@ -22,6 +22,7 @@ from backend.services.terminal.firmware_artifacts import (
     read_model_artifact,
     read_release_metadata,
 )
+from backend.services.terminal.ota_policy import evaluate_ota_policy
 
 
 router = APIRouter(prefix="/api/terminal/firmware", tags=["terminal-firmware"])
@@ -130,6 +131,28 @@ async def firmware_catalog(
     catalog = await _verified_catalog()
     response.headers.update(_PRIVATE_HEADERS)
     return catalog
+
+
+@router.get("/ota/capabilities")
+@limiter.limit("12/minute")
+async def firmware_ota_capabilities(
+    request: Request,
+    response: Response,
+    _user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Expose the authenticated, read-only OTA lock state.
+
+    No release evidence or event ledger is wired in this milestone, so the
+    policy cannot become ready even if a single configuration flag is changed.
+    """
+
+    policy = evaluate_ota_policy(
+        settings,
+        releases=(),
+        event_persistence_ready=False,
+    )
+    response.headers.update(_PRIVATE_HEADERS)
+    return policy.as_capabilities()
 
 
 @router.get("/releases/{release_id}/manifest.json")

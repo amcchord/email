@@ -22,7 +22,7 @@ const MODEL_CONTRACTS = Object.freeze({
     environment: 'reterminal_e1001',
     panel: 'GDEY075T7',
     resolution: Object.freeze([800, 480]),
-    partitionLayout: 'single-slot-e100x-v1',
+    partitionLayout: 'ab-v1',
     protectedRanges: Object.freeze({
       nvs: Object.freeze({ offset: 0x9000, size: 0x5000 }),
       littlefs: Object.freeze({ offset: 0x310000, size: 0xe0000 }),
@@ -33,7 +33,7 @@ const MODEL_CONTRACTS = Object.freeze({
     environment: 'reterminal_e1002',
     panel: 'GDEP073E01',
     resolution: Object.freeze([800, 480]),
-    partitionLayout: 'single-slot-e100x-v1',
+    partitionLayout: 'ab-v1',
     protectedRanges: Object.freeze({
       nvs: Object.freeze({ offset: 0x9000, size: 0x5000 }),
       littlefs: Object.freeze({ offset: 0x310000, size: 0xe0000 }),

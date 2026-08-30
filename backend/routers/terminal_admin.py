@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import secrets
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -34,7 +34,11 @@ from backend.services.eink.ha_client import (
     HAClientError,
     fetch_ha_states,
 )
-from backend.services.terminal.battery import BatteryReading, estimate_battery_health
+from backend.services.terminal.battery import (
+    BATTERY_RETENTION,
+    BatteryReading,
+    estimate_battery_health,
+)
 from backend.services.terminal.catalog import (
     CatalogError,
     content_type_options,
@@ -378,7 +382,7 @@ async def _list_owned_device_summaries(
     devices = list(result.scalars().all())
     if not devices:
         return []
-    cutoff = datetime.now(timezone.utc) - timedelta(days=45)
+    cutoff = datetime.now(timezone.utc) - BATTERY_RETENTION
     samples_result = await db.execute(
         select(TerminalBatterySample)
         .where(
@@ -676,7 +680,7 @@ async def update_device(
 
     await db.commit()
     await db.refresh(device)
-    cutoff = datetime.now(timezone.utc) - timedelta(days=45)
+    cutoff = datetime.now(timezone.utc) - BATTERY_RETENTION
     samples_result = await db.execute(
         select(TerminalBatterySample)
         .where(

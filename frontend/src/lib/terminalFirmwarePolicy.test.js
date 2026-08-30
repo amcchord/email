@@ -20,8 +20,8 @@ function artifact(role, size, flashOffset) {
 
 function model(name, options = {}) {
   const contracts = {
-    E1001: ['reterminal_e1001', 'GDEY075T7', [800, 480], 'single-slot-e100x-v1'],
-    E1002: ['reterminal_e1002', 'GDEP073E01', [800, 480], 'single-slot-e100x-v1'],
+    E1001: ['reterminal_e1001', 'GDEY075T7', [800, 480], 'ab-v1'],
+    E1002: ['reterminal_e1002', 'GDEP073E01', [800, 480], 'ab-v1'],
     E1004: ['reterminal_e1004', 'GDEP133C02', [1200, 1600], 'single-slot-e1004-v1'],
   };
   const [environment, panel, resolution, partitionLayout] = contracts[name];

@@ -8,11 +8,14 @@ formats remain in [`firmware-variants.md`](firmware-variants.md).
 
 Baselines verified on 2026-08-30:
 
-- Email application release `8ff0184` with the additive, default-locked secure
-  enrollment foundation deployed and Alembic at `f3a4b5c6d7e8`;
+- Email application and production at
+  `584e3e0c52f209c6e93e6a7abdaf93727548fbba`, with first-class At a Glance,
+  the default-locked secure enrollment foundation, and Alembic at
+  `f3a4b5c6d7e8`;
 - private `reterminal-color` `main` at
-  `fd8671bd9a3641ecf9af37491bb8a00607dec4d6` (`0.2.0-candidate.3`); and
-- exact-main GitHub Actions run `33329094948`, which passed the candidate's
+  `2e835543dfe7095fe65a4f62b0da9e3c91ca47d1` (`0.2.0-candidate.4`); and
+- GitHub Actions run `33335099281` at that exact candidate commit, which passed
+  the candidate's
   keyed RET1, cross-language, power-loss, reproducibility, manifest, and bundle
   verification gates.
 
@@ -21,17 +24,17 @@ Baselines verified on 2026-08-30:
 | Capability | Implemented today | Important limit |
 | --- | --- | --- |
 | USB build and flash | PlatformIO environments, pinned dependencies/toolchain evidence, exact per-model partitions, deterministic build metadata, and immutable checksummed bundles exist for E1001, E1002, and E1004. | Current artifacts truthfully declare `signed=false`; no browser may install them. Command-line PlatformIO/esptool remains the only qualified write path. |
-| Browser firmware gateway | Cookie-authenticated, rate-limited catalog/manifest/signature/artifact routes verify a signed approval catalog and every bundle byte from local immutable storage. | Production defaults contain no trusted key or approved catalog. The Admin surface is metadata-only and all three write gates are fixed false. |
-| Runtime configuration | Candidate.3 implements bounded RET1 and three-slot atomic NVS configuration while keeping generic release images unkeyed, enrollment-disabled, and free of credentials. The application now has a fail-closed policy, intent/ticket API, hashed per-device credentials, activation, bounded rollback, and revocation. | Production has no online enrollment key or qualified release/model allowlist, and the shipped browser does not import serial transport. Command-line `uploadfs` remains the only hardware workflow until HIL passes. |
-| Application partitions | Explicit single-slot layouts and exact protected NVS/LittleFS ranges are release-verified. Normal preserve-config artifacts cannot overlap either range. | There is no second application slot, so safe A/B OTA and automatic rollback remain impossible. |
-| Device check-in | Firmware reports bounded model, build, wake, battery, RSSI, memory, boot, and image metadata. The server stores sparse bounded battery history and gives conservative charge guidance. | MAC and the legacy shared terminal URL are routing data, not device authentication. Charging inference is not a write-safety proof. |
-| TLS and OTA | No update transport is enabled. Firmware continues to fetch only schedule JSON and BMP images. | Runtime HTTPS still uses `setInsecure()`, and there is no A/B updater, acknowledgement, rollout, or boot rollback. OTA remains blocked. |
+| Browser firmware gateway | Cookie-authenticated, rate-limited catalog/manifest/signature/artifact routes verify a signed approval catalog and every bundle byte from local immutable storage. The browser independently verifies exact manifest bytes with SHA-256 and detached Ed25519 against source-pinned contracts. | Production defaults contain no trusted key or approved catalog, and the browser key map is empty. The Admin surface is metadata-only; serial, artifact-download, provisioning, and write gates remain false. |
+| Runtime configuration | Candidate.4 retains bounded RET1 and three-slot atomic NVS configuration while keeping generic release images unkeyed, enrollment-disabled, and free of credentials. The application has a fail-closed policy, intent/ticket API, hashed per-device credentials, activation, bounded rollback, and revocation. | Production has no online enrollment key or qualified release/model allowlist, and the shipped browser does not import serial transport. Command-line `uploadfs` remains the only hardware workflow until HIL passes. |
+| Application partitions | Candidate.4 uses exact `ab-v1` on E1001/E1002: the legacy NVS, `ota_0`, LittleFS, and coredump ranges are unchanged and `ota_1` is appended at `0x400000`. E1004 remains exact single-slot. | Existing physical E1001/E1002 devices still need a qualified USB migration to install the new partition table. No model is OTA-eligible. |
+| Device check-in | Firmware reports bounded model, build, wake, battery, RSSI, memory, boot, and image metadata. The server stores sparse 90-day history and uses bounded robust discharge trends with coarse confidence wording. | MAC and the legacy shared terminal URL are routing data, not device authentication. Firmware lacks an external-power signal, so battery rises are only `possible_charging` and forecasts cannot gate a write. |
+| TLS and OTA | Candidate.4 requires fresh bounded SNTP, validates hostnames against an ISRG X1/X2 bundle, rejects plaintext/redirect downgrade, verifies exact Ed25519 OTA descriptors, writes only the inactive exact slot, and exposes pending-image valid/rollback APIs. | The OTA writer is compile-time disabled and unkeyed; schedule offers, artifact transport, event persistence, boot self-test integration, and HIL are absent. E1004 is hard-rejected. |
 | E1004 | The firmware builds reproducibly and its full-refresh dual-controller implementation is present. | No hardware qualification exists; E1004 browser installation and OTA are explicitly ineligible. |
 
 The personal checkout under `~/Development/reTerminalColor` remains dirty and
 must not be used as a release source. Firmware work uses a separate clean
-worktree and the private GitHub repository. Reproducibility does not make the
-current unsigned, single-slot output safe to install.
+worktree and the private GitHub repository. Reproducibility and an A/B table do
+not make the current unsigned, default-disabled output safe to install.
 
 ## Safety invariants
 
@@ -113,6 +116,8 @@ TERMINAL_FIRMWARE_STORAGE_PATH=/opt/mail/data/terminal-firmware
 TERMINAL_FIRMWARE_TRUSTED_SIGNING_KEYS={}
 TERMINAL_FIRMWARE_MINIMUM_CATALOG_GENERATION=0
 TERMINAL_FIRMWARE_BROWSER_FLASH_ENABLED=false
+TERMINAL_OTA_ENABLED=false
+TERMINAL_OTA_QUALIFIED_RELEASES={}
 ```
 
 Do not put signing private keys in the application environment or artifact
@@ -124,10 +129,11 @@ window. The browser flag alone is insufficient: a zero generation, unsigned or
 unqualified model, missing hardware revisions, or any validation error keeps
 downloads blocked.
 
-The shipped Admin component only requests and audits catalog metadata. It
-observes HTTPS, Web Serial, and Web Locks support without requesting a port.
-There is no esptool dependency, download loop, erase command, serial write, or
-dynamic flashing code in the production bundle.
+The shipped Admin component requests catalog metadata, exact manifest/signature
+evidence, and the read-only OTA capability lock state. It observes HTTPS, Web
+Serial, and Web Locks support without requesting a port. There is no esptool
+dependency, artifact download loop, erase command, serial write, or dynamic
+flashing code in the production bundle.
 
 ## Browser installation and local provisioning
 
@@ -162,18 +168,17 @@ bootloader recovery instructions; it is not reported as a partial success.
 
 ### First-install partition migration
 
-The current single-slot layout cannot safely rewrite itself into A/B. The first
-move to `ab-v1` is therefore a one-time USB/Web Serial migration:
+Candidate.4 builds E1001/E1002 with `ab-v1`, but a device running the prior
+single-slot partition table cannot safely rewrite that table through OTA. The
+first move is therefore a one-time USB/Web Serial migration:
 
-1. Build a reviewed `ab-v1` partition-table family with two equal application
-   slots, OTA data, NVS, LittleFS, and coredump space. A per-model storage
-   profile is acceptable because E1004 needs a much larger frame cache. Size
-   both app slots from measured worst-case binaries plus explicit growth
-   headroom. Do not freeze offsets in this roadmap.
-2. Preserve the existing first application, NVS, and LittleFS offsets and sizes
-   where validation shows that is safe; the unused upper portion of 32 MB flash
-   can hold the second app slot. Treat ROM bootloader recovery—not power-loss
-   atomicity—as the migration safety net.
+1. Use the reviewed E1001/E1002 `ab-v1` table: NVS `0x9000/0x5000`, OTA data
+   `0xe000/0x2000`, `ota_0` `0x10000/0x300000`, LittleFS
+   `0x310000/0xE0000`, coredump `0x3F0000/0x10000`, and equal `ota_1`
+   `0x400000/0x300000`. E1004 stays outside this migration.
+2. Preserve the first application, NVS, LittleFS, and coredump byte ranges.
+   Treat ROM bootloader recovery—not power-loss atomicity—as the partition-table
+   migration safety net.
 3. Flash only addresses from the CI-generated bundle. Do not run a whole-chip
    erase as part of the normal installer.
 4. If LittleFS is preserved byte-for-byte, leave it untouched and verify a
@@ -235,13 +240,17 @@ physical E1001/E1002 HIL.
 
 ## TLS and device-side update sequence
 
-CA validation is a prerequisite milestone. Replace `setInsecure()` with a
-maintained CA bundle, establish usable time before the first verified HTTPS
-request, and retain the last trusted time across sleep. First boot can use a
-bounded SNTP bootstrap plus a compile-time lower bound. Certificate or clock
-failure must fail closed, preserve the running image, and sleep with backoff.
-Plain HTTP remains available only in an explicitly non-production development
-build.
+Candidate.4 implements the transport prerequisite: every wake requires a fresh
+SNTP callback within 15 seconds and a plausible 2024–2041 clock, then validates
+the hostname and chain against compiled ISRG Root X1/X2. Certificate, clock, or
+handshake failure fails closed into the normal sleep/backoff path. Plain HTTP,
+scheme-relative URLs, redirect following, and `setInsecure()` are absent. The
+bundle must rotate before X2 expires in 2040 or before production changes CA.
+
+Candidate.4 also implements the local signed writer and rollback API described
+below, but `main.cpp` intentionally does not call either. Offer transport,
+durable device events, and bounded boot self-tests must land together before an
+enabled/keyed image can be distributed.
 
 For each offered update, firmware performs this sequence:
 
@@ -271,7 +280,9 @@ irreversibility review.
 ## Server contract
 
 Keep the existing schedule schema backward compatible by adding an optional
-`firmware` offer. Old firmware ignores it. Example:
+`firmware` offer. Old firmware ignores it. Transport metadata is not trusted
+artifact metadata; the content-addressed descriptor is verified separately.
+Example:
 
 ```json
 {
@@ -279,44 +290,47 @@ Keep the existing schedule schema backward compatible by adding an optional
   "next_checkin_sec": 900,
   "image": { "url": "image.bmp", "etag": "img-…", "format": "bmp4-spectra6-800x480" },
   "firmware": {
+    "schema_version": 1,
     "offer_id": "01K…",
-    "release_id": "terminal-e1002-0.2.0+4f52c9d",
-    "version": "0.2.0",
-    "manifest_url": "firmware/offers/01K….json",
-    "required": false,
-    "not_before": "2026-09-02T14:00:00Z"
+    "release_id": "<sha256-of-exact-ota-descriptor-bytes>",
+    "version": "0.3.0",
+    "manifest_url": "/terminal/device/…/firmware/…/manifest.json",
+    "signature_url": "/terminal/device/…/firmware/…/manifest.sig",
+    "application_url": "/terminal/device/…/firmware/…/application.bin",
+    "event_url": "/terminal/device/…/firmware/events",
+    "required": false
   }
 }
 ```
 
-The manifest is an envelope whose decoded `signed_payload` bytes are verified
-before parsing. This avoids ambiguous JSON canonicalization on the device:
+Candidate.4 defines an exact six-field OTA descriptor. Its detached signature
+is 64 raw Ed25519 bytes over the exact descriptor bytes; `release_id` is the
+lowercase SHA-256 of those same bytes. The device verifies before trusting any
+parsed field:
 
 ```json
 {
+  "firmware_sha256": "<64-lowercase-hex>",
+  "firmware_size": 1234567,
+  "layout": "ab-v1",
+  "model": "E1002",
   "schema_version": 1,
-  "signed_payload": "<base64url of exact UTF-8 payload bytes>",
-  "signature": {
-    "algorithm": "ecdsa-p256-sha256",
-    "key_id": "terminal-ota-2026-01",
-    "value": "<base64url signature>"
-  }
+  "version": "0.3.0"
 }
 ```
 
-The verified payload contains, at minimum:
+The descriptor intentionally excludes URLs, rollout state, and power policy.
+The server must link it to an independently verified signed parent bundle with
+the same model, version, `ab-v1` layout, application length/hash, signing key,
+positive catalog generation, and exact hardware-revision HIL evidence. Embed
+only reviewed public verification keys in qualified firmware; private signing
+keys belong in the offline signing boundary, never in this repository, the
+application environment, browser, terminal, or database.
 
-- offer/release ID, semantic version, Git commit, channel, build timestamp, and
-  expiry;
-- exact model and hardware-revision allowlist, chip family, minimum flash
-  bytes, current/target partition-layout IDs, and a monotonic security counter;
-- immutable HTTPS artifact URL, content length, SHA-256, and application image
-  type; and
-- minimum source version plus minimum battery millivolts/percent.
-
-Embed the active public verification key in firmware and support an overlap of
-old and new `key_id` values for rotation. Private signing keys belong in the CI
-signing boundary, never in this repository or the application database.
+The authenticated `GET /api/terminal/firmware/ota/capabilities` surface exposes
+these gates without enabling delivery. Current production has no descriptor,
+HIL allowlist, event ledger, offer route, artifact route, or event endpoint, so
+effective OTA remains locked.
 
 Server-side records should separate:
 
@@ -426,17 +440,20 @@ device that has the immediately previous production partition layout.
 3. **Secure serial enrollment and HIL qualification — active:** the bounded
    `@RET1` P-256/AES-GCM protocol, three-slot configuration, schema-2 release
    claim, fail-closed server tickets, per-device activation, rollback grace,
-   and revocation now have deterministic software tests. CA validation,
-   production Web Serial transport, and the repeatable physical E1001/E1002
-   interruption/recovery matrix remain. E1004 stays locked.
+   revocation, CA validation, and browser exact-byte Ed25519 preflight now have
+   deterministic software tests. Production Web Serial transport and the
+   repeatable physical E1001/E1002 interruption/recovery matrix remain. E1004
+   stays locked.
 4. **Browser first install:** add a pinned flashing implementation only after
    browser-side signature verification and milestone 3 pass. Flash exact
    preserve-config artifacts, verify ROM-loader output and rebooted identity,
    and keep a command-line rescue flow. The server and client write gates may
    then be changed through a separately reviewed release.
-5. **A/B OTA canary:** define and migrate to `ab-v1`, implement signed manifest
-   verification, CA-validated inactive-slot writes, pending validation,
-   rollback, battery gates, and a one-device rollout.
+5. **A/B OTA canary:** physically migrate to the implemented `ab-v1`, integrate
+   the existing signed descriptor/inactive-slot writer and pending-validation
+   APIs with authenticated offers, durable events, bounded self-tests, and a
+   one-device rollout. The conservative voltage gate remains independent from
+   the user-facing battery forecast.
 6. **Managed rollout:** add cohort promotion, pause/revoke, key rotation,
    charging notices, dashboards, and recovery drills before wider release.
 

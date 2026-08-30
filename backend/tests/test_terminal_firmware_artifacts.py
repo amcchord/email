@@ -30,8 +30,8 @@ MODEL_FIXTURES = (
         "E1001",
         "GDEY075T7",
         [800, 480],
-        "single-slot-e100x-v1",
-        "partitions/e100x.csv",
+        "ab-v1",
+        "partitions/e100x-ab-v1.csv",
         True,
         ["V1.0"],
     ),
@@ -40,8 +40,8 @@ MODEL_FIXTURES = (
         "E1002",
         "GDEP073E01",
         [800, 480],
-        "single-slot-e100x-v1",
-        "partitions/e100x.csv",
+        "ab-v1",
+        "partitions/e100x-ab-v1.csv",
         True,
         ["V1.0"],
     ),
@@ -77,13 +77,16 @@ def _json_bytes(value: Any) -> bytes:
 def _partition_entries(model: str):
     littlefs_size = 0x400000 if model == "E1004" else 0xE0000
     coredump_offset = 0x710000 if model == "E1004" else 0x3F0000
-    return (
+    entries = [
         ("nvs", 0x01, 0x02, 0x9000, 0x5000),
         ("otadata", 0x01, 0x00, 0xE000, 0x2000),
-        ("app0", 0x00, 0x10, 0x10000, 0x300000),
+        ("app0" if model == "E1004" else "ota_0", 0x00, 0x10, 0x10000, 0x300000),
         ("spiffs", 0x01, 0x82, 0x310000, littlefs_size),
         ("coredump", 0x01, 0x03, coredump_offset, 0x10000),
-    )
+    ]
+    if model != "E1004":
+        entries.append(("ota_1", 0x00, 0x11, 0x400000, 0x300000))
+    return tuple(entries)
 
 
 def _partition_source(model: str) -> bytes:
@@ -92,6 +95,7 @@ def _partition_source(model: str) -> bytes:
         (0x01, 0x02): "nvs",
         (0x01, 0x00): "ota",
         (0x00, 0x10): "ota_0",
+        (0x00, 0x11): "ota_1",
         (0x01, 0x82): "spiffs",
         (0x01, 0x03): "coredump",
     }
@@ -242,7 +246,7 @@ def stage_signed_bundle(
     security: dict[str, Any] = {
         "signed": True,
         "ota_eligible": False,
-        "reason": "test fixture is detached-signed but single-slot",
+        "reason": "test fixture is detached-signed but OTA remains disabled",
     }
     if manifest_schema_version == 2:
         security["serial_enrollment"] = serial_enrollment or {
@@ -402,6 +406,9 @@ def test_signed_qualified_bundle_is_installable(tmp_path: Path):
     assert by_model["E1001"]["install_eligible"] is True
     assert by_model["E1002"]["install_eligible"] is True
     assert by_model["E1004"]["install_eligible"] is False
+    assert by_model["E1001"]["partition_layout"] == "ab-v1"
+    assert by_model["E1002"]["partition_layout"] == "ab-v1"
+    assert by_model["E1004"]["partition_layout"] == "single-slot-e1004-v1"
     assert by_model["E1001"]["protected_ranges"] == [
         {"name": "nvs", "offset": 0x9000, "size": 0x5000},
         {"name": "littlefs", "offset": 0x310000, "size": 0xE0000},

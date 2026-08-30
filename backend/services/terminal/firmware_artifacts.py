@@ -71,15 +71,15 @@ MODEL_CONSTRAINTS = {
         "model": "E1001",
         "panel": "GDEY075T7",
         "resolution": [800, 480],
-        "partition_layout": "single-slot-e100x-v1",
-        "partition_csv": "partitions/e100x.csv",
+        "partition_layout": "ab-v1",
+        "partition_csv": "partitions/e100x-ab-v1.csv",
     },
     "reterminal_e1002": {
         "model": "E1002",
         "panel": "GDEP073E01",
         "resolution": [800, 480],
-        "partition_layout": "single-slot-e100x-v1",
-        "partition_csv": "partitions/e100x.csv",
+        "partition_layout": "ab-v1",
+        "partition_csv": "partitions/e100x-ab-v1.csv",
     },
     "reterminal_e1004": {
         "model": "E1004",
@@ -93,16 +93,18 @@ PARTITION_LAYOUTS = {
     "reterminal_e1001": (
         ("nvs", "data", "nvs", 0x9000, 0x5000),
         ("otadata", "data", "ota", 0xE000, 0x2000),
-        ("app0", "app", "ota_0", 0x10000, 0x300000),
+        ("ota_0", "app", "ota_0", 0x10000, 0x300000),
         ("spiffs", "data", "spiffs", 0x310000, 0xE0000),
         ("coredump", "data", "coredump", 0x3F0000, 0x10000),
+        ("ota_1", "app", "ota_1", 0x400000, 0x300000),
     ),
     "reterminal_e1002": (
         ("nvs", "data", "nvs", 0x9000, 0x5000),
         ("otadata", "data", "ota", 0xE000, 0x2000),
-        ("app0", "app", "ota_0", 0x10000, 0x300000),
+        ("ota_0", "app", "ota_0", 0x10000, 0x300000),
         ("spiffs", "data", "spiffs", 0x310000, 0xE0000),
         ("coredump", "data", "coredump", 0x3F0000, 0x10000),
+        ("ota_1", "app", "ota_1", 0x400000, 0x300000),
     ),
     "reterminal_e1004": (
         ("nvs", "data", "nvs", 0x9000, 0x5000),
@@ -120,6 +122,7 @@ PARTITION_SUBTYPE_IDS = {
     ("data", "spiffs"): 0x82,
     ("data", "littlefs"): 0x82,
     ("app", "ota_0"): 0x10,
+    ("app", "ota_1"): 0x11,
 }
 
 
@@ -722,7 +725,7 @@ def _validate_model(
     if type(model["browser_flash_qualified"]) is not bool:
         raise FirmwareArtifactError("manifest browser qualification is invalid")
     if model["ota_eligible"] is not False:
-        raise FirmwareArtifactError("single-slot firmware cannot be OTA eligible")
+        raise FirmwareArtifactError("firmware is not approved for OTA installation")
     revisions = model["hardware_revisions"]
     if not isinstance(revisions, list) or any(
         not isinstance(value, str)
@@ -778,9 +781,20 @@ def _validate_model(
         for entry in partition_entries
         if entry["type"] == "data" and entry["subtype"] in {"spiffs", "littlefs"}
     ]
-    if len(app_entries) != 1 or len(filesystem_entries) != 1 or "nvs" not in by_name:
+    expected_app_names = (
+        {"app0"}
+        if environment == "reterminal_e1004"
+        else {"ota_0", "ota_1"}
+    )
+    if (
+        {entry["name"] for entry in app_entries} != expected_app_names
+        or len(filesystem_entries) != 1
+        or "nvs" not in by_name
+    ):
         raise FirmwareArtifactError("partition layout lacks required protected ranges")
-    application_partition = app_entries[0]
+    application_partition = by_name[
+        "app0" if environment == "reterminal_e1004" else "ota_0"
+    ]
     filesystem_partition = filesystem_entries[0]
     if application_partition["offset"] != FLASH_OFFSETS["application"]:
         raise FirmwareArtifactError("application partition offset is invalid")
@@ -795,6 +809,10 @@ def _validate_model(
         "offset"
     ]:
         raise FirmwareArtifactError("application partition overlaps protected storage")
+    if environment != "reterminal_e1004":
+        ota_1_partition = by_name["ota_1"]
+        if ota_1_partition["size"] != application_partition["size"]:
+            raise FirmwareArtifactError("A/B application partitions are not equal size")
     ota_partition = by_name.get("otadata")
     if ota_partition is None or (
         ota_partition["offset"] != FLASH_OFFSETS["ota_data_initial"]

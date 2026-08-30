@@ -200,8 +200,6 @@ function formatChargeMoment(value) {
   return new Intl.DateTimeFormat(undefined, {
     month: 'short',
     day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
   }).format(date);
 }
 
@@ -213,6 +211,7 @@ export function summarizeAtAGlanceDevice(device, now = new Date()) {
   const chargeAt = formatChargeMoment(health.estimated_charge_at);
   const emptyAt = formatChargeMoment(health.estimated_empty_at);
   const notice = normalizeMessage(health.notice, '');
+  const confidence = cleanKey(health.confidence);
   const enrollment = cleanKey(device?.enrollment_state) || 'legacy';
 
   let tone = 'neutral';
@@ -227,16 +226,27 @@ export function summarizeAtAGlanceDevice(device, now = new Date()) {
   else if (currentMv != null && Number.isFinite(numericMv)) battery = `${Math.round(numericMv)} mV`;
 
   let forecast = '';
-  if (chargeAt) forecast = `Plan to charge by ${chargeAt}`;
-  else if (emptyAt) forecast = `Estimated empty ${emptyAt}`;
-  else if (Number.isFinite(Number(health.estimated_days_remaining))) {
+  const confidenceSuffix = confidence ? ` · ${confidence} confidence trend` : '';
+  if (chargeAt) forecast = `Plan to charge around ${chargeAt}${confidenceSuffix}`;
+  else if (emptyAt) forecast = `Estimated empty around ${emptyAt}${confidenceSuffix}`;
+  else if (
+    health.estimated_days_remaining != null
+    && Number.isFinite(Number(health.estimated_days_remaining))
+  ) {
     const days = Math.max(0, Number(health.estimated_days_remaining));
     forecast = days < 1
       ? `About ${Math.max(1, Math.round(days * 24))} hours remaining`
-      : `About ${Math.round(days * 10) / 10} days remaining`;
-  } else if (currentPct != null && Number(health.sample_count) < 3 && healthStatus !== 'stale') {
+      : `About ${Math.max(1, Math.round(days))} days remaining`;
+    forecast += confidenceSuffix;
+  } else if (
+    currentPct != null
+    && healthStatus !== 'stale'
+    && !['charge_now', 'charge_soon', 'possible_charging'].includes(healthStatus)
+  ) {
     const samples = Math.max(0, Number(health.sample_count) || 0);
-    forecast = `Learning battery trend · ${samples} check-in${samples === 1 ? '' : 's'}`;
+    forecast = samples < 3
+      ? `Learning battery trend · ${samples} check-in${samples === 1 ? '' : 's'}`
+      : 'Battery trend is still settling';
   }
 
   const enrollmentLabels = {

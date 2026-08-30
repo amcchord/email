@@ -6,7 +6,7 @@ async function source(relativePath) {
   return readFile(new URL(relativePath, import.meta.url), 'utf8');
 }
 
-test('At a Glance renders a catalog-only locked firmware installer', async () => {
+test('At a Glance renders a read-only, write-locked firmware installer', async () => {
   const [admin, component, installer, firmwareApi] = await Promise.all([
     source('../pages/Admin.svelte'),
     source('./admin/FirmwareInstaller.svelte'),
@@ -22,5 +22,10 @@ test('At a Glance renders a catalog-only locked firmware installer', async () =>
   assert.doesNotMatch(installer, /\.requestPort\s*\(/);
   assert.doesNotMatch(installer, /\.write\s*\(/);
   assert.doesNotMatch(installer, /eraseFlash|writeFlash|flashData/);
-  assert.equal((firmwareApi.match(/api\.(get|post|put|delete)\(/g) || []).join(','), 'api.get(');
+  assert.match(firmwareApi, /TERMINAL_FIRMWARE_CATALOG_ENDPOINT = '\/terminal\/firmware\/catalog'/);
+  assert.match(firmwareApi, /TERMINAL_OTA_CAPABILITIES_ENDPOINT = '\/terminal\/firmware\/ota\/capabilities'/);
+  assert.equal(
+    (firmwareApi.match(/api\.(get|post|put|patch|delete)\(/g) || []).join(','),
+    'api.get(,api.get(',
+  );
 });

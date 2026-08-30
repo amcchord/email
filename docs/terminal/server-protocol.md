@@ -84,10 +84,12 @@ already drew before deciding to fetch.
 Both endpoints **MUST** support `If-None-Match` and respond `304 Not Modified`
 when the resource hasn't changed.
 
-Both endpoints **MUST** be served over HTTPS with a publicly trusted
-certificate. The firmware uses ESP32 Arduino's `WiFiClientSecure` and the
-built-in `setCACertBundle()`, so any cert chain that browsers accept will
-work.
+Both endpoints **MUST** be served over HTTPS with a certificate chaining to the
+firmware's compiled ISRG Root X1/X2 bundle. Candidate.4 requires a fresh SNTP
+callback and a plausible 2024–2041 UTC clock before CA and hostname validation,
+rejects plaintext and scheme-relative URLs, and does not follow redirects.
+Production currently chains through X2. A non-ISRG image origin will fail
+closed even if a browser trusts it.
 
 ---
 
@@ -595,7 +597,9 @@ add support for them; they need a coordinated firmware-side change first.
 - Authentication headers. Secure enrollment uses a revocable path credential
   because current firmware persists one schedule URL; see
   [`secure-enrollment.md`](secure-enrollment.md).
-- OTA firmware updates.
+- OTA schedule offers and update/event transport. Candidate.4 contains a
+  default-disabled signed A/B writer library, but the schedule parser and
+  network path intentionally do not invoke it yet.
 - Server-initiated push (the device is asleep; it can't be pushed to).
 - Multiple images / playlists in a single response (use one `image` object).
 - Plug-in panel formats other than 4-bit Spectra 6 800x480.

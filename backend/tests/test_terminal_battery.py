@@ -202,20 +202,20 @@ def test_single_significant_rise_is_only_possible_charging():
     assert health.status == "possible_charging"
     assert health.current_pct == 90
     assert health.notice == (
-        "Battery level rose; waiting for another reading to confirm charging."
+        "Battery level rose; charging is possible, but external power is not reported."
     )
     assert health.drain_pct_per_day is None
     assert health.estimated_days_remaining is None
     assert health.estimated_empty_at is None
 
 
-def test_two_rising_readings_confirm_charging():
+def test_two_rising_readings_do_not_claim_external_power():
     health = estimate_battery_health(
         [_reading(0, 60), _reading(1, 70), _reading(2, 90)]
     )
 
-    assert health.status == "charging"
-    assert health.notice == "Battery level is rising; charging detected."
+    assert health.status == "possible_charging"
+    assert "external power is not reported" in health.notice
 
 
 def test_low_battery_warning_takes_precedence_over_a_noisy_rise():
@@ -225,13 +225,13 @@ def test_low_battery_warning_takes_precedence_over_a_noisy_rise():
     assert health.notice == "Charge this terminal now — battery is at 9%."
 
 
-def test_rise_across_a_reboot_does_not_claim_charging():
+def test_incrementing_wake_counter_does_not_hide_a_level_rise():
     health = estimate_battery_health(
         [_reading(0, 60, boot_count=7), _reading(1, 90, boot_count=8)]
     )
 
-    assert health.status == "healthy"
-    assert health.notice is None
+    assert health.status == "possible_charging"
+    assert "external power is not reported" in health.notice
 
 
 def test_discharge_prediction_restarts_after_a_charge_cycle():
@@ -266,3 +266,87 @@ def test_stale_telemetry_suppresses_old_runtime_prediction():
     assert health.notice == (
         "Battery estimate is stale — last battery check-in was 3 days ago at 70%."
     )
+
+
+def test_voltage_only_reading_does_not_make_an_old_percentage_fresh():
+    health = estimate_battery_health(
+        [
+            _reading(0, 70, None),
+            _reading(3, None, 3800),
+        ],
+        now=START + timedelta(days=3),
+    )
+
+    assert health.status == "stale"
+    assert health.current_pct == 70
+    assert health.current_mv == 3800
+    assert health.observed_at == START
+    assert health.sample_count == 1
+
+
+def test_single_adc_spike_does_not_dominate_the_discharge_forecast():
+    health = estimate_battery_health(
+        [
+            _reading(0, 80),
+            _reading(1, 79),
+            _reading(2, 95),
+            _reading(3, 78),
+            _reading(4, 77),
+            _reading(5, 76),
+        ]
+    )
+
+    assert health.status == "healthy"
+    assert health.drain_pct_per_day == pytest.approx(0.8)
+    assert health.estimated_days_remaining == pytest.approx(95.0)
+    assert health.confidence == "low"
+
+
+def test_small_level_oscillations_still_allow_a_conservative_trend():
+    health = estimate_battery_health(
+        [
+            _reading(0, 80),
+            _reading(1, 79),
+            _reading(2, 78),
+            _reading(3, 79),
+            _reading(4, 77),
+            _reading(5, 76),
+        ]
+    )
+
+    assert health.status == "healthy"
+    assert health.drain_pct_per_day == pytest.approx(0.75)
+    assert health.estimated_charge_at is not None
+
+
+def test_slow_discharge_can_use_more_than_45_days_of_history():
+    health = estimate_battery_health(
+        [
+            _reading(0, 90),
+            _reading(20, 85),
+            _reading(40, 80),
+            _reading(60, 75),
+            _reading(80, 70),
+        ]
+    )
+
+    assert health.trend_days == 80
+    assert health.drain_pct_per_day == pytest.approx(0.25)
+    assert health.estimated_days_remaining == 280
+
+
+def test_implausibly_distant_projection_is_not_presented_as_a_forecast():
+    health = estimate_battery_health(
+        [
+            _reading(0, 80),
+            _reading(20, 79),
+            _reading(40, 78),
+            _reading(60, 77),
+            _reading(80, 76),
+        ]
+    )
+
+    assert health.drain_pct_per_day == pytest.approx(0.05)
+    assert health.estimated_days_remaining is None
+    assert health.estimated_empty_at is None
+    assert health.estimated_charge_at is None

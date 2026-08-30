@@ -39,6 +39,8 @@ def _configure(
             terminal_firmware_trusted_signing_keys=trusted_keys,
             terminal_firmware_minimum_catalog_generation=minimum_generation,
             terminal_firmware_browser_flash_enabled=enabled,
+            terminal_ota_enabled=False,
+            terminal_ota_qualified_releases="{}",
         ),
     )
 
@@ -65,12 +67,36 @@ def _request(path: str = "/api/terminal/firmware/catalog") -> Request:
 def test_every_firmware_route_requires_an_authenticated_user():
     routes = [route for route in firmware_router.router.routes if hasattr(route, "dependant")]
 
-    assert len(routes) == 4
+    assert len(routes) == 5
     for route in routes:
         assert any(
             dependency.call is get_current_user
             for dependency in route.dependant.dependencies
         ), route.path
+
+
+@pytest.mark.asyncio
+async def test_ota_capabilities_are_authenticated_read_only_and_default_locked(
+    tmp_path: Path,
+    monkeypatch,
+):
+    fixture = stage_signed_bundle(tmp_path)
+    _configure(monkeypatch, tmp_path, fixture["trusted_keys"])
+    response = Response()
+
+    capabilities = await firmware_router.firmware_ota_capabilities(
+        _request("/api/terminal/firmware/ota/capabilities"),
+        response,
+        _user=None,
+    )
+
+    assert capabilities["state"] == "locked"
+    assert capabilities["enabled"] is False
+    assert capabilities["effective_offer_enabled"] is False
+    assert capabilities["event_persistence_ready"] is False
+    assert capabilities["qualified_releases"] == []
+    assert "Server-side terminal OTA is disabled." in capabilities["blockers"]
+    assert response.headers["cache-control"] == "private, no-store"
 
 
 def test_registered_catalog_endpoint_rejects_anonymous_requests():

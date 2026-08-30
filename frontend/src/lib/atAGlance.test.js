@@ -84,6 +84,7 @@ test('device summary raises charge attention and predicts the charge moment', ()
       status: 'charge_soon',
       current_pct: 18,
       estimated_charge_at: '2026-08-31T14:30:00Z',
+      confidence: 'low',
       notice: 'Charge this terminal soon.',
     },
   }, new Date('2026-08-30T12:00:00Z'));
@@ -91,7 +92,9 @@ test('device summary raises charge attention and predicts the charge moment', ()
   assert.equal(summary.battery, '18% battery');
   assert.equal(summary.tone, 'warning');
   assert.equal(summary.needsAttention, true);
-  assert.match(summary.forecast, /Plan to charge by/);
+  assert.match(summary.forecast, /^Plan to charge around /);
+  assert.match(summary.forecast, /low confidence trend/);
+  assert.doesNotMatch(summary.forecast, /2:30|14:30/);
   assert.equal(summary.lastSeen, '15 minutes ago');
   assert.equal(summary.enrollment, 'Secure connection');
 });
@@ -118,4 +121,33 @@ test('device summary reports learning, stale, and revoked states truthfully', ()
   assert.equal(stale.enrollment, 'Access revoked');
   assert.equal(stale.tone, 'warning');
   assert.equal(stale.needsAttention, true);
+});
+
+test('unsettled history remains honest after the first few samples', () => {
+  const summary = summarizeAtAGlanceDevice({
+    battery_health: {
+      status: 'healthy',
+      current_pct: 72,
+      sample_count: 8,
+      estimated_days_remaining: null,
+      estimated_empty_at: null,
+      estimated_charge_at: null,
+    },
+  });
+
+  assert.equal(summary.forecast, 'Battery trend is still settling');
+});
+
+test('runtime forecasts use coarse whole-day wording and confidence', () => {
+  const summary = summarizeAtAGlanceDevice({
+    battery_health: {
+      status: 'healthy',
+      current_pct: 72,
+      sample_count: 8,
+      estimated_days_remaining: 13.4,
+      confidence: 'medium',
+    },
+  });
+
+  assert.equal(summary.forecast, 'About 13 days remaining · medium confidence trend');
 });

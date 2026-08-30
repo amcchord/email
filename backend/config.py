@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     terminal_firmware_trusted_signing_keys: str = "{}"
     terminal_firmware_minimum_catalog_generation: int = 0
     terminal_firmware_browser_flash_enabled: bool = False
+    # Device OTA is independent from browser flashing. It remains locked until
+    # an exact signed descriptor, parent release evidence, physical HIL
+    # qualification, and durable server-side event persistence all agree.
+    terminal_ota_enabled: bool = False
+    terminal_ota_qualified_releases: str = "{}"
     # RET1 enrollment is an independent trust boundary from offline firmware
     # release signing. Production defaults remain locked until an operator
     # supplies an exact HTTPS base URL, an online P-256 key via a protected
