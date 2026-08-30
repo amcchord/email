@@ -85,7 +85,9 @@ async function request(method, path, body = null, options = {}) {
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Request failed' }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
+    const requestError = new Error(error.detail || `HTTP ${response.status}`);
+    requestError.status = response.status;
+    throw requestError;
   }
 
   if (response.status === 204) return null;
@@ -159,6 +161,8 @@ export const api = {
       ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
     }),
   getMailAction: (requestId) => request('GET', `/emails/actions/${requestId}`),
+  getMailActionByIdempotency: (idempotencyKey) =>
+    request('GET', `/emails/actions/by-idempotency/${idempotencyKey}`),
   listRecentMailActions: (limit = 20) =>
     request('GET', `/emails/actions/recent?limit=${encodeURIComponent(limit)}`),
   undoMailAction: (requestId) => request('POST', `/emails/actions/${requestId}/undo`, {}),

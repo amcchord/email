@@ -6,9 +6,14 @@ import {
   applyEmailAction,
   canUndoAction,
   captureInboxAction,
+  createMailActionSubmissionQueue,
+  failedMailActionRequestIds,
+  hasNewFailedMailActions,
   idempotencyKey,
+  isMailActionNetworkError,
   optimisticInboxAction,
   remainingUndoMs,
+  rollbackEmailAction,
   restoreInboxAction,
 } from './mailActionUX.js';
 
@@ -63,9 +68,89 @@ test('rollback replaces an optimistic in-place flag update exactly', () => {
   const snapshot = captureInboxAction(original, 1, [1]);
   const optimistic = original.map(item => item.id === 1 ? applyEmailAction(item, 'star') : item);
 
-  const restored = restoreInboxAction(optimistic, snapshot);
+  const restored = restoreInboxAction(optimistic, snapshot, 'star');
 
   assert.deepEqual(restored[0], original[0]);
+});
+
+test('older rollback preserves a newer optimistic change on the same email', () => {
+  const original = email(1);
+  const afterStar = applyEmailAction(original, 'star');
+  const afterNewerRead = applyEmailAction(afterStar, 'mark_read');
+
+  const rolledBack = rollbackEmailAction(afterNewerRead, original, 'star');
+
+  assert.equal(rolledBack.is_starred, false);
+  assert.equal(rolledBack.is_read, true);
+  assert.deepEqual(rolledBack.labels, ['INBOX']);
+});
+
+test('older in-place rollback never resurrects a row removed by a newer action', () => {
+  const original = [email(1), email(2)];
+  const starSnapshot = captureInboxAction(original, 1, [1]);
+
+  const restored = restoreInboxAction([email(2)], starSnapshot, 'star', false);
+
+  assert.deepEqual(restored.map(item => item.id), [2]);
+});
+
+test('rollback of the removal itself restores the missing row', () => {
+  const original = [email(1), email(2)];
+  const archiveSnapshot = captureInboxAction(original, 1, [1]);
+
+  const restored = restoreInboxAction([email(2)], archiveSnapshot, 'archive', true);
+
+  assert.deepEqual(restored.map(item => item.id), [1, 2]);
+});
+
+test('per-email submissions preserve invocation order while unrelated mail stays parallel', async () => {
+  const queue = createMailActionSubmissionQueue();
+  const order = [];
+  let releaseFirst;
+  const firstGate = new Promise(resolve => { releaseFirst = resolve; });
+
+  const first = queue.enqueue([1], async () => {
+    order.push('first-start');
+    await firstGate;
+    order.push('first-end');
+  });
+  const second = queue.enqueue([1], async () => { order.push('second'); });
+  const unrelated = queue.enqueue([2], async () => { order.push('unrelated'); });
+
+  await unrelated;
+  assert.deepEqual(order, ['first-start', 'unrelated']);
+  releaseFirst();
+  await Promise.all([first, second]);
+  assert.deepEqual(order, ['first-start', 'unrelated', 'first-end', 'second']);
+});
+
+test('an in-flight action that becomes uncertain keeps already-queued newer intent blocked', async () => {
+  const queue = createMailActionSubmissionQueue();
+  const order = [];
+  let makeUncertain;
+  let releaseUncertain;
+  const first = queue.enqueue([1], async queueControl => {
+    await new Promise((resolve, reject) => {
+      makeUncertain = () => {
+        releaseUncertain = queueControl.hold();
+        order.push('uncertain');
+        reject(new Error('outcome unknown'));
+      };
+    });
+  });
+  while (!makeUncertain) await new Promise(resolve => setImmediate(resolve));
+
+  const newer = queue.enqueue([1], async () => { order.push('newer-unstar'); });
+  const unrelated = queue.enqueue([2], async () => { order.push('unrelated'); });
+  const firstRejected = assert.rejects(first, /outcome unknown/);
+  makeUncertain();
+
+  await Promise.all([firstRejected, unrelated]);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(order, ['uncertain', 'unrelated']);
+  releaseUncertain();
+  await newer;
+  assert.deepEqual(order, ['uncertain', 'unrelated', 'newer-unstar']);
 });
 
 test('archive remains visible in All Mail while its Inbox label is removed', () => {
@@ -117,4 +202,21 @@ test('undo eligibility is server-deadline and state driven', () => {
 test('client idempotency keys come from the supplied secure UUID source', () => {
   assert.equal(idempotencyKey(() => 'generated-uuid'), 'generated-uuid');
   assert.equal(actionPastTense('archive', 2), '2 emails archived');
+});
+
+test('ambiguous action failures are recognized as network outcomes', () => {
+  assert.equal(isMailActionNetworkError(new TypeError('Failed to fetch')), true);
+  assert.equal(isMailActionNetworkError(new Error('HTTP 500')), false);
+});
+
+test('only newly failed durable operations require inbox reconciliation', () => {
+  const operations = [
+    { request_id: 'known', items: [{ state: 'failed' }] },
+    { request_id: 'new', items: [{ state: 'applied' }, { state: 'failed' }] },
+    { request_id: 'active', items: [{ state: 'retry_wait' }] },
+  ];
+
+  assert.deepEqual([...failedMailActionRequestIds(operations)], ['known', 'new']);
+  assert.equal(hasNewFailedMailActions(operations, new Set(['known'])), true);
+  assert.equal(hasNewFailedMailActions(operations, new Set(['known', 'new'])), false);
 });

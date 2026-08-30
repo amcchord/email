@@ -9,6 +9,8 @@ import { randomUUID } from 'node:crypto';
 
 const port = Number.parseInt(process.env.QA_API_PORT || '8000', 10);
 const now = new Date('2026-08-30T14:00:00Z');
+let lostActionResponses = Number.parseInt(process.env.QA_LOST_ACTION_RESPONSES || '0', 10);
+let lostLookupResponses = Number.parseInt(process.env.QA_LOST_LOOKUP_RESPONSES || '0', 10);
 
 const generatedEmails = [
   ['Quinn Rivera', 'Design review notes', 'The updated navigation hierarchy is ready for review.'],
@@ -129,7 +131,13 @@ async function handleActionCreate(request, response) {
   const existing = [...operations.values()].find(
     operation => operation.idempotency_key === payload.idempotency_key,
   );
-  if (existing) return writeJson(response, existing, 202);
+  if (existing) {
+    if (lostActionResponses > 0) {
+      lostActionResponses -= 1;
+      return writeJson(response, { detail: 'Failed to fetch' }, 503);
+    }
+    return writeJson(response, existing, 202);
+  }
 
   const requestId = randomUUID();
   const selected = payload.email_ids.map(id => emails.get(id)).filter(Boolean);
@@ -163,6 +171,10 @@ async function handleActionCreate(request, response) {
   };
   operation.items.forEach(item => { item.next_attempt_at = operation.undo_until; });
   operations.set(requestId, operation);
+  if (lostActionResponses > 0) {
+    lostActionResponses -= 1;
+    return writeJson(response, { detail: 'Failed to fetch' }, 503);
+  }
   return writeJson(response, operation, 202);
 }
 
@@ -214,6 +226,18 @@ async function handleRequest(request, response) {
   }
   if (request.method === 'POST' && pathname === '/api/emails/actions') {
     return handleActionCreate(request, response);
+  }
+
+  const idempotencyMatch = pathname.match(/^\/api\/emails\/actions\/by-idempotency\/([^/]+)$/);
+  if (request.method === 'GET' && idempotencyMatch) {
+    if (lostLookupResponses > 0) {
+      lostLookupResponses -= 1;
+      return writeJson(response, { detail: 'Failed to fetch' }, 503);
+    }
+    const operation = [...operations.values()].find(
+      item => item.idempotency_key === idempotencyMatch[1],
+    );
+    return writeJson(response, operation || { detail: 'Not found' }, operation ? 200 : 404);
   }
 
   const undoMatch = pathname.match(/^\/api\/emails\/actions\/([^/]+)\/undo$/);

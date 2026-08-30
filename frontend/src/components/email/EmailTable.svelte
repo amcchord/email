@@ -4,6 +4,7 @@
   import { accountColorMap, selectedAccountId } from '../../lib/stores.js';
   import Icon from '../common/Icon.svelte';
   import { cleanEmailText, categoryLabel, typeLabel } from '../../lib/emailText.js';
+  import { focusEmailRow, shouldFocusAdjacentRow } from '../../lib/emailRowFocus.js';
 
   let {
     emails = [],
@@ -30,13 +31,36 @@
   let expandedThreads = $state(new Set());
   let selectAll = $state(false);
   let sentinelEl = $state(null);
+  let tableEl = $state(null);
   let observer = null;
+  let previousSelectedId = null;
+  let previousEmailIds = new Set();
 
   $effect(() => {
     void selectionEpoch;
     void actionsDisabled;
     selectedIds = new Set();
     selectAll = false;
+  });
+
+  $effect(() => {
+    const currentEmailIds = new Set(emails.map(email => email.id));
+    const focusAdjacent = shouldFocusAdjacentRow({
+      previousSelectedId,
+      selectedId,
+      previousEmailIds,
+      emailIds: currentEmailIds,
+    });
+    const focusId = selectedId;
+
+    previousSelectedId = selectedId;
+    previousEmailIds = currentEmailIds;
+
+    if (focusAdjacent) {
+      queueMicrotask(() => {
+        if (selectedId === focusId) focusEmailRow(tableEl, focusId);
+      });
+    }
   });
 
   function toggleThread(threadId, event) {
@@ -134,6 +158,14 @@
     if (actionsDisabled) return;
     if (selectAll) { selectedIds = new Set(); selectAll = false; }
     else { selectedIds = new Set(emails.map(e => e.id)); selectAll = true; }
+  }
+
+  function activateRow(event, callback) {
+    if (event.target !== event.currentTarget) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      callback();
+    }
   }
 
   async function handleBulkAction(action) {
@@ -282,29 +314,29 @@
 
   <!-- Bulk actions toolbar -->
   {#if selectedIds.size > 0}
-    <div class="h-10 flex items-center gap-2 px-3 border-b shrink-0" style="border-color: var(--border-color); background: var(--bg-tertiary)">
-      <span class="text-xs font-medium" style="color: var(--text-secondary)">{selectedIds.size} selected</span>
-      <div class="flex gap-1 ml-auto">
-        <button onclick={() => handleBulkAction('mark_read')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Read</button>
-        <button onclick={() => handleBulkAction('mark_unread')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Unread</button>
-        <button onclick={() => handleBulkAction('archive')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Archive</button>
-        <button onclick={() => handleBulkAction('star')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Star</button>
+    <div class="flex flex-col items-stretch gap-1 px-3 py-2 border-b shrink-0 sm:flex-row sm:items-center sm:gap-2" style="border-color: var(--border-color); background: var(--bg-tertiary)" aria-busy={bulkActionPending}>
+      <span class="text-xs font-medium shrink-0" style="color: var(--text-secondary)">{selectedIds.size} selected</span>
+      <div class="grid grid-cols-3 gap-1 sm:ml-auto sm:flex sm:min-w-0 sm:flex-1 sm:flex-wrap sm:justify-end">
+        <button onclick={() => handleBulkAction('mark_read')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Read</button>
+        <button onclick={() => handleBulkAction('mark_unread')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Unread</button>
+        <button onclick={() => handleBulkAction('archive')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Archive</button>
+        <button onclick={() => handleBulkAction('star')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Star</button>
         {#if mailbox === 'SPAM'}
-          <button onclick={() => handleBulkAction('unspam')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Not Spam</button>
+          <button onclick={() => handleBulkAction('unspam')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Not Spam</button>
         {:else}
-          <button onclick={() => handleBulkAction('spam')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded text-red-500 disabled:opacity-50">Spam</button>
+          <button onclick={() => handleBulkAction('spam')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded text-red-500 disabled:opacity-50">Spam</button>
         {/if}
         {#if mailbox === 'TRASH'}
-          <button onclick={() => handleBulkAction('untrash')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Restore</button>
+          <button onclick={() => handleBulkAction('untrash')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Restore</button>
         {:else}
-          <button onclick={() => handleBulkAction('trash')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded text-red-500 disabled:opacity-50">Trash</button>
+          <button onclick={() => handleBulkAction('trash')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded text-red-500 disabled:opacity-50">Trash</button>
         {/if}
       </div>
     </div>
   {/if}
 
   <!-- Table -->
-  <div class="flex-1 overflow-auto">
+  <div class="flex-1 overflow-auto" bind:this={tableEl}>
     {#if loading && emails.length === 0}
       <div class="p-4 space-y-2">
         {#each Array(10) as _}
@@ -388,11 +420,14 @@
               {@const dConf = getDigestConfig(email.thread_digest_type)}
               {@const isExpanded = expandedThreads.has(email.gmail_thread_id)}
               {@const borderColor = email.thread_digest_type === 'scheduling' ? 'rgb(168, 85, 247)' : email.thread_digest_type === 'discussion' ? 'rgb(59, 130, 246)' : 'var(--border-color)'}
-              <!-- svelte-ignore a11y_click_events_have_key_events -->
               <tr
                 class="border-b cursor-pointer transition-fast"
                 style="border-color: var(--border-subtle); background: {isExpanded ? 'var(--bg-tertiary)' : 'var(--bg-secondary)'}; border-left: 3px solid {borderColor};"
                 onclick={(e) => toggleThread(email.gmail_thread_id, e)}
+                onkeydown={(e) => activateRow(e, () => toggleThread(email.gmail_thread_id, e))}
+                tabindex="0"
+                aria-expanded={isExpanded}
+                aria-label="{cleanEmailText(email.subject) || 'No subject'} conversation"
               >
                 <td class="px-3 py-2" style="width: 40px">
                   <div class="transition-transform" style="transform: rotate({isExpanded ? '90' : '0'}deg)">
@@ -437,12 +472,15 @@
               <!-- ========== EXPANDED THREAD CHILDREN (rendered inline) ========== -->
               {#if isExpanded && digestThreadEmails[email.gmail_thread_id]}
                 {#each digestThreadEmails[email.gmail_thread_id] as child (child.id)}
-                  <!-- svelte-ignore a11y_click_events_have_key_events -->
                   <tr
                     class="border-b cursor-pointer transition-fast"
                     style="border-color: var(--border-subtle); background: {selectedId === child.id ? 'var(--bg-hover)' : 'var(--bg-primary)'}; border-left: 3px solid {borderColor};"
                     transition:slide={{ duration: 150 }}
                     onclick={() => onSelect && onSelect(child.id)}
+                    onkeydown={(e) => activateRow(e, () => onSelect && onSelect(child.id))}
+                    tabindex="0"
+                    aria-label="Open message from {cleanEmailText(child.from_name || child.from_address || 'Unknown')}"
+                    data-email-row-id={child.id}
                   >
                     <td class="py-2" style="width: 40px"></td>
                     <td class="px-1 py-2" style="width: 32px"></td>
@@ -469,11 +507,14 @@
               {/if}
             {:else}
               <!-- ========== NORMAL EMAIL ROW ========== -->
-              <!-- svelte-ignore a11y_click_events_have_key_events -->
               <tr
                 class="border-b cursor-pointer transition-fast"
                 style="border-color: var(--border-subtle); background: {selectedId === email.id ? 'var(--bg-hover)' : 'var(--bg-secondary)'}"
                 onclick={() => onSelect && onSelect(email.id)}
+                onkeydown={(e) => activateRow(e, () => onSelect && onSelect(email.id))}
+                tabindex="0"
+                aria-label="Open email: {cleanEmailText(email.subject) || 'No subject'}"
+                data-email-row-id={email.id}
               >
                 <td class="px-3 py-2" style="width: 40px">
                   <button

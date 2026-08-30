@@ -37,6 +37,7 @@ function connect() {
 
   eventSource.addEventListener('new_emails', handleEvent('new_emails'));
   eventSource.addEventListener('emails_updated', handleEvent('emails_updated'));
+  eventSource.addEventListener('mail_action_updated', handleEvent('mail_action_updated'));
   eventSource.addEventListener('sync_complete', handleEvent('sync_complete'));
 
   eventSource.onopen = function () {

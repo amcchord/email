@@ -40,14 +40,27 @@ test('mail action lifecycle helpers use request-scoped routes', async t => {
   };
 
   await api.getMailAction('request-2');
+  await api.getMailActionByIdempotency('client-key');
   await api.listRecentMailActions(7);
   await api.undoMailAction('request-2');
   await api.retryMailAction('request-2');
 
   assert.deepEqual(calls, [
     { url: '/api/emails/actions/request-2', method: 'GET' },
+    { url: '/api/emails/actions/by-idempotency/client-key', method: 'GET' },
     { url: '/api/emails/actions/recent?limit=7', method: 'GET' },
     { url: '/api/emails/actions/request-2/undo', method: 'POST' },
     { url: '/api/emails/actions/request-2/retry', method: 'POST' },
   ]);
+});
+
+test('API errors retain the HTTP status needed for authoritative reconciliation', async t => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async () => jsonResponse({ detail: 'Mail action not found' }, 404);
+
+  await assert.rejects(
+    api.getMailActionByIdempotency('missing-key'),
+    error => error.message === 'Mail action not found' && error.status === 404,
+  );
 });

@@ -515,7 +515,7 @@
             onclick={() => onAction && onAction('trash', [email.id])}
             class="min-w-11 min-h-11 inline-flex items-center justify-center rounded-md transition-fast"
             style="color: var(--text-tertiary)"
-            title="Delete"
+            title="Move to trash"
             aria-label="Move email to trash"
             data-shortcut="email.trash"
           >

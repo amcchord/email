@@ -4,6 +4,7 @@
   import { accountColorMap, selectedAccountId } from '../../lib/stores.js';
   import Icon from '../common/Icon.svelte';
   import { cleanEmailText, categoryLabel, typeLabel } from '../../lib/emailText.js';
+  import { focusEmailRow, shouldFocusAdjacentRow } from '../../lib/emailRowFocus.js';
 
   let {
     emails = [],
@@ -29,12 +30,38 @@
   let bulkActionPending = $state(false);
   let expandedThreads = $state(new Set());
   let sentinelEl = $state(null);
+  let listEl = $state(null);
   let observer = null;
+  let previousSelectedId = null;
+  let previousEmailIds = new Set();
 
   $effect(() => {
     void selectionEpoch;
     void actionsDisabled;
     selectedIds = new Set();
+  });
+
+  $effect(() => {
+    const currentEmailIds = new Set(emails.map(email => email.id));
+    for (const threadEmails of Object.values(digestThreadEmails)) {
+      for (const child of threadEmails) currentEmailIds.add(child.id);
+    }
+    const focusAdjacent = shouldFocusAdjacentRow({
+      previousSelectedId,
+      selectedId,
+      previousEmailIds,
+      emailIds: currentEmailIds,
+    });
+    const focusId = selectedId;
+
+    previousSelectedId = selectedId;
+    previousEmailIds = currentEmailIds;
+
+    if (focusAdjacent) {
+      queueMicrotask(() => {
+        if (selectedId === focusId) focusEmailRow(listEl, focusId);
+      });
+    }
   });
 
   function toggleThread(threadId, event) {
@@ -243,29 +270,29 @@
 
   <!-- Toolbar -->
   {#if selectedIds.size > 0}
-    <div class="h-10 flex items-center gap-2 px-3 border-b shrink-0" style="border-color: var(--border-color); background: var(--bg-tertiary)">
-      <span class="text-xs font-medium" style="color: var(--text-secondary)">{selectedIds.size} selected</span>
-      <div class="flex gap-1 ml-auto">
-        <button onclick={() => handleBulkAction('mark_read')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Read</button>
-        <button onclick={() => handleBulkAction('mark_unread')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Unread</button>
-        <button onclick={() => handleBulkAction('archive')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Archive</button>
-        <button onclick={() => handleBulkAction('star')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Star</button>
+    <div class="flex flex-col items-stretch gap-1 px-3 py-2 border-b shrink-0 sm:flex-row sm:items-center sm:gap-2" style="border-color: var(--border-color); background: var(--bg-tertiary)" aria-busy={bulkActionPending}>
+      <span class="text-xs font-medium shrink-0" style="color: var(--text-secondary)">{selectedIds.size} selected</span>
+      <div class="grid grid-cols-3 gap-1 sm:ml-auto sm:flex sm:min-w-0 sm:flex-1 sm:flex-wrap sm:justify-end">
+        <button onclick={() => handleBulkAction('mark_read')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Read</button>
+        <button onclick={() => handleBulkAction('mark_unread')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Unread</button>
+        <button onclick={() => handleBulkAction('archive')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Archive</button>
+        <button onclick={() => handleBulkAction('star')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Star</button>
         {#if mailbox === 'SPAM'}
-          <button onclick={() => handleBulkAction('unspam')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Not Spam</button>
+          <button onclick={() => handleBulkAction('unspam')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Not Spam</button>
         {:else}
-          <button onclick={() => handleBulkAction('spam')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded text-red-500 disabled:opacity-50">Spam</button>
+          <button onclick={() => handleBulkAction('spam')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded text-red-500 disabled:opacity-50">Spam</button>
         {/if}
         {#if mailbox === 'TRASH'}
-          <button onclick={() => handleBulkAction('untrash')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Restore</button>
+          <button onclick={() => handleBulkAction('untrash')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Restore</button>
         {:else}
-          <button onclick={() => handleBulkAction('trash')} disabled={actionsDisabled || bulkActionPending} class="px-2 py-1 text-xs rounded text-red-500 disabled:opacity-50">Trash</button>
+          <button onclick={() => handleBulkAction('trash')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded text-red-500 disabled:opacity-50">Trash</button>
         {/if}
       </div>
     </div>
   {/if}
 
   <!-- Email list -->
-  <div class="flex-1 overflow-y-auto">
+  <div class="flex-1 overflow-y-auto" bind:this={listEl}>
     {#if loading && emails.length === 0}
       <div class="p-4 space-y-3">
         {#each Array(8) as _}
@@ -387,6 +414,7 @@
                   role="button"
                   tabindex="0"
                   aria-label="Open message from {cleanEmailText(child.from_name || child.from_address || 'Unknown')}"
+                  data-email-row-id={child.id}
                 >
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2 mb-0.5">
@@ -406,36 +434,34 @@
           {/if}
         {:else}
           <!-- ========== NORMAL EMAIL ROW ========== -->
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
-            class="flex items-start gap-3 px-4 py-3 border-b cursor-pointer transition-fast"
+            class="flex items-start gap-1 px-2 py-2 border-b transition-fast"
             class:font-medium={!email.is_read}
             style="border-color: var(--border-subtle); background: {selectedId === email.id ? 'var(--bg-hover)' : 'var(--bg-secondary)'};"
-            onclick={() => onSelect && onSelect(email.id)}
-            onkeydown={(e) => activateRow(e, () => onSelect && onSelect(email.id))}
-            role="button"
-            tabindex="0"
-            aria-label="Open email: {cleanEmailText(email.subject) || 'No subject'}"
           >
             <!-- Checkbox -->
             <button
               onclick={(e) => toggleSelect(email.id, e)}
               disabled={actionsDisabled}
-              class="mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-fast"
-              style="border-color: var(--border-color); background: {selectedIds.has(email.id) ? 'var(--color-accent-500)' : 'transparent'}"
+              class="min-w-11 min-h-11 rounded-md flex items-center justify-center shrink-0 transition-fast disabled:opacity-50"
               aria-label="{selectedIds.has(email.id) ? 'Deselect' : 'Select'} {cleanEmailText(email.subject) || 'email'}"
             >
-              {#if selectedIds.has(email.id)}
-                <Icon name="check" size={12} class="text-white" strokeWidth={3} />
-              {/if}
+              <span
+                class="w-4 h-4 rounded border flex items-center justify-center"
+                style="border-color: var(--border-color); background: {selectedIds.has(email.id) ? 'var(--color-accent-500)' : 'transparent'}"
+                aria-hidden="true"
+              >
+                {#if selectedIds.has(email.id)}
+                  <Icon name="check" size={12} class="text-white" strokeWidth={3} />
+                {/if}
+              </span>
             </button>
 
             <!-- Star -->
             <button
               onclick={(e) => { e.stopPropagation(); onAction && onAction(email.is_starred ? 'unstar' : 'star', [email.id]); }}
               disabled={actionsDisabled}
-              class="mt-0.5 shrink-0 disabled:opacity-50"
+              class="min-w-11 min-h-11 rounded-md inline-flex items-center justify-center shrink-0 transition-fast disabled:opacity-50"
               style="color: {email.is_starred ? 'var(--color-accent-500)' : 'var(--text-tertiary)'}"
               aria-label="{email.is_starred ? 'Unstar' : 'Star'} {cleanEmailText(email.subject) || 'email'}"
             >
@@ -443,8 +469,14 @@
             </button>
 
             <!-- Content -->
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2 mb-0.5">
+            <button
+              type="button"
+              class="flex-1 min-w-0 min-h-11 text-left py-1"
+              onclick={() => onSelect && onSelect(email.id)}
+              aria-label="Open email: {cleanEmailText(email.subject) || 'No subject'}"
+              data-email-row-id={email.id}
+            >
+              <span class="flex items-center gap-2 mb-0.5">
                 {#if showAccountDot && email.account_email && $accountColorMap[email.account_email]}
                   <span class="w-2 h-2 rounded-full shrink-0" style="background: {$accountColorMap[email.account_email].bg}" title={email.account_email}></span>
                 {/if}
@@ -460,11 +492,11 @@
                   </span>
                 {/if}
                 <span class="text-xs ml-auto shrink-0" style="color: var(--text-tertiary)">{formatDate(email.date)}</span>
-              </div>
-              <div class="text-sm truncate mb-0.5" style="color: var(--text-primary); opacity: {email.is_read ? 0.8 : 1}">
+              </span>
+              <span class="block text-sm truncate mb-0.5" style="color: var(--text-primary); opacity: {email.is_read ? 0.8 : 1}">
                 {cleanEmailText(email.subject) || '(no subject)'}
-              </div>
-              <div class="flex items-center gap-2">
+              </span>
+              <span class="flex items-center gap-2">
                 <span class="text-xs truncate" style="color: var(--text-tertiary)">{cleanEmailText(email.snippet)}</span>
                 {#if email.gmail_thread_id && seenThreadIds[email.id] && threadCounts[email.gmail_thread_id] > 1}
                   <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0" style="background: var(--bg-tertiary); color: var(--text-secondary)" title="Thread with {threadCounts[email.gmail_thread_id]} messages">
@@ -483,8 +515,8 @@
                 {#if email.ai_email_type}
                   <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 {emailTypeColors[email.ai_email_type] || ''}">{typeLabel(email.ai_email_type)}</span>
                 {/if}
-              </div>
-            </div>
+              </span>
+            </button>
           </div>
         {/if}
       {/each}

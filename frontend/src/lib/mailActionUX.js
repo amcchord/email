@@ -88,15 +88,104 @@ export function captureInboxAction(emails, selectedId, emailIds) {
   };
 }
 
-export function restoreInboxAction(currentEmails, snapshot) {
+function sameLabels(first, second) {
+  const a = new Set(Array.isArray(first) ? first : []);
+  const b = new Set(Array.isArray(second) ? second : []);
+  return a.size === b.size && [...a].every(label => b.has(label));
+}
+
+export function rollbackEmailAction(current, original, action) {
+  const projected = applyEmailAction(original, action);
+  if (sameLabels(current.labels, projected.labels)) return original;
+
+  const beforeLabels = new Set(Array.isArray(original.labels) ? original.labels : []);
+  const afterLabels = new Set(Array.isArray(projected.labels) ? projected.labels : []);
+  const desiredLabels = new Set(Array.isArray(current.labels) ? current.labels : []);
+  const changedLabels = new Set([...beforeLabels, ...afterLabels]);
+  for (const label of changedLabels) {
+    if (beforeLabels.has(label) === afterLabels.has(label)) continue;
+    if (beforeLabels.has(label)) desiredLabels.add(label);
+    else desiredLabels.delete(label);
+  }
+
+  const labels = [
+    ...(original.labels || []).filter(label => desiredLabels.has(label)),
+    ...(current.labels || []).filter(
+      label => desiredLabels.has(label) && !(original.labels || []).includes(label),
+    ),
+  ];
+  for (const label of desiredLabels) {
+    if (!labels.includes(label)) labels.push(label);
+  }
+  return {
+    ...current,
+    labels,
+    is_read: !desiredLabels.has('UNREAD'),
+    is_starred: desiredLabels.has('STARRED'),
+    is_trash: desiredLabels.has('TRASH'),
+    is_spam: desiredLabels.has('SPAM'),
+  };
+}
+
+export function restoreInboxAction(
+  currentEmails,
+  snapshot,
+  action = null,
+  reinsertMissing = true,
+) {
   const originals = new Map(snapshot.items.map(item => [item.email.id, item]));
-  const restored = currentEmails.map(email => originals.get(email.id)?.email || email);
+  const restored = currentEmails.map(email => {
+    const original = originals.get(email.id)?.email;
+    if (!original) return email;
+    return action ? rollbackEmailAction(email, original, action) : original;
+  });
 
   for (const item of [...snapshot.items].sort((a, b) => a.index - b.index)) {
     if (restored.some(email => email.id === item.email.id)) continue;
+    if (!reinsertMissing) continue;
     restored.splice(Math.min(item.index, restored.length), 0, item.email);
   }
   return restored;
+}
+
+export function createMailActionSubmissionQueue() {
+  const tails = new Map();
+
+  function enqueue(emailIds, submit) {
+    const ids = [...new Set(emailIds)];
+    const blockers = [...new Set(ids.map(id => tails.get(id)).filter(Boolean))];
+    let tailGate = Promise.resolve();
+    let releaseTail = null;
+    const queueControl = {
+      hold() {
+        if (releaseTail) return releaseTail;
+        let release;
+        tailGate = new Promise(resolve => { release = resolve; });
+        let released = false;
+        releaseTail = () => {
+          if (released) return;
+          released = true;
+          release();
+        };
+        return releaseTail;
+      },
+    };
+    const result = Promise.allSettled(blockers)
+      .then(() => submit(queueControl));
+    let tail;
+    tail = result
+      .catch(() => undefined)
+      .then(() => tailGate)
+      .finally(() => {
+        for (const id of ids) {
+          if (tails.get(id) === tail) tails.delete(id);
+        }
+      });
+    for (const id of ids) tails.set(id, tail);
+    return result;
+  }
+
+  return { enqueue };
 }
 
 export function idempotencyKey(randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto)) {
@@ -112,4 +201,21 @@ export function remainingUndoMs(undoUntil, now = Date.now()) {
 
 export function canUndoAction(operation, now = Date.now()) {
   return operation?.state === 'staged' && remainingUndoMs(operation.undo_until, now) > 0;
+}
+
+export function isMailActionNetworkError(error) {
+  return error instanceof TypeError || /network|failed to fetch/i.test(error?.message || '');
+}
+
+export function failedMailActionRequestIds(operations = []) {
+  return new Set(
+    operations
+      .filter(operation => operation.items?.some(item => item.state === 'failed'))
+      .map(operation => operation.request_id),
+  );
+}
+
+export function hasNewFailedMailActions(operations, observedRequestIds = new Set()) {
+  return [...failedMailActionRequestIds(operations)]
+    .some(requestId => !observedRequestIds.has(requestId));
 }
