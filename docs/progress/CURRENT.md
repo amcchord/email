@@ -13,6 +13,12 @@ HIL and a durable idempotent event ledger exist.
 
 ## Baseline
 
+- Universal Snooze application/runtime is
+  `231173b2d18966b603ed2f824f68380f8087de2c`; production deployed it with the
+  migration-free terminal candidate.5 integration as combined runtime
+  `35e3700e8a22eabf49e701fb873d4662d5b7abdc`. One durable reminder owns the
+  exact account/conversation across Inbox, reader, Flow, search, first-class
+  Snoozed, `H`, reload, provider retry, and cron recovery.
 - The deployed At a Glance terminal-safety application/runtime commit is
   `92d22a54c49ec9b4ba74042ece01a1c6d527ea07`; the following closeout is docs
   only. Battery estimates are bounded and advisory, the browser performs exact
@@ -38,10 +44,10 @@ HIL and a durable idempotent event ledger exist.
 - The deployed secure-enrollment application/runtime commit is
   `8ff01848a2be2818dfd9eb88b84be9aab4befb0a`; the following closeout is docs
   only. Production and GitHub were exact and clean at the runtime boundary.
-- Production Alembic is `f3a4b5c6d7e8 (head)`, the terminal-only additive
-  child of `e2f3a4b5c6d7`. The new credential and attempt tables remain empty,
-  all four existing terminals remain legacy, and the secure-MAC unique index is
-  present.
+- Production Alembic is `a4b5c6d7e8f9 (head)`, the Universal Snooze child of
+  terminal-only `f3a4b5c6d7e8`. The additive Snooze table is empty at release,
+  the terminal credential and attempt tables remain empty, all four existing
+  terminals remain legacy, and the secure-MAC unique index is present.
 - All seven checked production services are active, public health is `ok`, and
   the replacement API process has zero automatic restarts and no post-start
   warning-or-higher entries. Production has no secure-enrollment or OTA
@@ -88,6 +94,23 @@ live state.
   enable a write.
 - Next: defer schema allocation and implementation until physical candidate.4
   HIL establishes the exact event and rollback evidence the ledger must retain.
+
+## Recent Universal Snooze Release
+
+- Email exposes first-class **Snoozed** with one accessible picker across
+  Inbox, reader, Flow, keyboard `H`, and commands. Explicit zoned quick/custom
+  times, DST gap/fold handling, always/if-no-reply conditions, Undo,
+  reschedule, Return now, Cancel, narrow layout, and focus recovery are live.
+- Snooze is conversation-scoped and PostgreSQL-authoritative. Current Inbox
+  siblings archive together, a later manual placement wins every return race,
+  Cancel restores original placement, scheduled/explicit return adds Inbox,
+  fresh sync gates the no-reply decision, and terminal provider failures
+  release the active-conversation guard.
+- Consolidated validation passed 603 backend and 335 frontend tests, a
+  534-module build, 8 disposable-PostgreSQL lifecycle/race tests, the exact
+  migration roundtrip, and generated desktop/mobile browser QA with zero
+  provider calls. Full evidence and rollback boundaries are in
+  `UNIVERSAL_SNOOZE_RELEASE_2026-08-30.md`.
 
 ## Recent First-Class At a Glance Release
 

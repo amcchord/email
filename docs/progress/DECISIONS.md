@@ -578,3 +578,27 @@ add a new entry that explicitly supersedes the old one.
   remains single-slot and ineligible; the browser production trust map is empty;
   and future Serial/OTA work must preserve every independent gate plus exact
   interruption, rollback, and ROM-recovery evidence.
+
+## D-031 — Snooze is a durable conversation lifecycle
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Represent one active Snooze by the exact authenticated user,
+  Google account, and Gmail thread. Persist its time, condition, current
+  conversation membership, original Inbox membership, mail-action baselines,
+  attempts, leases, and terminal state in PostgreSQL. Use the existing ordered
+  mail-action outbox for archive and Inbox return; Redis is only wake-up
+  acceleration and cron remains the recovery authority.
+- Reason: Browser timers and one-message projections lose reminders across
+  reloads and split a conversation into contradictory rows. Pre-staging a
+  future Inbox return would make optimistic mail-action overlay surface it
+  immediately, while staging outside the conversation-row lock can let an
+  automated wake override a later manual mailbox move.
+- Consequence: Current eligible Inbox siblings archive together and one active
+  reminder exists per account/thread. Due/Return-now assigns ordered unarchive
+  work while every current conversation row is locked, so later manual
+  placement wins. Cancel restores original placement; wake returns to Inbox;
+  protected or newer-manual members are filtered individually. Conditional
+  return waits for a fresh sync checkpoint before concluding nobody replied,
+  terminal provider failures release uniqueness, and lost browser responses
+  reconcile the same client-keyed operation instead of creating another.

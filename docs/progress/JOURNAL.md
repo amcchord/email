@@ -3,6 +3,67 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Universal Snooze release
+
+### Scope
+
+Deliver a durable, first-class Snooze/Remind Later workflow across Email and
+Flow using only generated `.example.test` browser mutations during QA.
+
+### Completed
+
+- Added the direct `f3a4b5c6d7e8` child migration `a4b5c6d7e8f9`, one active
+  reminder per owned account/conversation, durable leases/retry, exact
+  idempotency recovery, fresh-sync no-reply gating, and ordered bulk
+  archive/Inbox-return work through the existing mail-action outbox.
+- Added first-class Snoozed navigation, shared accessible zoned/DST-safe
+  picker, always/if-no-reply conditions, `H`, commands, Flow support,
+  conversation-level optimistic projection, ten-second Cancel-backed Undo,
+  reschedule, Return now, error reconciliation, focus recovery, and responsive
+  management states.
+- Extended the local generated-mail fixture with sibling conversations, fake
+  time, active-thread conflict, original-placement Cancel, Sent-only Return
+  now, reply suppression, protected mailboxes, provider counters, and an exact
+  boundary self-test.
+
+### Verification
+
+- Consolidated validation passed 603 backend tests with 47 intentional skips,
+  all 335 frontend tests, and a 534-module production build. Focused backend
+  and mail-action coverage passed 53 tests; the final Snooze-focused frontend
+  pass completed 22 tests.
+- Eight disposable-PostgreSQL tests passed conversation, race ordering,
+  placement, partial-failure, terminal-failure, and fresh-sync behavior. The
+  exact `f3 → a4 → f3 → a4` migration roundtrip passed.
+- Generated desktop and 390-by-844 browser QA passed full-conversation hide and
+  Undo restoration, first-class Snoozed, reschedule/Return now, `H`, focus,
+  dialog, and console checks. Provider calls, rejected mutations, and unknown
+  fixture routes were zero; no real mailbox or calendar data was mutated.
+
+### Production Actions
+
+- Pushed exact Snooze application/runtime
+  `231173b2d18966b603ed2f824f68380f8087de2c`. A migration-free terminal
+  integration produced combined runtime
+  `35e3700e8a22eabf49e701fb873d4662d5b7abdc` for one coordinated deployment.
+- Created and validated the 1,383,720,058-byte pre-a4 backup
+  `/var/backups/mailapp/maildb-pre-universal-snooze-20260830T2224Z.dump`
+  (SHA-256
+  `049ad0aae0b0cb3ee4cc3b2e34585cd5fe248b1654fbd2127d42a195b2a9ec16`).
+  Production upgraded exactly `f3 → a4`, restarted the API and both workers,
+  and built 534 frontend modules.
+- All seven checked services and public health are healthy; affected services
+  have no warning-or-higher entries after the replacement boundary, anonymous
+  Snooze access is 401, and the aggregate Snooze row count is zero.
+  Authenticated read-only QA loaded empty first-class Snoozed and At a Glance
+  without opening mail or causing a mutation.
+
+### Next
+
+Continue from the combined a4 baseline. Reuse the one durable conversation
+lifecycle for future auto-reminders or reminder defaults; do not add browser-
+only or AI-only timers.
+
 ## 2026-08-30 — At a Glance firmware and battery safety release
 
 ### Scope

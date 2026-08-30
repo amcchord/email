@@ -38,6 +38,7 @@ free-form questions about your inbox without touching the web UI.
 - [Web session-only structured email search](#web-session-only-structured-email-search)
 - [Web session-only attachment preview and download](#web-session-only-attachment-preview-and-download)
 - [Web session-only durable mail actions](#web-session-only-durable-mail-actions)
+- [Web session-only durable Snooze reminders](#web-session-only-durable-snooze-reminders)
 - [Web session-only durable outbound delivery](#web-session-only-durable-outbound-delivery)
 - [Web session-only durable draft sessions](#web-session-only-durable-draft-sessions)
 - [Web session-only Todo ownership](#web-session-only-todo-ownership)
@@ -774,11 +775,13 @@ foreign, or missing targets return a uniform 404 and mutate nothing.
 ```
 
 Supported actions are `mark_read`, `mark_unread`, `star`, `unstar`, `archive`,
-`trash`, `untrash`, `spam`, and `unspam`. The idempotency key is optional for
-legacy callers, but retry-capable clients should generate one UUID per logical
-operation and reuse it until a response is known. Reusing a key with the same
-payload returns the original operation; reuse with a different payload returns
-409. After a lost or timed-out create response, the authenticated
+`unarchive`, `trash`, `untrash`, `spam`, and `unspam`. `unarchive` is the
+internal ordered Inbox-return primitive used by Snooze and is rejected for
+Trash or Spam. The idempotency key is optional for legacy callers, but
+retry-capable clients should generate one UUID per logical operation and reuse
+it until a response is known. Reusing a key with the same payload returns the
+original operation; reuse with a different payload returns 409. After a lost or
+timed-out create response, the authenticated
 `by-idempotency` route returns that exact owned operation or a uniform 404.
 Because a lost POST can still be waiting on a database lock, that 404 is not a
 definitive rejection: clients keep the projection visibly pending and replay
@@ -842,6 +845,86 @@ is picked up by the next durable cron pass.
 operations with unresolved failed items before newer completed operations, so
 a failure does not silently disappear behind routine successes. Public API
 tokens cannot call these mutation routes.
+
+## Web session-only durable Snooze reminders
+
+Universal Snooze uses the authenticated browser session and is scoped to one
+exact owned Google account and Gmail conversation. Public API tokens cannot
+call these routes.
+
+```text
+POST  /api/snoozes
+GET   /api/snoozes?state=active&limit=50&offset=0
+GET   /api/snoozes/by-idempotency/{idempotency_key}
+GET   /api/snoozes/{snooze_id}
+PATCH /api/snoozes/{snooze_id}/reschedule
+POST  /api/snoozes/{snooze_id}/cancel
+POST  /api/snoozes/{snooze_id}/return-now
+```
+
+Create requires one owned positive email ID, a future offset-aware instant,
+the originating IANA time zone, one condition, and a client UUID:
+
+```json
+{
+  "email_id": 9001,
+  "wake_at": "2026-08-31T13:00:00Z",
+  "time_zone": "America/New_York",
+  "condition": "if_no_reply",
+  "idempotency_key": "42a7cd5b-d5de-4d42-8a2c-1a80116b1607"
+}
+```
+
+`condition` is `always` or `if_no_reply`. Replaying the same idempotency key and
+canonical payload returns the original reminder even after its wake time;
+reusing the key for a different payload returns 409. The owned-key lookup is
+the recovery path after a lost create response.
+
+The lifecycle is conversation-scoped by `(user, account, gmail_thread_id)`.
+Only one active reminder may exist for that tuple. Current eligible Inbox
+members archive together through the durable mail-action outbox, and the
+response identifies both the representative row and conversation scope:
+
+```json
+{
+  "id": "2e7f88e3-d532-48c0-91e6-7ec16174f79e",
+  "email_id": 9001,
+  "account_id": 3,
+  "account_email": "you@example.test",
+  "gmail_thread_id": "generated-thread-id",
+  "wake_at": "2026-08-31T13:00:00Z",
+  "time_zone": "America/New_York",
+  "condition": "if_no_reply",
+  "state": "pending_archive",
+  "status_detail": "archiving",
+  "archive_required": true,
+  "originally_in_inbox": true,
+  "conversation_message_count": 2,
+  "archive_action_request_id": "d4cda482-261b-42e4-98ea-983f99b36768",
+  "archive_undo_until": "2026-08-30T12:00:10Z",
+  "error_code": null,
+  "error_message": null,
+  "email": { "id": 9001, "subject": "Generated example" }
+}
+```
+
+Active states are `pending_archive`, `scheduled`, and `pending_return`;
+terminal states are `returned`, `cancelled`, `dismissed`, and `failed`. Lists
+are bounded to 200 items and may request `active`, `scheduled`, `returned`,
+`cancelled`, `failed`, or `all`.
+
+Cancel is idempotent and restores the conversation's original Inbox placement.
+Return now and the scheduled wake add Inbox, including for a reminder created
+from Sent or All Mail. Trash, Spam, and messages with a newer manual placement
+are never overridden. Reschedule accepts a future offset-aware `wake_at` and an
+IANA `time_zone` for an active reminder.
+
+For `if_no_reply`, the worker first requires a successful account sync
+checkpoint at or after wake, then suppresses return if a later non-sent inbound
+message exists in the exact account/thread. PostgreSQL is authoritative;
+Redis is wake-up acceleration and the minutely cron drain recovers lost wakes
+and expired leases. Snooze return actions enter the same ordered mail-action
+sequence as direct user actions, so later manual placement wins.
 
 ## Web session-only durable outbound delivery
 
