@@ -350,7 +350,7 @@
       <!-- View mode toggle -->
       <button
         onclick={toggleViewMode}
-        class="p-1.5 rounded-md transition-fast shrink-0"
+        class="hidden md:inline-flex p-1.5 rounded-md transition-fast shrink-0"
         style="color: var(--text-secondary)"
         aria-label="Toggle view mode"
         title="{$viewMode === 'column' ? 'Switch to table view' : 'Switch to column view'}"

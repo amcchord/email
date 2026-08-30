@@ -15,6 +15,9 @@
     mailbox = 'INBOX',
     searchActive = false,
     searchTerm = '',
+    loadFailed = false,
+    actionsDisabled = false,
+    selectionEpoch = 0,
     onSelect = null,
     onAction = null,
     onLoadMore = null,
@@ -26,6 +29,12 @@
   let expandedThreads = $state(new Set());
   let sentinelEl = $state(null);
   let observer = null;
+
+  $effect(() => {
+    void selectionEpoch;
+    void actionsDisabled;
+    selectedIds = new Set();
+  });
 
   function toggleThread(threadId, event) {
     event.stopPropagation();
@@ -46,7 +55,7 @@
     if (sentinelEl) {
       observer = new IntersectionObserver((entries) => {
         const entry = entries[0];
-        if (entry && entry.isIntersecting && hasMore && !loadingMore && !loading) {
+        if (entry && entry.isIntersecting && hasMore && !loadingMore && !loading && !actionsDisabled) {
           if (onLoadMore) onLoadMore();
         }
       }, { rootMargin: '200px' });
@@ -78,6 +87,7 @@
 
   function toggleSelect(id, event) {
     event.stopPropagation();
+    if (actionsDisabled) return;
     const next = new Set(selectedIds);
     if (next.has(id)) {
       next.delete(id);
@@ -95,7 +105,7 @@
   }
 
   function handleBulkAction(action) {
-    if (selectedIds.size > 0 && onAction) {
+    if (!actionsDisabled && selectedIds.size > 0 && onAction) {
       onAction(action, Array.from(selectedIds));
       selectedIds = new Set();
     }
@@ -231,19 +241,19 @@
     <div class="h-10 flex items-center gap-2 px-3 border-b shrink-0" style="border-color: var(--border-color); background: var(--bg-tertiary)">
       <span class="text-xs font-medium" style="color: var(--text-secondary)">{selectedIds.size} selected</span>
       <div class="flex gap-1 ml-auto">
-        <button onclick={() => handleBulkAction('mark_read')} class="px-2 py-1 text-xs rounded" style="color: var(--text-secondary)">Read</button>
-        <button onclick={() => handleBulkAction('mark_unread')} class="px-2 py-1 text-xs rounded" style="color: var(--text-secondary)">Unread</button>
-        <button onclick={() => handleBulkAction('archive')} class="px-2 py-1 text-xs rounded" style="color: var(--text-secondary)">Archive</button>
-        <button onclick={() => handleBulkAction('star')} class="px-2 py-1 text-xs rounded" style="color: var(--text-secondary)">Star</button>
+        <button onclick={() => handleBulkAction('mark_read')} disabled={actionsDisabled} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Read</button>
+        <button onclick={() => handleBulkAction('mark_unread')} disabled={actionsDisabled} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Unread</button>
+        <button onclick={() => handleBulkAction('archive')} disabled={actionsDisabled} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Archive</button>
+        <button onclick={() => handleBulkAction('star')} disabled={actionsDisabled} class="px-2 py-1 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Star</button>
         {#if mailbox === 'SPAM'}
-          <button onclick={() => handleBulkAction('unspam')} class="px-2 py-1 text-xs rounded font-medium" style="color: var(--color-accent-600)">Not Spam</button>
+          <button onclick={() => handleBulkAction('unspam')} disabled={actionsDisabled} class="px-2 py-1 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Not Spam</button>
         {:else}
-          <button onclick={() => handleBulkAction('spam')} class="px-2 py-1 text-xs rounded text-red-500">Spam</button>
+          <button onclick={() => handleBulkAction('spam')} disabled={actionsDisabled} class="px-2 py-1 text-xs rounded text-red-500 disabled:opacity-50">Spam</button>
         {/if}
         {#if mailbox === 'TRASH'}
-          <button onclick={() => handleBulkAction('untrash')} class="px-2 py-1 text-xs rounded font-medium" style="color: var(--color-accent-600)">Restore</button>
+          <button onclick={() => handleBulkAction('untrash')} disabled={actionsDisabled} class="px-2 py-1 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Restore</button>
         {:else}
-          <button onclick={() => handleBulkAction('trash')} class="px-2 py-1 text-xs rounded text-red-500">Trash</button>
+          <button onclick={() => handleBulkAction('trash')} disabled={actionsDisabled} class="px-2 py-1 text-xs rounded text-red-500 disabled:opacity-50">Trash</button>
         {/if}
       </div>
     </div>
@@ -263,6 +273,10 @@
             </div>
           </div>
         {/each}
+      </div>
+    {:else if loadFailed}
+      <div class="flex items-center justify-center h-full p-8 text-center">
+        <p class="text-xs" style="color: var(--text-tertiary)">Results unavailable. Use Try again above.</p>
       </div>
     {:else if emails.length === 0 && !loading}
       <div class="flex flex-col items-center justify-center h-full text-center p-8">
@@ -402,6 +416,7 @@
             <!-- Checkbox -->
             <button
               onclick={(e) => toggleSelect(email.id, e)}
+              disabled={actionsDisabled}
               class="mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-fast"
               style="border-color: var(--border-color); background: {selectedIds.has(email.id) ? 'var(--color-accent-500)' : 'transparent'}"
               aria-label="{selectedIds.has(email.id) ? 'Deselect' : 'Select'} {cleanEmailText(email.subject) || 'email'}"
@@ -414,7 +429,8 @@
             <!-- Star -->
             <button
               onclick={(e) => { e.stopPropagation(); onAction && onAction(email.is_starred ? 'unstar' : 'star', [email.id]); }}
-              class="mt-0.5 shrink-0"
+              disabled={actionsDisabled}
+              class="mt-0.5 shrink-0 disabled:opacity-50"
               style="color: {email.is_starred ? 'var(--color-accent-500)' : 'var(--text-tertiary)'}"
               aria-label="{email.is_starred ? 'Unstar' : 'Star'} {cleanEmailText(email.subject) || 'email'}"
             >
