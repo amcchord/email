@@ -1062,3 +1062,44 @@ rate, estimated days remaining, expected charge-threshold time, confidence,
 status, and a human-readable notice; any estimate may be `null`. A single
 percentage rise is reported as possible charging; two corroborating rises are
 required to claim charging, and low-charge notices always take precedence.
+
+### Authenticated firmware catalog and artifacts
+
+Firmware release inspection uses the normal authenticated browser session.
+Public API tokens and anonymous callers cannot use these routes:
+
+```text
+GET /api/terminal/firmware/catalog
+GET /api/terminal/firmware/releases/{release_id}/manifest.json
+GET /api/terminal/firmware/releases/{release_id}/manifest.sig
+GET /api/terminal/firmware/releases/{release_id}/models/{model}/artifacts/{role}
+```
+
+The catalog endpoint returns at most one approved release. Each response is
+rebuilt from a detached-signature-verified catalog and a fully verified,
+content-addressed bundle on local storage. The service checks the exact release
+manifest schema, signing key, every listed hash and byte length, partition CSV
+and binary table, factory image composition, hardware-revision allowlist,
+model/panel/layout identity, and the NVS/LittleFS ranges that a normal install
+must preserve. E1004 remains ineligible.
+
+Catalog responses contain `schema_version`, `installer_state`,
+`browser_flash_enabled`, `trusted_key_ids`, `blockers`, and `releases`. A model
+record may include artifact download URLs only when the server enablement flag,
+positive minimum signed-catalog generation, signed release evidence, explicit
+hardware qualification, and model policy all agree. The browser applies a
+second exact-schema and flash-range audit before presenting metadata.
+
+The current browser installer is intentionally catalog-only. Its three
+independent write gates—browser signature verification, secure serial
+provisioning, and hardware recovery qualification—are fixed false in shipped
+code. It never calls `navigator.serial.requestPort`, downloads firmware bytes,
+erases a device, or invokes a flashing library.
+
+All responses use `Cache-Control: private, no-store`, `nosniff`, and same-origin
+resource policy. Artifact responses also include an exact `Content-Length`, a
+strong SHA-256 `ETag`, and a sanitized attachment filename. Unknown resources
+return 404, a recognized but ineligible model returns 409, and missing,
+untrusted, stale-generation, or corrupt approved state returns a non-disclosing
+503. Catalog/metadata reads are limited to six per minute per client; artifact
+reads are limited to twelve.

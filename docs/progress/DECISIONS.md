@@ -414,3 +414,28 @@ add a new entry that explicitly supersedes the old one.
   Review draft action when another composer is active. The global failure UI
   does not offer one-click Retry beside an editable recovered copy. Public API
   tokens cannot access these mutation routes.
+
+## D-024 — Firmware approval is signed, generation-pinned, and independently gated
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Serve browser firmware only from an operator-staged,
+  content-addressed local bundle referenced by a detached-signature-verified
+  catalog with one approved release and a monotonically increasing generation.
+  Require the configured public-key trust set, a positive externally pinned
+  minimum generation, exact manifest/partition/hash/hardware qualification,
+  explicit server enablement, independent browser signature verification,
+  secure serial provisioning, and hardware recovery evidence before any write
+  path can become eligible.
+- Reason: A signed manifest alone does not express operator approval, prevent a
+  replayed older release, prove a model's flash boundaries, or protect against
+  accidentally shipping an incomplete browser flasher. Fetching mutable
+  release state from GitHub at request time also widens the availability and
+  trust boundary.
+- Consequence: Production defaults remain locked with no trusted key, catalog,
+  positive generation floor, or enablement flag. Catalog inspection may ship
+  before installation because its client contains no serial request, binary
+  download, erase, or write code. Catalog generations are never reused; E1004
+  remains ineligible; private firmware signing keys stay offline; future
+  enrollment uses a separate online signing key and physical-cable trust is not
+  described as hardware attestation.

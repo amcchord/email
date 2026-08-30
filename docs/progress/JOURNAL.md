@@ -3,6 +3,59 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Fail-closed terminal firmware gateway candidate
+
+### Scope
+
+Publish the reproducible private firmware baseline and add an authenticated,
+locally staged firmware catalog to At a Glance without exposing any browser
+write, erase, unsigned-install, or OTA path. Preserve the durable outbound
+release and its migration head.
+
+### Completed
+
+- Merged private firmware release `1b5364e5` after GitHub Actions run
+  `33322241770` built all three models twice, proved byte identity, strictly
+  verified the manifest/checksums, and uploaded the immutable bundle.
+- Added a cookie-authenticated, rate-limited application gateway for one signed
+  approval catalog, detached manifests/signatures, and exact per-model
+  artifacts from local content-addressed storage.
+- Enforced signed catalog generations, public-key allowlists, exact manifest
+  and partition contracts, closed file sets, hashes, protected NVS/LittleFS
+  ranges, hardware revision qualification, E1004 lockout, safe filesystem
+  traversal, and non-disclosing errors.
+- Added an Admin catalog inspection surface that reports browser prerequisites
+  but contains no port request, flashing dependency, binary download, erase,
+  or write operation. Browser signature verification, secure provisioning, and
+  HIL gates remain fixed false.
+- Corrected the operations runbook to identify the systemd-overridden tracked
+  `/opt/mail/Caddyfile` as the live Caddy source.
+
+### Verification
+
+- Post-outbound rebase `make check`: 459 backend tests passed with 13 opt-in
+  PostgreSQL tests skipped; 221 frontend tests passed; 512 frontend modules
+  built. Focused firmware gateway tests passed 37/37; compilation and
+  `git diff --check` passed.
+- A final independent adversarial review reported no P0-P2 finding after
+  rollback-generation, bounded-catalog, filesystem-error, rate-limit, auth,
+  header, partition, and browser-policy fixes.
+- The exact firmware artifact downloaded from the successful main run passed
+  strict manifest verification and every `SHA256SUMS` check. Its manifest still
+  truthfully declares unsigned, single-slot, non-OTA, and unqualified state.
+
+### Production Actions
+
+- Pending exact reviewed merge and deployment. No database migration, signing
+  key, catalog, artifact tree, or enablement flag will be added.
+
+### Next
+
+Deploy the locked foundation and verify authentication, fail-closed empty
+catalog behavior, Admin presentation, Caddy policy, service health, exact Git,
+and unchanged Alembic head. Then resume the preserved secure-enrollment branch
+without treating its partial implementation as releasable.
+
 ## 2026-08-30 — Safe outbound delivery and More anchoring
 
 ### Scope

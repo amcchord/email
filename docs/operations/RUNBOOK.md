@@ -14,7 +14,7 @@ change production are labeled. Reconfirm actual state before following them.
 | API | `mailapp.service`, `127.0.0.1:8000` |
 | Workers | `mailworker.service`, `mailworker-cron.service` |
 | TUI | `mailtui.service`, ports 2222 and 8022 |
-| Proxy/static files | `caddy.service`, `/etc/caddy/Caddyfile` |
+| Proxy/static files | `caddy.service`, tracked `/opt/mail/Caddyfile` |
 | Database | PostgreSQL 17 on loopback port 5432 |
 | Queue/cache | Redis on loopback port 6379 |
 
@@ -149,11 +149,13 @@ systemctl restart mailtui
 ```
 
 The repository also provides `bash scripts/restart.sh` for grouped rebuilds and
-restarts, but selective commands make the blast radius clearer. If Caddy
-changes, validate before reload:
+restarts, but selective commands make the blast radius clearer. Production has
+a systemd override whose `ExecStart` and `ExecReload` both use the tracked
+`/opt/mail/Caddyfile`; the distro default under `/etc/caddy` is not the live
+source. If Caddy changes, validate the tracked file before reload:
 
 ```bash
-caddy validate --config /etc/caddy/Caddyfile
+caddy validate --config /opt/mail/Caddyfile
 systemctl reload caddy
 ```
 

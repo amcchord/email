@@ -6,40 +6,32 @@ not a description of capabilities already available in production. The image
 wire contract remains in [`server-protocol.md`](server-protocol.md), and panel
 formats remain in [`firmware-variants.md`](firmware-variants.md).
 
-Baseline inspected on 2026-08-30:
+Baselines verified on 2026-08-30:
 
-- this Email checkout and its current terminal protocol documents;
-- the sibling `reTerminalColor` checkout at `21fbe86`, including its
-  uncommitted working tree.
+- Email application release `0fe2ef7` for the authenticated firmware gateway
+  and locked browser surface;
+- private `reterminal-color` `main` at
+  `1b5364e5d4b48666b3ecfd0cf8ba31ab7f4bd5c4`; and
+- GitHub Actions run `33322241770`, which built E1001, E1002, and E1004 twice,
+  proved byte-identical output, strictly verified the release manifest, and
+  uploaded the checksummed bundle.
 
 ## Status today
 
 | Capability | Implemented today | Important limit |
 | --- | --- | --- |
-| USB build and flash | PlatformIO environments exist for E1001, E1002, and E1004. | Command-line workflow only; there is no published, immutable release bundle or browser installer. |
-| Runtime configuration | Firmware reads Wi-Fi and the schedule URL from `/config.json` on LittleFS and falls back to compile-time values. | Provisioning rewrites a filesystem image over USB. `LittleFS.begin(true)` may format on mount failure. The `board_build.filesystem = littlefs` correction is only in the dirty firmware working tree, not `origin/main`. |
-| Application partitions | E1001/E1002 use Arduino's `huge_app.csv`; E1004 has a custom table with one `ota_0` app partition. All builds declare 32 MB flash. | There is no second application slot, so safe A/B OTA and automatic rollback are impossible. Most flash capacity is currently unused. |
-| Device check-in | The firmware reports model-specific user agent, firmware version, MAC, wake reason, boot count, uptime, battery millivolts/percent, RSSI, free PSRAM, and image ETag. | MAC and the shared terminal URL are routing data, not device authentication. Battery percent is a rough linear LiPo estimate and no charging/power-source state is reported. |
-| Update transport | None. Firmware fetches only schedule JSON and BMP images. | No updater, release manifest, signature verification, acknowledgement, rollout, or recovery state exists. |
-| TLS | HTTPS requests use `WiFiClientSecure`. | `configure_secure_client()` calls `setInsecure()`, and the firmware can also follow plain HTTP. The current protocol text incorrectly claims CA-bundle validation. Production update work must remove this mismatch before OTA is enabled. |
-| E1004 | The committed tree contains a full-refresh dual-controller implementation. | Repository prose still calls the driver a stub, partial refresh explicitly falls back to a full refresh, and there is no recorded hardware qualification. Treat E1004 as experimental and OTA-ineligible until code, docs, and hardware results agree. |
+| USB build and flash | PlatformIO environments, pinned dependencies/toolchain evidence, exact per-model partitions, deterministic build metadata, and immutable checksummed bundles exist for E1001, E1002, and E1004. | Current artifacts truthfully declare `signed=false`; no browser may install them. Command-line PlatformIO/esptool remains the only qualified write path. |
+| Browser firmware gateway | Cookie-authenticated, rate-limited catalog/manifest/signature/artifact routes verify a signed approval catalog and every bundle byte from local immutable storage. | Production defaults contain no trusted key or approved catalog. The Admin surface is metadata-only and all three write gates are fixed false. |
+| Runtime configuration | Firmware reads `/config.json` from LittleFS without auto-formatting, keeps generic release images free of credentials, and emits redacted provisioning status. | Secure serial enrollment and atomic configuration rotation are the next milestone; current provisioning still uses command-line `uploadfs`. |
+| Application partitions | Explicit single-slot layouts and exact protected NVS/LittleFS ranges are release-verified. Normal preserve-config artifacts cannot overlap either range. | There is no second application slot, so safe A/B OTA and automatic rollback remain impossible. |
+| Device check-in | Firmware reports bounded model, build, wake, battery, RSSI, memory, boot, and image metadata. The server stores sparse bounded battery history and gives conservative charge guidance. | MAC and the legacy shared terminal URL are routing data, not device authentication. Charging inference is not a write-safety proof. |
+| TLS and OTA | No update transport is enabled. Firmware continues to fetch only schedule JSON and BMP images. | Runtime HTTPS still uses `setInsecure()`, and there is no A/B updater, acknowledgement, rollout, or boot rollback. OTA remains blocked. |
+| E1004 | The firmware builds reproducibly and its full-refresh dual-controller implementation is present. | No hardware qualification exists; E1004 browser installation and OTA are explicitly ineligible. |
 
-The firmware checkout is not a release baseline: `main` and `origin/main` both
-point to the single initial-import commit, while 13 tracked files are modified.
-Those edits may be useful work, but they must be reviewed, tested, committed,
-and built by CI before any artifact is called installable or eligible for OTA.
-
-There are also protocol details to reconcile before firmware management shares
-the schedule path:
-
-- Firmware does not retain the last schedule body, so a `304` from
-  `schedule.json` currently becomes an error/retry. The server should return a
-  complete `200` schedule until the firmware can safely replay a cached one.
-- A schedule ETag must change when a firmware offer or device action changes,
-  not only when image pixels change. Otherwise a valid OTA offer can be hidden
-  behind `304 Not Modified`.
-- Relative image-URL support exists only in the dirty firmware worktree. A
-  release must not depend on it until that work is integrated.
+The personal checkout under `~/Development/reTerminalColor` remains dirty and
+must not be used as a release source. Firmware work uses a separate clean
+worktree and the private GitHub repository. Reproducibility does not make the
+current unsigned, single-slot output safe to install.
 
 ## Safety invariants
 
@@ -83,6 +75,59 @@ browser + Web Serial        schedule offer -> device-authenticated manifest
 
 The browser installer and OTA use the same CI artifacts and signed release
 metadata. They differ only in transport and permitted flash regions.
+
+## Authenticated gateway foundation
+
+Production serves firmware bytes only from a local, operator-staged tree. It
+does not fetch GitHub releases during a request:
+
+```text
+/opt/mail/data/terminal-firmware/
+  catalog.json
+  catalog.sig
+  bundles/
+    <sha256-of-manifest>/
+      manifest.sig
+      payload/
+        manifest.json
+        SHA256SUMS
+        toolchain-evidence.txt
+        reterminal_e1001/...
+        reterminal_e1002/...
+        reterminal_e1004/...
+```
+
+`catalog.sig` is a raw 64-byte Ed25519 signature over the exact `catalog.json`
+bytes. The catalog has a positive, monotonically increasing generation and at
+most one approved release. Each release ID is the manifest SHA-256; its
+detached signature and payload live under that content-addressed directory.
+The same configured trust set verifies the catalog and manifest. The service
+rejects unlisted files, directories, symlinks, non-regular files, path races,
+wrong hashes, partition drift, unsafe factory-image composition, and catalog
+generations below the externally pinned floor.
+
+Runtime configuration is deliberately fail-closed:
+
+```text
+TERMINAL_FIRMWARE_STORAGE_PATH=/opt/mail/data/terminal-firmware
+TERMINAL_FIRMWARE_TRUSTED_SIGNING_KEYS={}
+TERMINAL_FIRMWARE_MINIMUM_CATALOG_GENERATION=0
+TERMINAL_FIRMWARE_BROWSER_FLASH_ENABLED=false
+```
+
+Do not put signing private keys in the application environment or artifact
+tree. The trust-key value contains only key IDs and public Ed25519 keys. Before
+any future enablement, stage the tree as root-owned/read-only, validate it
+offline, assign a never-reused higher catalog generation, pin that positive
+generation in configuration, and restart into a catalog-only verification
+window. The browser flag alone is insufficient: a zero generation, unsigned or
+unqualified model, missing hardware revisions, or any validation error keeps
+downloads blocked.
+
+The shipped Admin component only requests and audits catalog metadata. It
+observes HTTPS, Web Serial, and Web Locks support without requesting a port.
+There is no esptool dependency, download loop, erase command, serial write, or
+dynamic flashing code in the production bundle.
 
 ## Browser installation and local provisioning
 
@@ -142,25 +187,44 @@ Partition offsets and the filesystem offset remain stable after `ab-v1`; normal
 OTA writes only the inactive application slot. A future partition change is
 another explicitly named USB migration, not an ordinary OTA.
 
-### Provisioning without uploading Wi-Fi credentials
+### Confidential, server-authorized serial enrollment
 
-After the generic image boots, the installer reopens the serial port and sends
-a versioned provisioning message directly to firmware. The message contains
-the SSID, password, schedule URL, declared model/hardware revision, and a
-short-lived enrollment token. Firmware validates the message, writes its local
-configuration, reads it back, and returns a redacted acknowledgement.
+After the generic image boots, the installer reopens the same CH340 serial
+port and speaks bounded newline-delimited frames prefixed with `@RET1 `. Normal
+diagnostic lines remain separate and must never contain credentials. The target
+protocol uses ephemeral P-256 ECDH, HKDF-SHA256, directional AES-256-GCM keys,
+strict message sequences, and an ES256 enrollment ticket signed by a dedicated
+online application key. P-256 is supported by both the pinned ESP32 toolchain
+and browser Web Crypto.
 
-The installer must use no third-party scripts, analytics, session replay, or
-remote error capture. Credential values live only in page memory, are sent only
-through Web Serial, are never placed in `localStorage`/IndexedDB or the URL, and
-are cleared after acknowledgement or cancellation. The server may mint the
-one-time enrollment token, but it never receives the SSID or password.
+The signed ticket binds both ephemeral public keys and nonces, the exact boot
+transcript, model, reported identifiers, approved firmware release, one-time
+ticket ID, monotonically increasing configuration generation, credential ID,
+and server-controlled terminal endpoint. The browser encrypts the Wi-Fi
+configuration locally and sends only a hash/verifier needed for one-time,
+transactional ticket consumption to the server. SSID/password values never
+enter a URL, server log, artifact, analytics system, or browser persistence.
 
-On the first CA-validated check-in, the device exchanges the one-time token for
-a per-device credential. Store only a verifier/hash server-side, send the
-credential in an authorization header rather than a query string, and redact it
-from all logs. The existing terminal code remains a user-facing route secret;
-it is not sufficient authentication for OTA acknowledgements.
+Firmware verifies the signed ticket before decrypting. It stages configuration
+into one of two compact NVS slots, commits and reads it back, then publishes a
+new marker only after full schema/hash validation. Boot selects the highest
+valid generation. An interrupted commit therefore yields the complete old or
+new record, never a partial configuration. Rollback to the retained older blob
+requires a fresh signed ticket with a higher anti-replay generation.
+
+The ESP32 factory MAC, optional eFuse UID, chip revision, and flash ID are
+inventory identifiers, not attestation. Current devices have no Secure Boot,
+flash encryption, or protected per-device eFuse key, and the ROM downloader is
+open. This milestone must be described as confidential, server-authorized
+enrollment under physical-cable trust—not proof of genuine hardware or approved
+firmware. Manufacturing-grade identity is a separate irreversible project.
+
+The existing shared terminal code remains a legacy route credential. Securely
+enrolled devices require a distinct per-device credential and must not be
+upserted or reassigned through a spoofable MAC on that legacy path. Server-side
+ticket consumption, credential activation/rotation, revocation, and the new
+device-authenticated routes remain blocked until their post-`d1e2f3a4b5c6`
+migration and hardware-in-loop tests are complete.
 
 ## TLS and device-side update sequence
 
@@ -344,18 +408,27 @@ device that has the immediately previous production partition layout.
 
 ## Milestones and exit gates
 
-1. **Baseline and release discipline:** reconcile the dirty firmware checkout,
-   stale protocol/TLS/E1004 claims, pin the toolchain, build every model in CI,
-   and publish checksummed immutable artifacts. No OTA yet.
-2. **Secure browser first install:** ship Web Serial flashing, local serial
-   provisioning, exact-variant gates, and a tested rescue flow. Install `ab-v1`
-   over USB and report its verified version/layout.
-3. **Device trust and transport:** remove `setInsecure()`, add trusted time and
-   CA validation, enroll per-device credentials, and add normalized firmware
-   telemetry/ack events.
-4. **A/B OTA canary:** implement signed manifest verification, inactive-slot
-   writes, pending validation, rollback, battery gates, and one-device rollout.
-5. **Managed rollout:** add cohort promotion, pause/revoke, key rotation,
+1. **Reproducible release discipline — complete:** a clean private repository,
+   pinned toolchain, exact per-model layouts, deterministic double-build CI,
+   checksums, strict manifest validation, and immutable artifacts exist. The
+   resulting artifacts remain honestly unsigned and non-installable.
+2. **Authenticated gateway and locked browser foundation — complete:** the
+   application verifies a signed, generation-pinned, one-release catalog and
+   exact bundle contents behind cookie auth and rate limits. The browser audits
+   metadata only; it cannot request a port, download, erase, or write.
+3. **Secure serial enrollment and HIL qualification — active:** finish the
+   `@RET1` P-256/AES-GCM protocol, atomic two-slot configuration, one-time
+   server tickets, per-device credential lifecycle, CA validation, and a
+   repeatable E1001/E1002 interruption/recovery matrix. E1004 stays locked.
+4. **Browser first install:** add a pinned flashing implementation only after
+   browser-side signature verification and milestone 3 pass. Flash exact
+   preserve-config artifacts, verify ROM-loader output and rebooted identity,
+   and keep a command-line rescue flow. The server and client write gates may
+   then be changed through a separately reviewed release.
+5. **A/B OTA canary:** define and migrate to `ab-v1`, implement signed manifest
+   verification, CA-validated inactive-slot writes, pending validation,
+   rollback, battery gates, and a one-device rollout.
+6. **Managed rollout:** add cohort promotion, pause/revoke, key rotation,
    charging notices, dashboards, and recovery drills before wider release.
 
 No milestone should be promoted merely because it builds. Its exit gate is a
