@@ -270,12 +270,12 @@
     <div class="border-b shrink-0" style="border-color: var(--border-color)">
       <!-- From -->
       {#if accountList.length > 0}
-        <div class="compose-field flex items-center px-6 min-h-10 border-b" style="border-color: var(--border-subtle)">
+        <div class="compose-field flex items-center min-w-0 px-6 min-h-10 border-b" style="border-color: var(--border-subtle)">
           <label for="compose-from" class="text-sm w-16 shrink-0" style="color: var(--text-secondary)">From</label>
           <select
             id="compose-from"
             bind:value={selectedAccountId}
-            class="flex-1 h-full text-sm outline-none border-0"
+            class="min-w-0 flex-1 h-full text-sm outline-none border-0"
             style="background: transparent; color: var(--text-primary)"
           >
             {#each accountList as acct}
