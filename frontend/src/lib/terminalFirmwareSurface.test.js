@@ -7,11 +7,15 @@ async function source(relativePath) {
 }
 
 test('At a Glance renders a read-only, write-locked firmware installer', async () => {
-  const [admin, component, installer, firmwareApi] = await Promise.all([
+  const [app, admin, component, installer, firmwareApi, plan, workflow, recovery] = await Promise.all([
+    source('../App.svelte'),
     source('../pages/Admin.svelte'),
     source('./admin/FirmwareInstaller.svelte'),
     source('./terminalFirmwareInstaller.js'),
     source('./terminalFirmwareApi.js'),
+    source('./terminalFirmwareInstallPlan.js'),
+    source('./terminalFirmwareInstallWorkflow.js'),
+    source('./terminalFirmwareRecovery.js'),
   ]);
 
   assert.match(admin, /import FirmwareInstaller from '\.\.\/lib\/admin\/FirmwareInstaller\.svelte';/);
@@ -28,4 +32,16 @@ test('At a Glance renders a read-only, write-locked firmware installer', async (
     (firmwareApi.match(/api\.(get|post|put|patch|delete)\(/g) || []).join(','),
     'api.get(,api.get(',
   );
+
+  const productionSurface = [app, admin, component, installer, firmwareApi].join('\n');
+  for (const isolatedModule of [
+    'terminalFirmwareInstallPlan',
+    'terminalFirmwareInstallWorkflow',
+    'terminalFirmwareRecovery',
+  ]) {
+    assert.doesNotMatch(productionSurface, new RegExp(isolatedModule));
+  }
+  for (const isolatedSource of [plan, workflow, recovery]) {
+    assert.doesNotMatch(isolatedSource, /requestPort\s*\(|navigator\.serial|eraseFlash|erase_all\s*:\s*true/);
+  }
 });
