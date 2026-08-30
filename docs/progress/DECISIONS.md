@@ -230,3 +230,20 @@ add a new entry that explicitly supersedes the old one.
   editor recovery preserves the current draft instead of reloading the page;
   and generated browser QA must cover asset closure, slow enhancement,
   recoverable failure, draft continuity, focus, and mobile controls.
+
+## D-015 — Rendered email and AI content is display-only
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Sanitize sender-controlled email HTML and AI-generated Markdown as
+  display surfaces. Explicitly reject scripts, frames, objects, embeds, forms,
+  form controls, templates, base/meta elements, `srcdoc`, event attributes, and
+  executable URLs while preserving ordinary layout, inline style, tables,
+  images, Unicode, and safe links required for readable mail.
+- Reason: A sanitizer dependency is a security boundary, not a formatting
+  helper. Active or clobbering document structures provide no necessary mail
+  client function and must not become allowed through dependency-default drift.
+- Consequence: New rendered-content features must use the centralized policies
+  and pass generated hostile/benign browser fixtures. Remote image, CSS, and
+  link tracking remain a separate product policy requiring visible controls;
+  this display-only decision does not claim to block all network tracking.

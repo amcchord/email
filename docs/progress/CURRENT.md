@@ -4,10 +4,9 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Pause implementation while the consolidated product-polish release receives
-explicit user testing in production. Preserve the verified release and its
-rollback evidence; use generated messages for any mutation testing and do not
-open or change real mail merely to exercise the UI.
+Ship the isolated, locally verified frontend security refresh to production for
+user testing. Preserve the clean AI-provider worktree, use generated messages
+for rendered-content/browser QA, and do not open or change real production mail.
 
 ## Baseline
 
@@ -22,40 +21,39 @@ open or change real mail merely to exercise the UI.
 - A validated 1.38 GB custom-format backup is protected at
   `/var/backups/mailapp/maildb-pre-product-polish-20260830T1031Z.dump`, mode
   `0600`, owned by `postgres`.
+- The frontend security candidate is isolated on
+  `codex/frontend-dependency-security`. Its compatible lock refresh clears all
+  11 production advisories, and its DOMPurify/jsPDF/Svelte/editor/browser gates
+  pass locally and in clean Linux x86_64 Node 20.
 
 This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
 
-## Release Candidate Scope
+## Frontend Security Candidate Scope
 
-- Lossless, account-serialized Gmail synchronization checkpoints.
-- Durable, ordered mail-action outbox with idempotent reconciliation, exact
-  staged Undo, retries, lease recovery, and visible partial failure.
-- Authenticated attachment download, bounded canonical cache lifecycle, and
-  byte-classified text/image/untrusted-PDF preview behavior.
-- Truthful executable command palette, complete shortcut discovery, and
-  composable structured search inside an immutable account-ownership boundary.
-- Route-level feature splitting, stale-safe loading/error recovery, browser
-  history integration, and preserved cross-screen intent.
-- Deferred Tiptap loading behind immediate writing intent, draft-safe basic
-  editing, accessible writing controls, and stale reply/thread protections.
-- OpenAI GPT-5.6 and Anthropic Claude 5 provider/model selection from the
-  already-deployed `origin/main` baseline.
-- Generated localhost-only QA harnesses that reject every mutation and use
-  `.example.test` mail fixtures.
+- Compatible npm lock refresh from 11 production advisories to zero.
+- Explicit display-only sanitizer policy for email HTML and AI Markdown.
+- Single configured Tiptap Link/Underline extensions after the StarterKit
+  update.
+- Mobile Chat overlay sidebar, 44 px menu/download controls, and wrapping
+  download actions.
+- Exception-safe, section-aware multi-page Chat PDF generation.
+- Generated hostile email/Markdown and multi-page PDF browser fixtures with
+  dedicated read/mutation/unknown-route auditing.
 
-## Deployment Result
+## Verification Result
 
 - `make check` passed with 303 backend tests, 4 opt-in PostgreSQL skips, 108
   frontend tests, and a successful production build.
-- Generated in-app browser QA passed desktop, slow, fail-once, and exact 375px
-  editor scenarios with empty mutation and unknown-route audits.
-- Production used the exact reviewed commit, a validated pre-migration backup,
-  transactional Alembic upgrade, locked frontend install/build, and scoped
-  restarts of `mailapp`, `mailworker`, and `mailworker-cron` only.
-- Post-deploy verification confirmed exact local/origin Git state, schema head,
-  zero error-level application/worker log lines, zero service restarts, health
-  `ok`, and HTTP 200 for eager, deferred-editor, and rich-editor assets.
+- Clean Linux x86_64 Node 20 passed locked install, zero-vulnerability audit,
+  all frontend tests, and the manifest build.
+- Generated in-app browser QA passed hostile email/Markdown rendering, rich
+  editor mount, desktop and exact 375 px Chat/email layouts, and multi-page PDF
+  export. Mutation and unknown-route audits are empty.
+- The four-page generated PDF was byte-checked and Poppler-rendered page by
+  page; final pagination has no clipped or split content.
+- Production deployment is the next action. No schema change, backup, service
+  restart, real-mail read, or mailbox mutation is required.
 
 ## Known Constraints and Follow-ups
 
@@ -70,10 +68,12 @@ live state.
   scanning or a structural safety proof.
 - Shortcut override reset semantics and account-scoped saved views remain
   future work after the shared preference contract is deliberately extended.
-- The unchanged frontend lockfile has 11 npm production advisories (4 moderate,
-  6 high, 1 critical). Compatible fixes are available for DOMPurify, jsPDF,
-  Svelte, Vite, and transitive packages; handle them as the next isolated
-  dependency-update cycle with a full generated-browser regression pass.
+- Email compatibility still permits remote images, stylesheet links, and
+  inline style. A separate remote-content/tracking policy remains necessary.
+- Chat PDF is a polished raster export, not selectable/accessible document
+  text; semantic PDF output remains a future enhancement.
 - If rollback is required, return application code to `41d2898` while leaving
   the additive outbox schema in place unless a separately reviewed data
   downgrade is necessary.
+- For this frontend-only candidate specifically, return to `413d763` and
+  rebuild the locked frontend; no database rollback is involved.

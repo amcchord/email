@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Deterministic, read-only browser-QA server for structured email search.
+// Deterministic, read-only browser-QA server for core mail-client flows.
 // It binds only to localhost, serves immutable .example.test fixtures and the
 // built frontend, makes no outbound requests, and rejects every mutation.
 
@@ -134,6 +134,42 @@ function generatedEmail(overrides) {
 }
 
 const generatedEmails = deepFreeze([
+  generatedEmail({
+    id: 316,
+    from_name: 'Generated Security Lab',
+    from_address: 'security-lab@example.test',
+    subject: 'HTML sanitizer boundary QA',
+    snippet: 'Generated benign layouts and hostile markup for the email iframe boundary.',
+    date: '2026-08-30T13:58:00Z',
+    labels: ['INBOX'],
+    is_read: true,
+    body_text: 'Generated sanitizer fixture. No real mailbox data is used.',
+    body_html: `
+      <style id="generated-safe-email-style">
+        .generated-safe-email-marker { color: rgb(17, 94, 89); font-weight: 700; }
+        .generated-safe-email-table { border-collapse: collapse; width: 100%; }
+        .generated-safe-email-table td { border: 1px solid #cbd5e1; padding: 8px; }
+      </style>
+      <div id="generated-safe-email-marker" class="generated-safe-email-marker" style="color: rgb(17, 94, 89); font-weight: 700; padding: 8px" onclick="globalThis.__generatedEmailClick = 1">
+        Benign formatted email content survives.
+      </div>
+      <table id="generated-safe-email-table" class="generated-safe-email-table" cellpadding="2" cellspacing="0" style="border-collapse: collapse; width: 100%">
+        <tr><td style="border: 1px solid #cbd5e1; padding: 8px">Generated table layout</td><td style="border: 1px solid #cbd5e1; padding: 8px">Renée · 日本語 · ✅</td></tr>
+      </table>
+      <p>
+        <a id="generated-safe-email-link" href="https://safe.example.test/generated-email" target="_blank">Safe generated link</a>
+        <a id="generated-unsafe-email-link" href="javascript:globalThis.__generatedEmailHref = 1">Unsafe generated link</a>
+      </p>
+      <img id="generated-email-event-probe" alt="Generated local pixel" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" onerror="globalThis.__generatedEmailError = 1">
+      <script>globalThis.__generatedEmailScript = 1</script>
+      <iframe srcdoc="&lt;script&gt;parent.__generatedEmailFrame = 1&lt;/script&gt;"></iframe>
+      <object data="data:text/html,generated"></object>
+      <embed src="data:text/html,generated">
+      <svg width="0" height="0" aria-hidden="true" onload="globalThis.__generatedEmailSvg = 1"></svg>
+      <form id="generated-email-clobber-probe"><input name="__proto__" value="generated"></form>
+      <template id="generated-email-template-probe"><img src="x" onerror="globalThis.__generatedEmailTemplate = 1"></template>
+    `,
+  }),
   generatedEmail({
     id: 313,
     from_name: 'Generated Preview Lab',
@@ -437,11 +473,81 @@ const generatedTodos = deepFreeze([{
   ai_draft_status: null,
 }]);
 
+const generatedChatId = 'generated-security-chat';
+const generatedChatLongSections = Array.from({ length: 18 }, (_, index) => `
+## Generated section ${index + 1}
+
+This deterministic paragraph makes the PDF span multiple pages without using mailbox data. Renée reviews 日本語 text and accessibility marker ✅ ${index + 1}.
+
+- Generated list item A${index + 1}
+- Generated list item B${index + 1}
+
+> Generated blockquote ${index + 1} remains readable.
+`).join('\n');
+const generatedChatMarkdown = `# Generated dependency security
+
+Renée · 日本語 · ✅ — every value on this page is generated locally.
+
+| Boundary | Expected result |
+| --- | --- |
+| Benign Markdown | Preserved |
+| Active content | Removed |
+
+[Safe generated link](https://safe.example.test/generated-chat)
+
+<a id="generated-unsafe-chat-link" href="javascript:globalThis.__generatedChatHref = 1" onclick="globalThis.__generatedChatClick = 1">Unsafe generated link</a>
+<div id="generated-hostile-chat-marker" onclick="globalThis.__generatedChatMarker = 1">Hostile attributes are stripped from this retained marker.</div>
+<script>globalThis.__generatedChatScript = 1</script>
+<iframe srcdoc="<script>parent.__generatedChatFrame = 1</script>"></iframe>
+<object data="data:text/html,generated"></object>
+<embed src="data:text/html,generated">
+<svg width="0" height="0" aria-hidden="true" onload="globalThis.__generatedChatSvg = 1"></svg>
+<form id="generated-chat-clobber-probe"><input name="__proto__" value="generated"></form>
+<template id="generated-chat-template-probe"><img src="x" onerror="globalThis.__generatedChatTemplate = 1"></template>
+
+\`\`\`text
+generated code block — no secrets or mailbox data
+\`\`\`
+
+${generatedChatLongSections}`;
+const generatedChatConversation = deepFreeze({
+  id: generatedChatId,
+  title: 'Generated dependency security',
+  created_at: '2026-08-30T13:59:00Z',
+  updated_at: '2026-08-30T13:59:00Z',
+  messages: [
+    {
+      id: 'generated-chat-user-message',
+      role: 'user',
+      content: 'Render the generated dependency security fixture.',
+      plan: null,
+      task_results: null,
+      tokens_used: 0,
+      created_at: '2026-08-30T13:58:30Z',
+    },
+    {
+      id: 'generated-chat-assistant-message',
+      role: 'assistant',
+      content: generatedChatMarkdown,
+      plan: null,
+      task_results: null,
+      tokens_used: 0,
+      created_at: '2026-08-30T13:59:00Z',
+    },
+  ],
+});
+const generatedChatSummary = deepFreeze({
+  id: generatedChatConversation.id,
+  title: generatedChatConversation.title,
+  created_at: generatedChatConversation.created_at,
+  updated_at: generatedChatConversation.updated_at,
+});
+
 const emailsById = new Map(generatedEmails.map(email => [email.id, email]));
 
 const scenarios = deepFreeze({
   // Baseline order is newest first; the equal-timestamp pair remains stable.
-  '': { result_ids: [313, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 302, 301] },
+  '': { result_ids: [316, 313, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 302, 301] },
   [compoundQuery]: { result_ids: [301] },
   [removalQuery]: { result_ids: [301, 304] },
   'no-match': { result_ids: [] },
@@ -511,6 +617,7 @@ const audit = {
   action_status_reads: [],
   attachment_reads: [],
   attachment_preview_reads: [],
+  chat_reads: [],
   mutation_attempts: [],
   unknown_routes: [],
 };
@@ -1013,6 +1120,173 @@ function mobileAttachmentPreviewQaFrame(
               visible: confirmButton.getBoundingClientRect().top < frame.contentWindow.innerHeight
                 && confirmButton.getBoundingClientRect().bottom > 0,
             } : null,
+          });
+          document.body.dataset.qaReady = 'true';
+          break;
+        }
+        await delay(25);
+      }
+    });
+  </script>
+</body>
+</html>`;
+  return writeHtml(response, body);
+}
+
+function mobileEmailSanitizerQaFrame(response) {
+  const body = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Generated mobile email sanitizer QA</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #111827; }
+    body { display: grid; min-height: 100vh; place-items: start center; padding: 12px; }
+    iframe { width: 375px; height: 812px; max-width: 100%; border: 0; border-radius: 14px; background: white; box-shadow: 0 22px 70px rgb(0 0 0 / .4); }
+  </style>
+</head>
+<body data-qa-ready="false">
+  <iframe id="mobile-email-sanitizer-app" src="/?page=inbox" title="Generated sanitizer email at 375 by 812 pixels"></iframe>
+  <script>
+    const frame = document.getElementById('mobile-email-sanitizer-app');
+    const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+    frame.addEventListener('load', async () => {
+      const doc = frame.contentDocument;
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        const emailTab = doc.querySelector('[aria-label="Email tab"]');
+        if (emailTab) {
+          emailTab.click();
+          break;
+        }
+        await delay(25);
+      }
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        const emailButton = doc.querySelector('[aria-label="Open email: HTML sanitizer boundary QA"]');
+        if (emailButton) {
+          emailButton.click();
+          break;
+        }
+        await delay(25);
+      }
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        const emailFrame = doc.querySelector('iframe[title="Email content"]');
+        const emailDoc = emailFrame?.contentDocument;
+        const marker = emailDoc?.getElementById('generated-safe-email-marker');
+        if (marker) {
+          const forbidden = emailDoc.querySelectorAll('script, iframe, object, embed, form, input, button, textarea, select, option, template, base, meta');
+          const eventAttributes = [...emailDoc.querySelectorAll('*')].flatMap(element =>
+            [...element.attributes].filter(attribute => attribute.name.toLowerCase().startsWith('on'))
+          );
+          const unsafeLink = emailDoc.getElementById('generated-unsafe-email-link');
+          const safeLink = emailDoc.getElementById('generated-safe-email-link');
+          document.body.dataset.qaMetrics = JSON.stringify({
+            innerWidth: frame.contentWindow.innerWidth,
+            innerHeight: frame.contentWindow.innerHeight,
+            clientWidth: doc.documentElement.clientWidth,
+            scrollWidth: doc.documentElement.scrollWidth,
+            markerText: marker.textContent.trim(),
+            markerFontWeight: emailFrame.contentWindow.getComputedStyle(marker).fontWeight,
+            tableCount: emailDoc.querySelectorAll('#generated-safe-email-table').length,
+            styleCount: emailDoc.querySelectorAll('#generated-safe-email-style').length,
+            forbiddenCount: forbidden.length,
+            eventAttributeCount: eventAttributes.length,
+            unsafeHref: unsafeLink?.getAttribute('href') || null,
+            safeHref: safeLink?.getAttribute('href') || null,
+            probesExecuted: [
+              '__generatedEmailClick', '__generatedEmailHref', '__generatedEmailError',
+              '__generatedEmailScript', '__generatedEmailFrame', '__generatedEmailSvg',
+              '__generatedEmailTemplate',
+            ].filter(name => Object.hasOwn(emailFrame.contentWindow, name)),
+          });
+          document.body.dataset.qaReady = 'true';
+          break;
+        }
+        await delay(25);
+      }
+    });
+  </script>
+</body>
+</html>`;
+  return writeHtml(response, body);
+}
+
+function mobileChatQaFrame(response) {
+  const body = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Generated mobile Chat security QA</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: #111827; }
+    body { display: grid; min-height: 100vh; place-items: start center; padding: 12px; }
+    iframe { width: 375px; height: 812px; max-width: 100%; border: 0; border-radius: 14px; background: white; box-shadow: 0 22px 70px rgb(0 0 0 / .4); }
+  </style>
+</head>
+<body data-qa-ready="false">
+  <iframe id="mobile-chat-app" src="/?page=chat" title="Generated Chat at 375 by 812 pixels"></iframe>
+  <script>
+    const frame = document.getElementById('mobile-chat-app');
+    const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+    frame.addEventListener('load', async () => {
+      const doc = frame.contentDocument;
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        const sidebarToggle = doc.querySelector('[aria-label="Show conversation sidebar"]');
+        if (sidebarToggle) {
+          sidebarToggle.click();
+          break;
+        }
+        await delay(25);
+      }
+      for (let attempt = 0; attempt < 120; attempt += 1) {
+        const conversation = [...doc.querySelectorAll('[role="button"]')].find(element =>
+          element.textContent?.includes('Generated dependency security')
+        );
+        if (conversation) {
+          conversation.click();
+          break;
+        }
+        await delay(25);
+      }
+      for (let attempt = 0; attempt < 160; attempt += 1) {
+        const markdown = doc.querySelector('.chat-markdown');
+        if (markdown) {
+          const forbidden = markdown.querySelectorAll('script, iframe, object, embed, form, input, button, textarea, select, option, template, base, meta');
+          const eventAttributes = [...markdown.querySelectorAll('*')].flatMap(element =>
+            [...element.attributes].filter(attribute => attribute.name.toLowerCase().startsWith('on'))
+          );
+          const unsafeLink = markdown.querySelector('#generated-unsafe-chat-link');
+          const safeLink = [...markdown.querySelectorAll('a')].find(element =>
+            element.textContent?.includes('Safe generated link')
+          );
+          const downloadControls = [...doc.querySelectorAll('[title="Download as Markdown"], [title="Download as PDF"]')];
+          document.body.dataset.qaMetrics = JSON.stringify({
+            innerWidth: frame.contentWindow.innerWidth,
+            innerHeight: frame.contentWindow.innerHeight,
+            clientWidth: doc.documentElement.clientWidth,
+            scrollWidth: doc.documentElement.scrollWidth,
+            markdownWidth: markdown.getBoundingClientRect().width,
+            headingCount: markdown.querySelectorAll('h1, h2').length,
+            tableCount: markdown.querySelectorAll('table').length,
+            blockquoteCount: markdown.querySelectorAll('blockquote').length,
+            codeCount: markdown.querySelectorAll('pre code').length,
+            forbiddenCount: forbidden.length,
+            eventAttributeCount: eventAttributes.length,
+            unsafeHref: unsafeLink?.getAttribute('href') || null,
+            safeHref: safeLink?.getAttribute('href') || null,
+            nonAsciiPresent: markdown.textContent.includes('Renée · 日本語 · ✅'),
+            minDownloadHeight: downloadControls.length
+              ? Math.min(...downloadControls.map(element => element.getBoundingClientRect().height))
+              : null,
+            sidebarClosed: !doc.querySelector('[aria-label="Close conversation sidebar"]'),
+            probesExecuted: [
+              '__generatedChatHref', '__generatedChatClick', '__generatedChatMarker',
+              '__generatedChatScript', '__generatedChatFrame', '__generatedChatSvg',
+              '__generatedChatTemplate',
+            ].filter(name => Object.hasOwn(frame.contentWindow, name)),
           });
           document.body.dataset.qaReady = 'true';
           break;
@@ -1536,6 +1810,8 @@ async function handleGet(request, response, url) {
   }
   if (pathname === '/__qa/route-mobile') return mobileRouteQaFrame(response, url);
   if (pathname === '/__qa/editor-mobile') return mobileEditorQaFrame(response, url);
+  if (pathname === '/__qa/email-sanitizer-mobile') return mobileEmailSanitizerQaFrame(response);
+  if (pathname === '/__qa/chat-mobile') return mobileChatQaFrame(response);
   if (pathname === '/api/test/editor-audit') {
     return writeJson(response, {
       fixture: 'generated-lazy-editor',
@@ -1559,6 +1835,17 @@ async function handleGet(request, response, url) {
       unknown_routes: audit.unknown_routes,
     });
   }
+  if (pathname === '/api/test/security-audit') {
+    return writeJson(response, {
+      fixture: 'generated-content-security',
+      fixture_domains: ['example.test'],
+      fixture_message_id: 316,
+      fixture_conversation_id: generatedChatId,
+      chat_reads: audit.chat_reads,
+      mutation_attempts: audit.mutation_attempts,
+      unknown_routes: audit.unknown_routes,
+    });
+  }
   if (pathname === '/api/test/audit') {
     return writeJson(response, {
       fixture: 'generated-structured-search',
@@ -1573,6 +1860,7 @@ async function handleGet(request, response, url) {
       action_status_reads: audit.action_status_reads,
       attachment_reads: audit.attachment_reads,
       attachment_preview_reads: audit.attachment_preview_reads,
+      chat_reads: audit.chat_reads,
       mutation_attempts: audit.mutation_attempts,
       unknown_routes: audit.unknown_routes,
     });
@@ -1691,7 +1979,22 @@ async function handleGet(request, response, url) {
   if (pathname === '/api/ai/digests') {
     return writeJson(response, { digests: [], total: 0 });
   }
-  if (pathname === '/api/chat/conversations') return writeJson(response, []);
+  if (pathname === '/api/chat/conversations') {
+    const entry = beginAudit(request, url, { kind: 'conversation-list' });
+    audit.chat_reads.push(entry);
+    completeAudit(entry, 200, [generatedChatId]);
+    return writeJson(response, [generatedChatSummary]);
+  }
+
+  if (pathname === `/api/chat/conversations/${generatedChatId}`) {
+    const entry = beginAudit(request, url, {
+      kind: 'conversation-detail',
+      conversation_id: generatedChatId,
+    });
+    audit.chat_reads.push(entry);
+    completeAudit(entry, 200, [generatedChatId]);
+    return writeJson(response, generatedChatConversation);
+  }
 
   const threadMatch = pathname.match(/^\/api\/emails\/thread\/([^/]+)$/);
   if (threadMatch) {

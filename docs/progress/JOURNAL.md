@@ -3,6 +3,56 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Frontend dependency security candidate
+
+### Scope
+
+Refresh the compatible frontend dependency graph in isolation, address
+regressions exposed by the upgrades, and prove security-critical rendering,
+mobile Chat, editor, and PDF paths using generated data only.
+
+### Completed
+
+- Cleared 11 npm production advisories without force or declared-range changes;
+  DOMPurify is 3.4.14, jsPDF 4.2.1, Svelte 5.57.0, Vite 6.4.3, and Rollup
+  4.63.1.
+- Made email/AI renderers explicitly display-only, fixed duplicate Tiptap Link
+  and Underline registration, rebuilt Chat's narrow-screen sidebar/download
+  controls, and made PDF cleanup exception-safe.
+- Replaced fixed PDF raster cuts with structured heading/block boundaries plus
+  whitespace and tainted-canvas fallbacks. Iterative Poppler rendering caught
+  and eliminated text, heading, and blockquote page-boundary defects.
+- Extended the immutable localhost harness with generated hostile email HTML,
+  hostile Chat Markdown, long Unicode PDF content, exact 375 px wrappers, and
+  dedicated read/mutation/unknown-route evidence.
+- Three parallel agents handled compatible lock implementation, dependency
+  reachability/risk review, and generated user testing. Their DOMPurify,
+  jsPDF, Linux Node floor, and Tiptap warning findings were resolved.
+
+### Verification
+
+- `make check`: 303 backend passed, 4 opt-in PostgreSQL skipped, 108 frontend
+  passed, and the 500-module build completed.
+- Clean Linux x86_64 Node 20.20.2 passed `npm ci`, zero-vulnerability audit,
+  all frontend tests, and `vite build --manifest`.
+- Generated in-app browser desktop/exact-375 QA retained safe content, removed
+  all active tags/events/JavaScript URLs, mounted one enhanced editor, met 44
+  px Chat controls, and recorded no mutation or unknown-route attempts.
+- Final generated PDF: sanitized filename, `%PDF-`, 1,041,576 bytes, four
+  letter pages. Poppler page renders passed visual inspection without clipping,
+  splitting, overlap, or unreadable Unicode. Harness syntax and
+  `git diff --check` passed.
+
+### Production Actions
+
+- None yet. Candidate deployment is the next step; no schema change or service
+  restart is planned. The concurrent AI worktree remains untouched.
+
+### Next
+
+Commit and push the verified candidate, fast-forward production, run the locked
+frontend build, verify health/assets/audit, and record the exact release commit.
+
 ## 2026-08-30 — Consolidated product release and deployment
 
 ### Scope

@@ -30,6 +30,10 @@
   });
 
   onMount(() => {
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      sidebarOpen = false;
+    }
+
     const cleanupShortcuts = registerActions({
       'chat.new': () => {
         resetState();
@@ -74,6 +78,9 @@
     activeConversationId = id;
     currentConversationId.set(id);
     resetState();
+    if (window.matchMedia('(max-width: 767px)').matches) {
+      sidebarOpen = false;
+    }
 
     try {
       const data = await api.getConversation(id);
@@ -347,10 +354,81 @@
   // Download as PDF -- renders HTML to canvas then to PDF
   let pdfGenerating = $state(false);
 
+  function findCanvasPageBreak(
+    canvas,
+    startY,
+    idealEndY,
+    headingBreaks = [],
+    blockBreaks = [],
+  ) {
+    const sourceHeight = idealEndY - startY;
+    const minimumCandidateY = startY + (sourceHeight * 0.55);
+    const maximumCandidateY = idealEndY - 24;
+    const latestCandidate = candidates => candidates
+      .filter(candidate => candidate >= minimumCandidateY && candidate <= maximumCandidateY)
+      .at(-1);
+    const headingBreak = latestCandidate(headingBreaks);
+    if (headingBreak !== undefined) return headingBreak;
+    const blockBreak = latestCandidate(blockBreaks);
+    if (blockBreak !== undefined) return blockBreak;
+
+    const searchHeight = Math.min(320, Math.floor(sourceHeight * 0.28));
+    const searchStart = Math.max(startY + 80, idealEndY - searchHeight);
+    const height = idealEndY - searchStart;
+    if (height < 12) return idealEndY;
+
+    try {
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      const pixels = context.getImageData(0, searchStart, canvas.width, height).data;
+      const sampleStep = Math.max(1, Math.floor(canvas.width / 480));
+      const sampleCount = Math.ceil(canvas.width / sampleStep);
+      const maxColoredSamples = Math.max(3, Math.floor(sampleCount * 0.008));
+      const requiredBlankRows = Math.max(8, Math.round(canvas.width / 170));
+      let blankRunEnd = null;
+      let blankRunLength = 0;
+      let hasContentBelow = false;
+
+      for (let row = height - 1; row >= 0; row -= 1) {
+        let coloredSamples = 0;
+        for (let x = 0; x < canvas.width; x += sampleStep) {
+          const offset = ((row * canvas.width) + x) * 4;
+          if (
+            pixels[offset] < 250
+            || pixels[offset + 1] < 250
+            || pixels[offset + 2] < 250
+            || pixels[offset + 3] < 250
+          ) {
+            coloredSamples += 1;
+            if (coloredSamples > maxColoredSamples) break;
+          }
+        }
+
+        if (coloredSamples <= maxColoredSamples && hasContentBelow) {
+          if (blankRunEnd === null) blankRunEnd = searchStart + row + 1;
+          blankRunLength += 1;
+          if (blankRunLength >= requiredBlankRows) {
+            const blankRunStart = searchStart + row;
+            return Math.round((blankRunStart + blankRunEnd) / 2);
+          }
+        } else {
+          if (coloredSamples > maxColoredSamples) hasContentBelow = true;
+          blankRunEnd = null;
+          blankRunLength = 0;
+        }
+      }
+    } catch {
+      // If pixel inspection is unavailable, retain the legacy fixed-height
+      // page boundary rather than failing the export.
+    }
+
+    return idealEndY;
+  }
+
   async function downloadPDF() {
     if (!renderedContent || pdfGenerating) return;
 
     pdfGenerating = true;
+    let container = null;
     try {
       const { default: jsPDF } = await import('jspdf');
       const { default: html2canvas } = await import('html2canvas-pro');
@@ -359,7 +437,7 @@
       const safeName = title.replace(/[^a-zA-Z0-9\-_ ]/g, '').replace(/\s+/g, '-').substring(0, 60);
 
       // Create an offscreen container with print-optimized styles
-      const container = document.createElement('div');
+      container = document.createElement('div');
       container.style.cssText = 'position:absolute;left:-9999px;top:0;width:680px;';
       container.innerHTML = `
         <div style="
@@ -400,12 +478,45 @@
       const canvas = await html2canvas(container.firstElementChild, {
         scale: 2,
         useCORS: true,
-        allowTaint: true,
+        // Non-CORS images may be omitted, but must not poison the export
+        // canvas and make pagination/toDataURL fail for the entire response.
+        allowTaint: false,
         logging: false,
         backgroundColor: '#ffffff',
       });
 
-      document.body.removeChild(container);
+      const renderedRoot = container.firstElementChild;
+      const renderedBody = renderedRoot.querySelector('.pdf-body');
+      const rootRect = renderedRoot.getBoundingClientRect();
+      const canvasScaleY = rootRect.height > 0 ? canvas.height / rootRect.height : 1;
+      const sourceYForOffset = offset => Math.max(
+        0,
+        Math.round(offset * canvasScaleY),
+      );
+      const sourceTopFor = element => sourceYForOffset(
+        element.getBoundingClientRect().top - rootRect.top,
+      );
+      const topLevelBlocks = [...(renderedBody?.children || [])];
+      const headingBreaks = topLevelBlocks
+        .map((element, index) => {
+          if (!/^H[1-3]$/.test(element.tagName)) return null;
+          const headingTop = element.getBoundingClientRect().top - rootRect.top;
+          const previousElement = topLevelBlocks[index - 1];
+          if (!previousElement) return sourceYForOffset(headingTop);
+          const previousBottom = previousElement.getBoundingClientRect().bottom - rootRect.top;
+          const safeGap = previousBottom < headingTop
+            ? (previousBottom + headingTop) / 2
+            : headingTop - 8;
+          return sourceYForOffset(safeGap);
+        })
+        .filter(sourceTop => sourceTop !== null)
+        .filter(sourceTop => sourceTop > 0);
+      const blockBreaks = topLevelBlocks
+        .map(sourceTopFor)
+        .filter(sourceTop => sourceTop > 0);
+
+      container.remove();
+      container = null;
 
       // Calculate PDF dimensions -- letter size (8.5 x 11 in), content area with margins
       const pageWidthPt = 612;  // 8.5in in points
@@ -417,28 +528,34 @@
       const imgWidth = canvas.width;
       const imgHeight = canvas.height;
       const ratio = contentWidthPt / imgWidth;
-      const scaledHeight = imgHeight * ratio;
-
-      // Calculate how many pages we need
-      const totalPages = Math.ceil(scaledHeight / contentHeightPt);
+      const maxSourceHeight = contentHeightPt / ratio;
+      const pageSlices = [];
+      let sourceY = 0;
+      while (sourceY < imgHeight) {
+        const idealEndY = Math.min(imgHeight, Math.floor(sourceY + maxSourceHeight));
+        const endY = idealEndY < imgHeight
+          ? findCanvasPageBreak(canvas, sourceY, idealEndY, headingBreaks, blockBreaks)
+          : idealEndY;
+        const safeEndY = endY > sourceY ? endY : idealEndY;
+        pageSlices.push({ sourceY, sourceH: safeEndY - sourceY });
+        sourceY = safeEndY;
+      }
 
       const pdf = new jsPDF({ unit: 'pt', format: 'letter' });
 
-      for (let page = 0; page < totalPages; page++) {
+      for (let page = 0; page < pageSlices.length; page++) {
         if (page > 0) {
           pdf.addPage();
         }
 
-        // Calculate the source slice from the canvas for this page
-        const sourceY = (page * contentHeightPt) / ratio;
-        const sourceH = Math.min(contentHeightPt / ratio, imgHeight - sourceY);
+        const { sourceY: pageSourceY, sourceH } = pageSlices[page];
 
         // Create a temporary canvas for this page slice
         const pageCanvas = document.createElement('canvas');
         pageCanvas.width = imgWidth;
         pageCanvas.height = Math.ceil(sourceH);
         const ctx = pageCanvas.getContext('2d');
-        ctx.drawImage(canvas, 0, sourceY, imgWidth, sourceH, 0, 0, imgWidth, sourceH);
+        ctx.drawImage(canvas, 0, pageSourceY, imgWidth, sourceH, 0, 0, imgWidth, sourceH);
 
         const pageDataUrl = pageCanvas.toDataURL('image/jpeg', 0.95);
         const sliceHeightPt = sourceH * ratio;
@@ -451,16 +568,27 @@
     } catch (err) {
       console.error('PDF generation failed:', err);
       showToast('Failed to generate PDF: ' + err.message, 'error');
+    } finally {
+      container?.remove();
+      pdfGenerating = false;
     }
-    pdfGenerating = false;
   }
 </script>
 
-<div class="h-full flex" style="background: var(--bg-primary)">
+<div class="relative h-full flex" style="background: var(--bg-primary)">
+  {#if sidebarOpen}
+    <button
+      type="button"
+      aria-label="Close conversation sidebar"
+      onclick={() => sidebarOpen = false}
+      class="absolute inset-0 z-20 bg-black/35 md:hidden"
+    ></button>
+  {/if}
+
   <!-- Sidebar: conversation history -->
   {#if sidebarOpen}
     <div
-      class="w-64 shrink-0 border-r flex flex-col h-full"
+      class="absolute inset-y-0 left-0 z-30 flex h-full w-[min(16rem,calc(100%-3.5rem))] shrink-0 flex-col border-r shadow-2xl md:static md:w-64 md:shadow-none"
       style="background: var(--bg-secondary); border-color: var(--border-color)"
     >
       <!-- New Chat button -->
@@ -519,9 +647,10 @@
     <div class="h-14 flex items-center px-4 border-b shrink-0 gap-3" style="border-color: var(--border-color)">
       <button
         onclick={() => sidebarOpen = !sidebarOpen}
-        class="p-1.5 rounded-md transition-fast"
+        class="min-h-11 min-w-11 flex items-center justify-center rounded-md transition-fast"
         style="color: var(--text-secondary)"
         title="{sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}"
+        aria-label="{sidebarOpen ? 'Hide conversation sidebar' : 'Show conversation sidebar'}"
       >
         <Icon name="menu" size={20} />
       </button>
@@ -708,11 +837,11 @@
             <!-- Final rendered answer -->
             {#if renderedContent}
               <!-- Download buttons -->
-              <div class="flex items-center gap-2 mb-2">
+              <div class="flex flex-wrap items-center gap-2 mb-2">
                 <span class="text-xs font-medium" style="color: var(--text-tertiary)">Download:</span>
                 <button
                   onclick={downloadMarkdown}
-                  class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-fast"
+                  class="flex min-h-11 items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-fast"
                   style="border-color: var(--border-color); color: var(--text-secondary); background: var(--bg-secondary)"
                   title="Download as Markdown"
                 >
@@ -722,7 +851,7 @@
                 <button
                   onclick={downloadPDF}
                   disabled={pdfGenerating}
-                  class="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border transition-fast"
+                  class="flex min-h-11 items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-fast"
                   style="border-color: var(--border-color); color: var(--text-secondary); background: var(--bg-secondary); opacity: {pdfGenerating ? '0.6' : '1'}"
                   title="Download as PDF"
                 >

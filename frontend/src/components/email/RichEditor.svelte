@@ -28,6 +28,10 @@
       extensions: [
         StarterKit.configure({
           heading: { levels: [1, 2, 3] },
+          // Keep the explicitly configured extensions below as the single
+          // source of truth. Recent StarterKit releases bundle both.
+          link: false,
+          underline: false,
         }),
         Underline,
         Link.configure({
