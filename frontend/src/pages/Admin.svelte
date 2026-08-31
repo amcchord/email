@@ -27,6 +27,7 @@
   import AIModelsPanel from '../lib/admin/AIModelsPanel.svelte';
   import FirmwareInstaller from '../lib/admin/FirmwareInstaller.svelte';
   import TerminalEnrollment from '../lib/admin/TerminalEnrollment.svelte';
+  import TerminalOtaManager from '../lib/admin/TerminalOtaManager.svelte';
   import { revokeTerminalEnrollment } from '../lib/terminalEnrollmentApi.js';
   import Input from '../components/common/Input.svelte';
   import Icon from '../components/common/Icon.svelte';
@@ -900,6 +901,10 @@
     terminalsRefreshing = false;
   }
 
+  function replaceTerminalFromOta(updated) {
+    terminals = terminals.map(device => device.id === updated.id ? updated : device);
+  }
+
   async function regenerateTerminalCode() {
     if (!confirm('Regenerate the At a Glance firmware code? Existing e-ink devices will need a new firmware URL. Browser display links will remain valid.')) return;
     regenLoading = true;
@@ -1593,6 +1598,9 @@
 
         <FirmwareInstaller />
         <TerminalEnrollment bind:this={terminalEnrollmentPanel} />
+        {#if terminalsLoaded}
+          <TerminalOtaManager devices={terminals} onDeviceUpdated={replaceTerminalFromOta} />
+        {/if}
 
         {#if !terminalSettingsLoaded}
           <div class="rounded-xl border p-5 text-xs" style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-tertiary)">Loading...</div>
