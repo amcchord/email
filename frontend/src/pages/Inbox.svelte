@@ -102,7 +102,7 @@
   const actionSubmissions = createMailActionSubmissionQueue();
   const acceptedActionReconciler = createDatasetActionReconciler({
     isCurrent: datasetKey => inboxSessionIsCurrent()
-      && Boolean(get(searchQuery))
+      && (Boolean(get(searchQuery)) || actionReconciliationRequired)
       && currentDatasetSnapshot().key === datasetKey,
     refresh: () => refreshDataset(),
   });
@@ -442,6 +442,7 @@
     try {
       const sf = snapshot.smartFilter;
       let result;
+      let resultUsesConversations = false;
 
       if (sf && sf.type === 'needs_reply_ignored') {
         const paginationParams = { page: snapshot.page, page_size: snapshot.pageSize };
@@ -483,12 +484,17 @@
         }
         const useConversations = Boolean(snapshot.search)
           || (!sf && snapshot.mailbox !== 'DRAFTS');
+        resultUsesConversations = useConversations;
         result = useConversations
           ? normalizeConversationList(await api.listConversations(params))
           : await api.listEmails(params);
       }
 
-      const reconcileActiveSnoozes = sf?.type !== 'snoozed';
+      const activeSnoozesExcludedByServer = !sf
+        && !snapshot.search
+        && snapshot.mailbox === 'INBOX'
+        && resultUsesConversations;
+      const reconcileActiveSnoozes = sf?.type !== 'snoozed' && !activeSnoozesExcludedByServer;
       if (reconcileActiveSnoozes) {
         const active = await api.listSnoozes({ state: 'active', limit: 200, offset: 0 });
         const activeItems = active.items || [];
@@ -606,12 +612,13 @@
     try {
       const summary = get(emails).find(email => email.id === id);
       const conversation = isConversationSummary(summary);
-      const result = conversation && summary.gmail_thread_id
-        ? await api.getThread(summary.gmail_thread_id, 'asc', summary.account_id)
+      const threadId = String(summary?.gmail_thread_id || '').trim();
+      const result = conversation && threadId
+        ? await api.getThread(threadId, 'asc', summary.account_id)
         : await api.getEmail(id);
       if (!isCurrentEmailRequest(requestId, id)) return;
       selectedThread = conversation
-        ? (summary.gmail_thread_id ? result : { thread_id: '', emails: [result] })
+        ? (threadId ? result : { thread_id: '', emails: [result] })
         : null;
       const detail = conversation
         ? (selectedThread.emails || []).find(message => Number(message.id) === Number(summary.anchor_email_id))
@@ -711,6 +718,7 @@
       { gmailLabelId },
     ));
     if (removedCount > 0) emailsTotal.update(total => total + removedCount);
+    hasMore = get(emails).length < get(emailsTotal);
     if (get(selectedEmailId) === optimistic.selectedId) {
       selectedEmailId.set(snapshot.selectedId);
     }
@@ -763,7 +771,7 @@
     // Definitive actions always reconcile their still-current structured
     // search. This is intentionally independent of selectionEpoch: an earlier
     // refresh can invalidate presentation state while a queued action accepts.
-    requireActionReconciliation(context.datasetKey);
+    requireActionReconciliation(context.datasetKey, context.optimistic.removed);
     if (!actionContextIsCurrent(context.actionEpoch, context.datasetKey)) return;
     if (!announce) return;
 
@@ -795,8 +803,12 @@
     }
   }
 
-  function requireActionReconciliation(datasetKey) {
-    if (!inboxSessionIsCurrent() || !get(searchQuery) || currentDatasetSnapshot().key !== datasetKey) return;
+  function requireActionReconciliation(datasetKey, force = false) {
+    if (
+      !inboxSessionIsCurrent()
+      || (!force && !get(searchQuery))
+      || currentDatasetSnapshot().key !== datasetKey
+    ) return;
     actionReconciliationRequired = true;
     actionReconciliationVersion += 1;
     void acceptedActionReconciler.request(datasetKey);
@@ -857,7 +869,7 @@
       if (actionContextIsCurrent(context.actionEpoch, context.datasetKey)) {
         restoreOptimisticAction(context);
       }
-      requireActionReconciliation(context.datasetKey);
+      requireActionReconciliation(context.datasetKey, context.optimistic.removed);
       if (latestUndo?.requestId === context.operation.request_id) latestUndo = null;
       showToast(`${actionPastTense(context.action, actionDisplayCount(context, context.operation), context.labelName, context.scope === 'conversations' ? 'conversation' : 'email')} — undone`, 'success');
       return operation;
@@ -917,6 +929,15 @@
 
     emails.set(optimistic.emails);
     if (removedCount > 0) emailsTotal.update(total => Math.max(0, total - removedCount));
+    if (optimistic.removed) {
+      // Offset pagination cannot safely accept a response computed before a
+      // row-removing action. Discard any append and restart from page one once
+      // the durable operation is confirmed.
+      listRequests.invalidate();
+      loadingMore = false;
+      currentPageNum.set(1);
+      hasMore = get(emails).length < get(emailsTotal);
+    }
     selectedEmailId.set(optimistic.selectedId);
     if (optimistic.removed) {
       focusedEmailId = nextConversationFocus(emailsBefore, focusedBefore, uniqueIds);

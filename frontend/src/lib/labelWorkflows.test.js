@@ -90,6 +90,15 @@ test('visible thread expansion is account-aware and deduplicated', () => {
   assert.deepEqual(expandVisibleLabelTargets([1], visible), [1, 2]);
 });
 
+test('blank thread identities remain isolated label targets', () => {
+  const rows = [
+    email(1, { gmail_thread_id: ' ' }),
+    email(2, { gmail_thread_id: ' ' }),
+  ];
+
+  assert.deepEqual(expandVisibleLabelTargets([1], rows), [1]);
+});
+
 test('label projection updates flags, removes moves only from Inbox, and rolls back safely', () => {
   const original = email(1);
   assert.deepEqual(applyEmailAction(original, 'add_label', { gmailLabelId: 'Label_12' }).labels, ['INBOX', 'UNREAD', 'Label_12']);

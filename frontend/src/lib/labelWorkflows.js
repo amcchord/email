@@ -143,12 +143,14 @@ export function expandVisibleLabelTargets(selectedIds = [], visibleEmails = []) 
   const anchors = visibleEmails.filter(email => expanded.has(email.id));
   const threadKeys = new Set(
     anchors
-      .filter(email => email.gmail_thread_id)
-      .map(email => `${accountIdentity(email)}|${email.gmail_thread_id}`),
+      .map(email => ({ email, threadId: String(email.gmail_thread_id || '').trim() }))
+      .filter(({ threadId }) => threadId)
+      .map(({ email, threadId }) => `${accountIdentity(email)}|${threadId}`),
   );
   for (const email of visibleEmails) {
-    if (!email.gmail_thread_id) continue;
-    if (threadKeys.has(`${accountIdentity(email)}|${email.gmail_thread_id}`)) expanded.add(email.id);
+    const threadId = String(email.gmail_thread_id || '').trim();
+    if (!threadId) continue;
+    if (threadKeys.has(`${accountIdentity(email)}|${threadId}`)) expanded.add(email.id);
   }
   return [...expanded];
 }

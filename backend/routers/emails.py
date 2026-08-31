@@ -1,7 +1,7 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from sqlalchemy import select, func, desc, asc, or_, literal, tuple_
+from sqlalchemy import and_, select, func, desc, asc, or_, literal, tuple_
 from typing import Optional
 from uuid import UUID
 from backend.database import get_db
@@ -9,6 +9,7 @@ from backend.models.user import User
 from backend.models.email import Email, Attachment, EmailLabel
 from backend.models.account import GoogleAccount
 from backend.models.ai import AIAnalysis
+from backend.models.snooze import EmailSnooze, SNOOZE_ACTIVE_STATES
 from backend.schemas.email import (
     EmailSummary, EmailDetail, EmailListResponse,
     ConversationSummary, ConversationListResponse,
@@ -96,6 +97,7 @@ async def _conversation_filter_statement(
     *,
     account_rows,
     user_accounts: dict[int, str],
+    user_id: int,
     account_id: Optional[int],
     mailbox: str,
     label: Optional[str],
@@ -146,6 +148,24 @@ async def _conversation_filter_statement(
 
     if label:
         query = query.where(jsonb_contains(Email.labels, label))
+
+    # Snoozed Inbox conversations are hidden by the authoritative query so
+    # totals and page boundaries remain exact. Search and non-Inbox mailboxes
+    # intentionally retain them with their reminder metadata in the client.
+    if mailbox == "INBOX" and not (search_plan and search_plan.has_positive_in):
+        active_snooze = select(literal(1)).where(
+            EmailSnooze.user_id == user_id,
+            EmailSnooze.account_id == Email.account_id,
+            EmailSnooze.state.in_(SNOOZE_ACTIVE_STATES),
+            or_(
+                EmailSnooze.email_id == Email.id,
+                and_(
+                    func.btrim(Email.gmail_thread_id) != "",
+                    EmailSnooze.gmail_thread_id == Email.gmail_thread_id,
+                ),
+            ),
+        ).correlate(Email).exists()
+        query = query.where(~active_snooze)
     if is_read is not None:
         query = query.where(Email.is_read == is_read)
     if is_starred is not None:
@@ -616,6 +636,7 @@ async def list_conversations(
         db,
         account_rows=account_rows,
         user_accounts=user_accounts,
+        user_id=user.id,
         account_id=account_id,
         mailbox=mailbox,
         label=label,

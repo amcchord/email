@@ -1,7 +1,11 @@
+from types import SimpleNamespace
+
+import pytest
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 
 from backend.models.email import Email
+from backend.routers.emails import _conversation_filter_statement
 from backend.services.conversation_rows import (
     conversation_count_statement,
     conversation_page_statement,
@@ -69,3 +73,45 @@ def test_conversation_sort_uses_aggregate_state_for_read_and_attachment():
 
     assert "conversation_aggregates.unread_count ASC" in unread_sql
     assert "conversation_aggregates.attachment_count DESC" in attachment_sql
+
+
+@pytest.mark.asyncio
+async def test_inbox_filter_excludes_active_snoozes_before_grouping():
+    statement = await _conversation_filter_statement(
+        None,
+        account_rows=[SimpleNamespace(
+            id=7,
+            email="owner@example.test",
+            display_name="Generated owner",
+            description=None,
+            short_label=None,
+        )],
+        user_accounts={7: "owner@example.test"},
+        user_id=42,
+        account_id=None,
+        mailbox="INBOX",
+        label=None,
+        search=None,
+        tz=None,
+        is_read=None,
+        is_starred=None,
+        ai_category=None,
+        exclude_ai_category=None,
+        ai_email_type=None,
+        needs_reply=None,
+    )
+    compiled = statement.compile(dialect=postgresql.dialect())
+
+    assert "email_snoozes" in str(compiled)
+    assert "NOT (EXISTS" in str(compiled)
+    bound_values = {
+        item
+        for value in compiled.params.values()
+        for item in (value if isinstance(value, (list, tuple)) else [value])
+    }
+    assert bound_values >= {
+        42,
+        "pending_archive",
+        "scheduled",
+        "pending_return",
+    }
