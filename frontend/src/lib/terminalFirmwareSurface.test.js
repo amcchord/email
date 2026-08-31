@@ -6,13 +6,14 @@ async function source(relativePath) {
   return readFile(new URL(relativePath, import.meta.url), 'utf8');
 }
 
-test('At a Glance renders package preflight while real device transport stays locked', async () => {
-  const [app, atAGlance, admin, component, installer, firmwareApi, plan, workflow, recovery] = await Promise.all([
+test('At a Glance wires the isolated Web Serial adapter while independent production gates stay locked', async () => {
+  const [app, atAGlance, admin, component, installer, webSerial, firmwareApi, plan, workflow, recovery] = await Promise.all([
     source('../App.svelte'),
     source('../pages/AtAGlance.svelte'),
     source('../pages/Admin.svelte'),
     source('./admin/FirmwareInstaller.svelte'),
     source('./terminalFirmwareInstaller.js'),
+    source('./terminalFirmwareWebSerial.js'),
     source('./terminalFirmwareApi.js'),
     source('./terminalFirmwareInstallPlan.js'),
     source('./terminalFirmwareInstallWorkflow.js'),
@@ -23,19 +24,28 @@ test('At a Glance renders package preflight while real device transport stays lo
   assert.match(admin, /activeTab === 'terminals'[\s\S]*<FirmwareInstaller \/>/);
   assert.match(atAGlance, /import FirmwareInstaller from '\.\.\/lib\/admin\/FirmwareInstaller\.svelte';/);
   assert.match(atAGlance, /Terminal firmware[\s\S]*<FirmwareInstaller \/>/);
-  assert.match(component, /prepare a fully hashed preserve-config package/);
+  assert.match(component, /Verify a signed preserve-config package/);
   assert.match(component, /compileTerminalFirmwareInstallPlan/);
   assert.match(component, /loadTerminalFirmwareInstallArtifacts/);
   assert.match(component, /runTerminalFirmwareInstallWorkflow/);
-  assert.match(component, /PRODUCTION_TRANSPORT_AVAILABLE = false/);
-  assert.match(component, /disabled=\{!PRODUCTION_TRANSPORT_AVAILABLE \|\| !preparedPlan\}/);
+  assert.match(component, /createTerminalFirmwareWebSerialTransports/);
+  assert.match(component, /PRODUCTION_TRANSPORT_AVAILABLE = true/);
+  assert.match(component, /disabled=\{!canConnectInstall\}/);
+  assert.match(component, /!lock\.locked/);
   assert.match(component, /Recovery required|recoveryRequired/);
   assert.match(component, /Disconnect device/);
-  assert.match(component, /never requests a serial port and cannot write or erase a terminal/);
+  assert.match(component, /port selection always requires an explicit click/);
   assert.doesNotMatch(component, /requestPort\s*\(/);
   assert.doesNotMatch(installer, /\.requestPort\s*\(/);
   assert.doesNotMatch(installer, /\.write\s*\(/);
   assert.doesNotMatch(installer, /eraseFlash|writeFlash|flashData/);
+  assert.match(webSerial, /await serial\.requestPort\(\)/);
+  assert.match(webSerial, /locks\.request/);
+  assert.match(webSerial, /writeFlash/);
+  assert.match(webSerial, /readFlash/);
+  assert.match(webSerial, /after\('hard_reset'\)/);
+  assert.match(webSerial, /eraseAll: false/);
+  assert.doesNotMatch(webSerial, /eraseFlash|eraseAll: true/);
   assert.match(firmwareApi, /TERMINAL_FIRMWARE_CATALOG_ENDPOINT = '\/terminal\/firmware\/catalog'/);
   assert.match(firmwareApi, /TERMINAL_OTA_CAPABILITIES_ENDPOINT = '\/terminal\/firmware\/ota\/capabilities'/);
   assert.equal(
