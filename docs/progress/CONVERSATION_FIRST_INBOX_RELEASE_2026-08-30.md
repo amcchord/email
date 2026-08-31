@@ -85,9 +85,24 @@ than trying to reconcile duplicate message projections.
 
 ## Production Evidence
 
-Deployment is the next authorized step. Exact runtime, production checkout,
-health, log, authentication, and read-only browser evidence will be appended in
-the docs closeout without changing application code.
+- Exact application/runtime code boundary:
+  `f5be5851ae7c5e628e490223c50deb0be1c9c9b2`.
+- GitHub `main` and production fast-forwarded from exact terminal docs baseline
+  `93b9375b04dde8687421272a987c7590a89a8d47`; production first received release-
+  record commit `e4f2ac249d9d6a18c7a20fafedc7f7265db26bc1` before the final docs-only
+  closeout.
+- Only `mailapp` restarted. The retired process reached the host's known
+  graceful-stop timeout; the replacement became active at 00:11:15 UTC with
+  `NRestarts=0`. Warning-or-higher logs are empty after 00:11:16 UTC.
+- Production built 545 frontend modules. All seven checked services are active,
+  public health is `ok`, anonymous `GET /api/emails/conversations` is 401, Git is
+  exact/clean, and Alembic remains `b5c6d7e8f9a0 (head)`.
+- Authenticated read-only production QA loaded 50 visible Inbox rows and proved
+  all 50 carry conversation-row semantics. No message was opened and no mail
+  action was submitted. Browser warnings/errors were zero.
+- No migration, database backup/restore, dependency install, worker restart,
+  Caddy change, provider call, or real-mail/calendar mutation was part of the
+  release.
 
 ## Rollback Boundary
 

@@ -44,15 +44,28 @@ conversation-scoped actions without a schema change or real-mail mutation.
 
 ### Production Actions
 
-- None yet. The release is migration-free; production remains at exact clean
-  docs baseline `93b9375b04dde8687421272a987c7590a89a8d47` and Alembic
-  `b5c6d7e8f9a0 (head)` until the authorized deployment step.
+- Pushed the feature branch and fast-forwarded GitHub `main`, then production,
+  from exact terminal docs baseline `93b9375b04dde8687421272a987c7590a89a8d47`.
+  Exact application/runtime code boundary is
+  `f5be5851ae7c5e628e490223c50deb0be1c9c9b2`; production first received the
+  release-record commit `e4f2ac249d9d6a18c7a20fafedc7f7265db26bc1`.
+- Restarted only `mailapp`, then built the frontend after the replacement API
+  was active. The retired API again reached the host's known graceful-drain
+  timeout; the replacement became active at 00:11:15 UTC with `NRestarts=0`.
+  The API and workers have no warning-or-higher entries after 00:11:16 UTC.
+- Production remained at Alembic `b5c6d7e8f9a0 (head)`; no migration, database
+  backup/restore, dependency install, worker restart, Caddy change, or real-mail
+  mutation occurred. All seven services are active, public health is `ok`, and
+  anonymous conversation-list access returns 401.
+- Authenticated read-only browser QA loaded 50 visible Inbox rows and confirmed
+  all 50 expose conversation semantics. No row was opened and no mail action was
+  submitted; browser warnings/errors were zero.
 
 ### Next
 
-Push the reviewed branch/main, deploy the exact application commit without a
-migration, perform read-only production health and authenticated Inbox QA, then
-record the exact runtime and docs-closeout SHAs.
+Build focused/split Inbox placement as policy over the shipped conversation row.
+Preserve the terminal team's exclusive `c6d7e8f9a0b1` migration and coordinate
+shared Inbox/docs files before the next release.
 
 ## 2026-08-30 — At a Glance firmware protocol and installer foundation
 

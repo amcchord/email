@@ -4,14 +4,19 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Complete and release the migration-free conversation-first Inbox milestone from
-the exact terminal protocol baseline, while the isolated terminal track builds
-the reserved `c6d7e8f9a0b1` OTA attempt/event ledger. Keep real mail/calendar QA
-read-only except for generated `.example.test` fixtures and preserve every
-terminal write gate.
+Continue from the shipped conversation-first Inbox baseline: build the next
+focused/split placement slice as policy over one authoritative row, while the
+isolated terminal track builds reserved revision `c6d7e8f9a0b1` for its OTA
+attempt/event ledger. Keep real mail/calendar QA read-only except for generated
+`.example.test` fixtures and preserve every terminal write gate.
 
 ## Baseline
 
+- The deployed conversation-first Inbox application/runtime code boundary is
+  `f5be5851ae7c5e628e490223c50deb0be1c9c9b2`; following closeout commits are
+  documentation only. Inbox, ordinary mailboxes, labels, and search now use one
+  authoritative owned-account conversation row with a chronological reader and
+  durable conversation-scoped actions.
 - The deployed At a Glance firmware protocol/installer runtime is
   `84a854a5527c342b85bb2884ef43b89fea95a954`. The first-class page can select a
   signed release and exact physical model/revision, but artifact preflight is
@@ -78,21 +83,18 @@ live state.
 
 ## Active Work Items
 
-### P1 — Conversation-first Inbox triage
+### P1 — Focused/split Inbox placement
 
-- State: verifying; the authoritative row, full thread reader, conversation-
-  scoped actions, and generated browser acceptance are complete and the release
-  is migration-free.
-- Scope: one account-safe conversation row across Inbox, mailboxes, and search;
-  aggregate counts/state; chronological reader rail; conversation-wide bulk and
-  row actions; J/K focus, O open, and Escape restoration. Focused/split placement
-  remains the next independent slice.
-- Acceptance: grouping/counting occurs before pagination; blank thread IDs never
-  merge; cross-account reads fail closed; active Snoozes do not corrupt Inbox
-  totals; actions preserve durable idempotency, Undo, retry, and generated-only
-  QA boundaries.
-- Next: push the reviewed commits, deploy without a migration, run read-only
-  production postflight, and close the exact release record.
+- State: ready; the authoritative conversation row and durable action boundary
+  are shipped.
+- Scope: deterministic, explainable focused/other placement over the existing
+  row without creating a second message-level truth, plus fast keyboard movement
+  between the sections.
+- Acceptance: each conversation appears exactly once; placement reasons are
+  visible and stable; manual mailbox/label/Snooze actions keep their existing
+  account ownership, idempotency, Undo, and retry semantics.
+- Next: audit the current Focused filter and define the smallest split placement
+  contract before changing shared shell or Inbox files.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 
@@ -128,7 +130,7 @@ live state.
 - Next: keep the implementation isolated from Inbox files and shared docs until
   the conversation release provides its exact GitHub/production closeout SHA.
 
-## Pending Conversation-First Inbox Release
+## Recent Conversation-First Inbox Release
 
 - PostgreSQL now returns one exact owned-account conversation row after grouping
   and counting, with truthful totals, aggregate unread/star/attachment/label
@@ -139,7 +141,9 @@ live state.
 - Final checks passed 684 backend tests with 51 intentional skips, all 392
   frontend tests, an eight-test disposable PostgreSQL gate, a 545-module build,
   and generated desktop/mobile browser QA with zero provider calls, rejected
-  mutations, unknown routes, or console warnings/errors. Full evidence is in
+  mutations, unknown routes, or console warnings/errors. Production built the
+  same 545 modules; all services, health, authentication, and read-only row
+  semantics passed with no post-start warning entries. Full evidence is in
   `CONVERSATION_FIRST_INBOX_RELEASE_2026-08-30.md`.
 
 ## Recent At a Glance Firmware Protocol & Installer Foundation Release
