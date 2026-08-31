@@ -210,7 +210,7 @@ def assert_error_conflict_and_stale_session(page: Page, base_url: str) -> None:
     dialog.get_by_role("button", name="Save changes").click()
     expect(dialog.get_by_role("alert")).to_contain_text("changed elsewhere")
     dialog.get_by_role("button", name="Reload Saved Views").click()
-    dialog.get_by_role("button", name="Close").click()
+    expect(dialog).not_to_be_visible()
     expect(page.get_by_role("button", name="Generated External Winner", exact=True)).to_be_visible()
 
     # Change the generated authenticated identity in place. The browser must
