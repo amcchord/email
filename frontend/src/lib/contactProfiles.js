@@ -225,6 +225,16 @@ export function normalizeContactConversationNavigationIntent(value) {
   return normalizeRecentContactConversation(value, { accountId });
 }
 
+export function contactConversationAnchorForAccount(value, accountId) {
+  if (value === null) return null;
+  const expectedAccountId = integerValue(Number(accountId), 'account_id', { minimum: 1 });
+  const intent = normalizeContactConversationNavigationIntent(value);
+  if (intent.account_id !== expectedAccountId) {
+    throw new TypeError('The contact conversation account no longer matches the active account.');
+  }
+  return intent.anchor_email_id;
+}
+
 export function contactDisplayName(contact) {
   return contact?.name || contact?.address || 'Unknown contact';
 }

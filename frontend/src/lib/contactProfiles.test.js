@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   contactComposeIntent,
+  contactConversationAnchorForAccount,
   contactConversationNavigationIntent,
   createContactProfilePayload,
   createContactQueryPayload,
@@ -166,4 +167,15 @@ test('contact actions create one exact Compose recipient and one exact Inbox int
     observed_message_count: 1,
     direction: 'outbound_only',
   });
+
+  const directOpen = {
+    account_id: ACCOUNT_ID,
+    anchor_email_id: 701,
+    thread_id: 'generated-thread-7',
+    observed_last_at: '2026-08-30T12:00:00Z',
+    observed_message_count: 3,
+    direction: 'bidirectional',
+  };
+  assert.equal(contactConversationAnchorForAccount(directOpen, ACCOUNT_ID), 701);
+  assert.throws(() => contactConversationAnchorForAccount(directOpen, 99), /active account/);
 });

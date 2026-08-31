@@ -76,7 +76,10 @@
   } from '../lib/snooze.js';
   import { focusEmailRow, focusEmailRowOrFallback } from '../lib/emailRowFocus.js';
   import { formatSnoozeWake } from '../lib/remindLater.js';
-  import { normalizeContactConversationNavigationIntent } from '../lib/contactProfiles.js';
+  import {
+    contactConversationAnchorForAccount,
+    normalizeContactConversationNavigationIntent,
+  } from '../lib/contactProfiles.js';
 
   let selectedEmail = $state(null);
   let selectedThread = $state(null);
@@ -469,6 +472,15 @@
     return inboxSessionIsCurrent() && listRequests.isCurrent(requestId);
   }
 
+  function pendingContactAnchorEmailId(accountId) {
+    try {
+      return contactConversationAnchorForAccount(get(contactConversationIntent), accountId);
+    } catch {
+      contactConversationIntent.set(null);
+      return null;
+    }
+  }
+
   function refreshDataset() {
     if (!inboxSessionIsCurrent()) return Promise.resolve(false);
     currentPageNum.set(1);
@@ -610,7 +622,12 @@
         datasetAuthoritative = !actionReconciliationRequired;
         datasetError = false;
         datasetErrorMessage = '';
-        const directOpenEmailId = initialDirectOpen.commit(datasetAuthoritative);
+        const initialDirectOpenEmailId = initialDirectOpen.commit(datasetAuthoritative);
+        // Contacts owns a one-shot, exact-account reader intent. Restore its
+        // anchor only after this Inbox dataset is authoritative so a cold lazy
+        // mount cannot erase the selection before the detail request begins.
+        const contactDirectOpenEmailId = pendingContactAnchorEmailId(snapshot.accountId);
+        const directOpenEmailId = contactDirectOpenEmailId ?? initialDirectOpenEmailId;
         if (directOpenEmailId !== null) {
           focusedEmailId = directOpenEmailId;
           selectedEmailId.set(directOpenEmailId);
