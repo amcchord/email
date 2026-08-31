@@ -22,6 +22,9 @@ export const GENERATED_PROVIDER_DRAFT_SCENARIOS = Object.freeze([
   'recipient-held-session',
   'snippet-held-session',
   'recipient-fails',
+  'contact-delay',
+  'contact-held-session',
+  'contact-fails',
 ]);
 
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
@@ -259,6 +262,195 @@ const RECIPIENT_HISTORY_BY_USER = Object.freeze({
   ]),
 });
 
+// Generated-only metadata corpus for first-class Contact browser QA. Subject
+// and body sentinels deliberately exist on the source rows so the contract test
+// can prove that neither query nor profile responses accidentally serialize
+// message content. Bcc-only, self-address, Draft, Spam, Trash, foreign-account,
+// and foreign-user rows are present as exclusion sentinels.
+const CONTACT_PRIVATE_SUBJECT_SENTINEL = 'GENERATED_CONTACT_PRIVATE_SUBJECT_MUST_NOT_ESCAPE';
+const CONTACT_PRIVATE_BODY_SENTINEL = 'GENERATED_CONTACT_PRIVATE_BODY_MUST_NOT_ESCAPE';
+
+function generatedContactMessage(overrides) {
+  return Object.freeze({
+    account_id: overrides.account_id,
+    anchor_email_id: overrides.anchor_email_id,
+    thread_id: overrides.thread_id ?? null,
+    observed_at: overrides.observed_at,
+    is_sent: Boolean(overrides.is_sent),
+    from_name: overrides.from_name || '',
+    from_address: overrides.from_address || '',
+    to_addresses: Object.freeze([...(overrides.to_addresses || [])]),
+    cc_addresses: Object.freeze([...(overrides.cc_addresses || [])]),
+    bcc_addresses: Object.freeze([...(overrides.bcc_addresses || [])]),
+    is_draft: Boolean(overrides.is_draft),
+    is_spam: Boolean(overrides.is_spam),
+    is_trash: Boolean(overrides.is_trash),
+    subject: CONTACT_PRIVATE_SUBJECT_SENTINEL,
+    body_text: CONTACT_PRIVATE_BODY_SENTINEL,
+    body_html: `<p>${CONTACT_PRIVATE_BODY_SENTINEL}</p>`,
+  });
+}
+
+const CONTACT_HISTORY_BY_USER = Object.freeze({
+  9101: Object.freeze([
+    generatedContactMessage({
+      account_id: 1101,
+      anchor_email_id: 1401,
+      thread_id: 'generated-contact-ada-thread',
+      observed_at: '2026-08-30T15:59:00.000Z',
+      is_sent: false,
+      from_name: 'Lovelace, Ada',
+      from_address: 'ada.profile@example.test',
+      to_addresses: ['sender-a@example.test'],
+    }),
+    generatedContactMessage({
+      account_id: 1101,
+      anchor_email_id: 1402,
+      thread_id: 'generated-contact-ada-thread',
+      observed_at: '2026-08-30T15:57:00.000Z',
+      is_sent: true,
+      from_name: 'Generated Sender A',
+      from_address: 'sender-a@example.test',
+      to_addresses: ['Ada Lovelace <ada.profile@example.test>'],
+    }),
+    generatedContactMessage({
+      account_id: 1101,
+      anchor_email_id: 1403,
+      thread_id: 'generated-contact-outbound-thread',
+      observed_at: '2026-08-29T14:00:00.000Z',
+      is_sent: true,
+      from_name: 'Generated Sender A',
+      from_address: 'sender-a@example.test',
+      to_addresses: [{ name: 'Generated Outbound', address: 'outbound-only@example.test' }],
+    }),
+    generatedContactMessage({
+      account_id: 1101,
+      anchor_email_id: 1404,
+      thread_id: 'generated-contact-inbound-thread',
+      observed_at: '2026-08-28T13:00:00.000Z',
+      is_sent: false,
+      from_name: 'Generated Inbound',
+      from_address: 'inbound-only@example.test',
+      to_addresses: ['sender-a@example.test'],
+    }),
+    generatedContactMessage({
+      account_id: 1101,
+      anchor_email_id: 1405,
+      thread_id: 'generated-contact-shared-primary',
+      observed_at: '2026-08-27T12:00:00.000Z',
+      is_sent: true,
+      from_name: 'Generated Sender A',
+      from_address: 'sender-a@example.test',
+      cc_addresses: [{ name: 'Shared Primary Relationship', address: 'shared@example.test' }],
+    }),
+    generatedContactMessage({
+      account_id: 1102,
+      anchor_email_id: 1501,
+      thread_id: 'generated-contact-shared-alternate',
+      observed_at: '2026-08-30T12:00:00.000Z',
+      is_sent: false,
+      from_name: 'Shared Alternate Relationship',
+      from_address: 'shared@example.test',
+      to_addresses: ['alternate-a@example.test'],
+    }),
+    generatedContactMessage({
+      account_id: 1102,
+      anchor_email_id: 1502,
+      thread_id: null,
+      observed_at: '2026-08-26T12:00:00.000Z',
+      is_sent: true,
+      from_name: 'Generated Alternate A',
+      from_address: 'alternate-a@example.test',
+      to_addresses: [{ name: 'Alternate Account Only', address: 'alternate-profile@example.test' }],
+    }),
+    generatedContactMessage({
+      account_id: 1101,
+      anchor_email_id: 1491,
+      thread_id: 'generated-contact-bcc-exclusion',
+      observed_at: '2026-08-31T00:00:00.000Z',
+      is_sent: true,
+      from_name: 'Generated Sender A',
+      from_address: 'sender-a@example.test',
+      bcc_addresses: [{ name: 'Hidden Contact Sentinel', address: 'bcc-only@example.test' }],
+    }),
+    generatedContactMessage({
+      account_id: 1101,
+      anchor_email_id: 1492,
+      thread_id: 'generated-contact-self-exclusion',
+      observed_at: '2026-08-31T00:01:00.000Z',
+      is_sent: true,
+      from_name: 'Generated Sender A',
+      from_address: 'sender-a@example.test',
+      to_addresses: ['alternate-a@example.test', 'sender-a@example.test'],
+    }),
+    generatedContactMessage({
+      account_id: 1101,
+      anchor_email_id: 1493,
+      thread_id: 'generated-contact-draft-exclusion',
+      observed_at: '2026-08-31T00:02:00.000Z',
+      is_sent: false,
+      is_draft: true,
+      from_name: 'Draft Contact Sentinel',
+      from_address: 'draft-only@example.test',
+      to_addresses: ['sender-a@example.test'],
+    }),
+    generatedContactMessage({
+      account_id: 1101,
+      anchor_email_id: 1494,
+      thread_id: 'generated-contact-spam-exclusion',
+      observed_at: '2026-08-31T00:03:00.000Z',
+      is_sent: false,
+      is_spam: true,
+      from_name: 'Spam Contact Sentinel',
+      from_address: 'spam-only@example.test',
+      to_addresses: ['sender-a@example.test'],
+    }),
+    generatedContactMessage({
+      account_id: 1101,
+      anchor_email_id: 1495,
+      thread_id: 'generated-contact-trash-exclusion',
+      observed_at: '2026-08-31T00:04:00.000Z',
+      is_sent: false,
+      is_trash: true,
+      from_name: 'Trash Contact Sentinel',
+      from_address: 'trash-only@example.test',
+      to_addresses: ['sender-a@example.test'],
+    }),
+  ]),
+  9102: Object.freeze([
+    generatedContactMessage({
+      account_id: 1201,
+      anchor_email_id: 1601,
+      thread_id: 'generated-contact-user-b-shared',
+      observed_at: '2026-08-30T15:58:00.000Z',
+      is_sent: false,
+      from_name: 'User B Private Shared',
+      from_address: 'shared@example.test',
+      to_addresses: ['sender-b@example.test'],
+    }),
+    generatedContactMessage({
+      account_id: 1201,
+      anchor_email_id: 1602,
+      thread_id: 'generated-contact-user-b-shared',
+      observed_at: '2026-08-29T15:58:00.000Z',
+      is_sent: true,
+      from_name: 'Generated Sender B',
+      from_address: 'sender-b@example.test',
+      to_addresses: [{ name: 'User B Private Shared', address: 'shared@example.test' }],
+    }),
+    generatedContactMessage({
+      account_id: 1201,
+      anchor_email_id: 1603,
+      thread_id: 'generated-contact-user-b-only',
+      observed_at: '2026-08-28T15:58:00.000Z',
+      is_sent: false,
+      from_name: 'User B Private Contact',
+      from_address: 'user-b-contact@example.test',
+      to_addresses: ['sender-b@example.test'],
+    }),
+  ]),
+});
+
 const SEEDED_SNIPPETS_BY_USER = Object.freeze({
   9101: Object.freeze([
     Object.freeze({
@@ -430,6 +622,226 @@ function generatedRecipientSuggestions(userId, accountId, query, limit) {
     }));
 }
 
+const CONTACT_RELATIONSHIPS = new Set([
+  'all',
+  'bidirectional',
+  'inbound_only',
+  'outbound_only',
+]);
+const CONTACT_ROW_LIMIT = 4_000;
+const CONTACT_ALLOWED_ROUTES = Object.freeze([
+  'POST /api/contacts/query',
+  'POST /api/contacts/profile',
+]);
+
+function generatedContactKey(userId, accountId, address) {
+  return sha256({
+    fixture: 'generated-contact-profile:v1',
+    user_id: userId,
+    account_id: accountId,
+    address,
+  });
+}
+
+function generatedContactDirection(received, sent) {
+  if (received && sent) return 'bidirectional';
+  return sent ? 'outbound_only' : 'inbound_only';
+}
+
+function generatedContactProjection(userId, accountId) {
+  const ownedAddresses = new Set(
+    (ACCOUNTS_BY_USER[userId] || []).map(account => account.email.toLowerCase()),
+  );
+  const rows = (CONTACT_HISTORY_BY_USER[userId] || [])
+    .filter(row => row.account_id === accountId)
+    .filter(row => !row.is_draft && !row.is_spam && !row.is_trash)
+    .sort((left, right) => (
+      Date.parse(right.observed_at) - Date.parse(left.observed_at)
+      || right.anchor_email_id - left.anchor_email_id
+    ))
+    .slice(0, CONTACT_ROW_LIMIT);
+  const contacts = new Map();
+
+  for (const row of rows) {
+    const observedAtMs = Date.parse(row.observed_at);
+    const candidates = row.is_sent
+      ? [
+          ...(Array.isArray(row.to_addresses) ? row.to_addresses : []),
+          ...(Array.isArray(row.cc_addresses) ? row.cc_addresses : []),
+        ]
+      : [{ name: row.from_name, address: row.from_address }];
+    const seenOnMessage = new Set();
+    for (const candidate of candidates) {
+      const mailbox = generatedMailbox(candidate);
+      if (
+        !mailbox
+        || ownedAddresses.has(mailbox.address)
+        || seenOnMessage.has(mailbox.address)
+      ) continue;
+      seenOnMessage.add(mailbox.address);
+
+      let contact = contacts.get(mailbox.address);
+      if (!contact) {
+        contact = {
+          account_id: accountId,
+          address: mailbox.address,
+          name: null,
+          name_seen_at_ms: Number.NEGATIVE_INFINITY,
+          observed_message_count: 0,
+          observed_received_count: 0,
+          observed_sent_count: 0,
+          observed_first_at_ms: observedAtMs,
+          observed_last_at_ms: observedAtMs,
+          observed_last_received_at_ms: null,
+          observed_last_sent_at_ms: null,
+          conversations: new Map(),
+        };
+        contacts.set(mailbox.address, contact);
+      }
+
+      contact.observed_message_count += 1;
+      contact.observed_first_at_ms = Math.min(contact.observed_first_at_ms, observedAtMs);
+      contact.observed_last_at_ms = Math.max(contact.observed_last_at_ms, observedAtMs);
+      if (row.is_sent) {
+        contact.observed_sent_count += 1;
+        contact.observed_last_sent_at_ms = Math.max(
+          contact.observed_last_sent_at_ms ?? Number.NEGATIVE_INFINITY,
+          observedAtMs,
+        );
+      } else {
+        contact.observed_received_count += 1;
+        contact.observed_last_received_at_ms = Math.max(
+          contact.observed_last_received_at_ms ?? Number.NEGATIVE_INFINITY,
+          observedAtMs,
+        );
+      }
+      if (
+        mailbox.name
+        && (
+          observedAtMs > contact.name_seen_at_ms
+          || (
+            observedAtMs === contact.name_seen_at_ms
+            && (!contact.name || mailbox.name.localeCompare(contact.name) < 0)
+          )
+        )
+      ) {
+        contact.name = mailbox.name;
+        contact.name_seen_at_ms = observedAtMs;
+      }
+
+      const conversationIdentity = row.thread_id
+        ? `thread:${row.thread_id}`
+        : `message:${row.anchor_email_id}`;
+      let conversation = contact.conversations.get(conversationIdentity);
+      if (!conversation) {
+        conversation = {
+          account_id: accountId,
+          anchor_email_id: row.anchor_email_id,
+          thread_id: row.thread_id,
+          observed_last_at_ms: observedAtMs,
+          observed_message_count: 0,
+          received: false,
+          sent: false,
+        };
+        contact.conversations.set(conversationIdentity, conversation);
+      } else if (
+        observedAtMs > conversation.observed_last_at_ms
+        || (
+          observedAtMs === conversation.observed_last_at_ms
+          && row.anchor_email_id > conversation.anchor_email_id
+        )
+      ) {
+        conversation.anchor_email_id = row.anchor_email_id;
+        conversation.observed_last_at_ms = observedAtMs;
+      }
+      conversation.observed_message_count += 1;
+      conversation.sent ||= row.is_sent;
+      conversation.received ||= !row.is_sent;
+    }
+  }
+
+  const summaries = [...contacts.values()].map(contact => ({
+    account_id: accountId,
+    contact_key: generatedContactKey(userId, accountId, contact.address),
+    name: contact.name,
+    address: contact.address,
+    formatted: formattedGeneratedMailbox(contact),
+    relationship: generatedContactDirection(
+      contact.observed_received_count > 0,
+      contact.observed_sent_count > 0,
+    ),
+    observed_message_count: contact.observed_message_count,
+    observed_received_count: contact.observed_received_count,
+    observed_sent_count: contact.observed_sent_count,
+    observed_conversation_count: contact.conversations.size,
+    observed_first_at: new Date(contact.observed_first_at_ms).toISOString(),
+    observed_last_at: new Date(contact.observed_last_at_ms).toISOString(),
+    observed_last_received_at: contact.observed_last_received_at_ms === null
+      ? null
+      : new Date(contact.observed_last_received_at_ms).toISOString(),
+    observed_last_sent_at: contact.observed_last_sent_at_ms === null
+      ? null
+      : new Date(contact.observed_last_sent_at_ms).toISOString(),
+  }));
+  const conversationsByKey = new Map(
+    [...contacts.values()].map(contact => [
+      generatedContactKey(userId, accountId, contact.address),
+      [...contact.conversations.values()]
+        .sort((left, right) => (
+          right.observed_last_at_ms - left.observed_last_at_ms
+          || right.anchor_email_id - left.anchor_email_id
+          || String(right.thread_id || '').localeCompare(String(left.thread_id || ''))
+        ))
+        .map(conversation => ({
+          account_id: accountId,
+          anchor_email_id: conversation.anchor_email_id,
+          thread_id: conversation.thread_id,
+          observed_last_at: new Date(conversation.observed_last_at_ms).toISOString(),
+          observed_message_count: conversation.observed_message_count,
+          direction: generatedContactDirection(conversation.received, conversation.sent),
+        })),
+    ]),
+  );
+  const observedDates = rows.map(row => Date.parse(row.observed_at));
+  return {
+    summaries,
+    conversations_by_key: conversationsByKey,
+    coverage: {
+      rows_scanned: rows.length,
+      row_limit: CONTACT_ROW_LIMIT,
+      history_may_be_truncated: rows.length >= CONTACT_ROW_LIMIT,
+      observed_oldest_at: observedDates.length
+        ? new Date(Math.min(...observedDates)).toISOString()
+        : null,
+      observed_newest_at: observedDates.length
+        ? new Date(Math.max(...observedDates)).toISOString()
+        : null,
+    },
+  };
+}
+
+function generatedContactQueryRank(contact, query) {
+  const needle = query.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+  if (!needle) return 0;
+  const name = String(contact.name || '').toLocaleLowerCase();
+  const address = contact.address.toLocaleLowerCase();
+  if (needle === name || needle === address) return 0;
+  if (
+    name.startsWith(needle)
+    || address.startsWith(needle)
+    || name.split(/[^a-z0-9@._+-]+/).some(token => token.startsWith(needle))
+  ) return 1;
+  if (name.includes(needle) || address.includes(needle)) return 2;
+  return null;
+}
+
+function hasOnlyKeys(value, allowedKeys) {
+  return value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && Object.keys(value).every(key => allowedKeys.has(key));
+}
+
 function clone(value) {
   return structuredClone(value);
 }
@@ -494,6 +906,20 @@ function newCounters() {
     recipient_lookup_held: 0,
     recipient_lookup_stale_session_responses: 0,
     recipient_lookup_account_rejections: 0,
+    contact_query_requests: 0,
+    contact_query_successes: 0,
+    contact_query_failures: 0,
+    contact_query_delays: 0,
+    contact_query_held: 0,
+    contact_query_stale_session_responses: 0,
+    contact_query_account_rejections: 0,
+    contact_profile_requests: 0,
+    contact_profile_successes: 0,
+    contact_profile_failures: 0,
+    contact_profile_delays: 0,
+    contact_profile_stale_session_responses: 0,
+    contact_profile_account_rejections: 0,
+    contact_profile_key_rejections: 0,
     follow_up_policy_reads: 0,
     follow_up_policy_writes: 0,
     follow_up_policy_conflicts: 0,
@@ -548,6 +974,7 @@ export function createGeneratedProviderDraftFixture({
   let firstLostResponseUsed = false;
   let firstHeldResponseUsed = false;
   let firstRecipientHeldResponseUsed = false;
+  let firstContactHeldResponseUsed = false;
   let firstSnippetHeldResponseUsed = false;
   const drafts = new Map();
   const outbounds = new Map();
@@ -1392,6 +1819,237 @@ export function createGeneratedProviderDraftFixture({
 
     counters.recipient_lookup_successes += 1;
     recordEvent('recipient_lookup_succeeded', request, pathname, eventMetadata);
+    return writeJson(response, payload);
+  }
+
+  async function handleContactQuery(request, response, pathname) {
+    const requestUserId = currentUser.id;
+    counters.contact_query_requests += 1;
+    let body;
+    try {
+      body = await readJson(request);
+    } catch (error) {
+      counters.rejected_payloads += 1;
+      counters.contact_query_failures += 1;
+      return writeError(response, 422, 'contact_query_invalid', error.message);
+    }
+    const allowedKeys = new Set(['account_id', 'query', 'relationship', 'page', 'page_size']);
+    const accountId = body?.account_id;
+    if (!hasOnlyKeys(body, allowedKeys)) {
+      counters.rejected_payloads += 1;
+      counters.contact_query_failures += 1;
+      return writeError(response, 422, 'contact_query_invalid', 'Contact query payload is invalid');
+    }
+    if (!Number.isSafeInteger(accountId) || !accountForUser(requestUserId, accountId)) {
+      counters.contact_query_account_rejections += 1;
+      recordEvent('contact_query_account_rejected', request, pathname, {
+        account_id: Number.isSafeInteger(accountId) ? accountId : null,
+        request_user_id: requestUserId,
+      });
+      return writeError(response, 404, 'contact_not_found', 'Generated contact not found');
+    }
+
+    const query = body.query === undefined ? '' : body.query;
+    const relationship = body.relationship === undefined ? 'all' : body.relationship;
+    const page = body.page === undefined ? 1 : body.page;
+    const pageSize = body.page_size === undefined ? 50 : body.page_size;
+    if (
+      typeof query !== 'string'
+      || query.length > 254
+      || /[\r\n\x00-\x1f\x7f]/.test(query)
+      || typeof relationship !== 'string'
+      || !CONTACT_RELATIONSHIPS.has(relationship)
+      || !Number.isSafeInteger(page)
+      || page < 1
+      || !Number.isSafeInteger(pageSize)
+      || pageSize < 1
+      || pageSize > 100
+    ) {
+      counters.rejected_payloads += 1;
+      counters.contact_query_failures += 1;
+      recordEvent('contact_query_rejected', request, pathname, {
+        account_id: accountId,
+        request_user_id: requestUserId,
+      });
+      return writeError(response, 422, 'contact_query_invalid', 'Contact query payload is invalid');
+    }
+    if (scenario === 'contact-fails') {
+      counters.contact_query_failures += 1;
+      recordEvent('contact_query_failed', request, pathname, {
+        account_id: accountId,
+        request_user_id: requestUserId,
+      });
+      return writeError(
+        response,
+        503,
+        'contact_query_unavailable',
+        'Generated contact query is temporarily unavailable',
+      );
+    }
+
+    const projection = generatedContactProjection(requestUserId, accountId);
+    const relationshipTier = {
+      bidirectional: 0,
+      outbound_only: 1,
+      inbound_only: 2,
+    };
+    const ranked = projection.summaries
+      .map(contact => ({ contact, rank: generatedContactQueryRank(contact, query) }))
+      .filter(({ contact, rank }) => (
+        rank !== null
+        && (relationship === 'all' || contact.relationship === relationship)
+      ))
+      .sort((left, right) => (
+        left.rank - right.rank
+        || relationshipTier[left.contact.relationship] - relationshipTier[right.contact.relationship]
+        || Date.parse(right.contact.observed_last_at) - Date.parse(left.contact.observed_last_at)
+        || right.contact.observed_message_count - left.contact.observed_message_count
+        || left.contact.address.localeCompare(right.contact.address)
+      ));
+    const total = ranked.length;
+    const totalPages = total ? Math.ceil(total / pageSize) : 0;
+    const start = (page - 1) * pageSize;
+    const payload = {
+      account_id: accountId,
+      page,
+      page_size: pageSize,
+      total,
+      total_pages: totalPages,
+      coverage: projection.coverage,
+      contacts: ranked.slice(start, start + pageSize).map(({ contact }) => contact),
+    };
+    const eventMetadata = {
+      account_id: accountId,
+      query_length: query.length,
+      relationship,
+      page,
+      page_size: pageSize,
+      request_user_id: requestUserId,
+      result_count: payload.contacts.length,
+      total,
+    };
+
+    if (scenario === 'contact-held-session' && !firstContactHeldResponseUsed) {
+      firstContactHeldResponseUsed = true;
+      counters.contact_query_delays += 1;
+      counters.contact_query_held += 1;
+      const held = {
+        kind: 'contact-query',
+        response,
+        request_user_id: requestUserId,
+        payload,
+        event_metadata: eventMetadata,
+      };
+      heldResponses.push(held);
+      request.on('close', () => {
+        const index = heldResponses.indexOf(held);
+        if (index >= 0) heldResponses.splice(index, 1);
+      });
+      recordEvent('contact_query_held', request, pathname, eventMetadata);
+      return;
+    }
+
+    if (scenario === 'contact-delay') {
+      counters.contact_query_delays += 1;
+      recordEvent('contact_query_delayed', request, pathname, eventMetadata);
+      await new Promise(resolve => setTimeout(resolve, 60));
+      if (currentUser?.id !== requestUserId) {
+        counters.contact_query_stale_session_responses += 1;
+      }
+    }
+
+    counters.contact_query_successes += 1;
+    recordEvent('contact_query_succeeded', request, pathname, eventMetadata);
+    return writeJson(response, payload);
+  }
+
+  async function handleContactProfile(request, response, pathname) {
+    const requestUserId = currentUser.id;
+    counters.contact_profile_requests += 1;
+    let body;
+    try {
+      body = await readJson(request);
+    } catch (error) {
+      counters.rejected_payloads += 1;
+      counters.contact_profile_failures += 1;
+      return writeError(response, 422, 'contact_profile_invalid', error.message);
+    }
+    const allowedKeys = new Set(['account_id', 'contact_key', 'recent_limit']);
+    const accountId = body?.account_id;
+    if (!hasOnlyKeys(body, allowedKeys)) {
+      counters.rejected_payloads += 1;
+      counters.contact_profile_failures += 1;
+      return writeError(response, 422, 'contact_profile_invalid', 'Contact profile payload is invalid');
+    }
+    if (!Number.isSafeInteger(accountId) || !accountForUser(requestUserId, accountId)) {
+      counters.contact_profile_account_rejections += 1;
+      recordEvent('contact_profile_account_rejected', request, pathname, {
+        account_id: Number.isSafeInteger(accountId) ? accountId : null,
+        request_user_id: requestUserId,
+      });
+      return writeError(response, 404, 'contact_not_found', 'Generated contact not found');
+    }
+    const contactKey = body.contact_key;
+    const recentLimit = body.recent_limit === undefined ? 8 : body.recent_limit;
+    if (
+      typeof contactKey !== 'string'
+      || !/^[0-9a-f]{64}$/.test(contactKey)
+      || !Number.isSafeInteger(recentLimit)
+      || recentLimit < 1
+      || recentLimit > 20
+    ) {
+      counters.rejected_payloads += 1;
+      counters.contact_profile_failures += 1;
+      return writeError(response, 422, 'contact_profile_invalid', 'Contact profile payload is invalid');
+    }
+
+    const projection = generatedContactProjection(requestUserId, accountId);
+    const contact = projection.summaries.find(item => item.contact_key === contactKey);
+    if (!contact) {
+      counters.contact_profile_key_rejections += 1;
+      recordEvent('contact_profile_key_rejected', request, pathname, {
+        account_id: accountId,
+        request_user_id: requestUserId,
+      });
+      return writeError(response, 404, 'contact_not_found', 'Generated contact not found');
+    }
+    if (scenario === 'contact-fails') {
+      counters.contact_profile_failures += 1;
+      recordEvent('contact_profile_failed', request, pathname, {
+        account_id: accountId,
+        request_user_id: requestUserId,
+      });
+      return writeError(
+        response,
+        503,
+        'contact_profile_unavailable',
+        'Generated contact profile is temporarily unavailable',
+      );
+    }
+
+    const payload = {
+      account_id: accountId,
+      contact,
+      recent_conversations: (projection.conversations_by_key.get(contactKey) || [])
+        .slice(0, recentLimit),
+    };
+    const eventMetadata = {
+      account_id: accountId,
+      request_user_id: requestUserId,
+      recent_limit: recentLimit,
+      recent_count: payload.recent_conversations.length,
+    };
+    if (scenario === 'contact-delay') {
+      counters.contact_profile_delays += 1;
+      recordEvent('contact_profile_delayed', request, pathname, eventMetadata);
+      await new Promise(resolve => setTimeout(resolve, 60));
+      if (currentUser?.id !== requestUserId) {
+        counters.contact_profile_stale_session_responses += 1;
+      }
+    }
+
+    counters.contact_profile_successes += 1;
+    recordEvent('contact_profile_succeeded', request, pathname, eventMetadata);
     return writeJson(response, payload);
   }
 
@@ -2352,6 +3010,7 @@ export function createGeneratedProviderDraftFixture({
       fixture: 'generated-provider-draft-sessions',
       fixture_domains: ['example.test'],
       localhost_only: true,
+      allowed_contact_routes: CONTACT_ALLOWED_ROUTES,
       scenario,
       connectivity,
       current_user_id: currentUser?.id || null,
@@ -2417,6 +3076,21 @@ export function createGeneratedProviderDraftFixture({
         writeJson(held.response, held.payload);
         continue;
       }
+      if (held.kind === 'contact-query') {
+        if (currentUser?.id !== held.request_user_id) {
+          counters.stale_session_responses_released += 1;
+          counters.contact_query_stale_session_responses += 1;
+        }
+        counters.contact_query_successes += 1;
+        recordEvent(
+          'contact_query_released',
+          request,
+          '/api/contacts/query',
+          held.event_metadata,
+        );
+        writeJson(held.response, held.payload);
+        continue;
+      }
       const record = drafts.get(logicalKey(held.request_user_id, held.client_draft_id));
       if (record) {
         record.state = 'synced';
@@ -2464,6 +3138,7 @@ export function createGeneratedProviderDraftFixture({
     firstLostResponseUsed = false;
     firstHeldResponseUsed = false;
     firstRecipientHeldResponseUsed = false;
+    firstContactHeldResponseUsed = false;
     firstSnippetHeldResponseUsed = false;
     drafts.clear();
     outbounds.clear();
@@ -2519,6 +3194,13 @@ export function createGeneratedProviderDraftFixture({
             records.length,
           ]),
         ),
+        contact_history_counts_by_user: Object.fromEntries(
+          Object.entries(CONTACT_HISTORY_BY_USER).map(([userId, records]) => [
+            userId,
+            records.length,
+          ]),
+        ),
+        allowed_contact_routes: CONTACT_ALLOWED_ROUTES,
         scenarios: GENERATED_PROVIDER_DRAFT_SCENARIOS,
       });
     }
@@ -2916,6 +3598,12 @@ export function createGeneratedProviderDraftFixture({
     }
     if (request.method === 'GET' && pathname === '/api/compose/recipients') {
       return handleRecipientSuggestions(request, response, pathname, url);
+    }
+    if (request.method === 'POST' && pathname === '/api/contacts/query') {
+      return handleContactQuery(request, response, pathname);
+    }
+    if (request.method === 'POST' && pathname === '/api/contacts/profile') {
+      return handleContactProfile(request, response, pathname);
     }
     if (request.method === 'GET' && pathname === '/api/compose/snippets') {
       return handleSnippetList(request, response, pathname);
