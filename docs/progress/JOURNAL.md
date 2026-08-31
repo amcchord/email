@@ -3,6 +3,61 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-31 — Goal-period release freeze and user-testing handoff
+
+### Scope
+
+Stop the recursive feature/audit cycle, preserve the exact shipped runtime,
+publish one authoritative release narrative for the full modern-client goal
+period, and pause for ordinary user testing.
+
+### Completed
+
+- Added
+  `GOAL_PERIOD_RELEASE_NOTES_2026-08-30_TO_2026-08-31.md`, covering the exact
+  source/runtime/schema boundaries, user-facing mail, writing, organization,
+  account, privacy, Calendar, and At a Glance changes; the complete milestone
+  index; schema evolution; verification; intentional limits; and a bounded
+  user-testing guide.
+- Changed `CURRENT.md` from feature selection to an explicit release freeze.
+  Terminal hardware qualification and OTA rollout remain paused and locked;
+  P2 polish is batched instead of triggering another broad validation loop.
+- Reconciled the terminal track's final bounded evidence without reopening its
+  loop: one attached E1001 and one E1002 each completed an exact signed legacy
+  candidate.15→candidate.16 update into `ota_1`, retained configuration, and
+  resumed schedule/render operation. Candidate.16 remains a feature-branch
+  build with a cancelled superseded CI run; follow-up lifecycle-classification
+  commit `e45f3d9` remains uninstalled and unreleased.
+- Reconciled the pre-closeout state before editing: local branch, GitHub
+  `main`, and the clean production checkout were exact at `ee48d59`; all seven
+  services were active and public health returned `ok`.
+
+### Verification
+
+- Documentation-bounded review checked Markdown links/paths, exact release and
+  migration identifiers, diff whitespace, and secret scope. No runtime,
+  dependency, schema, provider, mailbox, Calendar, or terminal code changed,
+  so broad backend/frontend/CI suites were intentionally not rerun.
+- The latest application gate remains 841 backend tests with 75 expected
+  skips, all 554 frontend tests, the 634-module build, generated browser
+  acceptance, and signed-in read-only production QA from the touch-first
+  release.
+
+### Production Actions
+
+- Fast-forwarded only the release documentation after confirming the runtime
+  diff was empty. No build, dependency install, migration, backup, service
+  restart/reload, provider operation, mail/Calendar mutation, or terminal
+  action was required.
+- Final postflight retained the exact application/runtime
+  `c7b9960653f48c0a7ab47f79a295d6fedd19695a`, Alembic
+  `c1d2e3f4a5b6 (head)`, active services, and public health `ok`.
+
+### Next
+
+Pause. Collect workflow-impacting user feedback, reproduce it once, and open
+one bounded follow-up release only after a coherent P0/P1 batch is defined.
+
 ## 2026-08-31 — Touch-first resilient Inbox triage
 
 ### Scope
