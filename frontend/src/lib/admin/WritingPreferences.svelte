@@ -37,6 +37,7 @@
   let dialog = $state(null);
   let nameInput = $state(null);
   let returnFocus = null;
+  let createSnippetId = null;
   let requestGeneration = 0;
 
   let filtered = $derived(rankPersonalSnippets(snippets, query));
@@ -74,6 +75,7 @@
   async function openEditor(snippet = null, event = null) {
     returnFocus = event?.currentTarget || document.activeElement;
     editing = snippet ? normalizeSnippet(snippet) : null;
+    createSnippetId = editing ? null : crypto.randomUUID();
     name = editing?.name || '';
     shortcut = editing?.shortcut || '';
     bodyHtml = editing?.body_html || '';
@@ -95,6 +97,7 @@
       return;
     }
     editorOpen = false;
+    createSnippetId = null;
     discardConfirm = false;
     deleteConfirm = false;
     await tick();
@@ -124,7 +127,7 @@
     saving = true;
     try {
       const payload = snippetEditorPayload({
-        snippetId: editing?.snippet_id || crypto.randomUUID(),
+        snippetId: editing?.snippet_id || createSnippetId,
         name,
         shortcut,
         bodyHtml,

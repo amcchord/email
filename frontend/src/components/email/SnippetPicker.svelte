@@ -94,9 +94,11 @@
   }
 
   function handleDialogKeydown(event) {
+    // The picker is the active keyboard context. Keep modifier shortcuts from
+    // reaching the underlying Compose/Reader/Flow surface while it is open.
+    event.stopPropagation();
     if (event.key === 'Escape') {
       event.preventDefault();
-      event.stopPropagation();
       void closePicker();
       return;
     }

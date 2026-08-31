@@ -21,7 +21,7 @@ test('one accessible picker owns loading, empty, error, keyboard, and narrow sta
   assert.match(picker, /role="listbox"/);
   assert.match(picker, /aria-activedescendant/);
   assert.match(picker, /event\.key === 'ArrowDown'/);
-  assert.match(picker, /event\.key === 'Escape'[\s\S]*event\.stopPropagation/);
+  assert.match(picker, /function handleDialogKeydown\(event\) \{\s*\/\/[\s\S]*event\.stopPropagation\(\)/);
   assert.match(picker, /Snippets could not be loaded|Snippets could not be loaded|Retry/);
   assert.match(picker, /@media \(max-width: 767px\)/);
   assert.match(picker, /Manage snippets/);
@@ -35,6 +35,9 @@ test('writing settings preserve dirty and destructive content behind confirmatio
   assert.match(manager, /Delete .*Existing drafts will keep their inserted text/s);
   assert.match(manager, /DeferredRichEditor/);
   assert.match(manager, /role="dialog"/);
+  assert.match(manager, /createSnippetId = editing \? null : crypto\.randomUUID\(\)/);
+  assert.match(manager, /snippetId: editing\?\.snippet_id \|\| createSnippetId/);
+  assert.doesNotMatch(manager, /snippetId: editing\?\.snippet_id \|\| crypto\.randomUUID\(\)/);
   assert.match(admin, /id: 'writing', label: 'Writing', adminOnly: false/);
   assert.match(admin, /activeTab === 'writing'[\s\S]*<WritingPreferences \/>/);
 });
