@@ -11,6 +11,7 @@ from alembic.script import ScriptDirectory
 from fastapi import FastAPI
 from pydantic import ValidationError
 
+import backend.routers.compose as compose_router
 import backend.routers.signatures as signature_router
 import backend.services.drafts as draft_module
 import backend.services.outbound_messages as outbound_module
@@ -23,7 +24,7 @@ from backend.models.signature import AccountSignature
 from backend.routers.auth import get_current_user
 from backend.schemas.email import ComposeDraftRequest, ComposeRequest, DraftSessionDetailResponse
 from backend.schemas.signature import AccountSignatureReplace
-from backend.services.drafts import draft_request_hash
+from backend.services.drafts import DraftValidationError, draft_request_hash
 from backend.services.drafts import _process_upsert, stage_draft_upsert
 from backend.services.outbound_messages import (
     _process_claimed_outbound,
@@ -34,6 +35,7 @@ from backend.services.signatures import (
     AccountSignatureView,
     SignatureConflict,
     SignatureNotFound,
+    SignatureRenderedMessageTooLarge,
     SignatureValidationError,
     _snapshot,
     list_account_signatures,
@@ -41,6 +43,7 @@ from backend.services.signatures import (
     replace_account_signature,
     sanitize_signature_html,
     valid_signature_snapshot,
+    with_signature_snapshot_applied,
 )
 
 
@@ -84,10 +87,18 @@ class _SignatureSession:
 
 
 class _AdmissionSession:
-    def __init__(self, *, account, signature=None, existing_outbound=None):
+    def __init__(
+        self,
+        *,
+        account,
+        signature=None,
+        existing_outbound=None,
+        existing_draft=None,
+    ):
         self.account = account
         self.signature = signature
         self.existing_outbound = existing_outbound
+        self.existing_draft = existing_draft
         self.added = []
         self.statements = []
         self.commit_count = 0
@@ -102,7 +113,9 @@ class _AdmissionSession:
             return _Result(scalar=self.signature)
         if entity is OutboundMessage:
             return _Result(scalar=self.existing_outbound)
-        if entity in {DraftSession, DraftMutation}:
+        if entity is DraftSession:
+            return _Result(scalar=self.existing_draft)
+        if entity is DraftMutation:
             return _Result(scalar=None)
         return _Result(scalar=None)
 
@@ -387,6 +400,37 @@ def test_snapshot_is_tamper_evident_and_renderer_preserves_authored_parts():
         signature_snapshot=suppressed,
     ) == ("Authored<br><br>Quote", "Authored\n\nQuote")
 
+    restored = with_signature_snapshot_applied(
+        suppressed,
+        account_id=41,
+        applied=True,
+    )
+    assert restored["policy_revision"] == suppressed["policy_revision"]
+    assert restored["body_html"] == suppressed["body_html"]
+    assert restored["content_hash"] != suppressed["content_hash"]
+    assert valid_signature_snapshot(restored, account_id=41) == restored
+    with pytest.raises(SignatureValidationError, match="usable frozen signature"):
+        with_signature_snapshot_applied(
+            _snapshot(account_id=41, signature=None, applied=False),
+            account_id=41,
+            applied=True,
+        )
+
+
+def test_renderer_enforces_combined_utf8_ceiling(monkeypatch):
+    import backend.services.signatures as signatures_module
+
+    monkeypatch.setattr(signatures_module, "MAX_RENDERED_MESSAGE_BYTES", 7)
+    with pytest.raises(SignatureRenderedMessageTooLarge, match="10 MiB"):
+        render_signature_bodies(
+            account_id=41,
+            body_html="four",
+            body_text="four",
+            quoted_html="",
+            quoted_text="",
+            signature_snapshot=None,
+        )
+
 
 def test_compose_contract_hashes_new_fields_and_preserves_legacy_hash_shape():
     common = {
@@ -585,6 +629,74 @@ async def test_outbound_worker_reuses_frozen_snapshot_without_live_lookup(monkey
 
 
 @pytest.mark.asyncio
+async def test_rendered_size_fails_before_draft_or_send_provider_contact(monkeypatch):
+    import backend.services.signatures as signatures_module
+
+    monkeypatch.setattr(signatures_module, "MAX_RENDERED_MESSAGE_BYTES", 7)
+    provider_calls = []
+    failures = []
+
+    class Gmail:
+        async def find_sent_message_by_rfc_message_id(self, *_args, **_kwargs):
+            provider_calls.append("find")
+            return None
+
+        async def send_email(self, **_kwargs):
+            provider_calls.append("send")
+            return "provider-message"
+
+        async def create_draft_resource(self, **_kwargs):
+            provider_calls.append("draft")
+            return {"id": "provider-draft"}
+
+        def get_refreshed_token(self):
+            return None
+
+    async def outbound_failed(**kwargs):
+        failures.append(("outbound", kwargs["disposition"].code))
+        return True
+
+    async def draft_failed(**kwargs):
+        failures.append(("draft", kwargs["disposition"].code))
+        return True
+
+    monkeypatch.setattr(outbound_module, "_record_preflight_failure", outbound_failed)
+    monkeypatch.setattr(draft_module, "_record_retry_or_failure", draft_failed)
+    payload = {
+        "to": ["recipient@example.test"],
+        "cc": [],
+        "bcc": [],
+        "subject": "",
+        "body_html": "four",
+        "body_text": "four",
+        "quoted_html": "",
+        "quoted_text": "",
+        "attachments": [],
+    }
+    outbound = SimpleNamespace(
+        id=7,
+        account_id=41,
+        lease_token=uuid4(),
+        rfc_message_id="<mail-too-large@example.test>",
+        provider_attempted_at=None,
+        payload=payload,
+    )
+    draft = SimpleNamespace(
+        account_id=41,
+        payload=payload,
+    )
+
+    await _process_claimed_outbound(outbound, gmail=Gmail())
+    await _process_upsert(draft, gmail=Gmail())
+
+    assert provider_calls == []
+    assert failures == [
+        ("outbound", "rendered_message_too_large"),
+        ("draft", "rendered_message_too_large"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_draft_admission_freezes_snapshot_without_materializing_authored_body(monkeypatch):
     signature = AccountSignature(
         account_id=41,
@@ -638,6 +750,130 @@ async def test_draft_admission_freezes_snapshot_without_materializing_authored_b
     assert draft.payload["quoted_html"] == "<blockquote>Quote</blockquote>"
     assert draft.payload["signature_snapshot"]["policy_revision"] == 3
     assert draft.payload["signature_snapshot"]["applied"] is True
+    acknowledgement = compose_router._draft_response(draft, include_signature=True)
+    assert acknowledgement.signature_snapshot is not None
+    assert acknowledgement.signature_snapshot.policy_revision == 3
+    assert compose_router._draft_response(draft).signature_snapshot is None
+
+
+@pytest.mark.asyncio
+async def test_existing_draft_mode_toggles_only_the_frozen_revision(monkeypatch):
+    frozen_signature = AccountSignature(
+        account_id=41,
+        enabled=True,
+        include_on_new=True,
+        include_on_replies=True,
+        include_on_forwards=True,
+        body_html="<p>Frozen revision four</p>",
+        body_text="Frozen revision four",
+        revision=4,
+        sanitizer_version=1,
+    )
+    frozen = _snapshot(account_id=41, signature=frozen_signature, applied=True)
+    draft = DraftSession(
+        id=81,
+        client_draft_id=uuid4(),
+        user_id=17,
+        account_id=41,
+        source_email_id=None,
+        source_email_id_snapshot=None,
+        source_gmail_thread_id=None,
+        source_message_id_header=None,
+        source_references_header=None,
+        revision=1,
+        synced_revision=1,
+        payload_hash="a" * 64,
+        payload={
+            "account_id": 41,
+            "to": ["recipient@example.test"],
+            "cc": [],
+            "bcc": [],
+            "subject": "",
+            "body_html": "<p>Authored</p>",
+            "body_text": "Authored",
+            "quoted_html": "",
+            "quoted_text": "",
+            "composition_kind": "new",
+            "signature_mode": "default",
+            "signature_snapshot": frozen,
+        },
+        attachment_count=0,
+        attachment_bytes=0,
+        rfc_message_id="<draft-frozen@example.test>",
+        provider_draft_id="provider-draft",
+        provider_message_id="provider-message",
+        provider_create_attempted_at=None,
+        state="synced",
+        next_attempt_at=None,
+        attempt_count=0,
+        max_attempts=8,
+        reconcile_count=0,
+    )
+    live_signature = AccountSignature(
+        account_id=41,
+        enabled=True,
+        include_on_new=True,
+        include_on_replies=True,
+        include_on_forwards=True,
+        body_html="<p>Live revision five</p>",
+        body_text="Live revision five",
+        revision=5,
+        sanitizer_version=1,
+    )
+    db = _AdmissionSession(
+        account=_account(),
+        signature=live_signature,
+        existing_draft=draft,
+    )
+
+    async def no_op(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(draft_module, "_enforce_quotas", no_op)
+    monkeypatch.setattr(draft_module, "_trim_mutation_receipts", no_op)
+    monkeypatch.setattr(draft_module, "_publish_draft_event", no_op)
+
+    def request(*, revision, mode, kind="new"):
+        return ComposeDraftRequest(
+            account_id=41,
+            to=["recipient@example.test"],
+            body_html="<p>Authored</p>",
+            body_text="Authored",
+            composition_kind=kind,
+            signature_mode=mode,
+            client_draft_id=draft.client_draft_id,
+            revision=revision,
+            mutation_id=uuid4(),
+        )
+
+    disabled, _created = await stage_draft_upsert(
+        db,
+        user_id=17,
+        request=request(revision=2, mode="disabled"),
+    )
+    assert disabled.payload["signature_snapshot"]["applied"] is False
+    assert disabled.payload["signature_snapshot"]["policy_revision"] == 4
+    assert disabled.payload["signature_snapshot"]["body_text"] == "Frozen revision four"
+
+    restored, _created = await stage_draft_upsert(
+        db,
+        user_id=17,
+        request=request(revision=3, mode="enabled"),
+    )
+    assert restored.payload["signature_snapshot"] == frozen
+    assert restored.payload["signature_snapshot"]["policy_revision"] == 4
+    assert not any(
+        getattr(statement, "column_descriptions", [{}])[0].get("entity") is AccountSignature
+        for statement in db.statements
+        if getattr(statement, "column_descriptions", None)
+    )
+
+    with pytest.raises(DraftValidationError, match="cannot change composition kind"):
+        await stage_draft_upsert(
+            db,
+            user_id=17,
+            request=request(revision=4, mode="enabled", kind="forward"),
+        )
 
 
 @pytest.mark.asyncio

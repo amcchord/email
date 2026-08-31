@@ -493,6 +493,7 @@ class DraftSessionResponse(BaseModel):
     error_message: Optional[str] = None
     attachment_count: int = 0
     attachment_bytes: int = 0
+    signature_snapshot: Optional[SignatureSnapshotResponse] = None
     created_at: datetime
     updated_at: datetime
     synced_at: Optional[datetime] = None
@@ -510,7 +511,6 @@ class DraftSessionDetailResponse(DraftSessionResponse):
     quoted_text: str = ""
     composition_kind: Literal["new", "reply", "forward"] = "new"
     signature_mode: Literal["default", "enabled", "disabled"] = "default"
-    signature_snapshot: Optional[SignatureSnapshotResponse] = None
     in_reply_to: Optional[str] = None
     references: Optional[str] = None
     thread_id: Optional[str] = None

@@ -134,7 +134,12 @@ def _raise_outbound_http_error(error: Exception) -> None:
     raise error
 
 
-def _draft_response(draft: DraftSession) -> DraftSessionResponse:
+def _draft_response(
+    draft: DraftSession,
+    *,
+    include_signature: bool = False,
+) -> DraftSessionResponse:
+    payload = draft.payload if isinstance(draft.payload, dict) else {}
     return DraftSessionResponse(
         client_draft_id=draft.client_draft_id,
         account_id=draft.account_id,
@@ -152,6 +157,9 @@ def _draft_response(draft: DraftSession) -> DraftSessionResponse:
         error_message=draft.error_message,
         attachment_count=draft.attachment_count,
         attachment_bytes=draft.attachment_bytes,
+        signature_snapshot=(
+            payload.get("signature_snapshot") if include_signature else None
+        ),
         created_at=draft.created_at,
         updated_at=draft.updated_at,
         synced_at=draft.synced_at,
@@ -160,7 +168,7 @@ def _draft_response(draft: DraftSession) -> DraftSessionResponse:
 
 
 def _draft_detail_response(draft: DraftSession) -> DraftSessionDetailResponse:
-    metadata = _draft_response(draft).model_dump()
+    metadata = _draft_response(draft, include_signature=True).model_dump()
     payload = draft.payload if isinstance(draft.payload, dict) else {}
     attachments = [
         DraftAttachmentDetail(
@@ -185,7 +193,6 @@ def _draft_detail_response(draft: DraftSession) -> DraftSessionDetailResponse:
         quoted_text=str(payload.get("quoted_text") or ""),
         composition_kind=payload.get("composition_kind", "new"),
         signature_mode=payload.get("signature_mode", "default"),
-        signature_snapshot=payload.get("signature_snapshot"),
         in_reply_to=payload.get("in_reply_to"),
         references=payload.get("references"),
         thread_id=payload.get("thread_id"),
@@ -409,7 +416,7 @@ async def save_draft(
         _raise_draft_http_error(error)
     if created or draft.state in {"pending", "reconciling"}:
         background_tasks.add_task(try_enqueue_draft_drain)
-    return _draft_response(draft)
+    return _draft_response(draft, include_signature=True)
 
 
 @router.get("/drafts/recent", response_model=list[DraftSessionResponse])

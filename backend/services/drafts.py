@@ -513,25 +513,35 @@ async def _stage_draft_upsert(
     if existing_snapshot is not None:
         from backend.services.signatures import (
             SignatureValidationError,
-            resolve_signature_snapshot,
             valid_signature_snapshot,
+            with_signature_snapshot_applied,
         )
 
         validated = valid_signature_snapshot(existing_snapshot, account_id=account.id)
         if validated is None:
             raise DraftValidationError("Draft signature snapshot is invalid")
-        if (
-            existing_payload.get("signature_mode") == payload.get("signature_mode")
-            and existing_payload.get("composition_kind") == payload.get("composition_kind")
-        ):
+        if existing_payload.get("composition_kind") != request.composition_kind:
+            raise DraftValidationError(
+                "A signature-aware draft cannot change composition kind"
+            )
+        existing_mode = existing_payload.get("signature_mode", "default")
+        if existing_mode == request.signature_mode or request.signature_mode == "default":
             signature_snapshot = validated
+        elif request.signature_mode == "disabled":
+            try:
+                signature_snapshot = with_signature_snapshot_applied(
+                    validated,
+                    account_id=account.id,
+                    applied=False,
+                )
+            except SignatureValidationError as error:
+                raise DraftValidationError(str(error)) from error
         else:
             try:
-                signature_snapshot = await resolve_signature_snapshot(
-                    db,
+                signature_snapshot = with_signature_snapshot_applied(
+                    validated,
                     account_id=account.id,
-                    composition_kind=request.composition_kind,
-                    signature_mode=request.signature_mode,
+                    applied=True,
                 )
             except SignatureValidationError as error:
                 raise DraftValidationError(str(error)) from error
@@ -1538,7 +1548,11 @@ async def _process_upsert(draft: DraftSession, *, gmail: GmailService) -> None:
             now=utcnow(),
         )
         return
-    from backend.services.signatures import SignatureValidationError, render_signature_bodies
+    from backend.services.signatures import (
+        SignatureRenderedMessageTooLarge,
+        SignatureValidationError,
+        render_signature_bodies,
+    )
 
     try:
         body_html, body_text = render_signature_bodies(
@@ -1549,6 +1563,17 @@ async def _process_upsert(draft: DraftSession, *, gmail: GmailService) -> None:
             quoted_text=str(payload.get("quoted_text") or ""),
             signature_snapshot=payload.get("signature_snapshot"),
         )
+    except SignatureRenderedMessageTooLarge:
+        await _record_retry_or_failure(
+            claimed=draft,
+            disposition=DraftErrorDisposition(
+                False,
+                "rendered_message_too_large",
+                "Rendered draft content is too large",
+            ),
+            now=utcnow(),
+        )
+        return
     except SignatureValidationError:
         await _record_retry_or_failure(
             claimed=draft,

@@ -1323,6 +1323,64 @@ async def _process_claimed_outbound(
     lease_token = outbound.lease_token
     if lease_token is None:
         return
+
+    payload = outbound.payload
+    body_html = ""
+    body_text = ""
+    if outbound.provider_attempted_at is None:
+        if not isinstance(payload, dict):
+            await _record_preflight_failure(
+                outbound_id=outbound.id,
+                lease_token=lease_token,
+                disposition=OutboundErrorDisposition(
+                    False,
+                    "payload_missing",
+                    "Send content is unavailable",
+                ),
+                now=utcnow(),
+            )
+            return
+
+        from backend.services.signatures import (
+            SignatureRenderedMessageTooLarge,
+            SignatureValidationError,
+            render_signature_bodies,
+        )
+
+        try:
+            body_html, body_text = render_signature_bodies(
+                account_id=outbound.account_id,
+                body_html=str(payload.get("body_html") or ""),
+                body_text=str(payload.get("body_text") or ""),
+                quoted_html=str(payload.get("quoted_html") or ""),
+                quoted_text=str(payload.get("quoted_text") or ""),
+                signature_snapshot=payload.get("signature_snapshot"),
+            )
+        except SignatureRenderedMessageTooLarge:
+            await _record_preflight_failure(
+                outbound_id=outbound.id,
+                lease_token=lease_token,
+                disposition=OutboundErrorDisposition(
+                    False,
+                    "rendered_message_too_large",
+                    "Rendered send content is too large",
+                ),
+                now=utcnow(),
+            )
+            return
+        except SignatureValidationError:
+            await _record_preflight_failure(
+                outbound_id=outbound.id,
+                lease_token=lease_token,
+                disposition=OutboundErrorDisposition(
+                    False,
+                    "signature_snapshot_invalid",
+                    "Send signature data is invalid",
+                ),
+                now=utcnow(),
+            )
+            return
+
     try:
         provider_message_id = await gmail.find_sent_message_by_rfc_message_id(
             outbound.rfc_message_id,
@@ -1371,39 +1429,7 @@ async def _process_claimed_outbound(
         )
         return
 
-    payload = outbound.payload
-    if not isinstance(payload, dict):
-        await _record_preflight_failure(
-            outbound_id=outbound.id,
-            lease_token=lease_token,
-            disposition=OutboundErrorDisposition(False, "payload_missing", "Send content is unavailable"),
-            now=utcnow(),
-        )
-        return
-
-    from backend.services.signatures import SignatureValidationError, render_signature_bodies
-
-    try:
-        body_html, body_text = render_signature_bodies(
-            account_id=outbound.account_id,
-            body_html=str(payload.get("body_html") or ""),
-            body_text=str(payload.get("body_text") or ""),
-            quoted_html=str(payload.get("quoted_html") or ""),
-            quoted_text=str(payload.get("quoted_text") or ""),
-            signature_snapshot=payload.get("signature_snapshot"),
-        )
-    except SignatureValidationError:
-        await _record_preflight_failure(
-            outbound_id=outbound.id,
-            lease_token=lease_token,
-            disposition=OutboundErrorDisposition(
-                False,
-                "signature_snapshot_invalid",
-                "Send signature data is invalid",
-            ),
-            now=utcnow(),
-        )
-        return
+    assert isinstance(payload, dict)
 
     attempted_at = utcnow()
     if not await _mark_provider_attempt_started(

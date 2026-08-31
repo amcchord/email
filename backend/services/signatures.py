@@ -17,6 +17,7 @@ from backend.schemas.signature import AccountSignatureReplace
 
 
 SIGNATURE_SANITIZER_VERSION = 1
+MAX_RENDERED_MESSAGE_BYTES = 10 * 1024 * 1024
 SIGNATURE_HTML_TAGS = {
     "a",
     "b",
@@ -52,6 +53,10 @@ class SignatureConflict(SignatureError):
 
 
 class SignatureValidationError(SignatureError):
+    pass
+
+
+class SignatureRenderedMessageTooLarge(SignatureValidationError):
     pass
 
 
@@ -319,6 +324,28 @@ def valid_signature_snapshot(snapshot: object, *, account_id: int) -> dict | Non
     return dict(snapshot)
 
 
+def with_signature_snapshot_applied(
+    snapshot: object,
+    *,
+    account_id: int,
+    applied: bool,
+) -> dict:
+    """Toggle only application state while preserving frozen signature content."""
+    if type(applied) is not bool:
+        raise SignatureValidationError("Signature snapshot application state is invalid")
+    validated = valid_signature_snapshot(snapshot, account_id=account_id)
+    if validated is None:
+        raise SignatureValidationError("Signature snapshot is invalid")
+    if applied and (not validated["body_html"] or not validated["body_text"]):
+        raise SignatureValidationError("The draft does not contain a usable frozen signature")
+    if validated["applied"] == applied:
+        return validated
+    updated = {**validated, "applied": applied}
+    unhashed = {key: value for key, value in updated.items() if key != "content_hash"}
+    updated["content_hash"] = signature_snapshot_hash(unhashed)
+    return updated
+
+
 def render_signature_bodies(
     *,
     account_id: int,
@@ -339,4 +366,8 @@ def render_signature_bodies(
     signature_text = snapshot["body_text"] if snapshot and snapshot["applied"] else ""
     html = "<br><br>".join(part for part in (body_html, signature_html, quoted_html) if part)
     text = "\n\n".join(part for part in (body_text, signature_text, quoted_text) if part)
+    if len(html.encode("utf-8")) + len(text.encode("utf-8")) > MAX_RENDERED_MESSAGE_BYTES:
+        raise SignatureRenderedMessageTooLarge(
+            "Rendered message content exceeds the 10 MiB provider limit"
+        )
     return html, text
