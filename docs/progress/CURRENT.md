@@ -4,10 +4,11 @@ Last updated: 2026-08-31
 
 ## Active Objective
 
-Operate the newly deployed user-trainable Focused/Other rules without weakening
-the deterministic split, exact counts, or account ownership, and select the
-next bounded modern-client workflow gap from observed use rather than reopening
-the finished release for minor polish. Keep Share Availability as an explicit
+Operate the newly deployed touch-first Inbox triage and user-trainable
+Focused/Other rules without weakening durable mail actions, deterministic
+splits, exact counts, or account ownership. Select the next bounded
+modern-client workflow gap from observed use rather than reopening finished
+releases for minor polish. Keep Share Availability as an explicit
 truthful synchronized snapshot rather than a hold, event, booking link, or
 claim of live availability. Keep the deployed Attachments, Saved Views, first-class
 Contacts, writing, Universal Send
@@ -20,6 +21,14 @@ write gate.
 
 ## Baseline
 
+- The deployed touch-first Inbox triage application/runtime is
+  `c7b9960653f48c0a7ab47f79a295d6fedd19695a`. Ordinary authoritative Inbox
+  conversation rows now support strict preference-driven primary-touch
+  Archive/Snooze/read/star/no-action gestures, visible mobile alternatives,
+  and one session-local dataset-scoped selection model across list/table
+  rendering, refreshes, keyboard commands, and an accessible bulk bar. Swipe
+  actions reuse existing durable action/Undo paths; Snooze remains zero-write
+  until an explicit time. No real-mail QA mutation or migration was added.
 - The deployed user-trainable Focused/Other application/runtime is
   `060d4bca9db4b18ac4926679d2bbafe3f7b16736`. Split Inbox now supports explicit
   exact-account conversation, sender, and exact-domain corrections with visible
@@ -171,8 +180,8 @@ write gate.
   backfill or provider mutation. Existing Saved View, signature, follow-up,
   attachment, and OTA state is unchanged.
 - All seven checked production services are active, public health is `ok`, and
-  replacement API PID 2184456 has zero automatic restarts and no warning-or-
-  higher entries after becoming active at 19:26:06 UTC. Production has no
+  replacement API PID 2188272 has zero automatic restarts and no warning-or-
+  higher entries after becoming active at 20:41:38 UTC. Production has no
   secure-enrollment or OTA enablement, online key, approved catalog, qualified
   release/model pair, nonzero rollout, or device update offer.
 - Private firmware `main` is exact at candidate.9
@@ -193,6 +202,28 @@ write gate.
 
 This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
+
+## Recent Touch-first Inbox Triage Release
+
+- Cross-device swipe settings default to left Archive and right Snooze and
+  allow only Archive, Snooze, Toggle read, Toggle star, or No action. The
+  controller accepts only primary touch/coarse-pointer horizontal intent on an
+  authoritative ordinary Inbox dataset; protected mailboxes and every stale,
+  cancelled, short, vertical, multi-touch, or interactive-target path are
+  zero-write.
+- List and table views share one parent-owned session-local selection model,
+  Shift ranges, Select loaded, Clear, `X`, long press, visible 44-pixel row
+  actions, and a sticky responsive bulk surface. Account/mailbox/session
+  changes clear selection and authoritative refreshes prune vanished rows.
+- The single consolidated gate passed 841 backend tests with 75 expected skips,
+  554 frontend tests, and the 634-module build. Generated-only browser QA at
+  desktop and 390×844 recorded one preference write, zero mail/Snooze writes,
+  zero external capabilities, and no browser errors. Signed-in production QA
+  remained read-only.
+- GitHub and production runtime are exact at
+  `c7b9960653f48c0a7ab47f79a295d6fedd19695a`; Alembic remains
+  `c1d2e3f4a5b6 (head)`. Full evidence is in
+  `TOUCH_FIRST_TRIAGE_RELEASE_2026-08-31.md`.
 
 ## Active Work Items
 

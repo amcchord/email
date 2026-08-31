@@ -1045,3 +1045,29 @@ add a new entry that explicitly supersedes the old one.
   inspectable, and conflict or session ambiguity fails closed. Wildcards,
   cross-account rules, arbitrary selector entry, provider training, and AI
   policy changes require a separately reviewed contract.
+
+## D-052 — Touch triage is preference-authoritative and reuses durable actions
+
+- Date: 2026-08-31
+- Status: accepted
+- Decision: Limit horizontal swipe handling to primary touch/coarse-pointer
+  interactions on authoritative ordinary Inbox conversation rows. Resolve each
+  direction from strict cross-device preferences and allow only Archive,
+  Snooze, Toggle read, Toggle star, or No action. Route committed actions
+  through the existing durable mail-action and Undo path; opening Snooze is
+  zero-write until an explicit return time is selected. Keep multi-selection
+  session-local, dataset-scoped, and parent-owned so list/table rendering and
+  same-dataset refreshes cannot create competing selection truth.
+- Reason: Fast triage is valuable on touch devices, but a gesture is easier to
+  trigger accidentally than a labeled control. Allowing Trash, Spam, Move, a
+  stale dataset, failed preference hydration, or duplicated component-local
+  selection would turn a convenience into an unbounded mail mutation or a
+  misleading bulk target.
+- Consequence: Vertical intent, short drags, cancellation, multi-touch,
+  interactive descendants, stale generations, protected mailboxes, and failed
+  preference reads perform no gesture write. A visible action button,
+  checkboxes, keyboard commands, and the sticky accessible bulk bar remain
+  equivalent non-gesture paths. Selection clears across account, mailbox, and
+  session boundaries and prunes rows that disappear from the authoritative
+  result set. Additional swipe actions or persistent selection require a new
+  safety and ownership review rather than widening this contract in place.
