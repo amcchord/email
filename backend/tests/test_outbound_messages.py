@@ -208,6 +208,54 @@ def test_scheduled_send_metadata_and_actionability_are_deadline_bound():
     assert "ck_outbound_messages_retry_expiry" in constraint_names
 
 
+@pytest.mark.asyncio
+async def test_post_send_archive_stages_owned_conversation_and_tolerates_deleted_source(monkeypatch):
+    import backend.services.mail_actions as mail_actions_module
+
+    captured = []
+    enqueues = 0
+
+    class SessionContext:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    async def stage(_db, **kwargs):
+        captured.append(kwargs)
+        if len(captured) == 2:
+            raise mail_actions_module.MailActionNotFound("generated source was synced away")
+        return [object()], True
+
+    async def enqueue():
+        nonlocal enqueues
+        enqueues += 1
+
+    monkeypatch.setattr(outbound_module, "async_session", SessionContext)
+    monkeypatch.setattr(mail_actions_module, "stage_mail_actions", stage)
+    monkeypatch.setattr(mail_actions_module, "try_enqueue_mail_action_drain", enqueue)
+
+    outbound = _outbound(payload={
+        "archive_source_after_send": True,
+        "source_email_id": 81,
+    })
+    assert await outbound_module._ensure_post_send_archive(outbound) is True
+    assert captured[0]["email_ids"] == [81]
+    assert captured[0]["scope"] == "conversations"
+    assert captured[0]["action"] == "archive"
+    assert enqueues == 1
+
+    # Gmail history can delete the FK source between admission and delivery.
+    # The retained immutable identifier reaches MailActionNotFound, which is a
+    # successful no-op instead of trapping a delivered send in reconciliation.
+    outbound.source_email_id = None
+    assert await outbound_module._ensure_post_send_archive(outbound) is True
+    assert captured[1]["email_ids"] == [81]
+    assert captured[1]["scope"] == "conversations"
+    assert enqueues == 1
+
+
 def test_outbound_migration_is_immediate_post_c0_head():
     config = Config()
     config.set_main_option("script_location", "alembic")

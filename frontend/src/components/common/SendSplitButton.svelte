@@ -61,11 +61,17 @@
   }
 
   function handleCancel(event) {
-    if (submitting) {
-      event.preventDefault();
-      return;
-    }
-    restoreOptionsFocus = true;
+    event.preventDefault();
+    event.stopPropagation();
+    if (submitting) return;
+    closeOptions();
+  }
+
+  function handleDialogKeydown(event) {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!submitting) closeOptions();
   }
 
   async function chooseArchive() {
@@ -144,6 +150,7 @@
   aria-labelledby="send-options-title"
   onclick={handleBackdrop}
   oncancel={handleCancel}
+  onkeydown={handleDialogKeydown}
   onclose={handleDialogClosed}
 >
   <div class="p-5 sm:p-6">

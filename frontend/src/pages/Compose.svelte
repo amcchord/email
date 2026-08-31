@@ -284,7 +284,8 @@
       ? await draftController.load({ clientDraftId: intent.client_draft_id, intent, initialSnapshot: draftSnapshot() })
       : await draftController.load({ intent, initialSnapshot: draftSnapshot() });
     if (requestGeneration !== openingDraftGeneration || !sessionGuard.isCurrent()) return;
-    if (suppliedClientId && knownServerRevisionRequiresRefresh(data, state)) {
+    if (data?.refresh_server_draft === true
+      || (suppliedClientId && knownServerRevisionRequiresRefresh(data, state))) {
       await draftController.refresh();
       if (requestGeneration !== openingDraftGeneration || !sessionGuard.isCurrent()) return;
       state = draftController.getState();

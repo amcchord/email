@@ -700,6 +700,25 @@ async def test_post_send_archive_is_durable_and_idempotent(monkeypatch):
             "archive_source_after_send": True,
         })
         async with sessions() as db:
+            source = await db.get(Email, source_id)
+            sibling = Email(
+                account_id=account_id,
+                gmail_message_id="generated-message-one-sibling",
+                gmail_thread_id=source.gmail_thread_id,
+                labels=["INBOX"],
+                is_read=True,
+                is_starred=False,
+                is_trash=False,
+                is_spam=False,
+                is_draft=False,
+                is_sent=False,
+                has_attachments=False,
+            )
+            db.add(sibling)
+            await db.flush()
+            sibling_id = sibling.id
+            await db.commit()
+        async with sessions() as db:
             outbound, _created = await stage_outbound_message(
                 db,
                 user_id=user_id,
@@ -720,10 +739,10 @@ async def test_post_send_archive_is_durable_and_idempotent(monkeypatch):
 
         async with sessions() as db:
             actions = list((await db.execute(select(MailAction))).scalars().all())
-            assert len(actions) == 1
-            assert actions[0].action == "archive"
-            assert actions[0].email_id == source_id
-            assert actions[0].user_id == user_id
+            assert len(actions) == 2
+            assert {action.action for action in actions} == {"archive"}
+            assert {action.email_id for action in actions} == {source_id, sibling_id}
+            assert {action.user_id for action in actions} == {user_id}
     finally:
         await engine.dispose()
 

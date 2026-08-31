@@ -809,11 +809,11 @@
   }
 
   async function sendInlineReply(schedule = null, { archiveAfterSend = false } = {}) {
-    if (!email || !inlineReplyBody.trim() || !sessionIsCurrent() || !durableReplyController) return;
+    if (!email || !inlineReplyBody.trim() || !sessionIsCurrent() || !durableReplyController) return false;
     const replyAtStart = activeReplyEnvelopeResult;
     if (!replyAtStart.available) {
       showToast(replyUnavailableMessage(replyAtStart.reason), 'error');
-      return;
+      return false;
     }
     if (archiveAfterSend && !inlineReplyCanArchive) {
       showToast('Open a verified reply before using Send & archive.', 'error');
@@ -823,12 +823,12 @@
     const emailIdAtStart = email.id;
     const bodyAtStart = inlineReplyBody;
     const generationAtStart = inlineReplyGeneration;
-    if (!persistInlineReply()) return;
+    if (!persistInlineReply()) return false;
     try {
       await durableReplyController.markSending(true);
     } catch (error) {
       if (sessionIsCurrent()) showToast(error?.message || 'Reply must be saved before sending.', 'error');
-      return;
+      return false;
     }
     const controllerAtStart = durableReplyController;
     const replyOwnerAtStart = durableReply;
@@ -892,13 +892,15 @@
         },
         onRestore: (operation, reason) => restoreOutboundComposeDraft(restoreDraft, operation, reason),
       });
-      if (!sessionIsCurrent()) return;
+      if (!sessionIsCurrent()) return false;
       if (operation) {
         await controllerAtStart.markSendUncertain(operation);
         releaseEditor();
+        return true;
       }
     } catch (err) {
       if (sessionIsCurrent()) showToast(err.message, 'error');
+      return false;
     } finally {
       if (sessionIsCurrent()) {
         inlineReplySending = false;
@@ -906,6 +908,7 @@
         await controllerAtStart?.markSending(false);
       }
     }
+    return false;
   }
 
   function formatFullDate(dateStr) {

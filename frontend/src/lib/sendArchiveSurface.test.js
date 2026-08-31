@@ -15,7 +15,11 @@ test('send options expose archive only when an exact source is supplied', () => 
   assert.match(buttonSource, /Cancellation or failed delivery leaves it where it is/);
   assert.match(buttonSource, /aria-labelledby="send-options-title"/);
   assert.match(buttonSource, /oncancel=\{handleCancel\}/);
+  assert.match(buttonSource, /onkeydown=\{handleDialogKeydown\}/);
+  assert.match(buttonSource, /event\.key !== 'Escape'[\s\S]*event\.stopPropagation\(\)[\s\S]*closeOptions\(\)/);
   assert.match(buttonSource, /optionsButton\.focus/);
+  assert.doesNotMatch(buttonSource, /class="send-primary[\s\S]{0,500}bind:this=\{optionsButton\}/);
+  assert.match(buttonSource, /bind:this=\{optionsButton\}[\s\S]{0,500}class="send-options/);
 });
 
 test('full Compose gates the action on a verified reply and keeps ordinary send unchanged', () => {

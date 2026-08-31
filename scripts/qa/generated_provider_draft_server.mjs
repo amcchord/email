@@ -211,6 +211,7 @@ function newCounters() {
     outbound_send_now: 0,
     provider_send_lookups: 0,
     provider_sends: 0,
+    post_send_archives: 0,
     same_mutation_replays: 0,
     same_revision_replays: 0,
     immutable_revision_conflicts: 0,
@@ -1104,6 +1105,7 @@ export function createGeneratedProviderDraftFixture({
       idempotency_key: record.idempotency_key,
       account_id: record.account_id,
       source_email_id: record.source_email_id,
+      archive_source_after_send: record.archive_source_after_send,
       client_draft_id: record.client_draft_id,
       state: record.state,
       scheduled_for: record.scheduled_for,
@@ -1141,6 +1143,13 @@ export function createGeneratedProviderDraftFixture({
     record.updated_at = record.sent_at;
     record.payload = null;
     counters.provider_sends += 1;
+    if (record.archive_source_after_send) {
+      counters.post_send_archives += 1;
+      recordEvent('post_send_archive_committed', request, pathname, {
+        send_id: record.send_id,
+        source_email_id: record.source_email_id,
+      });
+    }
     const draft = drafts.get(logicalKey(record.owner_user_id, record.client_draft_id));
     if (draft?.linked_send_id === record.send_id) {
       draft.state = 'discarded';
@@ -1170,6 +1179,12 @@ export function createGeneratedProviderDraftFixture({
       if (!accountForUser(currentUser.id, body.account_id)) {
         throw new Error('Generated account is not owned by this user');
       }
+      if (
+        body.archive_source_after_send !== undefined
+        && typeof body.archive_source_after_send !== 'boolean'
+      ) {
+        throw new Error('archive_source_after_send must be a boolean when supplied');
+      }
       for (const field of ['to', 'cc', 'bcc']) {
         if (!Array.isArray(body[field] || []) || !(body[field] || []).every(isGeneratedAddress)) {
           counters.non_example_test_rejections += 1;
@@ -1190,6 +1205,33 @@ export function createGeneratedProviderDraftFixture({
     ) {
       return writeError(response, 409, 'outbound_conflict', 'Generated draft is not ready to send');
     }
+    const provenance = {
+      source_email_id: body.source_email_id ?? null,
+      thread_id: body.thread_id ?? null,
+      in_reply_to: body.in_reply_to ?? null,
+      references: body.references ?? null,
+    };
+    const provenanceChanged = Object.entries(provenance).some(
+      ([field, value]) => value !== (draft.payload[field] ?? null),
+    );
+    if (provenanceChanged) {
+      return writeError(
+        response,
+        409,
+        'outbound_conflict',
+        'Generated send must retain the draft exact-source provenance',
+      );
+    }
+    const sourceEmailId = provenance.source_email_id;
+    const archiveSourceAfterSend = body.archive_source_after_send === true;
+    if (archiveSourceAfterSend && !sourceForUser(currentUser.id, sourceEmailId)) {
+      return writeError(
+        response,
+        422,
+        'outbound_invalid',
+        'Send & archive requires an owned generated source message',
+      );
+    }
     const scheduleMs = body.scheduled_for ? Date.parse(body.scheduled_for) : null;
     if (body.scheduled_for && (!Number.isFinite(scheduleMs) || scheduleMs < clockNowMs + 60_000)) {
       return writeError(response, 422, 'outbound_invalid', 'Schedule must be at least one minute ahead');
@@ -1202,7 +1244,11 @@ export function createGeneratedProviderDraftFixture({
       subject: body.subject || '',
       body_html: body.body_html || '',
       body_text: body.body_text || '',
-      source_email_id: body.source_email_id || null,
+      source_email_id: sourceEmailId,
+      thread_id: provenance.thread_id,
+      in_reply_to: provenance.in_reply_to,
+      references: provenance.references,
+      archive_source_after_send: archiveSourceAfterSend,
       client_draft_id: body.client_draft_id,
       draft_revision: body.draft_revision,
       scheduled_for: body.scheduled_for || null,
@@ -1230,7 +1276,8 @@ export function createGeneratedProviderDraftFixture({
       idempotency_key: body.idempotency_key,
       owner_user_id: currentUser.id,
       account_id: body.account_id,
-      source_email_id: body.source_email_id || null,
+      source_email_id: sourceEmailId,
+      archive_source_after_send: archiveSourceAfterSend,
       client_draft_id: body.client_draft_id,
       payload_hash: payloadHash,
       payload: immutable,
@@ -1259,6 +1306,7 @@ export function createGeneratedProviderDraftFixture({
     recordEvent('outbound_accepted', request, pathname, {
       send_id: sendId,
       scheduled_for: record.scheduled_for,
+      archive_source_after_send: record.archive_source_after_send,
     });
     return writeJson(response, outboundResponse(record), 202);
   }
@@ -1352,6 +1400,42 @@ export function createGeneratedProviderDraftFixture({
     return { sources, providerDrafts };
   }
 
+  function mailboxConversations() {
+    return Object.values(SOURCE_MESSAGES)
+      .filter(source => source.owner_user_id === currentUser.id)
+      .map(source => ({
+        conversation_key: `${source.account_id}:thread:${source.gmail_thread_id}`,
+        account_id: source.account_id,
+        account_email: source.account_email,
+        anchor_email_id: source.id,
+        gmail_message_id: source.gmail_message_id,
+        gmail_thread_id: source.gmail_thread_id,
+        subject: source.subject,
+        from_address: source.from_address,
+        from_name: source.from_name,
+        to_addresses: source.to_addresses,
+        date: source.date,
+        snippet: source.snippet,
+        is_draft: false,
+        is_sent: false,
+        is_trash: false,
+        is_spam: false,
+        is_read: source.is_read,
+        unread_count: source.is_read ? 0 : 1,
+        is_starred: source.is_starred,
+        star_state: source.is_starred ? 'all' : 'none',
+        has_attachments: source.has_attachments,
+        labels: source.labels,
+        label_coverage: Object.fromEntries((source.labels || []).map(label => [label, 'all'])),
+        member_count: 1,
+        matched_count: 1,
+        is_subscription: false,
+        needs_reply: true,
+        inbox_placement: 'focused',
+        inbox_placement_reason: 'needs_reply',
+      }));
+  }
+
   function auditPayload() {
     const logicalDrafts = [...drafts.values()].map(draftSummary);
     const logicalOutbounds = [...outbounds.values()].map(record => ({
@@ -1360,6 +1444,8 @@ export function createGeneratedProviderDraftFixture({
       account_id: record.account_id,
       state: record.state,
       scheduled_for: record.scheduled_for,
+      source_email_id: record.source_email_id,
+      archive_source_after_send: record.archive_source_after_send,
       execute_after: record.execute_after,
       attempt_count: record.attempt_count,
       payload_retained: Boolean(record.payload),
@@ -1574,6 +1660,14 @@ export function createGeneratedProviderDraftFixture({
     if (request.method === 'GET' && pathname === '/api/emails/actions/recent') {
       return writeJson(response, []);
     }
+    if (request.method === 'GET' && pathname === '/api/snoozes') {
+      return writeJson(response, {
+        items: [],
+        total: 0,
+        limit: Number(url.searchParams.get('limit')) || 200,
+        offset: Number(url.searchParams.get('offset')) || 0,
+      });
+    }
     if (request.method === 'GET' && pathname === '/api/calendar/upcoming') {
       return writeJson(response, []);
     }
@@ -1622,6 +1716,35 @@ export function createGeneratedProviderDraftFixture({
         total: visible.length,
         page: 1,
         page_size: 50,
+      });
+    }
+    if (request.method === 'GET' && pathname === '/api/emails/conversations') {
+      const conversations = mailboxConversations();
+      return writeJson(response, {
+        conversations,
+        total: conversations.length,
+        page: Number(url.searchParams.get('page')) || 1,
+        page_size: Number(url.searchParams.get('page_size')) || 50,
+        total_pages: conversations.length ? 1 : 0,
+      });
+    }
+    const threadMatch = pathname.match(/^\/api\/emails\/thread\/([^/]+)$/);
+    if (request.method === 'GET' && threadMatch) {
+      const threadId = decodeURIComponent(threadMatch[1]);
+      const accountId = Number(url.searchParams.get('account_id')) || null;
+      const emails = Object.values(SOURCE_MESSAGES)
+        .filter(source => (
+          source.owner_user_id === currentUser.id
+          && source.gmail_thread_id === threadId
+          && (!accountId || source.account_id === accountId)
+        ))
+        .map(source => clone(source));
+      if (!emails.length) return writeError(response, 404, 'thread_not_found', 'Generated thread not found');
+      return writeJson(response, {
+        thread_id: threadId,
+        subject: emails[0].subject,
+        emails,
+        participants: [{ name: emails[0].from_name, address: emails[0].from_address }],
       });
     }
     const emailMatch = pathname.match(/^\/api\/emails\/(\d+)$/);

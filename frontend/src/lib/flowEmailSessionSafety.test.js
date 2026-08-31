@@ -64,7 +64,7 @@ test('EmailView gates attachment and message action continuations to its capture
   );
   assert.match(
     text,
-    /async function sendInlineReply[\s\S]*await submitOutboundSend\(payload,[\s\S]*onAccepted: \(\) => \{\}[\s\S]*onRestore: \(operation, reason\) => restoreOutboundComposeDraft\(restoreDraft, operation, reason\)[\s\S]*await controllerAtStart\.markSendUncertain\(operation\);\s*releaseEditor\(\)/,
+    /async function sendInlineReply[\s\S]*await submitOutboundSend\(payload,[\s\S]*onAccepted: \(\) => \{[\s\S]*onRestore: \(operation, reason\) => restoreOutboundComposeDraft\(restoreDraft, operation, reason\)[\s\S]*await controllerAtStart\.markSendUncertain\(operation\);\s*releaseEditor\(\);\s*return true/,
   );
   assert.doesNotMatch(text, /async function sendInlineReply[\s\S]*await api\.sendEmail/);
   assert.match(

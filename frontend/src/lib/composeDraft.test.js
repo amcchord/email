@@ -190,7 +190,7 @@ test('Compose owns one durable, attachment-complete draft through send handoff',
   assert.doesNotMatch(text, /await[\s\S]{0,1000}event\.currentTarget\.value/);
   assert.match(text, /Attachments are stored with this draft and restored when you return\./);
   assert.match(text, /const restoreDraft = \{\s*\.\.\.data,[\s\S]*attachments: attachments\.map/);
-  assert.match(text, /await submitOutboundSend\(data, \{[\s\S]*onAccepted: releaseEditor,[\s\S]*onRestore: restoreEditor/);
+  assert.match(text, /await submitOutboundSend\(data, \{[\s\S]*onAccepted: acceptedOperation => \{[\s\S]*releaseEditor\(acceptedOperation\);[\s\S]*onRestore: restoreEditor/);
   assert.match(text, /onSent: forgetSentDraft/);
   assert.doesNotMatch(releaseEditor, /durableStorage|\.delete\(/);
   assert.match(text, /recovery_source_client_draft_id/);

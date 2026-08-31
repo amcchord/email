@@ -52,7 +52,7 @@ function recoveryIdentity(operation) {
   return String(raw).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 128) || 'unknown';
 }
 
-export function outboundRecoveryDraft(draft, operation) {
+export function outboundRecoveryDraft(draft, operation, { reuseOriginal = false } = {}) {
   const {
     client_draft_id: _clientDraftId,
     recovery_source_client_draft_id: _recoverySourceClientDraftId,
@@ -64,6 +64,16 @@ export function outboundRecoveryDraft(draft, operation) {
   } = draft && typeof draft === 'object' ? draft : {};
   const recoverySourceClientId = [operation?.client_draft_id, _clientDraftId]
     .find(isComposeDraftUuid);
+  if (reuseOriginal && recoverySourceClientId) {
+    const clientDraftId = recoverySourceClientId.toLowerCase();
+    return {
+      ...recoverable,
+      draft_key: `client:${clientDraftId}`,
+      client_draft_id: clientDraftId,
+      recovery_source_client_draft_id: clientDraftId,
+      refresh_server_draft: true,
+    };
+  }
   return {
     ...recoverable,
     draft_key: `outbound-recovery:${recoveryIdentity(operation)}`,
@@ -110,7 +120,12 @@ export function createOutboundDraftRestorer({
   return (draft, operation, reason = 'failed') => {
     const session = captureSession();
     if (!isSessionCurrent(session)) return false;
-    const recovered = outboundRecoveryDraft(draft, operation);
+    // Undo/cancel makes the server restore the original durable provider
+    // draft. Reopen that identity and refresh it; inventing a second reply
+    // identity would conflict with exact-source ownership.
+    const recovered = outboundRecoveryDraft(draft, operation, {
+      reuseOriginal: reason === 'cancelled',
+    });
     const openRecovered = () => {
       if (!isSessionCurrent(session)) return;
       setDraft(recovered);

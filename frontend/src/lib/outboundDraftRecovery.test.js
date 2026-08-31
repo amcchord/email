@@ -140,9 +140,17 @@ test('an intentional Undo opens its recovered draft when Compose is not active',
     queueDraft: () => assert.fail('Undo should open directly'),
   });
 
-  assert.equal(restorer({ body_html: '<p>Cancelled</p>' }, { send_id: 'send-c' }, 'cancelled'), true);
+  const clientDraftId = '10000000-0000-4000-8000-000000000077';
+  assert.equal(restorer(
+    { body_html: '<p>Cancelled</p>', client_draft_id: clientDraftId },
+    { send_id: 'send-c', client_draft_id: clientDraftId },
+    'cancelled',
+  ), true);
   assert.equal(page, 'compose');
-  assert.equal(draft.draft_key, 'outbound-recovery:send-c');
+  assert.equal(draft.draft_key, `client:${clientDraftId}`);
+  assert.equal(draft.client_draft_id, clientDraftId);
+  assert.equal(draft.recovery_source_client_draft_id, clientDraftId);
+  assert.equal(draft.refresh_server_draft, true);
 });
 
 test('a recovery cannot open for a stale authenticated session', () => {

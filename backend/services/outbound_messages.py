@@ -156,6 +156,11 @@ async def _ensure_post_send_archive(outbound: OutboundMessage) -> bool:
         return True
     source_email_id = outbound.source_email_id
     if not isinstance(source_email_id, int) or source_email_id <= 0:
+        # Gmail history may remove the validated source before a scheduled
+        # delivery. The FK then becomes NULL, while the immutable retained
+        # intent still carries the admission-validated source identifier.
+        source_email_id = payload.get("source_email_id")
+    if not isinstance(source_email_id, int) or source_email_id <= 0:
         logger.error("Outbound post-send archive is missing a validated source email")
         return False
 
@@ -174,6 +179,7 @@ async def _ensure_post_send_archive(outbound: OutboundMessage) -> bool:
                 email_ids=[source_email_id],
                 action="archive",
                 idempotency_key=action_key,
+                scope="conversations",
             )
     except MailActionNotFound:
         # The exact source was validated at send admission. If it has since
