@@ -3,6 +3,73 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-31 — Deterministic Saved Views / Custom Splits
+
+### Scope
+
+Add private user-owned named views over the existing structured-search and
+conversation Inbox authority. Keep result membership live, account scope exact,
+query text out of URLs/storage, and every real mailbox/calendar acceptance step
+read-only. Preserve the concurrent terminal/AI boundaries and D-041 bounded
+release cadence.
+
+### Completed
+
+- Added additive revision `a0b1c2d3e4f5` and private/no-store Saved View CRUD,
+  reorder, revision, idempotency, owner/account validation, case-insensitive
+  names, twelve-view quota, and account-delete fail-closed behavior. Views store
+  definitions only and never cache results or call Gmail, Calendar, or AI.
+- Added first-class Email Sidebar placement, exact account+query opening,
+  save/saved/modified/manage states, command-palette entries, `G V` navigation,
+  responsive editor, focus containment, two-step delete, conflict recovery,
+  session purge, and strict API normalization.
+- Added generated `.example.test` user/account-isolated CRUD, revision,
+  idempotency, reorder, transient failure, conflict, held-session, desktop, and
+  390x844 browser acceptance with zero external/provider/mail/calendar writes.
+
+### Verification
+
+- Focused implementation checks passed. Independent P0/P1 review found one
+  stale-survivor revision path after delete; the client now discards and reloads
+  the authoritative compacted collection. Generated mobile acceptance found the
+  editor under the transformed off-canvas Sidebar; the editor now temporarily
+  disables that containing block and restores it on close.
+- One final generated browser acceptance passed desktop and 390x844 create,
+  open, exact account, modified, rename, reorder, two-step delete, retry,
+  conflict reload, stale-session isolation, `G V`, command palette, query-free
+  URLs, zero blocked/external requests, and zero provider/mail/calendar writes.
+- Disposable PostgreSQL passed exact
+  `f9a0b1c2d3e4 -> a0b1c2d3e4f5 -> f9a0b1c2d3e4 -> a0b1c2d3e4f5`.
+  The single consolidated post-freeze gate passed 782 backend tests with 75
+  expected skips, all 516 frontend tests, and a 616-module production build.
+- Visual evidence is stored outside the repository in
+  `/Users/austinmcchord/Development/Email-release-evidence/saved-views-2026-08-31/`.
+
+### Production Actions
+
+- Fast-forwarded GitHub `main` and clean production to exact runtime
+  `a3f02a3a0ba07226f653c8d0986874ac12404bd4`.
+- Created and validated protected pre-a0 custom-format backup
+  `/var/backups/mailapp/maildb-pre-saved-views-20260831T1522Z.dump`: 1,384,127,964
+  bytes, `postgres:postgres`, mode `0600`, SHA-256
+  `c96ce925388b0eb97e64e987af6085c27549b744967dd1ef417a2e64dbf89476`.
+- Upgraded exactly `f9a0b1c2d3e4 -> a0b1c2d3e4f5`, replaced only `mailapp`,
+  then published the 616-module frontend after local API health succeeded. The
+  retired Uvicorn connection reached the known 90-second graceful-stop limit;
+  replacement PID 2170998 has `NRestarts=0` and no warning-or-higher entries
+  after its 15:25:49 UTC start boundary.
+- All seven checked services and public/local health are healthy. Anonymous
+  Saved Views access is 401 with `private, no-store`; the aggregate new-table
+  count is zero. Signed-in production browser QA showed `Saved Views 0/12` and
+  the truthful empty instruction without opening mail, creating a view, or
+  causing any mailbox/calendar mutation.
+
+### Next
+
+Operate this definition-only release and choose the next bounded modern-client
+gap independently. Provider rules, cached counts, shared views, notifications,
+or AI-maintained membership require a separate data/safety milestone.
+
 ## 2026-08-31 — First-class Contacts projection
 
 ### Scope

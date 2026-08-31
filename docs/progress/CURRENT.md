@@ -4,20 +4,27 @@ Last updated: 2026-08-31
 
 ## Active Objective
 
-Operate first-class per-account signatures, delivery-confirmed automatic
-follow-up reminders, safe inline snippet expansion, account-scoped recipient
-autocomplete, Personal Snippets, and the migration-free first-class Contacts
-projection as durable writing and relationship workflows without widening
-account, provider-data, or message-content boundaries.
-Operate Universal Send & Archive, Focused/Split Inbox, and the terminal track
-as durable, truthful workflows. Continue physical
-qualification of the independently gated Web Serial installer and OTA control
+Operate deterministic user-owned Saved Views / Custom Splits over the existing
+structured-search and conversation Inbox authority. Keep their bounded names,
+exact optional account scope, and validated queries private and revision-safe;
+never cache results, store message content, invoke AI, or mutate Gmail. Keep
+first-class Contacts, writing, Universal Send & Archive, Focused/Split Inbox,
+and the terminal track operating as durable, truthful workflows. Continue
+physical qualification of the independently gated Web Serial installer and OTA control
 plane on exact E1001/E1002 hardware. Keep real mail/calendar QA read-only except
 for generated `.example.test` fixtures and preserve every independent terminal
 write gate.
 
 ## Baseline
 
+- The deployed Saved Views / Custom Splits application/runtime is
+  `a3f02a3a0ba07226f653c8d0986874ac12404bd4`. A user can save up to twelve
+  validated structured searches with an optional exact owned-account scope,
+  open them from first-class Email navigation or the command palette, and
+  manage order, edits, conflicts, and deletion without placing private terms
+  in URLs. The projection is view-only: it caches no results, calls no AI or
+  provider, and performs no mail/calendar mutation. Production began with zero
+  Saved Views.
 - The deployed first-class Contacts application/runtime is
   `f84678ce0536c15560ccc9ddc4db857c1b8578ff`. Contacts is the first More item
   and a responsive exact-account list/profile workspace over the newest 4,000
@@ -134,10 +141,10 @@ write gate.
 - The deployed secure-enrollment application/runtime commit is
   `8ff01848a2be2818dfd9eb88b84be9aab4befb0a`; the following closeout is docs
   only. Production and GitHub were exact and clean at the runtime boundary.
-- Production Alembic is `f9a0b1c2d3e4 (head)`, the additive Signatures child of
-  Automatic Follow-up revision `e8f9a0b1c2d3`. The signature table required no
-  backfill and began empty. Existing follow-up/OTA tables retain their prior
-  state; all four existing terminals remain legacy.
+- Production Alembic is `a0b1c2d3e4f5 (head)`, the additive Saved Views child
+  of Signatures revision `f9a0b1c2d3e4`. The new table required no backfill and
+  began empty. Existing signature/follow-up/OTA tables retain their prior state;
+  all four existing terminals remain legacy.
 - All seven checked production services are active, public health is `ok`, and
   the replacement API process has zero automatic restarts and no post-start
   warning-or-higher entries. Production has no secure-enrollment or OTA
@@ -197,6 +204,28 @@ live state.
 - Next: attach dedicated hardware and complete physical A/B migration,
   interrupted-write, rollback, recovery, and USB-rescue evidence before
   installing any eligible descriptor or changing rollout from zero.
+
+## Recent Saved Views / Custom Splits Release
+
+- Saved Views is a first-class Email Sidebar section, command-palette category,
+  and `G V` destination. A valid structured search can be saved, reopened with
+  its exact optional account, renamed, edited, reordered, or explicitly deleted.
+- The private/no-store API persists only a bounded name, validated query,
+  optional owned account, order, revision, and idempotency identity. Owner-row
+  locking, exact revisions, authoritative reorder snapshots, and fail-closed
+  missing-account behavior prevent cross-user or silent concurrent changes.
+- Opening a view updates account, mailbox, and query as one session-only Inbox
+  snapshot; queries never enter navigation URLs or browser storage. Auth changes
+  purge the collection and late responses cannot publish into a new identity.
+- Generated desktop and 390x844 acceptance passed create/open/modified/edit,
+  reorder/delete, retry/conflict recovery, `G V`, command-palette navigation,
+  session isolation, and zero external/provider/mail/calendar mutations. One
+  independent P0/P1 review found and fixed stale survivor revisions after
+  delete; the mobile run found and fixed the off-canvas editor containing block.
+- Exact migration `f9a0b1c2d3e4 -> a0b1c2d3e4f5 -> f9a0b1c2d3e4 ->
+  a0b1c2d3e4f5`, the one consolidated 782-backend/516-frontend/616-module gate,
+  protected backup, production migration, API replacement, frontend build, and
+  signed-in read-only postflight all passed. Production started with zero rows.
 
 ## Recent First-class Contacts Release
 

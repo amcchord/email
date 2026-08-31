@@ -36,6 +36,7 @@ free-form questions about your inbox without touching the web UI.
 - [Security notes](#security-notes)
 - [Web session-only calendar reads](#web-session-only-calendar-reads)
 - [Web session-only structured email search](#web-session-only-structured-email-search)
+- [Web session-only Saved Views](#web-session-only-saved-views)
 - [Web session-only attachment preview and download](#web-session-only-attachment-preview-and-download)
 - [Web session-only durable mail actions](#web-session-only-durable-mail-actions)
 - [Web session-only durable Snooze reminders](#web-session-only-durable-snooze-reminders)
@@ -761,6 +762,82 @@ thread. Omitting the parameter preserves a legacy read only when the thread ID
 is unique across the user's owned accounts; an ambiguous cross-account thread
 returns 409 rather than combining mail. First-party conversation and reply
 surfaces always send the exact account scope.
+
+## Web session-only Saved Views
+
+Saved Views are private named definitions over the structured-search contract
+above. They are available only to the authenticated browser session, never to
+`/api/v1` tokens. Every response, including validation, authentication, not-
+found, and conflict responses, carries `Cache-Control: private, no-store`.
+
+```text
+GET    /api/saved-views
+POST   /api/saved-views
+PUT    /api/saved-views/{view_id}
+DELETE /api/saved-views/{view_id}?revision={positive_integer}
+POST   /api/saved-views/reorder
+```
+
+The collection response is:
+
+```json
+{
+  "items": [
+    {
+      "id": "0c10bd58-ec55-4718-8418-c2d7c48f1f12",
+      "create_id": "8400dc83-f5cb-4128-950f-e76fded3b4b0",
+      "name": "Leadership follow-ups",
+      "account_id": 7,
+      "query": "from:leader@example.test is:unread in:inbox",
+      "position": 0,
+      "revision": 1,
+      "created_at": "2026-08-31T15:00:00Z",
+      "updated_at": "2026-08-31T15:00:00Z"
+    }
+  ],
+  "max_views": 12
+}
+```
+
+`POST` accepts exactly `{ create_id, name, account_id, query }`. The client UUID
+is an idempotency identity: an exact replay returns the existing view with 200;
+reusing it for different content returns 409. A new view returns 201. `PUT`
+accepts exactly `{ revision, name, account_id, query }`; an exact retry of the
+immediately successful replacement is idempotent, while any stale or divergent
+revision returns 409. Names are normalized, limited to 80 characters, and
+case-insensitively unique per user. Queries are limited to 512 characters and
+must pass the same parser used by Inbox search.
+
+`account_id` may be `null` for all owned accounts or one positive account owned
+by the session user. Missing and foreign accounts both return 404; the server
+never coerces an invalid account to `null`, which would broaden the view. If an
+account is removed, its account-scoped views are deleted rather than widened.
+
+Reorder accepts one authoritative snapshot:
+
+```json
+{
+  "expected_order": [
+    "0c10bd58-ec55-4718-8418-c2d7c48f1f12",
+    "5503a580-cad9-4cbe-9ec2-21b9cdbf3373"
+  ],
+  "view_ids": [
+    "5503a580-cad9-4cbe-9ec2-21b9cdbf3373",
+    "0c10bd58-ec55-4718-8418-c2d7c48f1f12"
+  ]
+}
+```
+
+Both arrays must contain the exact current collection once each. A concurrent
+change returns 409; success returns the normalized collection with updated
+positions and revisions. Deletion also compacts following positions, so clients
+must refresh the authoritative collection after a successful 204.
+
+Saved Views store only the bounded definition and ownership metadata. They do
+not cache message IDs or results, call Gmail or AI, move mail, or write any
+mail/calendar state. The first-party UI keeps queries in authenticated session
+memory and request bodies; opening a view applies its account and query without
+placing private terms in navigation URLs or browser storage.
 
 ## Web session-only attachment preview and download
 

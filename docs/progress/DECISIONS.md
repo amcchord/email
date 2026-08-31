@@ -923,3 +923,26 @@ add a new entry that explicitly supersedes the old one.
   Durable aliases, notes, organizations, merge rules, provider contacts, and
   all-history counters require a separately reviewed owned schema and sync
   contract rather than widening this projection in place.
+
+## D-047 — Saved Views persist private definitions, never result authority
+
+- Date: 2026-08-31
+- Status: accepted
+- Decision: Persist at most twelve revisioned, user-owned Saved Views containing
+  only a normalized name, validated structured-search query, optional exact
+  owned account, order, and idempotency metadata. Treat the conversation/search
+  endpoint as the only result authority; never cache result rows, message IDs,
+  counts, or provider state in a view. Keep the client collection session-only
+  and keep private query text out of navigation URLs and browser storage.
+- Reason: Durable named searches close the Custom Split workflow gap without
+  duplicating Inbox truth or introducing Gmail filters, AI classification, or a
+  second pagination model. Cached membership would become stale under sync and
+  mail actions, while a missing account silently widened to all accounts could
+  disclose unrelated mail.
+- Consequence: Every mutation is owner-serialized and revision-checked; create
+  and replacement retries are content-checked; reorder carries the exact
+  expected collection; and deletion refreshes compacted positions/revisions.
+  Missing or foreign account scope fails as 404 and account deletion removes
+  scoped views. Future provider rules, notifications, badges, shared views, or
+  cached counts require a separate model and review rather than widening this
+  definition contract.
