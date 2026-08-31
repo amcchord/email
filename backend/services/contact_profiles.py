@@ -28,6 +28,10 @@ CONTACT_RECIPIENTS_PER_SENT_MESSAGE = 100
 MAX_CONTACT_PAGE_SIZE = 100
 MAX_RECENT_CONTACT_CONVERSATIONS = 20
 CONTACT_KEY_VERSION = "contact-profile:v1"
+MAX_MAILBOX_ADDRESS_LENGTH = 254
+MAX_MAILBOX_LOCAL_LENGTH = 64
+MAX_MAILBOX_DOMAIN_LENGTH = 253
+MAX_FORMATTED_MAILBOX_LENGTH = 998
 
 _EMAIL_ADDRESS_RE = re.compile(
     r"^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@"
@@ -151,7 +155,22 @@ def _mailbox(value: Any, explicit_name: Any = None) -> tuple[str | None, str] | 
         return None
     parsed_name, address = parsed[0]
     address = address.strip().lower()
-    if not _EMAIL_ADDRESS_RE.fullmatch(address):
+    if (
+        len(address) > MAX_MAILBOX_ADDRESS_LENGTH
+        or not _EMAIL_ADDRESS_RE.fullmatch(address)
+    ):
+        return None
+    local, domain = address.rsplit("@", 1)
+    if (
+        len(local) > MAX_MAILBOX_LOCAL_LENGTH
+        or len(domain) > MAX_MAILBOX_DOMAIN_LENGTH
+        or local.startswith(".")
+        or local.endswith(".")
+        or ".." in local
+        or domain.startswith(".")
+        or domain.endswith(".")
+        or ".." in domain
+    ):
         return None
     name = _clean_name(explicit_name) or _clean_name(parsed_name)
     if name and name.casefold() == address.casefold():
@@ -349,6 +368,16 @@ def _summary(
 ) -> ContactSummary:
     if aggregate.observed_first_at is None or aggregate.observed_last_at is None:
         raise ValueError("Contact aggregate has no observed dates")
+    formatted = (
+        formataddr((aggregate.name, aggregate.address))
+        if aggregate.name
+        else aggregate.address
+    )
+    # RFC 2047 can expand a bounded Unicode display name far beyond its source
+    # length. The normalized address remains the identity and a safe complete
+    # fallback, so never let untrusted display metadata poison the whole page.
+    if len(formatted) > MAX_FORMATTED_MAILBOX_LENGTH:
+        formatted = aggregate.address
     return ContactSummary(
         account_id=account_id,
         contact_key=contact_key_for_address(
@@ -359,11 +388,7 @@ def _summary(
         ),
         name=aggregate.name,
         address=aggregate.address,
-        formatted=(
-            formataddr((aggregate.name, aggregate.address))
-            if aggregate.name
-            else aggregate.address
-        ),
+        formatted=formatted,
         relationship=_relationship(aggregate),
         observed_message_count=aggregate.observed_message_count,
         observed_received_count=aggregate.observed_received_count,

@@ -6,9 +6,9 @@ Last updated: 2026-08-31
 
 Operate first-class per-account signatures, delivery-confirmed automatic
 follow-up reminders, safe inline snippet expansion, account-scoped recipient
-autocomplete, and Personal Snippets as durable writing workflows. Continue
-writing acceleration with first-class contact profiles and relationship
-context without widening account or provider-data boundaries.
+autocomplete, and Personal Snippets as durable writing workflows. Ship the
+frozen migration-free first-class Contacts projection without widening account,
+provider-data, or message-content boundaries.
 Operate Universal Send & Archive, Focused/Split Inbox, and the terminal track
 as durable, truthful workflows. Continue physical
 qualification of the independently gated Web Serial installer and OTA control
@@ -157,17 +157,18 @@ live state.
 
 ### P1 — First-class contact profiles and relationship context
 
-- State: ready; recipient autocomplete already provides an account-scoped,
-  metadata-only foundation without a Google Contacts scope or provider call.
-- Scope: one private contact surface with normalized identities, owned-account
-  boundaries, recent conversation context, keyboard-first Compose access, and
-  safe empty/error/mobile states. Do not infer a schema or new provider scope
-  until the existing synchronized metadata path is audited.
-- Acceptance: contacts never cross accounts or users, expose no message body,
-  remain useful without a Google Contacts permission, and open the exact
-  conversation/Compose intent without recipient duplication.
-- Next: run one bounded read-only UX/data audit, coordinate any post-f9 schema
-  allocation, then freeze the smallest coherent contact-profile milestone.
+- State: ready to deploy; backend, first-class route, responsive list/profile
+  UI, exact Compose/Inbox handoffs, generated safety fixture, independent SHIP
+  review, browser acceptance, and the consolidated gate are complete. Alembic
+  remains `f9a0b1c2d3e4`.
+- Scope: one private contact surface derived from an exact account's newest
+  4,000 eligible synchronized metadata rows, with normalized identities,
+  observed relationship context, keyboard actions, and safe loading, empty,
+  error, retry, desktop, and mobile states.
+- Acceptance: contacts never cross accounts or users, expose no message
+  content or Bcc-only identity, require no Contacts permission/provider call,
+  and open the exact conversation or one-recipient Compose intent.
+- Next: commit, push, deploy, and close the read-only production evidence.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 

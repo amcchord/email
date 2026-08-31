@@ -901,3 +901,25 @@ add a new entry that explicitly supersedes the old one.
   not expose content, and an unavailable policy blocks Send until explicit
   Retry or Continue unsigned. Downgrading f9 drops user-created signature
   content and is data-lossy once rows exist.
+
+## D-046 — Contact profiles are bounded correspondence projections, not an address book
+
+- Date: 2026-08-31
+- Status: accepted
+- Decision: Derive each Contact profile at read time from one exact owned
+  account's newest 4,000 eligible synchronized metadata rows. Identify a
+  correspondent with an opaque user/account/address HMAC, exclude Bcc-only and
+  every owned address, and return only normalized relationship counts,
+  timestamps, corpus coverage, and exact recent thread pointers. Keep query
+  and profile POST-only, private, no-store, and session-authenticated.
+- Reason: A first-class relationship view is useful before adding Google
+  Contacts access or a writable schema, but a global or content-bearing
+  projection could disclose another account's correspondents, place private
+  search terms in URLs, or imply complete address-book truth from partial mail
+  history.
+- Consequence: The UI labels every metric as observed, discloses truncation,
+  and keeps same-address correspondents separate across accounts. Compose and
+  Inbox handoffs retain exact account authority and session-only identities.
+  Durable aliases, notes, organizations, merge rules, provider contacts, and
+  all-history counters require a separately reviewed owned schema and sync
+  contract rather than widening this projection in place.

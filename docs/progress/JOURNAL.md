@@ -3,6 +3,62 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-31 — First-class Contacts projection
+
+### Scope
+
+Add a private, account-exact Contacts workspace from existing synchronized
+metadata without a Google Contacts scope, provider call, schema change, or real
+mail/calendar mutation. Preserve the D-041 bounded release cadence and the
+concurrent terminal baseline.
+
+### Completed
+
+- Added authenticated POST-only query/profile APIs over a newest-4,000-row
+  account corpus, excluding Draft, Spam, Trash, Bcc-only correspondents, and
+  every owned address. Responses are content-free, no-store, and use opaque
+  user/account/address keys.
+- Added Contacts as the first More item, lazy route, command-palette target,
+  `G P` destination, and responsive list/profile workspace with exact account,
+  search, relationship filters, observed coverage/metrics, loading, empty,
+  error/retry, mobile Back/focus, Compose, and recent conversation actions.
+- Added strict frontend normalization and a one-shot session-only Inbox handoff
+  that restores the exact account/anchor only after Inbox dataset authority is
+  ready, then renders off-page threads chronologically without implying broad
+  conversation action scope.
+- Extended the localhost `.example.test` fixture with account/user-isolated
+  Contact metadata, privacy/exclusion sentinels, delay/failure/held-session
+  cases, exact already-read thread/message handoffs, and read-only audit
+  counters.
+
+### Verification
+
+- Focused backend, frontend, generated fixture, syntax, build, and diff checks
+  passed during implementation. Browser acceptance found one P1 cold-route
+  selection loss; the Inbox now restores the contact intent independently of
+  the transient selection store, and the focused regression passed.
+- Final generated browser acceptance passed anchored More placement, desktop
+  and 390×844 list/profile behavior, account isolation during delayed switches,
+  filter/search/empty/error/retry states, exact chronological thread opening,
+  mobile Back focus, zero privacy sentinels, and zero browser diagnostics.
+  Audit counters remained at zero sends, provider mutations, unexpected
+  mutations, unknown routes, and external calls.
+- Independent review found and fixed one P1 sender-metadata poison path; the
+  strict mailbox/format regression passed and the re-review returned SHIP with
+  no remaining P0/P1. The one consolidated post-freeze gate passed 770 backend
+  tests with 75 expected skips, all 509 frontend tests, and a 612-module
+  production build.
+
+### Production Actions
+
+- None yet. Production remains on exact Signatures closeout `0a0ba1a` with
+  application/runtime `2232074` and Alembic `f9a0b1c2d3e4`.
+
+### Next
+
+Commit and deploy the migration-free API/frontend release, then perform
+read-only production health, auth-boundary, log, and browser postflight.
+
 ## 2026-08-31 — First-class per-account signatures
 
 ### Scope

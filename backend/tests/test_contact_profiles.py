@@ -11,6 +11,7 @@ from sqlalchemy.dialects import postgresql
 import backend.routers.contacts as contacts_router
 from backend.database import get_db
 from backend.routers.auth import get_current_user
+from backend.schemas.contact import ContactQueryResponse
 from backend.services.contact_profiles import (
     CONTACT_CORPUS_ROW_LIMIT,
     ContactCoverage,
@@ -207,6 +208,35 @@ def test_query_ranking_relationship_filter_and_pagination_are_deterministic():
     assert [item.address for item in first.contacts] == ["alpha@example.test"]
     assert [item.address for item in second.contacts] == ["zulu@example.test"]
     assert [item.address for item in outbound.contacts] == ["outbound@example.test"]
+
+
+def test_projection_skips_poison_mailboxes_and_bounds_encoded_display_names():
+    oversized_address = f"{'a' * 65}@example.test"
+    oversized_unicode_name = "😀" * 255
+    rows = [
+        _row(1, from_address="valid@example.test", from_name="Valid Person"),
+        _row(2, from_address=oversized_address, from_name="Oversized Address"),
+        _row(3, from_address=".bad@example.test", from_name="Leading Dot"),
+        _row(4, from_address="a..b@example.test", from_name="Repeated Dot"),
+        _row(5, from_address="emoji@example.test", from_name=oversized_unicode_name),
+    ]
+
+    page = build_contact_query_page(
+        corpus_rows=rows,
+        owned_addresses=["owner@example.test"],
+        user_id=9,
+        account_id=17,
+        secret_key=SECRET,
+    )
+
+    assert [contact.address for contact in page.contacts] == [
+        "emoji@example.test",
+        "valid@example.test",
+    ]
+    emoji = page.contacts[0]
+    assert emoji.name == oversized_unicode_name
+    assert emoji.formatted == "emoji@example.test"
+    assert ContactQueryResponse.model_validate(page).contacts[0].address == "emoji@example.test"
 
 
 def test_profile_uses_opaque_key_and_returns_only_content_free_recent_pointers():

@@ -1213,6 +1213,76 @@ requests. Unfinished input remains local, is not autosaved, and blocks sender
 changes, draft save, navigation, and every Send path until the user commits or
 removes it.
 
+## Web session-only Contact profiles
+
+Contact profiles are private, read-only projections of already-synchronized
+message metadata. They do not request Google Contacts access, call a provider,
+or create an address-book record. Public API tokens cannot access them.
+
+```text
+POST /api/contacts/query
+POST /api/contacts/profile
+```
+
+Both endpoints require an active account owned by the authenticated user.
+Missing, inactive, and foreign accounts share the same non-disclosing 404
+response. Requests are POST-only so search text and opaque contact keys do not
+enter browser history, proxy query logs, or referrer URLs. Responses use
+`Cache-Control: private, no-store`.
+
+Query accepts an exact `account_id`, optional name/address `query`, one of
+`all`, `bidirectional`, `inbound_only`, or `outbound_only`, and bounded page
+controls. The projection scans at most the newest 4,000 eligible metadata rows
+from that account, excluding Draft, Spam, Trash, Bcc-only correspondents, and
+every mailbox owned by the signed-in user. It returns normalized name/address,
+an opaque HMAC-derived `contact_key`, relationship direction, observed message
+and conversation counts, observed first/last timestamps, and explicit corpus
+coverage. Subject, snippet, body, Bcc, labels, attachments, AI output, and raw
+headers are never returned.
+
+Profile accepts the same exact account plus one opaque `contact_key` and a
+`recent_limit` from 1 through 20. It returns the same metadata summary and
+content-free recent conversation pointers:
+
+```json
+{
+  "account_id": 3,
+  "contact": {
+    "account_id": 3,
+    "contact_key": "<opaque 64-character key>",
+    "name": "Lovelace, Ada",
+    "address": "ada.correspondent@example.test",
+    "formatted": "\"Lovelace, Ada\" <ada.correspondent@example.test>",
+    "relationship": "bidirectional",
+    "observed_message_count": 4,
+    "observed_received_count": 2,
+    "observed_sent_count": 2,
+    "observed_conversation_count": 1,
+    "observed_first_at": "2026-08-28T15:57:00Z",
+    "observed_last_at": "2026-08-30T15:59:00Z",
+    "observed_last_received_at": "2026-08-30T15:59:00Z",
+    "observed_last_sent_at": "2026-08-30T15:57:00Z"
+  },
+  "recent_conversations": [
+    {
+      "account_id": 3,
+      "anchor_email_id": 1401,
+      "thread_id": "provider-thread-id",
+      "observed_last_at": "2026-08-30T15:59:00Z",
+      "observed_message_count": 4,
+      "direction": "bidirectional"
+    }
+  ]
+}
+```
+
+The browser treats both response types as untrusted: it rejects mixed-account,
+malformed, duplicate, or mismatched identities. Email starts one new Compose
+intent with the exact account and one canonical To recipient. Opening a recent
+conversation carries only the exact account, anchor, and thread pointer in
+session memory, then loads that account-owned thread after Inbox authority is
+ready. The handoff is cleared on every authenticated-session transition.
+
 ## Web session-only Personal Snippets
 
 Personal Snippets are private reusable writing blocks owned by the authenticated
