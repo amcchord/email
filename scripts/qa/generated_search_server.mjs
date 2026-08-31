@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 
-// Deterministic, read-only browser-QA server for core mail-client flows.
-// It binds only to localhost, serves immutable .example.test fixtures and the
-// built frontend, makes no outbound requests, and rejects every mutation.
+// Deterministic browser-QA server for core mail-client flows. It binds only to
+// localhost, serves .example.test fixtures and the built frontend, and makes no
+// outbound requests. Mail/provider/calendar writes stay rejected; an isolated
+// in-memory Saved Views fixture accepts only its own expected local mutations.
 
 import { createReadStream } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { dirname, extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { createGeneratedSavedViewsFixture } from './generated_saved_views_fixture.mjs';
 
 const host = '127.0.0.1';
 const port = Number.parseInt(process.env.QA_PORT || '4178', 10);
@@ -863,6 +866,7 @@ const audit = {
   mutation_attempts: [],
   unknown_routes: [],
 };
+const savedViewsFixture = createGeneratedSavedViewsFixture();
 const routeAssetReads = [];
 const routeAssetAttempts = new Map();
 let routeAssetsPromise = null;
@@ -1765,6 +1769,18 @@ async function listEmails(request, response, url) {
   });
   audit.queries.push(entry);
 
+  if ((Number.isFinite(accountId) && !savedViewsFixture.currentUserOwnsAccount(accountId))
+    || !savedViewsFixture.currentAuthUser()) {
+    completeAudit(entry, savedViewsFixture.currentAuthUser() ? 404 : 401);
+    return writeJson(
+      response,
+      savedViewsFixture.currentAuthUser()
+        ? { detail: 'Account not found' }
+        : { detail: 'Not authenticated' },
+      savedViewsFixture.currentAuthUser() ? 404 : 401,
+    );
+  }
+
   const scenario = Object.hasOwn(scenarios, decodedSearch) ? scenarios[decodedSearch] : null;
   if (!scenario) {
     completeAudit(entry, 422);
@@ -1783,9 +1799,11 @@ async function listEmails(request, response, url) {
     return writeJson(response, { detail: scenario.detail }, status);
   }
 
+  const ownedAccountIds = new Set(savedViewsFixture.currentAuthUser()?.account_ids || []);
   const filtered = scenario.result_ids
     .map(id => emailsById.get(id))
     .filter(Boolean)
+    .filter(email => ownedAccountIds.has(email.account_id))
     .filter(email => scenario.overrides_mailbox || visibleInMailbox(email, mailbox))
     .filter(email => accountId === null || email.account_id === accountId);
   const offset = (page - 1) * pageSize;
@@ -2302,12 +2320,18 @@ async function handleGet(request, response, url) {
         fixture_event_ids: [...generatedCalendarEvents, ...generatedCalendarBoundaryEvents].map(event => event.id),
       },
       calendar_reads: audit.calendar_reads,
+      saved_views: savedViewsFixture.snapshot(),
       mutation_attempts: audit.mutation_attempts,
       unknown_routes: audit.unknown_routes,
     });
   }
   if (pathname === '/api/auth/me') {
-    return writeJson(response, { id: 1, username: 'generated-search-qa', is_admin: false });
+    const user = savedViewsFixture.currentAuthUser();
+    return writeJson(
+      response,
+      user ? { id: user.id, username: user.username, is_admin: false } : { detail: 'Not authenticated' },
+      user ? 200 : 401,
+    );
   }
   if (pathname === '/api/auth/ui-preferences') {
     return writeJson(response, { thread_order: 'newest_first', theme: 'amber', color_scheme: 'light' });
@@ -2329,7 +2353,14 @@ async function handleGet(request, response, url) {
   }
   if (pathname === '/api/auth/about-me') return writeJson(response, { about_me: '' });
   if (pathname === '/api/auth/api-tokens') return writeJson(response, []);
-  if (pathname === '/api/accounts/') return writeJson(response, calendarAccounts());
+  if (pathname === '/api/accounts/') {
+    const user = savedViewsFixture.currentAuthUser();
+    return writeJson(
+      response,
+      user ? savedViewsFixture.currentAccounts() : { detail: 'Not authenticated' },
+      user ? 200 : 401,
+    );
+  }
   const calendarReauthorizeMatch = pathname.match(/^\/api\/accounts\/(\d+)\/reauthorize$/);
   if (calendarFixtureEnabled && calendarReauthorizeMatch) {
     const accountId = Number.parseInt(calendarReauthorizeMatch[1], 10);
@@ -2691,6 +2722,8 @@ async function handleGet(request, response, url) {
 async function handleRequest(request, response) {
   const url = new URL(request.url, `http://${host}:${port}`);
   const { pathname } = url;
+
+  if (await savedViewsFixture.handle(request, response, url)) return;
 
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(request.method)) {
     const entry = beginAudit(request, url);
