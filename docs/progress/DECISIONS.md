@@ -879,3 +879,25 @@ add a new entry that explicitly supersedes the old one.
   from PostgreSQL without message content. Explicit self-only or Bcc-only
   enablement fails admission, identifier disagreement fails closed, and schema
   rollback becomes data-lossy once e8 reminder truth exists.
+
+## D-045 — Signatures are immutable per-draft sidecars, not authored body content
+
+- Date: 2026-08-31
+- Status: accepted
+- Decision: Store one revisioned rich/plain signature policy per exact owned
+  Google account. Freeze one sanitized, content-hashed snapshot when a new
+  durable writing intent is established; linked sends copy that snapshot
+  exactly. Keep authored body, signature, and structured quoted history as
+  separate fields and assemble the transient provider body exactly once in that
+  order. Remove and Restore change only the frozen snapshot's applied state.
+- Reason: Copying live settings into editable draft HTML makes signatures
+  duplicate on reload, drift after settings edits, become indistinguishable
+  from user-authored text, and reorder incorrectly around forwarded history.
+  Resolving policy again during retries or scheduled delivery can also change
+  an already accepted message.
+- Consequence: Existing legacy drafts remain unsigned; policy changes affect
+  future intents only. Sender and account ownership fail closed, sanitization
+  is versioned, rendered size is checked before Gmail, recent draft lists do
+  not expose content, and an unavailable policy blocks Send until explicit
+  Retry or Continue unsigned. Downgrading f9 drops user-created signature
+  content and is data-lossy once rows exist.

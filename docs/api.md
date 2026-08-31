@@ -40,6 +40,7 @@ free-form questions about your inbox without touching the web UI.
 - [Web session-only durable mail actions](#web-session-only-durable-mail-actions)
 - [Web session-only durable Snooze reminders](#web-session-only-durable-snooze-reminders)
 - [Web session-only automatic follow-up reminders](#web-session-only-automatic-follow-up-reminders)
+- [Web session-only per-account signatures](#web-session-only-per-account-signatures)
 - [Web session-only durable outbound delivery](#web-session-only-durable-outbound-delivery)
 - [Web session-only durable draft sessions](#web-session-only-durable-draft-sessions)
 - [Web session-only Todo ownership](#web-session-only-todo-ownership)
@@ -1100,6 +1101,78 @@ accelerates work; the periodic database drainer recovers expired leases and
 lost enqueueing. Reply detection requires a successful sync checkpoint at or
 after wake. No tracking pixel, read receipt, remote image, or message-content
 copy is used.
+
+## Web session-only per-account signatures
+
+Signatures are authenticated, owner-scoped writing preferences. Public API
+tokens cannot read or mutate these routes.
+
+```text
+GET /api/compose/signatures
+PUT /api/compose/signatures/{account_id}
+```
+
+`GET` returns every active connected account. An account without a saved row is
+represented by a disabled revision-zero default. `PUT` is a complete,
+revision-checked replacement:
+
+```json
+{
+  "expected_revision": 0,
+  "enabled": true,
+  "include_on_new": true,
+  "include_on_replies": true,
+  "include_on_forwards": true,
+  "body_html": "<p><strong>Generated Sender</strong><br>Example team</p>",
+  "body_text": "Generated Sender\nExample team"
+}
+```
+
+Missing, inactive, and foreign accounts share the same non-disclosing 404.
+Exact replacement replay is safe; a stale revision returns 409
+`signature_policy_conflict`. Rich content is bounded, sanitized through the
+pinned server sanitizer, and returned with a `sanitizer_version`. Active
+content, event handlers, inline styles, remote images, and unsafe protocols are
+removed. An enabled policy requires coherent rich and plain content and at
+least one selected message type.
+
+Compose, reader reply, and Flow include these fields in durable draft and send
+payloads:
+
+```json
+{
+  "composition_kind": "reply",
+  "signature_mode": "default",
+  "quoted_html": "<blockquote>Earlier generated message</blockquote>",
+  "quoted_text": "Earlier generated message"
+}
+```
+
+`composition_kind` is `new`, `reply`, or `forward`; it cannot change after a
+draft is created. `signature_mode` is `default`, `enabled`, or `disabled`.
+Quoted forward history is a separate bounded field, not editable authored
+body content.
+
+The server freezes one sanitized `signature_snapshot` when a new durable draft
+or unlinked send first establishes its writing intent. The snapshot records the
+exact account, policy revision, sanitizer version, content hash, content, and
+whether it is applied. Linked sends copy their draft snapshot exactly. A later
+settings edit cannot rewrite a draft, retry, scheduled send, or accepted
+outbound message. Legacy drafts with no snapshot remain unsigned instead of
+acquiring a new policy on reopen.
+
+The provider renderer assembles the transient send body exactly once in this
+order: authored body, frozen signature when applied, then structured quoted
+history. Persisted authored body is never rewritten with signature markup.
+Remove and Restore only change the applied state of the frozen sidecar; they do
+not re-read live settings or duplicate content. Rendered output is size-checked
+before any Gmail call. Signature policy load failure visibly blocks Send until
+Retry succeeds or the user explicitly continues unsigned.
+
+Full draft-detail and draft-save responses may return the frozen snapshot so a
+mounted writer can reconcile its authoritative state. Recent-draft lists omit
+signature content. Logs, generated QA audit records, and companion lifecycle
+state retain only safe identifiers, revisions, counts, and hashes.
 
 ## Web session-only recipient suggestions
 
