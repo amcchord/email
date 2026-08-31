@@ -693,3 +693,46 @@ add a new entry that explicitly supersedes the old one.
   only: Gmail placement, labels, durable conversation actions, Snooze, Undo,
   retry, and idempotency retain their existing ownership boundary. No migration
   or AI-provider call is part of the feature.
+
+## D-036 — Catalog designs require exact registered implementations
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Treat every catalog-declared `(content_type, design)` as an exact
+  contract with explicit immutable Pillow renderer and palette registrations,
+  plus exact device and browser content renderers. Validate equality across
+  these registries at import time. Unknown content, design, or palette values
+  fail closed instead of selecting a visually plausible default.
+- Reason: A catalog option can reach first-class selectors, scoped browser
+  displays, and physical terminals automatically. Silently mapping a missing
+  future design to Editorial would make an incomplete feature appear valid and
+  could let browser/device outputs disagree while tests still see an image.
+- Consequence: Existing Home Editorial/Swiss and Day Ahead Editorial pixels are
+  snapshot-pinned and unchanged. Adding a design now requires one explicit
+  registry entry, its palette family, compatible catalog declaration, and exact
+  renderer coverage; startup/test validation rejects partial registration.
+  Persisted invalid selections use the existing logged safety fallback rather
+  than impersonating a different named design.
+
+## D-037 — Browser transport presence does not imply write eligibility
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Ship the reviewed, exact-version Web Serial/esptool adapter as an
+  inert capability behind the existing independent release-signature,
+  generation-pinned catalog, secure-enrollment, printed-revision, model/layout,
+  and physical HIL gates. Only an enabled Connect action entered by an explicit
+  user click may request a port. Hold one origin-wide exclusive Web Lock across
+  ROM write/readback, reset, and same-port RET1 verification, and never expose a
+  whole-chip erase path.
+- Reason: Keeping transport code absent prevented physical testing of the real
+  browser path, but merely including it must not let a UI or configuration flag
+  bypass trust, recoverability, model identity, or provisioning. Browser port
+  selection is physical authorization, not firmware authenticity or hardware
+  attestation.
+- Consequence: Production can deploy and inspect the exact transport while the
+  Connect action remains unreachable with an empty key/catalog/HIL state.
+  Promotion consumes immutable candidate bytes only after complete exact-revision
+  E1001 and E1002 evidence and signs offline; E1004 and OTA eligibility stay
+  false. Physical interruption, DTR/RTS, ROM recovery, RET1 provisioning, and
+  first authenticated check-in remain mandatory before any enablement.

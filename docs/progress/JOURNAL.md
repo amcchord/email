@@ -3,6 +3,78 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — At a Glance browser transport, owner controls, and design registry
+
+### Scope
+
+Promote the existing signed-package and OTA foundations into real, still
+independently locked operator software: a pinned browser transport, owner OTA
+inspection/rescue controls, fail-loud design registration, and an offline
+HIL-bound signing path. Do not qualify hardware, install a key/catalog, enable a
+write, allocate a migration, or mutate a terminal.
+
+### Completed
+
+- Added pinned `esptool-js@0.6.1` behind the existing source-signature,
+  enrollment, catalog, printed-revision, and HIL gates. One explicit click
+  selects the port; one exclusive Web Lock covers ROM and application phases;
+  only the four signed preserve-config segments are written with erase-all
+  disabled; byte-for-byte readback, hard reset, and exact same-port RET1
+  status-v2 identity are required before success.
+- Added terminal-owner Settings controls for read-only OTA capability blockers,
+  printed-revision confirm/clear, attempt history/detail, and cancellation only
+  for `offered` sequence-zero attempts. The surface cannot create offers, change
+  enablement/rollout, fetch OTA artifacts, or access a device transport.
+- Replaced implicit Editorial/palette fallbacks with immutable exact Pillow
+  registries and catalog/device/web completeness checks. Unknown or incomplete
+  designs now fail closed; exact pixel hashes preserve existing Home
+  Editorial/Swiss and Day Ahead Editorial output.
+- Added private firmware branch `codex/firmware-promotion-tool` at
+  `aadac9d6dbb0afc0e115db3528251691a93c6fc5`. Its offline tool consumes the
+  immutable candidate plus complete revision-bound E1001/E1002 HIL records,
+  preserves firmware bytes, signs the exact schema-2 manifest/schema-1 catalog
+  tree, and keeps E1004 and all OTA eligibility false. No real key or evidence
+  was used and firmware `main` remains candidate.7 `ea3547b`.
+
+### Verification
+
+- Rebased the three migration-free application slices onto exact Focused/Split
+  closeout `e2fdffd562f125c341703042620e09e9b96c8aa5` with no shared-shell
+  conflict. Focused backend gate: 101 passed. Full frontend: 412 passed.
+- `npm ci` and audit reported zero vulnerabilities; the exact production build
+  transformed 587 modules. `git diff --check` passed. The isolated design gate
+  had passed 133 checks and the offline promotion tool had passed 20 safety
+  checks before integration.
+- No E1001/E1002 serial port was attached. No browser chooser, device write,
+  enrollment, signing ceremony, release qualification, OTA attempt, provider
+  call, or real mail/calendar mutation was performed.
+
+### Production Actions
+
+- Fast-forwarded GitHub `main`, the integration branch, and production from
+  exact Focused closeout `e2fdffd` to application/runtime
+  `fdc766c234c02e5cd7d59df453691e8bc39eadbc`. Installed the locked frontend
+  dependency, built 587 modules, and restarted only `mailapp`; Alembic remained
+  exactly `c6d7e8f9a0b1` and no backup, migration, worker, Caddy, or database
+  write was required.
+- The retired API process reached the host's known graceful-drain timeout. The
+  replacement became active at 01:14:33 UTC as PID 2133109 with zero automatic
+  restarts and no warning-or-higher entries after 01:14:34. All seven checked
+  services are active and public health is `ok`.
+- Production remains exact and clean. Browser flashing is false, trusted
+  release-key count is zero, OTA enablement is false, rollout is zero, and both
+  OTA tables remain empty. Anonymous firmware catalog, OTA capability, and RET1
+  enrollment reads remain 401. The production bundle contains the new owner
+  control and gated transport surfaces, but no gate can currently authorize a
+  port or write.
+
+### Next
+
+Attach dedicated E1001 and E1002 devices, record their exact printed revisions,
+execute the complete browser/RET1/A-B/OTA interruption and recovery matrix, and
+only then perform the protected offline signing ceremony and separately review
+browser enrollment and OTA canary enablement.
+
 ## 2026-08-30 — Focused/Split Inbox implementation
 
 ### Scope

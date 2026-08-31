@@ -7,25 +7,28 @@ formats remain in [`firmware-variants.md`](firmware-variants.md).
 
 Baselines verified on 2026-08-30:
 
-- Email OTA control-plane runtime `9253eb4`, deployed on Conversation-first
-  Inbox closeout `075a475`, with Alembic revision `c6d7e8f9a0b1` descending
-  directly from prior production head `b5c6d7e8f9a0`;
+- Email terminal integration runtime
+  `fdc766c234c02e5cd7d59df453691e8bc39eadbc`, including the OTA control plane,
+  owner controls, gated browser transport, and exact design registries, with
+  Alembic revision `c6d7e8f9a0b1` descending directly from prior production head
+  `b5c6d7e8f9a0`;
 - private `reterminal-color` `main` at
-  `5db28243f8dc56309492ae926c0b5186a5fffeb7` (`0.2.0-candidate.6`), with the
-  default-disabled transport coordinator isolated at `949bc87`; and
-- exact candidate.6 Actions run `33341323506`, plus green host safety and
-  generic E1001/E1002/E1004 and keyed E1002 transport builds for `949bc87`.
+  `ea3547b8bdb96cd27a4b14f4ed0ce662445944b4` (`0.2.0-candidate.7`), with the
+  default-disabled transport coordinator integrated; and
+- exact candidate.7 Actions run `33344430605`, plus offline promotion tooling
+  on private branch `codex/firmware-promotion-tool` at
+  `aadac9d6dbb0afc0e115db3528251691a93c6fc5`.
 
 ## Status today
 
 | Capability | Implemented today | Important limit |
 | --- | --- | --- |
 | USB build and flash | PlatformIO environments, pinned dependencies/toolchain evidence, exact per-model partitions, deterministic build metadata, and immutable checksummed bundles exist for E1001, E1002, and E1004. | Current artifacts truthfully declare `signed=false`; no browser may install them. Command-line PlatformIO/esptool remains the only qualified write path. |
-| Browser firmware gateway | Cookie-authenticated, rate-limited catalog/manifest/signature/artifact routes verify a signed approval catalog and every bundle byte from local immutable storage. The browser independently verifies exact manifest bytes with SHA-256 and detached Ed25519 against source-pinned contracts. | Production defaults contain no trusted key or approved catalog, and the browser key map is empty. The Admin surface is metadata-only; serial, artifact-download, provisioning, and write gates remain false. |
-| Runtime configuration | Candidate.6 retains bounded RET1 and three-slot atomic NVS configuration while keeping generic release images unkeyed, enrollment-disabled, and free of credentials. Exact status v2 adds read-only partition, boot-state, and source-build identity while the v1 handshake transcript stays unchanged; the application remains compatible with candidate.4 status v1. | Production has no online enrollment key or qualified release/model allowlist, and the shipped browser does not import serial transport. Command-line `uploadfs` remains the only hardware workflow until HIL passes. |
-| Application partitions | Candidate.6 validates the complete six-entry `ab-v1` table at runtime on E1001/E1002: the legacy NVS, `ota_0`, LittleFS, and coredump ranges are unchanged and `ota_1` is appended at `0x400000`. E1004 remains exact single-slot and OTA-ineligible. | Existing physical E1001/E1002 devices still need a qualified USB migration to install the new partition table. No production model/revision is HIL-qualified for OTA. |
-| Device check-in | Active enrolled firmware reports bounded model, build, wake, battery, RSSI, memory, boot, image, exact source-build, and running-slot metadata. Candidate.6 summarizes a seven-sample battery burst with median, spread, count, and explicit validity; the server excludes explicitly invalid readings from its sparse 90-day predictor. | The legacy shared terminal URL is routing data, not OTA authentication. Current hardware has no direct external-power signal, so OTA uses a fresh measured 4000 mV/80% reserve and forecasts never gate a write. |
-| TLS and OTA | The isolated coordinator at `949bc87` uses fresh bounded SNTP, CA/hostname validation, no redirects/downgrade, exact scoped offers, bounded artifact reads, Ed25519/content-address verification, inactive-slot streaming, a CRC-protected NVS attempt/event record, pending validation, and rollback/recovery reporting. The server persists idempotent attempts/events in PostgreSQL. | Generic E1001/E1002/E1004 artifacts remain transport-disabled, writer-disabled, and unkeyed. Server enablement, HIL map, and rollout default closed; no production offer or physical write is authorized. E1004 is hard-rejected. |
+| Browser firmware gateway | Cookie-authenticated, rate-limited catalog/manifest/signature/artifact routes verify a signed approval catalog and every bundle byte from local immutable storage. The browser independently verifies exact manifest bytes with SHA-256 and detached Ed25519, then a pinned `esptool-js@0.6.1` adapter can hold one exclusive Web Serial session through exact four-segment write/readback, reset, and RET1 status-v2 verification. | Production has no trusted key, approved catalog, positive generation, enrollment qualification, or HIL-qualified model/revision. The Connect action is therefore unreachable and no port or artifact request can begin. |
+| Runtime configuration | Candidate.7 retains bounded RET1 and three-slot atomic NVS configuration while keeping generic release images unkeyed, enrollment-disabled, and free of credentials. Exact status v2 adds read-only partition, boot-state, and source-build identity while the v1 handshake transcript stays unchanged; the application remains compatible with candidate.4 status v1. | Production has no online enrollment key or qualified release/model allowlist. The flashing transport does not provide Wi-Fi/configuration enrollment, and command-line recovery remains required until HIL passes. |
+| Application partitions | Candidate.7 validates the complete six-entry `ab-v1` table at runtime on E1001/E1002: the legacy NVS, `ota_0`, LittleFS, and coredump ranges are unchanged and `ota_1` is appended at `0x400000`. E1004 remains exact single-slot and OTA-ineligible. | Existing physical E1001/E1002 devices still need a qualified USB migration to install the new partition table. No production model/revision is HIL-qualified for OTA. |
+| Device check-in | Active enrolled firmware reports bounded model, build, wake, battery, RSSI, memory, boot, image, exact source-build, and running-slot metadata. Candidate.7 summarizes a seven-sample battery burst with median, spread, count, and explicit validity; the server excludes explicitly invalid readings from its sparse 90-day predictor. | The legacy shared terminal URL is routing data, not OTA authentication. Current hardware has no direct external-power signal, so OTA uses a fresh measured 4000 mV/80% reserve and forecasts never gate a write. |
+| TLS and OTA | Candidate.7 incorporates the coordinator founded at `949bc87`: fresh bounded SNTP, CA/hostname validation, no redirects/downgrade, exact scoped offers, bounded artifact reads, Ed25519/content-address verification, inactive-slot streaming, a CRC-protected NVS attempt/event record, pending validation, and rollback/recovery reporting. The server persists idempotent attempts/events in PostgreSQL. | Generic E1001/E1002/E1004 artifacts remain transport-disabled, writer-disabled, and unkeyed. Server enablement, HIL map, and rollout default closed; no production offer or physical write is authorized. E1004 is hard-rejected. |
 | E1004 | The firmware builds reproducibly and its full-refresh dual-controller implementation is present. | No hardware qualification exists; E1004 browser installation and OTA are explicitly ineligible. |
 
 The personal checkout under `~/Development/reTerminalColor` remains dirty and
@@ -129,9 +132,12 @@ downloads blocked.
 
 The shipped Admin component requests catalog metadata, exact manifest/signature
 evidence, and the read-only OTA capability lock state. It observes HTTPS, Web
-Serial, and Web Locks support without requesting a port. There is no esptool
-dependency, artifact download loop, erase command, serial write, or dynamic
-flashing code in the production bundle.
+Serial, and Web Locks support without requesting a port. The exact-version
+esptool adapter is loaded only after an enabled Connect action and explicit
+browser port choice. It exposes no whole-chip erase, and every package,
+signature, server, enrollment, revision, and HIL blocker is checked before that
+action becomes reachable. Production's empty trust/catalog/HIL state therefore
+prevents both artifact and port access.
 
 ## Browser installation and local provisioning
 
@@ -238,21 +244,21 @@ physical E1001/E1002 HIL.
 
 ## TLS and device-side update sequence
 
-Candidate.6 implements the transport prerequisite: every wake requires a fresh
+Candidate.7 implements the transport prerequisite: every wake requires a fresh
 SNTP callback within 15 seconds and a plausible 2024–2041 clock, then validates
 the hostname and chain against compiled ISRG Root X1/X2. Certificate, clock, or
 handshake failure fails closed into the normal sleep/backoff path. Plain HTTP,
 scheme-relative URLs, redirect following, and `setInsecure()` are absent. The
 bundle must rotate before X2 expires in 2040 or before production changes CA.
 
-Candidate.6 also implements the local signed writer and calls the pending-image
+Candidate.7 also implements the local signed writer and calls the pending-image
 validation/rollback gate before enrollment, panel, network, restart, or sleep
 work. A pending image must prove the enabled/keyed policy, durable boot counter,
 preserved enrolled configuration, read-only LittleFS mount, and two frame-sized
-PSRAM allocations. Firmware commit `949bc87` adds the separately gated HTTPS/NVS
-coordinator and lifecycle transport. Generic artifacts still compile both
-writer and transport out, so no enabled/keyed image may be distributed without
-the exact physical qualification and release process below.
+PSRAM allocations. The coordinator founded at firmware commit `949bc87` is
+integrated into candidate.7. Generic artifacts still compile both writer and
+transport out, so no enabled/keyed image may be distributed without the exact
+physical qualification and release process below.
 
 For each offered update, firmware performs this sequence:
 
@@ -447,20 +453,22 @@ device that has the immediately previous production partition layout.
    resulting artifacts remain honestly unsigned and non-installable.
 2. **Authenticated gateway and locked browser foundation — complete:** the
    application verifies a signed, generation-pinned, one-release catalog and
-   exact bundle contents behind cookie auth and rate limits. The browser audits
-   metadata only; it cannot request a port, download, erase, or write.
+   exact bundle contents behind cookie auth and rate limits. Production has no
+   trusted key/catalog/HIL tuple, so the installed transport cannot request a
+   port, download artifacts, or write.
 3. **Secure serial enrollment and HIL qualification — active:** the bounded
    `@RET1` P-256/AES-GCM protocol, three-slot configuration, schema-2 release
    claim, fail-closed server tickets, per-device activation, rollback grace,
    revocation, CA validation, and browser exact-byte Ed25519 preflight now have
-   deterministic software tests. Production Web Serial transport and the
-   repeatable physical E1001/E1002 interruption/recovery matrix remain. E1004
-   stays locked.
-4. **Browser first install:** add a pinned flashing implementation only after
-   browser-side signature verification and milestone 3 pass. Flash exact
-   preserve-config artifacts, verify ROM-loader output and rebooted identity,
-   and keep a command-line rescue flow. The server and client write gates may
-   then be changed through a separately reviewed release.
+   deterministic software tests. The flashing transport is installed, but the
+   RET1 provisioning transport and repeatable physical E1001/E1002
+   interruption/recovery matrix remain. E1004 stays locked.
+4. **Browser first install — software-integrated, physically blocked:** the
+   pinned adapter implements exact preserve-config write/readback, ROM identity,
+   rebooted RET1 identity, cancellation, disconnect, and recovery-required
+   boundaries behind independent gates. Complete both-model physical HIL, use
+   the offline promotion tool to sign the exact bytes/revisions, and retain a
+   command-line rescue flow before enabling the server/client write gates.
 5. **A/B OTA canary — software-integrated, physically blocked:** authenticated
    offers/artifacts/events, the PostgreSQL ledger, signed descriptor/inactive-
    slot writer, durable NVS replay, and pending validation/rollback are wired
@@ -471,7 +479,8 @@ device that has the immediately previous production partition layout.
    bounded cohort. The conservative measured-power gate remains independent
    from the user-facing battery forecast.
 6. **Managed rollout:** add cohort promotion, pause/revoke, key rotation,
-   charging notices, dashboards, and recovery drills before wider release.
+   operational dashboards, and recovery drills before wider release. Existing
+   predicted-life charging notices remain advisory rather than write admission.
 
 No milestone should be promoted merely because it builds. Its exit gate is a
 repeatable artifact, device evidence for each eligible model, server-observed

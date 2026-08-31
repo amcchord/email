@@ -5,10 +5,10 @@ Last updated: 2026-08-30
 ## Active Objective
 
 Operate the deployed Focused/Split Inbox as one truthful projection over the
-authoritative conversation row while the terminal track qualifies the
-default-locked OTA control plane and promoted candidate.7 firmware coordinator
-on physical E1001/E1002 hardware. Keep real mail/calendar QA read-only except
-for generated `.example.test` fixtures and preserve every independent terminal
+authoritative conversation row while the terminal track physically qualifies
+the deployed, independently gated Web Serial installer and OTA control plane on
+exact E1001/E1002 hardware. Keep real mail/calendar QA read-only except for
+generated `.example.test` fixtures and preserve every independent terminal
 write gate.
 
 ## Baseline
@@ -29,11 +29,20 @@ write gate.
   checks, conservative power and deterministic cohort gates, and an append-only
   attempt/event ledger. Production remains disabled with an empty HIL map,
   zero-percent rollout, no eligible descriptor, and zero attempt/event rows.
-- The deployed At a Glance firmware protocol/installer runtime is
-  `84a854a5527c342b85bb2884ef43b89fea95a954`. The first-class page can select a
-  signed release and exact physical model/revision, but artifact preflight is
-  still server-qualification-gated and the shipped browser remains
-  source-hard-disabled for serial/device writes.
+- The deployed At a Glance terminal integration runtime is
+  `fdc766c234c02e5cd7d59df453691e8bc39eadbc`. Settings now exposes owner-scoped
+  OTA lock state, printed-revision confirmation, attempt history/detail, and
+  safe cancellation of an unstarted offer. The first-class installer includes
+  pinned `esptool-js@0.6.1`, an exclusive Web Serial/Web Locks adapter, exact
+  preserve-config writing/readback, and same-port RET1 status verification.
+  Every port/write path remains unreachable because production has no trusted
+  release key, approved catalog, enrollment qualification, browser HIL tuple,
+  or enablement.
+- The deployed Pillow renderer now uses exact immutable design and palette
+  registries with import-time catalog/device/web completeness checks. Existing
+  Home Editorial/Swiss and Day Ahead Editorial pixels are unchanged; a missing
+  future design implementation fails closed instead of silently rendering as
+  Editorial.
 - The deployed Gmail Labels & Move application/runtime commit is
   `a440801c18c8377b50a225af71f3937caa78c7af`. Existing synchronized user labels
   are account-safe, conversation-scoped durable actions across list, table,
@@ -86,6 +95,13 @@ write gate.
   reproducibility, signed-manifest verification, and immutable candidate
   upload. Generic bundles remain unkeyed, enrollment-disabled, OTA-disabled,
   and physically unqualified.
+- The offline promotion/signing workflow is pushed only on private firmware
+  branch `codex/firmware-promotion-tool` at
+  `aadac9d6dbb0afc0e115db3528251691a93c6fc5`. It requires complete,
+  revision-bound E1001 and E1002 HIL records, preserves candidate bytes, emits
+  the application gateway's exact signed catalog tree, and keeps E1004 plus all
+  OTA eligibility false. It has not used a real key, qualified a device, or
+  changed firmware `main`.
 
 This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
@@ -94,10 +110,11 @@ live state.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 
-- State: candidate.6, the executable HIL evidence harness, exact browser package
-  preflight, recovery workflow, and both OTA1 parsers are complete; production
-  remains locked. No E1001/E1002 was attached during this release, and no
-  device write, enrollment key, qualified catalog, or OTA offer was enabled.
+- State: candidate.7, the executable HIL evidence harness, exact browser package
+  preflight, real pinned Web Serial transport, recovery workflow, offline
+  HIL-bound signing tool, and both OTA1 parsers are complete; production remains
+  locked. No E1001/E1002 was attached during this release, and no device write,
+  enrollment key, qualified catalog, or OTA offer was enabled.
 - Scope: physical RET1 enrollment, interrupted serial/config write, three-slot
   selection, same-owner pending continuity, rollback grace, revocation,
   preserve-config, trusted-time/CA failure, A/B partition migration, inactive
@@ -141,6 +158,27 @@ live state.
   desktop/mobile browser QA, and authenticated aggregate-only production QA.
   Full evidence is in `FOCUSED_SPLIT_INBOX_RELEASE_2026-08-30.md`.
 
+## Recent At a Glance Browser Transport & Owner Controls Release
+
+- The browser installer now owns one user-selected Web Serial port under one
+  exclusive Web Lock, probes exact ESP32-S3/flash/MAC identity, writes only the
+  four signed preserve-config segments with erase-all disabled, reads every
+  byte back, resets, and requires exact RET1 status-v2 identity on the same
+  port. Existing signature, catalog, enrollment, revision, and HIL gates remain
+  independent and default closed.
+- Terminal Settings exposes read-only OTA capability blockers and per-device
+  attempt history/detail plus owner-confirmed printed revision and cancellation
+  only while an offer is still unstarted. It cannot create an offer, change
+  rollout, fetch OTA artifacts, or write a device.
+- Exact design/palette registries now validate every catalog declaration across
+  Pillow, device, and browser rendering at import time. Existing output is
+  pinned by exact pixel hashes; unknown values fail closed.
+- Consolidated validation passed 101 focused backend checks, all 412 frontend
+  tests, npm audit with zero vulnerabilities, and a 587-module build. Production
+  remains at Alembic `c6d7e8f9a0b1`, with all seven services healthy, both OTA
+  tables empty, and browser/OTA rollout gates false/empty. Full evidence is in
+  `AT_A_GLANCE_BROWSER_TRANSPORT_RELEASE_2026-08-30.md`.
+
 ## Recent At a Glance OTA Control Plane Release
 
 - Owner-idempotent attempts snapshot exact signed release, device, active
@@ -183,10 +221,11 @@ live state.
   printed-revision gates, hashes all four preserve-config artifacts before any
   future connection, re-hashes prepared bytes at the write boundary, and
   distinguishes safe pre-write cancellation from recovery-required state.
-- Real Web Serial/esptool and device OTA transports remain absent. Consolidated
-  terminal checks passed 261 backend tests with 12 expected skips, 59 frontend
-  tests, a 541-module local build, and the exact firmware release gate. Full
-  evidence is in
+- That foundation preceded the now-deployed gated Web Serial adapter; device
+  access still cannot begin without signed, server-qualified, physically
+  qualified release evidence. Consolidated terminal checks passed 261 backend
+  tests with 12 expected skips, 59 frontend tests, a 541-module local build,
+  and the exact firmware release gate. Full evidence is in
   `AT_A_GLANCE_FIRMWARE_PROTOCOL_INSTALLER_RELEASE_2026-08-30.md`.
 
 ## Recent Gmail Labels & Move Release
@@ -297,13 +336,15 @@ live state.
 
 ## Near-Term Terminal Queue
 
-- Run the candidate.6 physical E1001/E1002 RET1, trusted TLS, A/B partition
+- Run the candidate.7 physical E1001/E1002 RET1, trusted TLS, A/B partition
   migration, interruption, pending-image validation, rollback, preserve-config,
   and ROM recovery HIL. E1004 remains blocked and single-slot.
-- Add production Web Serial only after HIL, with a source-pinned browser signing
-  key and the existing serial/provisioning/recovery gates still independent.
-- After HIL, add the durable OTA event ledger and device-authenticated
-  offer/artifact/event transport before considering cohorts or enablement.
+- After complete HIL, use the offline promotion tool with a protected signing
+  key, pin only its public key and positive catalog generation, and qualify the
+  exact printed revisions before changing the browser gate.
+- Keep RET1 provisioning and OTA rollout separately locked until their own
+  interruption/recovery evidence is complete; browser-flash qualification must
+  not imply OTA eligibility.
 
 ## Safety Constraints
 
@@ -313,11 +354,12 @@ live state.
 - Firmware release signing stays offline and independent from the future online
   enrollment key. Neither private key belongs in Git, browser code, artifacts,
   application logs, or progress documents.
-- The shipped browser may fetch and hash firmware bytes only after exact
+- The shipped browser may request a port and fetch/hash firmware bytes only
+  after exact
   signature, schema, model, printed-revision, preservation, and server-side
   qualification gates all pass. The current catalog cannot pass those gates,
-  and the build contains no serial request, Wi-Fi/configuration write, erase,
-  esptool, or dynamic flashing transport.
+  and the build contains no Wi-Fi/configuration write, erase-all path, trusted
+  release key, or qualified catalog.
 - Physical cable observation is not hardware attestation. MAC, model, chip
   revision, and firmware version are self-reported inventory fields.
 - Real production mail and calendars remain read-only during terminal QA.
