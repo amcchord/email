@@ -189,7 +189,7 @@ def test_schema_model_and_direct_e8_migration_contract():
     config.set_main_option("script_location", "alembic")
     scripts = ScriptDirectory.from_config(config)
     assert scripts.get_revision("f9a0b1c2d3e4").down_revision == "e8f9a0b1c2d3"
-    assert scripts.get_heads() == ["f9a0b1c2d3e4"]
+    assert scripts.get_heads() == ["a0b1c2d3e4f5"]
 
 
 def test_allowlist_sanitizer_removes_active_and_remote_content():

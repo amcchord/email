@@ -25,6 +25,7 @@ from backend.routers import (
     events,
     follow_up,
     public_api,
+    saved_views,
     snippets,
     signatures,
     snoozes,
@@ -111,6 +112,7 @@ app.include_router(calendar.router)
 app.include_router(events.router)
 app.include_router(follow_up.router)
 app.include_router(public_api.router)
+app.include_router(saved_views.router)
 app.include_router(snoozes.router)
 app.include_router(snippets.router)
 app.include_router(signatures.router)
