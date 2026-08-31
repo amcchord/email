@@ -1,6 +1,7 @@
 <script>
   import { onMount, tick } from 'svelte';
-  import { currentPage } from '../../lib/stores.js';
+  import { accounts, currentPage, savedViews } from '../../lib/stores.js';
+  import { openSavedView } from '../../lib/savedViewState.js';
   import {
     activeShortcuts,
     actionRegistryVersion,
@@ -49,7 +50,7 @@
     void $actionRegistryVersion;
     void $commandPaletteOpen;
     const context = pageToContext($currentPage);
-    return Object.values($activeShortcuts)
+    const registeredCommands = Object.values($activeShortcuts)
       .filter(shortcut => shortcut.id !== 'nav.commands')
       .filter(shortcut => shortcut.palette !== false)
       .filter(shortcut => shortcut.context === 'global' || shortcut.context === context)
@@ -64,6 +65,20 @@
         };
       })
       .filter(command => command.registered);
+    const savedViewCommands = $savedViews.map(view => ({
+      id: `saved-view:${view.id}`,
+      key: '',
+      shortcut: '',
+      label: `Open ${view.name}`,
+      context: 'global',
+      category: 'Saved Views',
+      keywords: ['saved view', 'custom split', 'search', view.query],
+      registered: true,
+      enabled: view.account_id === null || $accounts.some(account => account.id === view.account_id),
+      disabledReason: 'Reconnect this Saved View account before opening it.',
+      run: () => openSavedView(view),
+    }));
+    return [...registeredCommands, ...savedViewCommands];
   });
 
   let visibleCommands = $derived(getVisibleCommands(commands, {
@@ -156,7 +171,14 @@
     if (!command?.enabled || executingId) return;
     const session = activeSession;
     executionError = '';
-    const invocation = invokeAction(command.id);
+    let invocation;
+    try {
+      invocation = command.run
+        ? { started: true, result: command.run(), error: null }
+        : invokeAction(command.id);
+    } catch (error) {
+      invocation = { started: true, result: undefined, error };
+    }
     if (!invocation.started) {
       if (sessionGuard.isCurrent(session) && $commandPaletteOpen) {
         executionError = invocation.disabledReason || 'That command is not available right now.';
@@ -321,7 +343,7 @@
             onclick={() => executeCommand(command)}
           >
             <span class="command-icon" aria-hidden="true">
-              <Icon name={command.category === 'Inbox' ? 'mail' : 'arrow-right'} size={16} />
+              <Icon name={command.category === 'Inbox' ? 'mail' : command.category === 'Saved Views' ? 'bookmark' : 'arrow-right'} size={16} />
             </span>
             <span class="command-copy">
               <span class="command-label">{command.label}</span>

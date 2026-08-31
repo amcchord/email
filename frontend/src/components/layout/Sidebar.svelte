@@ -4,6 +4,7 @@
   import { api } from '../../lib/api.js';
   import { onMount } from 'svelte';
   import Icon from '../common/Icon.svelte';
+  import SavedViews from '../email/SavedViews.svelte';
 
   let accountList = $derived($syncStatus.length > 0 ? $syncStatus : $accounts);
   let categoriesExpanded = $state(false);
@@ -239,6 +240,8 @@
         {/if}
       </div>
     {/if}
+
+    <SavedViews showSection={!$sidebarCollapsed} />
 
     <!-- Categories section -->
     {#if categoryLabels.length > 0 && !$sidebarCollapsed}

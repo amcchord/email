@@ -23,6 +23,16 @@ export const selectedThreadId = writable(null);
 // One-shot, account-authoritative handoff from Contacts to Inbox. It is
 // intentionally session memory only and is cleared on every auth transition.
 export const contactConversationIntent = writable(null);
+// Session-only Saved Views state. Queries are deliberately never mirrored to
+// URLs or browser storage and are purged at every authenticated transition.
+export const savedViews = writable([]);
+export const savedViewsLoading = writable(false);
+export const savedViewsLoaded = writable(false);
+export const savedViewsError = writable('');
+export const savedViewsMax = writable(12);
+export const activeSavedViewId = writable(null);
+export const savedViewEditorRequest = writable(null);
+export const savedViewFocusRequest = writable(0);
 
 // Email state
 export const emails = writable([]);
@@ -300,6 +310,14 @@ function resetAuthenticatedSessionState() {
   selectedEmailId.set(null);
   selectedThreadId.set(null);
   contactConversationIntent.set(null);
+  savedViews.set([]);
+  savedViewsLoading.set(false);
+  savedViewsLoaded.set(false);
+  savedViewsError.set('');
+  savedViewsMax.set(12);
+  activeSavedViewId.set(null);
+  savedViewEditorRequest.set(null);
+  savedViewFocusRequest.set(0);
 
   emails.set([]);
   emailsLoading.set(false);

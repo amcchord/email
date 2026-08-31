@@ -339,6 +339,18 @@ export const api = {
     return request('GET', `/emails/labels/all${params}`);
   },
 
+  // Private revisioned Saved Views. Queries remain in authenticated request
+  // bodies and session memory; they are never encoded into navigation URLs.
+  listSavedViews: () => request('GET', '/saved-views'),
+  createSavedView: (payload) => request('POST', '/saved-views', payload),
+  replaceSavedView: (viewId, payload) =>
+    request('PUT', `/saved-views/${encodeURIComponent(viewId)}`, payload),
+  deleteSavedView: (viewId, revision) => {
+    const params = new URLSearchParams({ revision: String(revision) });
+    return request('DELETE', `/saved-views/${encodeURIComponent(viewId)}?${params.toString()}`);
+  },
+  reorderSavedViews: (payload) => request('POST', '/saved-views/reorder', payload),
+
   // Durable thread snooze / remind later
   createSnooze: (payload) => request('POST', '/snoozes', payload),
   listSnoozes: ({ state = 'active', limit = 50, offset = 0 } = {}) => {

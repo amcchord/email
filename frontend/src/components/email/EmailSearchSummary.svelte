@@ -4,6 +4,9 @@
     getEmailSearchScopeLabel,
     removeEmailSearchClause,
   } from '../../lib/emailSearch.js';
+  import { activeSavedViewId, savedViews, savedViewsMax, selectedAccountId } from '../../lib/stores.js';
+  import { isSavableStructuredSearch, savedViewMatches } from '../../lib/savedViews.js';
+  import { requestSavedViewEditor } from '../../lib/savedViewState.js';
   import Icon from '../common/Icon.svelte';
 
   let {
@@ -28,6 +31,9 @@
       ? 'Previous results remain visible'
       : (analysis.valid ? getEmailSearchScopeLabel(analysis.ast) : 'Structured search results')
   );
+  let activeSavedView = $derived($savedViews.find(view => view.id === $activeSavedViewId) || null);
+  let activeSavedViewExact = $derived(savedViewMatches(activeSavedView, $selectedAccountId, query));
+  let canSaveView = $derived(isSavableStructuredSearch(query) && (activeSavedView || $savedViews.length < $savedViewsMax));
 
   function updateQuery(value) {
     if (onQueryChange) onQueryChange(value);
@@ -90,6 +96,16 @@
   {/if}
 
   <div class="summary-actions">
+    {#if canSaveView}
+      <button
+        type="button"
+        class:modified-button={activeSavedView && !activeSavedViewExact}
+        onclick={() => requestSavedViewEditor({ mode: activeSavedView ? 'edit' : 'create', viewId: activeSavedView?.id || null, useCurrentSearch: true })}
+        title={activeSavedViewExact ? `Manage ${activeSavedView.name}` : activeSavedView ? `Save changes to ${activeSavedView.name}` : 'Save this search as a view'}
+      >
+        {activeSavedViewExact ? 'Saved' : activeSavedView ? 'Save changes' : 'Save view'}
+      </button>
+    {/if}
     <button type="button" onclick={focusSearch}>Edit</button>
     <button type="button" class="clear-button" onclick={() => updateQuery('')}>Clear</button>
   </div>
@@ -199,6 +215,9 @@
     color: var(--text-primary);
   }
   .summary-actions .clear-button {
+    color: var(--color-accent-600);
+  }
+  .summary-actions .modified-button {
     color: var(--color-accent-600);
   }
   .raw-query {

@@ -7,11 +7,13 @@
   import ShortcutHelpModal from '../common/ShortcutHelpModal.svelte';
   import CommandPalette from '../common/CommandPalette.svelte';
   import OutboundSendStatus from '../email/OutboundSendStatus.svelte';
-  import { sidebarCollapsed, currentPage, composeData } from '../../lib/stores.js';
+  import { sidebarCollapsed, currentPage, composeData, savedViewFocusRequest, savedViews, savedViewsMax, searchQuery, createAuthenticatedSessionGuard } from '../../lib/stores.js';
   import { newComposeIntent } from '../../lib/composeDraft.js';
   import { getLazyRouteLabel, normalizeAuthenticatedPage, preloadAuthenticatedPage } from '../../lib/lazyRoutes.js';
   import { openCommandPalette, registerActions, toggleShortcutHelp, loadUserShortcuts } from '../../lib/shortcutStore.js';
   import { theme } from '../../lib/theme.js';
+  import { isSavableStructuredSearch } from '../../lib/savedViews.js';
+  import { refreshSavedViews, requestSavedViewEditor } from '../../lib/savedViewState.js';
 
   let { children } = $props();
 
@@ -54,14 +56,32 @@
     }
   }
 
+  async function focusSavedViewsWhenReady() {
+    currentPage.set('inbox');
+    void preloadAuthenticatedPage('inbox');
+    sidebarCollapsed.set(false);
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      const section = document.querySelector('[data-saved-views-focus]');
+      if (section) {
+        savedViewFocusRequest.update(value => value + 1);
+        section.focus();
+        return;
+      }
+    }
+  }
+
   onMount(() => {
     // Load user's custom shortcut overrides from API
     loadUserShortcuts();
+    const savedViewsSession = createAuthenticatedSessionGuard();
+    void refreshSavedViews(savedViewsSession);
 
     // Register global navigation shortcuts that work on every page
     const cleanup = registerActions({
       'nav.flow':     () => navigateByShortcut('flow'),
       'nav.inbox':    () => navigateByShortcut('inbox'),
+      'nav.savedViews': () => { void focusSavedViewsWhenReady(); },
       'nav.calendar': () => navigateByShortcut('calendar'),
       'nav.glance':   () => navigateByShortcut('at-a-glance'),
       'nav.contacts': () => navigateByShortcut('contacts'),
@@ -78,9 +98,19 @@
       'nav.commands': openCommandPalette,
       'nav.help':     toggleShortcutHelp,
       'nav.theme':    () => theme.toggle(),
+      'savedViews.saveCurrent': {
+        run: () => requestSavedViewEditor({ mode: 'create' }),
+        isEnabled: () => $currentPage === 'inbox' && isSavableStructuredSearch($searchQuery) && $savedViews.length < $savedViewsMax,
+        disabledReason: () => $savedViews.length >= $savedViewsMax
+          ? `Saved Views is full (${ $savedViewsMax }). Manage an existing view first.`
+          : 'Open a valid structured email search first.',
+      },
     });
 
-    return cleanup;
+    return () => {
+      savedViewsSession.dispose();
+      cleanup();
+    };
   });
 </script>
 

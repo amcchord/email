@@ -26,6 +26,7 @@ export const SHORTCUT_DEFAULTS = [
   // ── Navigation (global) ──────────────────────────────────────────
   { id: 'nav.flow',     key: 'g f', label: 'Go to Flow',              context: 'global', category: 'Navigation' },
   { id: 'nav.inbox',    key: 'g i', label: 'Go to Inbox',             context: 'global', category: 'Navigation' },
+  { id: 'nav.savedViews', key: 'g v', label: 'Go to Saved Views',      context: 'global', category: 'Navigation', keywords: ['custom split', 'search', 'folder'] },
   { id: 'nav.calendar', key: 'g l', label: 'Go to Calendar',          context: 'global', category: 'Navigation' },
   { id: 'nav.glance',   key: 'g g', label: 'Go to At a Glance',       context: 'global', category: 'Navigation' },
   { id: 'nav.contacts', key: 'g p', label: 'Go to Contacts',          context: 'global', category: 'Navigation', keywords: ['people', 'correspondents', 'relationships'] },
@@ -65,6 +66,7 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'inbox.nextSection', key: 'Shift+j', label: 'Next inbox section', context: 'inbox', category: 'Inbox' },
   { id: 'inbox.prevSection', key: 'Shift+k', label: 'Previous inbox section', context: 'inbox', category: 'Inbox' },
   { id: 'inbox.undo',     key: 'z',       label: 'Undo last email action', context: 'inbox', category: 'Inbox' },
+  { id: 'savedViews.saveCurrent', key: '', label: 'Save current search', context: 'inbox', category: 'Saved Views', keywords: ['custom split', 'filter'] },
 
   // ── Flow ─────────────────────────────────────────────────────────
   { id: 'flow.next',       key: 'j',          label: 'Next item',               context: 'flow', category: 'Flow' },
