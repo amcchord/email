@@ -44,13 +44,24 @@ conversation row, without a migration, AI-provider call, or Gmail move.
 
 ### Production Actions
 
-- Pending the final independent review and exact fast-forward/postflight. No
-  production action or real-mail/calendar mutation has occurred in this slice.
+- Fast-forwarded GitHub `main`, the feature branch, and production to exact
+  reviewed application/runtime `dea8117f5b5348d8c4d3f78e0e6af08273a6367d`.
+  Production built 546 frontend modules; Alembic remained exactly
+  `c6d7e8f9a0b1` and no backup, migration, dependency, worker, Caddy, or terminal
+  change was required.
+- The retired API process exhausted its graceful-drain timeout at the
+  replacement boundary. Replacement PID 2132116 is active with zero automatic
+  restarts and no warning-or-higher entries after its 01:03:15 UTC start. All
+  seven checked services are active, public health is `ok`, and anonymous split
+  access is 401.
+- Authenticated aggregate-only production QA showed both sections, exact
+  nonzero totals, 25 visible reason-labelled rows in each, and zero browser
+  warning/error entries. No real message was opened or mutated.
 
 ### Next
 
-Ship one exact reviewed build, perform aggregate/read-only authenticated
-production QA, and close the release record with exact runtime/docs SHAs.
+Monitor the released projection and continue product work from the exact docs
+closeout while preserving the terminal OTA owner-UI rebase boundary.
 
 ## 2026-08-30 — At a Glance OTA control plane and firmware coordinator
 
@@ -83,8 +94,9 @@ a physical write.
 - Exact post-Conversation-rebase gate: 273 passed with 16 expected skips;
   formatting, compilation, and `git diff --check` passed.
 - Firmware host safety, generic E1001/E1002/E1004 builds, and keyed E1002
-  coordinator build passed at `949bc87`. Candidate.7 exact-SHA Actions remains
-  the private-main promotion gate.
+  coordinator build passed at `949bc87`. Candidate.7 exact-SHA Actions run
+  `33344430605` subsequently passed and private `main` was promoted to exact
+  `ea3547b8bdb96cd27a4b14f4ed0ce662445944b4`.
 
 ### Production Actions
 
@@ -102,9 +114,9 @@ a physical write.
 
 ### Next
 
-Promote candidate.7 after exact CI, then require the physical E1001/E1002
-18-case migration/interruption/rollback/recovery/rescue record before installing
-an eligible descriptor, confirming a revision, or enabling one canary cohort.
+Require the physical E1001/E1002 18-case migration/interruption/rollback/
+recovery/rescue record before installing an eligible descriptor, confirming a
+revision, or enabling one canary cohort.
 
 ## 2026-08-30 — Conversation-first Inbox implementation
 

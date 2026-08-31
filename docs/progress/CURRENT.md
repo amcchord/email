@@ -4,15 +4,20 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Release the completed focused/split placement slice as policy over one
-authoritative conversation row, while the
-terminal track qualifies the now-deployed, default-locked OTA control plane and
-candidate.7 firmware coordinator on physical E1001/E1002 hardware. Keep real
-mail/calendar QA read-only except for generated `.example.test` fixtures and
-preserve every independent terminal write gate.
+Operate the deployed Focused/Split Inbox as one truthful projection over the
+authoritative conversation row while the terminal track qualifies the
+default-locked OTA control plane and promoted candidate.7 firmware coordinator
+on physical E1001/E1002 hardware. Keep real mail/calendar QA read-only except
+for generated `.example.test` fixtures and preserve every independent terminal
+write gate.
 
 ## Baseline
 
+- The deployed Focused/Split Inbox application/runtime is
+  `dea8117f5b5348d8c4d3f78e0e6af08273a6367d`. One coherent endpoint ranks,
+  counts, and pages both visible sections over the authoritative owned-account
+  conversation row, with exact totals, stable reasons, keyboard traversal, and
+  no Gmail move, AI call, or migration.
 - The deployed conversation-first Inbox application/runtime code boundary is
   `f5be5851ae7c5e628e490223c50deb0be1c9c9b2`; following closeout commits are
   documentation only. Inbox, ordinary mailboxes, labels, and search now use one
@@ -75,35 +80,17 @@ preserve every independent terminal write gate.
   warning-or-higher entries. Production has no secure-enrollment or OTA
   enablement, online key, approved catalog, qualified release/model pair,
   nonzero rollout, or device update offer.
-- Private firmware `main` is
-  `5db28243f8dc56309492ae926c0b5186a5fffeb7`
-  (`0.2.0-candidate.6`). Exact-SHA run `33341323506` passed the complete
-  software/reproducibility gate. Candidate.7 branch tip
-  `ea3547b8bdb96cd27a4b14f4ed0ce662445944b4` adds the separately gated HTTPS/
-  NVS coordinator; its exact-SHA promotion run is pending. Generic bundles
-  remain unkeyed, enrollment-disabled, OTA-disabled, and physically
-  unqualified.
+- Private firmware `main` and `codex/ota-transport` are exact at candidate.7
+  `ea3547b8bdb96cd27a4b14f4ed0ce662445944b4`. Exact-SHA run `33344430605`
+  passed release tooling, keyed RET1 and OTA1 coordinator builds, every model,
+  reproducibility, signed-manifest verification, and immutable candidate
+  upload. Generic bundles remain unkeyed, enrollment-disabled, OTA-disabled,
+  and physically unqualified.
 
 This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
 
 ## Active Work Items
-
-### P1 — Focused/split Inbox placement
-
-- State: implementation and consolidated local gate are complete on the exact
-  terminal OTA docs baseline `81a277e`; production remains unchanged until the
-  reviewed branch is fast-forwarded and its read-only postflight passes.
-- Scope: deterministic, explainable Focused/Other placement over the existing
-  row without creating a second message-level truth, exact section totals,
-  visible reasons, responsive list/table layout, and fast keyboard movement
-  between sections.
-- Acceptance: each conversation appears exactly once; placement reasons are
-  visible and stable; manual mailbox/label/Snooze actions keep their existing
-  account ownership, idempotency, Undo, and retry semantics.
-- Next: close the independent release review, fast-forward GitHub and production,
-  then run authenticated read-only section/count/console QA without opening or
-  mutating real mail.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 
@@ -128,18 +115,31 @@ live state.
 
 - State: application runtime `9253eb4` and Alembic `c6d7e8f9a0b1` are deployed;
   all production gates remain closed and both new tables are empty. Firmware
-  candidate.7 is pushed on `codex/ota-transport` pending its exact CI gate and
-  private-main promotion.
+  candidate.7 is promoted on private `main` after its exact CI gate passed.
 - Scope: one additive event-ledger migration descending from b5, authenticated
   device offer/artifact/event endpoints,
   idempotent attempt state, power gates, rollout cohorts, and rescue controls.
 - Acceptance: a restart or repeated request cannot duplicate or lose update
   truth, only exact HIL-qualified evidence is offerable, and no single flag can
   enable a write.
-- Next: promote candidate.7 only after exact CI, then attach dedicated hardware
-  and complete physical A/B migration, interrupted-write, rollback, recovery,
-  and USB-rescue evidence before installing any eligible descriptor or changing
-  rollout from zero.
+- Next: attach dedicated hardware and complete physical A/B migration,
+  interrupted-write, rollback, recovery, and USB-rescue evidence before
+  installing any eligible descriptor or changing rollout from zero.
+
+## Recent Focused/Split Inbox Release
+
+- One PostgreSQL statement applies deterministic Focused/Other placement after
+  exact conversation anchoring and before both section counts and pagination,
+  preventing duplicate, missing, or drifting placement truth.
+- The literal Inbox exposes visible Focused and Other sections, exact totals,
+  stable reasons, responsive list/table presentation, persistent preference,
+  and J/K, Shift+J/K, O, and Escape behavior. Generated Undo restores the exact
+  row, selection, totals, and DOM focus.
+- Final validation passed 696 backend tests with 56 expected skips, all 404
+  frontend tests, fresh-c6 PostgreSQL placement/pagination checks, a 546-module
+  build, independent review with no actionable P0–P2 findings, generated
+  desktop/mobile browser QA, and authenticated aggregate-only production QA.
+  Full evidence is in `FOCUSED_SPLIT_INBOX_RELEASE_2026-08-30.md`.
 
 ## Recent At a Glance OTA Control Plane Release
 

@@ -105,8 +105,18 @@ needs-reply, or legacy exclusion filter.
   `81a277e22cc0fcf5439735beaa74a775622de27a`.
 - Focused/Split implementation commit: `e85ffa0` after the exact-base rebase.
 - Generated/PostgreSQL evidence commit: `0e19fcd`.
-- Final reviewed application/runtime, GitHub main, production, service health,
-  and authenticated read-only QA evidence will be recorded after deployment.
+- Final reviewed application/runtime and initial GitHub/production release:
+  `dea8117f5b5348d8c4d3f78e0e6af08273a6367d`.
+- Production built 546 frontend modules. The replacement API is PID 2132116,
+  has zero automatic restarts, and has no warning-or-higher entries after its
+  2026-08-31 01:03:15 UTC start boundary. The retired process exhausted its
+  graceful-drain timeout at the replacement boundary; the replacement started
+  cleanly, all seven checked services are active, and public health is `ok`.
+- Anonymous access to `/api/emails/conversations/split` is 401. Authenticated
+  read-only production QA showed both first-class sections, exact nonzero
+  totals, 25 visible rows and reason chips in each section, and zero browser
+  warning/error entries. It did not open, move, archive, label, snooze, or
+  otherwise mutate real mail.
 - Production remains at Alembic `c6d7e8f9a0b1`; this release is migration-free.
 
 ## Rollback boundary
