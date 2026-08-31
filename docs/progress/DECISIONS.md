@@ -753,3 +753,26 @@ add a new entry that explicitly supersedes the old one.
   reconciliation retries the same archive identity; and a source removed by
   later sync turns the archive into a terminal no-op instead of trapping the
   delivered message in reconciliation.
+
+## D-039 — Browser install and enrollment share one physical session; activation remains device-authenticated
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: After all independent server, signed-catalog, release/model,
+  printed-revision, enrollment, and HIL gates pass, one explicit user gesture
+  selects one Web Serial port and holds one origin-wide Web Lock across exact
+  preserve-config flash/readback, reset, RET1 encrypted configuration/result,
+  and activation polling. Wi-Fi and the raw device credential remain
+  browser-to-device; the API receives only hashes. Firmware, not browser
+  structure parsing, performs authoritative ES256 ticket verification.
+- Reason: Reopening a chooser between flash and provisioning loses physical
+  continuity and makes identity/recovery ambiguous, while treating a serial
+  result as activation would let self-reported cable evidence replace proof
+  that the installed credential can authenticate over the intended HTTPS path.
+- Consequence: Pre-write cancellation is owner/same-origin and supersedes only
+  the exact attempt/candidate. A later old-generation handshake can retry with
+  fresh hashes, and one unique lost-result lineage can reconcile from an
+  observed target generation, but an uncertain encrypted write is never
+  replayed automatically. Only the first matching scoped HTTPS check-in
+  activates the candidate. Production exposes no Wi-Fi fields and disables
+  Connect until every independent gate is deliberately satisfied.

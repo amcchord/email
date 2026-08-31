@@ -1557,10 +1557,15 @@ and `200` for an exact replay, and rejects binding, transition, runtime-slot,
 build, boot-count, or payload conflicts. Sequence gaps are retained explicitly
 and cannot later count as clean rollout-promotion evidence.
 
-The current browser installer remains physically write-locked. Its serial
-transport, secure provisioning, and hardware recovery gates are fixed false in
-shipped code. It never calls `navigator.serial.requestPort`, downloads firmware
-artifacts, erases a device, or invokes a flashing library.
+The browser installer remains physically write-locked by dynamic server,
+catalog, release/model, printed-revision, enrollment, and HIL gates. Production
+has no trusted catalog key, positive generation, online enrollment identity, or
+qualified release/model tuple, so it renders no Wi-Fi inputs and disables the
+Connect action before any `navigator.serial.requestPort` or artifact request can
+begin. When all independent gates are deliberately satisfied, one explicit user
+gesture selects one port and holds one origin-wide Web Lock through exact
+four-segment preserve-config flash/readback, reset, RET1 configuration/result,
+and activation polling. Whole-chip erase remains unavailable.
 
 Browser firmware responses use `Cache-Control: private, no-store`, `nosniff`,
 and same-origin resource policy. Browser artifact responses also include an
@@ -1577,16 +1582,18 @@ limited to 120 requests per minute per client.
 
 RET1 enrollment uses the authenticated browser session for owner intent and a
 separate per-device credential for later terminal check-ins. Public API tokens
-cannot call the enrollment APIs. The production browser surface remains
-transport-locked: it can inspect capabilities and revoke an existing secure
-credential, but it does not import the RET1 transport module, request a serial
-port, accept Wi-Fi values, flash, or erase.
+cannot call the enrollment APIs. The deployed browser surface imports its RET1
+transport only through the independently gated workflow. Production remains
+locked: it can inspect capabilities and revoke an existing secure credential,
+but it exposes no Wi-Fi fields, leaves Connect disabled, and cannot request a
+port, download an artifact, flash, configure, or erase a device.
 
 ```text
 GET  /api/terminal/enrollment/capabilities
 POST /api/terminal/enrollment/intents
 POST /api/terminal/enrollment/intents/{attempt_id}/ticket
 POST /api/terminal/enrollment/intents/{attempt_id}/complete
+POST /api/terminal/enrollment/intents/{attempt_id}/cancel
 GET  /api/terminal/enrollment/intents/{attempt_id}
 POST /api/terminal/enrollment/devices/{public_id}/revoke
 
@@ -1595,12 +1602,15 @@ GET /terminal/device/{public_id}/{credential}/image.bmp
 ```
 
 The capabilities read is session-authenticated and private. Intent, ticket,
-completion, and revocation writes additionally require a browser session
-cookie, an approved same-origin `Origin`, and a same-origin Fetch Metadata
-claim when the browser sends one. Intent and ticket UUIDs are idempotency keys;
-reusing one with different exact input returns 409. The server accepts only an
-exact RET1 status/hello/hello-ack transcript for a catalog-qualified E1001 or
-E1002 release and refuses E1004.
+completion, cancellation, and revocation writes additionally require a browser
+session cookie, an approved same-origin `Origin`, and a same-origin Fetch
+Metadata claim when the browser sends one. Intent and ticket UUIDs are
+idempotency keys; reusing one with different exact input returns 409. The server
+accepts only an exact RET1 status/hello/hello-ack transcript for a
+catalog-qualified E1001 or E1002 release and refuses E1004. Cancellation binds
+the exact `client_intent_id` and operation `cancel`, is owner-scoped and
+same-origin, and supersedes only that attempt and candidate before encrypted
+device provisioning may have begun.
 
 Issuance remains fail-closed unless all of these agree:
 
@@ -1629,6 +1639,16 @@ artifact. The server authorizes the browser-supplied configuration hash; it
 cannot independently inspect the encrypted configuration or prove that its
 schedule URL matches the issued URL without a future RET1 protocol extension.
 The first-party browser builder therefore remains part of this trust boundary.
+The browser validates the compact JWS structure and exact transition bindings;
+firmware performs the authoritative ES256 signature verification before it
+decrypts and stages configuration.
+
+A cancelled pre-write attempt may be reused only after a new physical handshake
+proves that the device still reports the old generation; the server then issues
+fresh hashes and a fresh ticket for that same generation. If the encrypted
+result was lost, the browser never automatically replays it. A fresh observed
+target generation may reconcile one unique recent lineage and advance safely,
+but physical cable evidence never substitutes for scoped HTTPS activation.
 
 Browser completion is advisory. A candidate credential becomes active only on
 the first matching scoped HTTPS check-in with the expected normalized MAC and

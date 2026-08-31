@@ -3,6 +3,61 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — At a Glance same-port browser provisioning
+
+### Scope
+
+Complete the previously locked browser installer from exact preserve-config
+flash through RET1 enrollment and authenticated activation while keeping every
+production trust and physical-HIL gate closed. Do not attach or mutate a
+terminal, install keys/catalogs, qualify hardware, enable OTA, or allocate a
+migration.
+
+### Completed
+
+- Kept one explicit user-selected Web Serial port and one origin-wide Web Lock
+  across exact four-segment write/readback, reset, RET1 status/hello,
+  browser-local encrypted configuration/result, and scoped activation polling.
+- Added owner/same-origin pre-write cancellation, safe same-generation reuse
+  only after fresh physical proof, and observed-target-generation recovery for
+  one unique lost-result lineage. Uncertain encrypted writes never replay
+  automatically, and cable evidence never activates a credential.
+- Advanced private firmware `main` to candidate.8 at
+  `14f7046ae0253504f25972e9bc6ad952c1fa649f`. Its bounded configured-device
+  window and schema-2 31-case secret-free HIL harness passed exact Actions run
+  `33349001516`; the offline promotion tool is integrated but unused.
+
+### Verification
+
+- The consolidated application gate passed 716 backend tests with 65 expected
+  skips, all 440 frontend tests, 29 disposable-PostgreSQL enrollment tests, and
+  a 590-module production build.
+- Signed-in, read-only production QA confirmed the first-class At a Glance tab,
+  Browser terminal installer, locked enrollment/OTA blockers, zero Wi-Fi inputs,
+  a disabled Connect action, and zero browser warnings/errors. No serial chooser,
+  artifact request, terminal mutation, or real mail/calendar mutation occurred.
+
+### Production Actions
+
+- Fast-forwarded GitHub and production to application/runtime
+  `739fe555d90dc9dd49ffdea28fc165ed2b0f7089`, built 590 frontend modules, and
+  replaced only `mailapp`. No migration, backup, worker, Caddy, key, catalog,
+  firmware promotion, or terminal action was required.
+- All seven checked services are active and public health is `ok`. Replacement
+  mailapp PID 2135271 has zero automatic restarts and no warning-or-higher entry
+  after 02:00:12 UTC. The retired process emitted only the host's three known
+  systemd timeout/kill/result lines.
+- Production is exact and clean at the runtime boundary; Alembic remains
+  `c6d7e8f9a0b1 (head)`. Anonymous enrollment and OTA capability reads return
+  401, and aggregate enrollment-attempt, device-credential, OTA-attempt, and
+  OTA-event counts all remain zero.
+
+### Next
+
+Attach dedicated E1001/E1002 hardware and execute the 31-case schema-2 record
+before any protected signing ceremony, catalog/key installation, release/model
+qualification, browser enablement, or OTA canary.
+
 ## 2026-08-30 — Universal Send & Archive
 
 ### Scope

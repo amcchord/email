@@ -7,20 +7,23 @@ OTA remain separate gates in [`firmware-management.md`](firmware-management.md).
 
 ## Current release posture
 
-- Private firmware `main` is `5db28243f8dc56309492ae926c0b5186a5fffeb7`
-  (`0.2.0-candidate.6`). Exact-SHA GitHub Actions run `33341323506` passed its
-  keyed RET1/OTA guards, cross-language and host safety tests, all-model
-  reproducibility, manifest, and bundle checks. The separately gated OTA
-  coordinator is isolated at `949bc87`; it is not a production release.
+- Private firmware `main` is `14f7046ae0253504f25972e9bc6ad952c1fa649f`
+  (`0.2.0-candidate.8`). Exact-SHA GitHub Actions run `33349001516` passed
+  release tooling, keyed RET1 and OTA builds, all models, reproducibility,
+  manifest verification, and immutable candidate upload. The same mainline now
+  includes the offline schema-2 HIL-bound promotion tool.
 - Generic firmware artifacts remain unkeyed and enrollment-disabled. No release
   signing key, enrollment private key, credential, Wi-Fi value, or device image
   is committed to either repository.
-- The Email application understands signed schema-2 RET1 release claims,
-  owner-scoped enrollment intents, short-lived ES256 tickets, hashed device
-  credentials, activation, one-generation rollback grace, and revocation.
-- Production defaults remain locked. The shipped Admin surface can report
-  policy and revoke an existing credential, but cannot request Web Serial,
-  create configuration, download firmware, flash, or erase.
+- The deployed Email runtime `739fe555d90dc9dd49ffdea28fc165ed2b0f7089`
+  now holds one user-selected Web Serial port and one exclusive Web Lock from
+  exact preserve-config flash through RET1 result, creates Wi-Fi configuration
+  only in browser memory, and activates only after the first scoped HTTPS
+  check-in.
+- Production defaults remain locked. No trusted catalog, online enrollment
+  identity, qualified release/model pair, or HIL tuple exists, so the Wi-Fi
+  fields are absent and the Connect action is disabled without requesting a
+  port.
 - Physical E1001 and E1002 HIL is still mandatory. E1004 remains blocked.
 
 Software completeness is not physical qualification. Do not set an enablement
@@ -59,9 +62,9 @@ protected per-device attestation key, and their ROM downloader remains open.
    requires the server flag, exact HTTPS origin, protected online key, signed
    catalog and positive generation floor, matching schema-2 RET1 claim, and an
    explicit E1001/E1002 release/model HIL allowlist.
-2. A future transport adapter obtains an explicit user-selected serial port and
+2. The gated transport adapter obtains one explicit user-selected serial port and
    exchanges exact bounded `@RET1` status, hello, and hello-ack frames. Exact
-   candidate.4 status v1 remains accepted; candidate.6 status v2 adds physical-
+   candidate.4 status v1 remains accepted; candidate.8 status v2 adds physical-
    cable observations of partition layout, running slot, boot state, and source
    build ID without changing the v1 hello/hello-ack transcript. The
    browser verifies canonical encoding, P-256 points, transcript/session hash,
@@ -74,9 +77,11 @@ protected per-device attestation key, and their ROM downloader remains open.
    locally. It submits only credential SHA-256 and configuration SHA-256. The
    server persists a candidate hash and returns one short-lived ES256 compact
    JWS bound to the exact transition.
-5. The browser verifies the JWS, encrypts the ticket and configuration through
-   RET1, and sends them only to the attached device. Firmware verifies before
-   decrypting and stages the configuration in its three-slot atomic NVS store.
+5. The browser validates the compact JWS structure and exact transition
+   bindings, encrypts the ticket and configuration through RET1, and sends them
+   only to the attached device. Firmware performs the authoritative ES256
+   signature verification before decrypting and stages the configuration in
+   its three-slot atomic NVS store.
    Payload commit, readback, and marker commit preserve the current and
    immediate rollback configurations through interruption.
 6. Browser result reporting is advisory. Server activation occurs only when the
@@ -111,6 +116,13 @@ pending/enrolled --owner revoke--> revoked --qualified physical re-enroll--> enr
   MAC lookup prevents spoofable auto-registration from recreating it.
 - Re-enrollment does not replace the current active configuration on ticket
   issue or browser completion. Only candidate check-in activates it.
+- A pre-write browser failure calls the exact owner/same-origin cancellation
+  endpoint. Cancellation supersedes only that attempt and candidate; a later
+  fresh handshake proving the old generation may safely reuse it with new
+  hashes. If a result was lost after an encrypted write, the browser never
+  replays automatically: a fresh observed target generation reconciles one
+  unique recent lineage and advances again without treating cable evidence as
+  activation.
 - Activation retains exactly the immediately previous generation as a rollback
   URL for 24 hours. It is accepted only while one current active credential
   matches server generation/config state. Older rollback and candidate rows are
@@ -138,8 +150,10 @@ idempotent revocation.
 - The raw device credential is generated in the browser and never sent to an
   application API. PostgreSQL stores only SHA-256.
 - Wi-Fi SSID/password and configuration JSON stay browser-to-device. The pure
-  WebCrypto module has no DOM, Serial, storage, network, or logging access and
-  is not imported by the production UI.
+  WebCrypto module has no DOM, Serial, storage, network, or logging access; the
+  production UI imports it only through the dynamically policy-gated workflow,
+  clears its local fields at handoff/session teardown, and exposes no inputs
+  while production policy is locked.
 - Path credentials are unavoidable because current firmware persists only one
   schedule URL. Caddy skips the complete scoped path from access logs. The ASGI
   middleware immediately redacts the server-owned outer scope while routing a
@@ -152,10 +166,10 @@ idempotent revocation.
 
 ## Production enablement checklist
 
-1. Complete physical E1001 and E1002 tests for normal enrollment, wrong model,
-   interrupted payload/marker writes, three-slot boot selection, old-config
-   continuity, rollback grace, Wi-Fi failure, CA failure, candidate check-in,
-   revocation, and ROM recovery.
+1. Complete the schema-2, 31-case physical E1001 and E1002 record for browser
+   reset timing, normal enrollment, partial frames, payload/marker interruption,
+   lost-result reconciliation, three-slot continuity, Wi-Fi/CA failure,
+   activation, revocation/re-enrollment, A/B recovery, and secret-free evidence.
 2. Publish a signed schema-2 candidate from the exact reviewed firmware commit
    and stage it in the root-owned immutable artifact tree. Advance and pin a
    never-reused positive catalog generation.
@@ -163,10 +177,12 @@ idempotent revocation.
    runtime service user as owner and mode `0400` or `0600`. Record only its key
    ID and public hash in the signed release/configuration.
 4. Configure the exact HTTPS origin and the explicit release-to-model HIL
-   allowlist. Verify capabilities become ready before adding any transport.
-5. Add the Web Serial adapter as a separately reviewed production import. It
-   must require explicit user gesture, never persist inputs, wipe owned mutable
-   buffers, handle reconnect and interruption, and retain command-line rescue.
+   allowlist. Verify capabilities become ready before allowing the already
+   deployed transport to render Wi-Fi inputs or enable Connect.
+5. Exercise the exact deployed Web Serial adapter. It requires explicit user
+   gesture, never persists inputs, clears owned mutable buffers, handles
+   reconnect/interruption without automatic replay, and retains command-line
+   rescue.
 6. Re-run the complete application, protocol, disposable-PostgreSQL, Caddy,
    browser, and physical recovery gates. Enable one lab unit first.
 

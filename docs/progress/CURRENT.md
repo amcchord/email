@@ -35,14 +35,15 @@ E1001/E1002 hardware. Keep real mail/calendar QA read-only except for generated
   attempt/event ledger. Production remains disabled with an empty HIL map,
   zero-percent rollout, no eligible descriptor, and zero attempt/event rows.
 - The deployed At a Glance terminal integration runtime is
-  `fdc766c234c02e5cd7d59df453691e8bc39eadbc`. Settings now exposes owner-scoped
-  OTA lock state, printed-revision confirmation, attempt history/detail, and
-  safe cancellation of an unstarted offer. The first-class installer includes
-  pinned `esptool-js@0.6.1`, an exclusive Web Serial/Web Locks adapter, exact
-  preserve-config writing/readback, and same-port RET1 status verification.
-  Every port/write path remains unreachable because production has no trusted
-  release key, approved catalog, enrollment qualification, browser HIL tuple,
-  or enablement.
+  `739fe555d90dc9dd49ffdea28fc165ed2b0f7089`. One explicit user action can hold
+  a selected Web Serial port and origin-wide Web Lock through exact
+  preserve-config flash/readback, reset, RET1 configuration/result, and scoped
+  activation polling. Safe pre-write cancellation, same-generation retry after
+  fresh physical proof, and lost-result generation recovery avoid automatic
+  encrypted-write replay. Production remains unreachable because it has no
+  trusted release key, approved catalog/generation, online enrollment identity,
+  qualified release/model HIL tuple, or enablement; no Wi-Fi inputs render and
+  Connect is disabled.
 - The deployed Pillow renderer now uses exact immutable design and palette
   registries with import-time catalog/device/web completeness checks. Existing
   Home Editorial/Swiss and Day Ahead Editorial pixels are unchanged; a missing
@@ -94,19 +95,19 @@ E1001/E1002 hardware. Keep real mail/calendar QA read-only except for generated
   warning-or-higher entries. Production has no secure-enrollment or OTA
   enablement, online key, approved catalog, qualified release/model pair,
   nonzero rollout, or device update offer.
-- Private firmware `main` and `codex/ota-transport` are exact at candidate.7
-  `ea3547b8bdb96cd27a4b14f4ed0ce662445944b4`. Exact-SHA run `33344430605`
+- Private firmware `main` is exact at candidate.8
+  `14f7046ae0253504f25972e9bc6ad952c1fa649f`. Exact-SHA run `33349001516`
   passed release tooling, keyed RET1 and OTA1 coordinator builds, every model,
   reproducibility, signed-manifest verification, and immutable candidate
-  upload. Generic bundles remain unkeyed, enrollment-disabled, OTA-disabled,
-  and physically unqualified.
-- The offline promotion/signing workflow is pushed only on private firmware
-  branch `codex/firmware-promotion-tool` at
-  `aadac9d6dbb0afc0e115db3528251691a93c6fc5`. It requires complete,
-  revision-bound E1001 and E1002 HIL records, preserves candidate bytes, emits
-  the application gateway's exact signed catalog tree, and keeps E1004 plus all
-  OTA eligibility false. It has not used a real key, qualified a device, or
-  changed firmware `main`.
+  upload. A valid configured-device hello may extend the initial reset window
+  once to a fixed 60-second-from-start ceiling; invalid or repeated hellos
+  cannot keep the device awake.
+- The offline promotion/signing workflow is integrated on that same private
+  firmware `main`. It requires complete schema-2, revision-bound E1001 and E1002
+  HIL records across 31 cases, preserves candidate bytes, emits the application
+  gateway's exact signed catalog tree, and keeps E1004 plus all OTA eligibility
+  false. It has not used a real key, qualified a device, or changed any
+  production enablement.
 
 This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
@@ -115,11 +116,12 @@ live state.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 
-- State: candidate.7, the executable HIL evidence harness, exact browser package
-  preflight, real pinned Web Serial transport, recovery workflow, offline
-  HIL-bound signing tool, and both OTA1 parsers are complete; production remains
-  locked. No E1001/E1002 was attached during this release, and no device write,
-  enrollment key, qualified catalog, or OTA offer was enabled.
+- State: candidate.8, the schema-2 HIL evidence harness, exact browser package
+  preflight, real pinned Web Serial/RET1 same-port transport, recovery workflow,
+  offline HIL-bound signing tool, and both OTA1 parsers are complete; production
+  remains locked. No E1001/E1002 was attached during this release, and no
+  chooser, device write, enrollment key, qualified catalog, or OTA offer was
+  enabled.
 - Scope: physical RET1 enrollment, interrupted serial/config write, three-slot
   selection, same-owner pending continuity, rollback grace, revocation,
   preserve-config, trusted-time/CA failure, A/B partition migration, inactive
@@ -129,7 +131,7 @@ live state.
   enrollment, flash, or update cannot silently strand a terminal, disclose
   credentials, or replace the known-good slot. Only qualified exact
   release/model/hardware-revision tuples may enter either allowlist.
-- Next: attach dedicated E1001/E1002 devices and execute the 18-case HIL record
+- Next: attach dedicated E1001/E1002 devices and execute the 31-case HIL record
   with bounded source evidence before enabling either browser or OTA transport
   for a real device.
 
@@ -137,7 +139,7 @@ live state.
 
 - State: application runtime `9253eb4` and Alembic `c6d7e8f9a0b1` are deployed;
   all production gates remain closed and both new tables are empty. Firmware
-  candidate.7 is promoted on private `main` after its exact CI gate passed.
+  candidate.8 is on private `main` after its exact CI gate passed.
 - Scope: one additive event-ledger migration descending from b5, authenticated
   device offer/artifact/event endpoints,
   idempotent attempt state, power gates, rollout cohorts, and rescue controls.
@@ -162,6 +164,24 @@ live state.
   evidence is in `UNIVERSAL_SEND_ARCHIVE_RELEASE_2026-08-30.md`. Production
   built the same 588 modules; all seven services and public health are healthy,
   Alembic remains `c6d7e8f9a0b1`, and anonymous outbound history is 401.
+
+## Recent At a Glance Same-Port Browser Provisioning Release
+
+- The first-class installer now retains the one selected port and exclusive Web
+  Lock from exact four-segment flash/readback through reset, RET1 encrypted
+  configuration/result, and activation polling. Raw Wi-Fi and device credential
+  values remain browser-to-device; the API receives only hashes.
+- Owner/same-origin pre-write cancellation supersedes only the exact attempt and
+  candidate. A fresh old-generation handshake may safely retry; an observed
+  target generation can reconcile one unique lost-result lineage without
+  treating cable evidence as activation or replaying an uncertain write.
+- Candidate.8 and its 31-case schema-2 HIL harness are exact on private firmware
+  `main`; CI run `33349001516` passed. Application validation passed 716 backend
+  tests with 65 expected skips, all 440 frontend tests, 29 disposable-PostgreSQL
+  enrollment tests, and a 590-module build. Production remains locked with all
+  enrollment/OTA tables empty and no serial chooser or device mutation. Full
+  evidence is in
+  `AT_A_GLANCE_RET1_BROWSER_PROVISIONING_RELEASE_2026-08-30.md`.
 
 ## Recent Focused/Split Inbox Release
 
@@ -356,7 +376,7 @@ live state.
 
 ## Near-Term Terminal Queue
 
-- Run the candidate.7 physical E1001/E1002 RET1, trusted TLS, A/B partition
+- Run the candidate.8 physical E1001/E1002 RET1, trusted TLS, A/B partition
   migration, interruption, pending-image validation, rollback, preserve-config,
   and ROM recovery HIL. E1004 remains blocked and single-slot.
 - After complete HIL, use the offline promotion tool with a protected signing
@@ -378,8 +398,8 @@ live state.
   after exact
   signature, schema, model, printed-revision, preservation, and server-side
   qualification gates all pass. The current catalog cannot pass those gates,
-  and the build contains no Wi-Fi/configuration write, erase-all path, trusted
-  release key, or qualified catalog.
+  and production renders no Wi-Fi inputs or enabled Connect action. The build
+  contains no erase-all path, trusted release key, or qualified catalog.
 - Physical cable observation is not hardware attestation. MAC, model, chip
   revision, and firmware version are self-reported inventory fields.
 - Real production mail and calendars remain read-only during terminal QA.
