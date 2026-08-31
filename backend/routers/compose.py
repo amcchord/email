@@ -139,7 +139,8 @@ def _draft_response(
     *,
     include_signature: bool = False,
 ) -> DraftSessionResponse:
-    payload = draft.payload if isinstance(draft.payload, dict) else {}
+    draft_payload = getattr(draft, "payload", None)
+    payload = draft_payload if isinstance(draft_payload, dict) else {}
     return DraftSessionResponse(
         client_draft_id=draft.client_draft_id,
         account_id=draft.account_id,
