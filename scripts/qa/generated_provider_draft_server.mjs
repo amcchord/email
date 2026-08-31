@@ -498,6 +498,11 @@ function newCounters() {
     follow_up_policy_writes: 0,
     follow_up_policy_conflicts: 0,
     follow_up_requested_sends: 0,
+    signature_policy_reads: 0,
+    signature_policy_writes: 0,
+    signature_policy_conflicts: 0,
+    signature_snapshots_frozen: 0,
+    signature_applied_sends: 0,
     expected_mutations: 0,
     unexpected_mutations: 0,
     unknown_routes: 0,
@@ -548,6 +553,7 @@ export function createGeneratedProviderDraftFixture({
   const outbounds = new Map();
   const outboundIdempotency = new Map();
   const followUpPolicies = new Map();
+  const signaturePolicies = new Map();
   const mutations = new Map();
   const snippets = new Map();
   const offlineMutationIds = new Set();
@@ -579,6 +585,10 @@ export function createGeneratedProviderDraftFixture({
     return `${userId}:${accountId}`;
   }
 
+  function signaturePolicyKey(userId, accountId) {
+    return `${userId}:${accountId}`;
+  }
+
   function validTimeZone(value) {
     try {
       new Intl.DateTimeFormat('en-US', { timeZone: value }).format();
@@ -598,6 +608,21 @@ export function createGeneratedProviderDraftFixture({
       wake_local_time: '09:00',
       time_zone: 'UTC',
       weekdays_only: true,
+      revision: 0,
+    };
+  }
+
+  function publicSignaturePolicy(account) {
+    const policy = signaturePolicies.get(signaturePolicyKey(currentUser.id, account.id));
+    return policy ? clone(policy) : {
+      account_id: account.id,
+      account_email: account.email,
+      enabled: false,
+      include_on_new: true,
+      include_on_replies: true,
+      include_on_forwards: true,
+      body_html: '',
+      body_text: '',
       revision: 0,
     };
   }
@@ -787,6 +812,22 @@ export function createGeneratedProviderDraftFixture({
     if (raw.follow_up_time_zone != null && !validTimeZone(raw.follow_up_time_zone)) {
       throw new Error('follow_up_time_zone is invalid');
     }
+    const compositionKind = raw.composition_kind || (sourceEmailId !== null ? 'reply' : 'new');
+    if (!['new', 'reply', 'forward'].includes(compositionKind)) {
+      throw new Error('composition_kind is invalid');
+    }
+    if (sourceEmailId !== null && compositionKind !== 'reply') {
+      throw new Error('Reply provenance requires the reply composition kind');
+    }
+    const signatureMode = raw.signature_mode || 'default';
+    if (!['default', 'enabled', 'disabled'].includes(signatureMode)) {
+      throw new Error('signature_mode is invalid');
+    }
+    const quotedHtml = typeof raw.quoted_html === 'string' ? raw.quoted_html : '';
+    const quotedText = typeof raw.quoted_text === 'string' ? raw.quoted_text : '';
+    if (compositionKind !== 'forward' && (quotedHtml || quotedText)) {
+      throw new Error('Quoted forward content requires the forward composition kind');
+    }
 
     return {
       client_draft_id: raw.client_draft_id,
@@ -807,6 +848,10 @@ export function createGeneratedProviderDraftFixture({
       follow_up_time_zone: validTimeZone(raw.follow_up_time_zone)
         ? raw.follow_up_time_zone.trim()
         : null,
+      composition_kind: compositionKind,
+      signature_mode: signatureMode,
+      quoted_html: quotedHtml,
+      quoted_text: quotedText,
       is_draft: true,
       attachments: normalizedAttachments,
       _attachment_bytes: attachmentTotal,
@@ -820,6 +865,59 @@ export function createGeneratedProviderDraftFixture({
       ...immutable
     } = payload;
     return immutable;
+  }
+
+  function signatureDefaultEnabled(policy, compositionKind) {
+    if (!policy?.enabled) return false;
+    if (compositionKind === 'reply') return policy.include_on_replies === true;
+    if (compositionKind === 'forward') return policy.include_on_forwards === true;
+    return policy.include_on_new === true;
+  }
+
+  function signatureApplied(mode, defaultEnabled, hasContent) {
+    if (!hasContent || mode === 'disabled') return false;
+    if (mode === 'enabled') return true;
+    return defaultEnabled;
+  }
+
+  function freezeSignatureSnapshot(payload) {
+    const policy = signaturePolicies.get(
+      signaturePolicyKey(currentUser.id, payload.account_id),
+    );
+    const bodyHtml = policy?.body_html || '';
+    const bodyText = policy?.body_text || '';
+    const defaultApplied = signatureDefaultEnabled(policy, payload.composition_kind);
+    const snapshot = {
+      account_id: payload.account_id,
+      policy_revision: policy?.revision || 0,
+      sanitizer_version: 'generated-v1',
+      applied: signatureApplied(
+        payload.signature_mode,
+        defaultApplied,
+        Boolean(bodyHtml || bodyText),
+      ),
+      body_html: bodyHtml,
+      body_text: bodyText,
+      content_hash: sha256({ body_html: bodyHtml, body_text: bodyText }),
+    };
+    counters.signature_snapshots_frozen += 1;
+    return snapshot;
+  }
+
+  function applySignatureMode(snapshot, mode) {
+    if (!snapshot) return null;
+    const hasContent = Boolean(snapshot.body_html || snapshot.body_text);
+    const next = {
+      ...clone(snapshot),
+      applied: mode === 'disabled'
+        ? false
+        : mode === 'enabled'
+          ? hasContent
+          : snapshot.applied === true,
+    };
+    delete next.content_hash;
+    next.content_hash = sha256(next);
+    return next;
   }
 
   function draftSummary(record) {
@@ -841,10 +939,12 @@ export function createGeneratedProviderDraftFixture({
       provider_create_count: record.provider_create_count,
       provider_update_count: record.provider_update_count,
       provider_delete_count: record.provider_delete_count,
+      signature_applied: record.payload.signature_snapshot?.applied === true,
+      signature_policy_revision: record.payload.signature_snapshot?.policy_revision || 0,
     };
   }
 
-  function draftResponse(record, { includeContent = false } = {}) {
+  function draftResponse(record, { includeContent = false, includeSignature = false } = {}) {
     const response = {
       client_draft_id: record.client_draft_id,
       account_id: record.account_id,
@@ -867,6 +967,9 @@ export function createGeneratedProviderDraftFixture({
       synced_at: record.synced_at,
       discarded_at: record.discarded_at,
     };
+    if (includeSignature) {
+      response.signature_snapshot = clone(record.payload.signature_snapshot || null);
+    }
     if (includeContent && record.state !== 'discarded') {
       Object.assign(response, clone(record.payload));
       delete response.mutation_id;
@@ -1444,7 +1547,7 @@ export function createGeneratedProviderDraftFixture({
         replayedDraft.updated_at = new Date().toISOString();
         counters.retries_after_lost_response += 1;
       }
-      return writeJson(response, draftResponse(replayedDraft), 202);
+      return writeJson(response, draftResponse(replayedDraft, { includeSignature: true }), 202);
     }
 
     if (connectivity === 'offline') {
@@ -1497,11 +1600,17 @@ export function createGeneratedProviderDraftFixture({
         }
         counters.same_revision_replays += 1;
         rememberMutation(currentUser.id, payload.mutation_id, expectedMutation);
-        return writeJson(response, draftResponse(existing), 202);
+        return writeJson(response, draftResponse(existing, { includeSignature: true }), 202);
       }
 
       existing.revision = payload.revision;
-      existing.payload = clone(immutable);
+      existing.payload = {
+        ...clone(immutable),
+        signature_snapshot: applySignatureMode(
+          existing.payload.signature_snapshot,
+          payload.signature_mode,
+        ),
+      };
       existing.payload_hash = payloadHash;
       existing.attachment_bytes = payload._attachment_bytes;
       existing.state = 'synced';
@@ -1540,6 +1649,10 @@ export function createGeneratedProviderDraftFixture({
       }
       providerSequence += 1;
       const timestamp = new Date().toISOString();
+      const storedPayload = {
+        ...clone(immutable),
+        signature_snapshot: freezeSignatureSnapshot(payload),
+      };
       drafts.set(key, {
         client_draft_id: payload.client_draft_id,
         draft_id: providerDraftId(currentUser.id, providerSequence),
@@ -1547,7 +1660,7 @@ export function createGeneratedProviderDraftFixture({
         owner_user_id: currentUser.id,
         account_id: payload.account_id,
         revision: payload.revision,
-        payload: clone(immutable),
+        payload: storedPayload,
         payload_hash: payloadHash,
         attachment_bytes: payload._attachment_bytes,
         state: 'synced',
@@ -1602,7 +1715,7 @@ export function createGeneratedProviderDraftFixture({
     ) {
       return holdResponseAfterPersistence(request, response, record, payload.mutation_id);
     }
-    return writeJson(response, draftResponse(record), 202);
+    return writeJson(response, draftResponse(record, { includeSignature: true }), 202);
   }
 
   function getDraftRecord(response, clientDraftId) {
@@ -1821,6 +1934,8 @@ export function createGeneratedProviderDraftFixture({
       source_email_id: record.source_email_id,
       archive_source_after_send: record.archive_source_after_send,
       follow_up_requested: record.follow_up_requested,
+      signature_applied: record.signature_applied,
+      signature_policy_revision: record.payload?.signature_snapshot?.policy_revision || 0,
       client_draft_id: record.client_draft_id,
       state: record.state,
       scheduled_for: record.scheduled_for,
@@ -1906,6 +2021,12 @@ export function createGeneratedProviderDraftFixture({
       if (body.follow_up_time_zone != null && !validTimeZone(body.follow_up_time_zone)) {
         throw new Error('follow_up_time_zone is invalid');
       }
+      if (!['new', 'reply', 'forward'].includes(body.composition_kind || 'new')) {
+        throw new Error('composition_kind is invalid');
+      }
+      if (!['default', 'enabled', 'disabled'].includes(body.signature_mode || 'default')) {
+        throw new Error('signature_mode is invalid');
+      }
       for (const field of ['to', 'cc', 'bcc']) {
         if (!Array.isArray(body[field] || []) || !(body[field] || []).every(isGeneratedAddress)) {
           counters.non_example_test_rejections += 1;
@@ -1956,6 +2077,21 @@ export function createGeneratedProviderDraftFixture({
         'Generated send must retain the draft follow-up reminder choice',
       );
     }
+    const signatureMode = body.signature_mode || 'default';
+    const compositionKind = body.composition_kind || 'new';
+    if (
+      signatureMode !== (draft.payload.signature_mode || 'default')
+      || compositionKind !== (draft.payload.composition_kind || 'new')
+      || (body.quoted_html || '') !== (draft.payload.quoted_html || '')
+      || (body.quoted_text || '') !== (draft.payload.quoted_text || '')
+    ) {
+      return writeError(
+        response,
+        409,
+        'outbound_conflict',
+        'Generated send must retain the frozen signature and quote decision',
+      );
+    }
     const sourceEmailId = provenance.source_email_id;
     const archiveSourceAfterSend = body.archive_source_after_send === true;
     if (archiveSourceAfterSend && !sourceForUser(currentUser.id, sourceEmailId)) {
@@ -1985,6 +2121,11 @@ export function createGeneratedProviderDraftFixture({
       archive_source_after_send: archiveSourceAfterSend,
       follow_up_reminder: followUpMode,
       follow_up_time_zone: followUpTimeZone,
+      composition_kind: compositionKind,
+      signature_mode: signatureMode,
+      signature_snapshot: clone(draft.payload.signature_snapshot || null),
+      quoted_html: body.quoted_html || '',
+      quoted_text: body.quoted_text || '',
       client_draft_id: body.client_draft_id,
       draft_revision: body.draft_revision,
       scheduled_for: body.scheduled_for || null,
@@ -2020,6 +2161,7 @@ export function createGeneratedProviderDraftFixture({
       source_email_id: sourceEmailId,
       archive_source_after_send: archiveSourceAfterSend,
       follow_up_requested: followUpRequested,
+      signature_applied: immutable.signature_snapshot?.applied === true,
       client_draft_id: body.client_draft_id,
       payload_hash: payloadHash,
       payload: immutable,
@@ -2046,11 +2188,13 @@ export function createGeneratedProviderDraftFixture({
     draft.updated_at = clockIso();
     counters.outbound_accepts += 1;
     if (followUpRequested) counters.follow_up_requested_sends += 1;
+    if (record.signature_applied) counters.signature_applied_sends += 1;
     recordEvent('outbound_accepted', request, pathname, {
       send_id: sendId,
       scheduled_for: record.scheduled_for,
       archive_source_after_send: record.archive_source_after_send,
       follow_up_requested: record.follow_up_requested,
+      signature_applied: record.signature_applied,
     });
     return writeJson(response, outboundResponse(record), 202);
   }
@@ -2191,6 +2335,8 @@ export function createGeneratedProviderDraftFixture({
       source_email_id: record.source_email_id,
       archive_source_after_send: record.archive_source_after_send,
       follow_up_requested: record.follow_up_requested,
+      signature_applied: record.signature_applied,
+      signature_policy_revision: record.payload?.signature_snapshot?.policy_revision || 0,
       execute_after: record.execute_after,
       attempt_count: record.attempt_count,
       payload_retained: Boolean(record.payload),
@@ -2220,6 +2366,18 @@ export function createGeneratedProviderDraftFixture({
       logical_outbounds: logicalOutbounds,
       logical_snippets: logicalSnippets,
       follow_up_policies: (ACCOUNTS_BY_USER[currentUser?.id] || []).map(publicFollowUpPolicy),
+      signature_policies: (ACCOUNTS_BY_USER[currentUser?.id] || []).map(account => {
+        const policy = publicSignaturePolicy(account);
+        return {
+          account_id: policy.account_id,
+          revision: policy.revision,
+          enabled: policy.enabled,
+          content_hash: sha256({
+            body_html: policy.body_html,
+            body_text: policy.body_text,
+          }),
+        };
+      }),
       events: clone(events),
     };
   }
@@ -2266,7 +2424,7 @@ export function createGeneratedProviderDraftFixture({
       if (currentUser?.id !== held.request_user_id) {
         counters.stale_session_responses_released += 1;
       }
-      writeJson(held.response, record ? draftResponse(record) : {
+      writeJson(held.response, record ? draftResponse(record, { includeSignature: true }) : {
         detail: { code: 'draft_not_found', message: 'Generated held draft disappeared' },
       }, record ? 202 : 404);
     }
@@ -2310,6 +2468,7 @@ export function createGeneratedProviderDraftFixture({
     outbounds.clear();
     outboundIdempotency.clear();
     followUpPolicies.clear();
+    signaturePolicies.clear();
     mutations.clear();
     offlineMutationIds.clear();
     events.length = 0;
@@ -2525,6 +2684,98 @@ export function createGeneratedProviderDraftFixture({
       };
       followUpPolicies.set(key, saved);
       counters.follow_up_policy_writes += 1;
+      return writeJson(response, clone(saved));
+    }
+    if (request.method === 'GET' && pathname === '/api/compose/signatures') {
+      counters.signature_policy_reads += 1;
+      const accounts = (ACCOUNTS_BY_USER[currentUser.id] || []).map(publicSignaturePolicy);
+      return writeJson(response, { accounts, total: accounts.length });
+    }
+    const signaturePolicyMatch = pathname.match(/^\/api\/compose\/signatures\/(\d+)$/);
+    if (request.method === 'PUT' && signaturePolicyMatch) {
+      markExpectedMutation(request, pathname, 'signature_policy_replace');
+      const account = accountForUser(currentUser.id, Number(signaturePolicyMatch[1]));
+      if (!account) {
+        return writeError(
+          response,
+          404,
+          'signature_policy_not_found',
+          'Generated account not found',
+        );
+      }
+      let body;
+      try {
+        body = await readJson(request);
+        for (const field of [
+          'enabled',
+          'include_on_new',
+          'include_on_replies',
+          'include_on_forwards',
+        ]) {
+          if (typeof body[field] !== 'boolean') throw new Error(`${field} must be a boolean`);
+        }
+        if (!Number.isSafeInteger(body.expected_revision) || body.expected_revision < 0) {
+          throw new Error('expected_revision must be a non-negative integer');
+        }
+        if (typeof body.body_html !== 'string' || body.body_html.length > 50_000) {
+          throw new Error('body_html is invalid');
+        }
+        if (typeof body.body_text !== 'string' || body.body_text.length > 20_000) {
+          throw new Error('body_text is invalid');
+        }
+      } catch (error) {
+        counters.rejected_payloads += 1;
+        return writeError(response, 422, 'signature_policy_invalid', error.message);
+      }
+      const sanitizeGeneratedSignature = value => String(value || '')
+        .replace(/<(script|style|form|iframe|svg|img)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
+        .replace(/<(script|style|form|iframe|svg|img)\b[^>]*\/?\s*>/gi, '')
+        .replace(/\s(?:on\w+|style|src)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+      const bodyHtml = sanitizeGeneratedSignature(body.body_html).trim();
+      const bodyText = String(body.body_text || '').replace(/\r\n?/g, '\n').trim();
+      if (body.enabled && !(bodyHtml || bodyText)) {
+        counters.rejected_payloads += 1;
+        return writeError(
+          response,
+          422,
+          'signature_policy_invalid',
+          'An enabled signature requires content',
+        );
+      }
+      const key = signaturePolicyKey(currentUser.id, account.id);
+      const existing = signaturePolicies.get(key);
+      const currentRevision = existing?.revision || 0;
+      const comparable = {
+        enabled: body.enabled,
+        include_on_new: body.include_on_new,
+        include_on_replies: body.include_on_replies,
+        include_on_forwards: body.include_on_forwards,
+        body_html: bodyHtml,
+        body_text: bodyText,
+      };
+      const sameValues = existing && Object.entries(comparable).every(
+        ([field, value]) => existing[field] === value,
+      );
+      if (existing && existing.revision === body.expected_revision + 1 && sameValues) {
+        return writeJson(response, clone(existing));
+      }
+      if (currentRevision !== body.expected_revision) {
+        counters.signature_policy_conflicts += 1;
+        return writeError(
+          response,
+          409,
+          'signature_policy_conflict',
+          'Generated signature revision changed',
+        );
+      }
+      const saved = {
+        account_id: account.id,
+        account_email: account.email,
+        ...comparable,
+        revision: currentRevision + 1,
+      };
+      signaturePolicies.set(key, saved);
+      counters.signature_policy_writes += 1;
       return writeJson(response, clone(saved));
     }
     if (request.method === 'GET' && pathname === '/api/terminal/settings') {

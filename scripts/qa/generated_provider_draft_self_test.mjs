@@ -33,6 +33,10 @@ const ids = Object.freeze({
   personalSnippetConflict: '00000000-0000-4000-8000-000000000115',
   followUp: '00000000-0000-4000-8000-000000000116',
   followUpSend: '00000000-0000-4000-8000-000000000117',
+  signature: '00000000-0000-4000-8000-000000000118',
+  signatureSend: '00000000-0000-4000-8000-000000000119',
+  signatureForward: '00000000-0000-4000-8000-000000000120',
+  signatureUnsigned: '00000000-0000-4000-8000-000000000121',
 });
 
 let mutationSequence = 200;
@@ -56,6 +60,10 @@ function draftPayload({
   to = ['recipient@example.test'],
   followUpReminder = 'default',
   followUpTimeZone = 'America/New_York',
+  compositionKind = null,
+  signatureMode = 'default',
+  quotedHtml = '',
+  quotedText = '',
 } = {}) {
   return {
     client_draft_id: clientDraftId,
@@ -74,6 +82,10 @@ function draftPayload({
     references,
     follow_up_reminder: followUpReminder,
     follow_up_time_zone: followUpTimeZone,
+    composition_kind: compositionKind || (sourceEmailId === null ? 'new' : 'reply'),
+    signature_mode: signatureMode,
+    quoted_html: quotedHtml,
+    quoted_text: quotedText,
     is_draft: true,
     attachments,
   };
@@ -139,6 +151,153 @@ async function waitFor(predicate, message, timeoutMs = 1_000) {
 const results = {};
 
 try {
+  // Per-account signatures are default-off, revision-safe, frozen once per
+  // writing intent, and retained as a sidecar rather than copied into the
+  // authored body. Later settings edits cannot rewrite an existing draft.
+  await reset('clean');
+  let signatures = await get('/api/compose/signatures');
+  assert.equal(signatures.total, 2);
+  assert.equal(signatures.accounts[0].enabled, false);
+  assert.equal(signatures.accounts[0].revision, 0);
+  const unsignedAck = await postDraft(draftPayload({
+    clientDraftId: ids.signatureUnsigned,
+    bodyHtml: '<p>Frozen before any signature policy exists.</p>',
+  }));
+  assert.equal(unsignedAck.signature_snapshot.applied, false);
+  assert.equal(unsignedAck.signature_snapshot.policy_revision, 0);
+  assert.equal(unsignedAck.signature_snapshot.body_html, '');
+  assert.equal(unsignedAck.signature_snapshot.content_hash.length, 64);
+  const primarySignature = await put('/api/compose/signatures/1101', {
+    enabled: true,
+    include_on_new: true,
+    include_on_replies: true,
+    include_on_forwards: true,
+    body_html: '<p><strong>Generated Sender A</strong><br>Example team</p>',
+    body_text: 'Generated Sender A\nExample team',
+    expected_revision: 0,
+  });
+  assert.equal(primarySignature.revision, 1);
+  const replayedSignature = await put('/api/compose/signatures/1101', {
+    enabled: true,
+    include_on_new: true,
+    include_on_replies: true,
+    include_on_forwards: true,
+    body_html: '<p><strong>Generated Sender A</strong><br>Example team</p>',
+    body_text: 'Generated Sender A\nExample team',
+    expected_revision: 0,
+  });
+  assert.deepEqual(replayedSignature, primarySignature);
+  const stillUnsigned = await get(
+    `/api/compose/drafts/by-client-id/${ids.signatureUnsigned}`,
+  );
+  assert.equal(stillUnsigned.signature_snapshot.applied, false);
+  assert.equal(stillUnsigned.signature_snapshot.policy_revision, 0);
+  assert.equal(stillUnsigned.signature_snapshot.body_html, '');
+  await put('/api/compose/signatures/1101', {
+    enabled: false,
+    include_on_new: true,
+    include_on_replies: true,
+    include_on_forwards: true,
+    body_html: primarySignature.body_html,
+    body_text: primarySignature.body_text,
+    expected_revision: 0,
+  }, { expectedStatus: 409 });
+  await put('/api/compose/signatures/1102', {
+    enabled: true,
+    include_on_new: true,
+    include_on_replies: false,
+    include_on_forwards: true,
+    body_html: '<p>Alternate Generated Sender</p>',
+    body_text: 'Alternate Generated Sender',
+    expected_revision: 0,
+  });
+
+  let signatureDraftPayload = draftPayload({
+    clientDraftId: ids.signature,
+    bodyHtml: '<p>Authored sentinel stays separate.</p>',
+  });
+  await postDraft(signatureDraftPayload);
+  await put('/api/compose/signatures/1101', {
+    enabled: true,
+    include_on_new: true,
+    include_on_replies: true,
+    include_on_forwards: true,
+    body_html: '<p>New settings revision for future drafts only.</p>',
+    body_text: 'New settings revision for future drafts only.',
+    expected_revision: 1,
+  });
+  signatureDraftPayload = {
+    ...signatureDraftPayload,
+    mutation_id: mutationId(),
+    revision: 2,
+    body_html: '<p>Authored sentinel stays separate after settings changed.</p>',
+    body_text: 'Authored sentinel stays separate after settings changed.',
+  };
+  await postDraft(signatureDraftPayload);
+  let reopenedSignature = await get(`/api/compose/drafts/by-client-id/${ids.signature}`);
+  assert.equal(reopenedSignature.signature_snapshot.policy_revision, 1);
+  assert.equal(reopenedSignature.signature_snapshot.applied, true);
+  assert.equal(reopenedSignature.signature_snapshot.body_text, 'Generated Sender A\nExample team');
+  assert.doesNotMatch(reopenedSignature.body_html, /Generated Sender A/);
+
+  signatureDraftPayload = {
+    ...signatureDraftPayload,
+    mutation_id: mutationId(),
+    revision: 3,
+    signature_mode: 'disabled',
+  };
+  await postDraft(signatureDraftPayload);
+  reopenedSignature = await get(`/api/compose/drafts/by-client-id/${ids.signature}`);
+  assert.equal(reopenedSignature.signature_snapshot.applied, false);
+  assert.equal(reopenedSignature.signature_snapshot.policy_revision, 1);
+  signatureDraftPayload = {
+    ...signatureDraftPayload,
+    mutation_id: mutationId(),
+    revision: 4,
+    signature_mode: 'enabled',
+  };
+  await postDraft(signatureDraftPayload);
+  reopenedSignature = await get(`/api/compose/drafts/by-client-id/${ids.signature}`);
+  assert.equal(reopenedSignature.signature_snapshot.applied, true);
+
+  const signatureSend = await post('/api/compose/send', {
+    ...signatureDraftPayload,
+    mutation_id: undefined,
+    revision: undefined,
+    is_draft: undefined,
+    idempotency_key: ids.signatureSend,
+    client_draft_id: ids.signature,
+    draft_revision: 4,
+  }, { expectedStatus: 202 });
+  await post(`/api/compose/sends/${signatureSend.send_id}/undo`, {});
+
+  await postDraft(draftPayload({
+    clientDraftId: ids.signatureForward,
+    compositionKind: 'forward',
+    quotedHtml: '<blockquote>Generated forwarded history.</blockquote>',
+    quotedText: 'Generated forwarded history.',
+    bodyHtml: '<p>Forward note.</p>',
+  }));
+  const reopenedForward = await get(
+    `/api/compose/drafts/by-client-id/${ids.signatureForward}`,
+  );
+  assert.equal(reopenedForward.composition_kind, 'forward');
+  assert.equal(reopenedForward.signature_snapshot.policy_revision, 2);
+  assert.equal(reopenedForward.quoted_text, 'Generated forwarded history.');
+
+  let snapshot = await audit();
+  assert.equal(snapshot.counters.signature_policy_reads, 1);
+  assert.equal(snapshot.counters.signature_policy_writes, 3);
+  assert.equal(snapshot.counters.signature_policy_conflicts, 1);
+  assert.equal(snapshot.counters.signature_snapshots_frozen, 3);
+  assert.equal(snapshot.counters.signature_applied_sends, 1);
+  assert.equal(snapshot.logical_drafts[0].signature_policy_revision, 0);
+  assert.equal(snapshot.logical_drafts[1].signature_policy_revision, 1);
+  assert.equal(snapshot.logical_drafts[2].signature_policy_revision, 2);
+  assert.equal(snapshot.logical_outbounds[0].signature_applied, true);
+  assertExpectedFlowSafety(snapshot);
+  results.signatures = snapshot.counters;
+
   // Account defaults remain off until an explicit revisioned save. A custom
   // 4-day policy round-trips, and the exact draft choice reaches send
   // admission without any external provider or network call.
@@ -200,7 +359,7 @@ try {
     {},
   );
   assert.equal(cancelledFollowUp.state, 'cancelled');
-  let snapshot = await audit();
+  snapshot = await audit();
   assert.equal(snapshot.counters.follow_up_policy_reads, 1);
   assert.equal(snapshot.counters.follow_up_policy_writes, 1);
   assert.equal(snapshot.counters.follow_up_policy_conflicts, 1);
