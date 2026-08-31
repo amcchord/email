@@ -46,7 +46,7 @@ are documented in [`firmware-variants.md`](firmware-variants.md). The
 covers all variants together from the server-implementer's
 perspective.
 
-Two endpoints satisfy the entire interaction:
+Two endpoints satisfy the image-render interaction:
 
 ```text
 GET <base>/schedule.json     # cheap metadata check-in, ~1 KB JSON
@@ -58,8 +58,13 @@ Legacy deployments choose one shared `<base>`. Email currently uses
 instead receives the opaque base
 `/terminal/device/{public_id}/{credential}`. Both route families retain this
 version-1 schedule/BMP body contract; the scoped route changes authorization,
-not the render schema. The `schedule.json` response can advertise a different
-URL for the image, and firmware follows the exact URL returned.
+not the render schema. An active scoped credential may also receive the
+optional OTA1 `firmware` object and use the content-addressed artifact/event
+routes defined in
+[`firmware-management.md`](firmware-management.md#server-contract). Legacy
+shared-code routes never receive an OTA offer. The `schedule.json` response can
+advertise a different URL for the image, and firmware follows the exact URL
+returned.
 
 ### Why two endpoints?
 
@@ -85,7 +90,7 @@ Both endpoints **MUST** support `If-None-Match` and respond `304 Not Modified`
 when the resource hasn't changed.
 
 Both endpoints **MUST** be served over HTTPS with a certificate chaining to the
-firmware's compiled ISRG Root X1/X2 bundle. Candidate.5 requires a fresh SNTP
+firmware's compiled ISRG Root X1/X2 bundle. Candidate.6 requires a fresh SNTP
 callback and a plausible 2024–2041 UTC clock before CA and hostname validation,
 rejects plaintext and scheme-relative URLs, and does not follow redirects.
 Production currently chains through X2. A non-ISRG image origin will fail
@@ -120,6 +125,9 @@ normalized, and match the credential-bound device or the response is the same
 | `X-Last-Image-ETag` | quoted ETag (RFC 7232)         | `"abc123def"`           | The ETag of the image currently painted on the panel; `""` if none.                                                               |
 | `If-None-Match`     | quoted ETag                    | `"abc123def"`           | On `/image.bmp`, mirrors `X-Last-Image-ETag`. On `/schedule.json`, mirrors the schedule's previous ETag if the firmware kept one. |
 | `Accept`            | MIME type                      | `application/json`      | `application/json` on `/schedule.json`, `image/bmp` on `/image.bmp`.                                                              |
+| `X-Firmware-Build-ID` | 40 lowercase hex            | `012345…4567`           | Required as exact source build identity for an OTA-capable active-credential poll.                                                |
+| `X-Running-Partition` | `ota_0` or `ota_1`           | `ota_0`                 | Required as the coherent running-slot identity for an OTA-capable active-credential poll.                                         |
+| `X-External-Power`  | optional `0` or `1`             | `1`                     | Direct hardware truth only. Current firmware omits it; absence means unknown and predictions never substitute for it.             |
 
 
 Header names are case-insensitive but the firmware emits them as shown.
@@ -181,6 +189,10 @@ X-Last-Image-ETag: "abc123def"
         "log_level":       { "type": "string", "enum": ["debug", "info", "warn", "error"] }
       },
       "additionalProperties": false
+    },
+    "firmware": {
+      "description": "Optional strict OTA1 offer on an active scoped credential; see firmware-management.md",
+      "type": "object"
     },
     "message": { "type": "string" }
   }
@@ -603,10 +615,10 @@ add support for them; they need a coordinated firmware-side change first.
 - Authentication headers. Secure enrollment uses a revocable path credential
   because current firmware persists one schedule URL; see
   [`secure-enrollment.md`](secure-enrollment.md).
-- OTA schedule offers and update/event transport. Candidate.5 contains a
-  default-disabled signed A/B writer and early pending-image validation gate,
-  but the schedule parser and network path intentionally do not invoke the
-  writer yet.
+- OTA qualification and transport are not part of the legacy shared-code image
+  protocol. Active RET1 credentials may receive the optional OTA1 extension
+  documented in `firmware-management.md`; generic firmware still compiles the
+  writer and transport out, and all production offer gates default closed.
 - Server-initiated push (the device is asleep; it can't be pushed to).
 - Multiple images / playlists in a single response (use one `image` object).
 - Plug-in panel formats other than 4-bit Spectra 6 800x480.
@@ -620,6 +632,7 @@ add support for them; they need a coordinated firmware-side change first.
 Endpoints:
   GET <base>/schedule.json    -> JSON, see 4.1
   GET <base>/image.bmp        -> 4-bit BMP, see 5.1
+  Active scoped OTA extension -> firmware-management.md#server-contract
 
 Required JSON fields:
   schema_version: 1
@@ -632,8 +645,13 @@ Image:
   Palette[0..5] = Black, White, Green, Blue, Red, Yellow
   ETag must match schedule.image.etag
 
-Headers from device (informational, never required):
+Base display headers from device (informational, never required):
   User-Agent, X-Device-MAC, X-FW-Version, X-Wake-Reason,
   X-Boot-Count, X-Uptime-Sec, X-Battery-MV, X-Battery-Pct,
   X-RSSI-Dbm, X-Free-PSRAM, X-Last-Image-ETag, If-None-Match
+
+Additional coherent OTA admission identity on a transport-enabled active
+credential:
+  X-Firmware-Build-ID, X-Running-Partition, X-Battery-Valid,
+  optional X-External-Power
 ```

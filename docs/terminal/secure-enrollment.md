@@ -7,10 +7,11 @@ OTA remain separate gates in [`firmware-management.md`](firmware-management.md).
 
 ## Current release posture
 
-- Private firmware `main` is `f23d6302ae4bc64326f385fe44593e2ec47febd0`
-  (`0.2.0-candidate.5`). Exact-main GitHub Actions run `33338824057` passed its
+- Private firmware `main` is `5db28243f8dc56309492ae926c0b5186a5fffeb7`
+  (`0.2.0-candidate.6`). Exact-SHA GitHub Actions run `33341323506` passed its
   keyed RET1/OTA guards, cross-language and host safety tests, all-model
-  reproducibility, manifest, and bundle checks.
+  reproducibility, manifest, and bundle checks. The separately gated OTA
+  coordinator is isolated at `949bc87`; it is not a production release.
 - Generic firmware artifacts remain unkeyed and enrollment-disabled. No release
   signing key, enrollment private key, credential, Wi-Fi value, or device image
   is committed to either repository.
@@ -60,7 +61,7 @@ protected per-device attestation key, and their ROM downloader remains open.
    explicit E1001/E1002 release/model HIL allowlist.
 2. A future transport adapter obtains an explicit user-selected serial port and
    exchanges exact bounded `@RET1` status, hello, and hello-ack frames. Exact
-   candidate.4 status v1 remains accepted; candidate.5 status v2 adds physical-
+   candidate.4 status v1 remains accepted; candidate.6 status v2 adds physical-
    cable observations of partition layout, running slot, boot state, and source
    build ID without changing the v1 hello/hello-ack transcript. The
    browser verifies canonical encoding, P-256 points, transcript/session hash,
@@ -114,9 +115,12 @@ pending/enrolled --owner revoke--> revoked --qualified physical re-enroll--> enr
   URL for 24 hours. It is accepted only while one current active credential
   matches server generation/config state. Older rollback and candidate rows are
   revoked.
-- Revocation locks the device, attempts, and all credentials; supersedes live
-  attempts; revokes candidate, active, and rollback generations; and leaves the
-  device isolated. Repeating it returns the same terminal state.
+- Revocation locks the device, live RET1 enrollment attempts, and all
+  credentials; supersedes those enrollment transitions; revokes candidate,
+  active, and rollback generations; and leaves the device isolated. Repeating
+  it returns the same terminal state. Historical OTA ledger rows remain
+  immutable, while the revoked credential can no longer use their device
+  routes.
 - A revoked owner may start a new qualified physical enrollment at the exact
   current generation. The revoked state remains isolated until the new
   candidate actually checks in.
@@ -166,7 +170,11 @@ idempotent revocation.
 6. Re-run the complete application, protocol, disposable-PostgreSQL, Caddy,
    browser, and physical recovery gates. Enable one lab unit first.
 
-OTA remains blocked after this checklist. It additionally requires CA-validated
-HTTPS, signed A/B artifacts, pending-image validation, automatic rollback,
-power gates, acknowledgements, cohorts, pause/revoke controls, and a tested USB
-rescue bundle.
+OTA remains blocked after this checklist even though CA validation, the signed
+A/B writer, pending validation/rollback, conservative power and deterministic
+cohort gates, the PostgreSQL acknowledgement ledger/routes, and the firmware
+coordinator now exist in default-locked software. A real offer still requires a
+signed/keyed transport-enabled eligible release, exact E1001/E1002 OTA HIL and
+printed-revision allowlist, physical `ab-v1` migration, nonzero rollout and
+server enablement, deployed schema/configuration, and a tested USB rescue
+bundle. E1004 remains blocked.

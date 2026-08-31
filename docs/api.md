@@ -1377,6 +1377,10 @@ GET    /api/terminal/devices
 PATCH  /api/terminal/devices/{device_id}
 DELETE /api/terminal/devices/{device_id}
 POST   /api/terminal/displays/{display_id}/regenerate
+POST   /api/terminal/devices/{device_id}/ota/attempts
+GET    /api/terminal/devices/{device_id}/ota/attempts
+GET    /api/terminal/ota/attempts/{attempt_id}
+POST   /api/terminal/ota/attempts/{attempt_id}/cancel
 ```
 
 `GET /api/terminal/experience` is the read-only contract for the first-class
@@ -1399,6 +1403,13 @@ the existing firmware variants. Regenerating the terminal code immediately
 invalidates old firmware URLs without disrupting browser displays. Regenerating
 one browser display rotates only that credential and immediately invalidates
 its old URL.
+
+`PATCH /api/terminal/devices/{device_id}` accepts an additive
+`hardware_revision` field. Supplying or clearing that field is an explicit
+owner confirmation: it requires the normal browser-session cookie plus the
+same-origin mutation boundary and is rejected while the device has an active
+OTA attempt. The value is never inferred from USB descriptors, model names, or
+firmware self-reporting.
 
 Each device response includes additive `battery_health` data. The server stores
 sparse samples on meaningful percentage/voltage changes plus a six-hour
@@ -1465,23 +1476,65 @@ is shipped in application source. It fetches no firmware artifact bytes.
 `GET /api/terminal/firmware/ota/capabilities` is an authenticated, read-only
 status surface. It reports the independent server enablement, exact HIL
 allowlist, positive catalog-generation, signed parent/model eligibility, and
-durable idempotent event-store blockers. This milestone wires no OTA release
-evidence or event ledger, so `effective_offer_enabled` remains false even if a
-single configuration flag is changed. There is no schedule offer, device
-artifact route, or acknowledgement endpoint.
+durable idempotent event-store blockers. The event store is now installed, but
+production still defaults to disabled with an empty HIL map and zero-percent
+rollout. No release is considered offerable merely because persistence exists;
+the exact descriptor, parent bundle, signing key, model, printed hardware
+revision, HIL evidence, catalog generation, power reserve, deterministic
+cohort, and enablement gates must all agree.
+
+Creating an owner OTA attempt is idempotent by `client_request_id` and exact
+request fingerprint. It snapshots the verified release and current device
+identity, active credential generation, running build/slot/boot count, fresh
+power evidence, rollout percentage, and cohort bucket. Only an unstarted offer
+may be cancelled. Reads are owner-scoped and never return the raw device
+credential or credential-bearing artifact URLs.
+
+An active enrolled terminal credential extends the secure schedule contract
+with an optional `firmware` object and content-addressed device routes:
+
+```text
+GET  /terminal/device/{public_id}/{credential}/schedule.json
+GET  /terminal/device/{public_id}/{credential}/firmware/{release_id}/manifest.json
+GET  /terminal/device/{public_id}/{credential}/firmware/{release_id}/manifest.sig
+GET  /terminal/device/{public_id}/{credential}/firmware/{release_id}/application.bin
+POST /terminal/device/{public_id}/{credential}/firmware/events
+```
+
+OTA attempt admission requires one recently stored coherent header snapshot:
+`X-FW-Version`,
+`X-Firmware-Build-ID`, `X-Running-Partition`, `X-Boot-Count`,
+`X-Battery-Valid: 1`, `X-Battery-MV`, and `X-Battery-Pct`.
+`X-External-Power` is optional and accepts only `0` or `1`; absence means
+unknown. Current firmware does not claim direct power, so offer admission uses
+fresh measured reserve of at least 4000 mV and 80%. Forecasts and
+`possible_charging` never authorize an update. Malformed telemetry clears the
+stored snapshot; firmware independently re-samples measured power before
+descriptor verification and again at the flash-write boundary.
+
+Artifacts are available only for the exact active attempt, release, device,
+and active credential that received the offer. Event bodies are bounded and
+strict duplicate-free OTA1 JSON. The append-only ledger enforces one global
+event identity and one sequence per attempt, returns `201` for first acceptance
+and `200` for an exact replay, and rejects binding, transition, runtime-slot,
+build, boot-count, or payload conflicts. Sequence gaps are retained explicitly
+and cannot later count as clean rollout-promotion evidence.
 
 The current browser installer remains physically write-locked. Its serial
 transport, secure provisioning, and hardware recovery gates are fixed false in
 shipped code. It never calls `navigator.serial.requestPort`, downloads firmware
 artifacts, erases a device, or invokes a flashing library.
 
-All responses use `Cache-Control: private, no-store`, `nosniff`, and same-origin
-resource policy. Artifact responses also include an exact `Content-Length`, a
-strong SHA-256 `ETag`, and a sanitized attachment filename. Unknown resources
-return 404, a recognized but ineligible model returns 409, and missing,
-untrusted, stale-generation, or corrupt approved state returns a non-disclosing
-503. Catalog/metadata reads are limited to six per minute per client; artifact
-reads are limited to twelve.
+Browser firmware responses use `Cache-Control: private, no-store`, `nosniff`,
+and same-origin resource policy. Browser artifact responses also include an
+exact `Content-Length`, a strong SHA-256 `ETag`, and a sanitized attachment
+filename. Unknown resources return 404, a recognized but ineligible model
+returns 409, and missing, untrusted, stale-generation, or corrupt approved
+state returns a non-disclosing 503. Catalog/metadata reads are limited to six
+per minute per client; browser artifact reads are limited to twelve. Scoped
+device OTA artifacts use the same private/no-store, `nosniff`, length, and ETag
+boundaries without `Content-Disposition`; device artifacts and events are each
+limited to 120 requests per minute per client.
 
 ### Secure terminal enrollment foundation
 

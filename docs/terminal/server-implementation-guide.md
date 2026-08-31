@@ -42,6 +42,12 @@ Every wake fits this shape:
 ```
 sleep ──► wake ──► Wi-Fi up ──► GET /schedule.json
                                    │
+                                   ├─ active scoped OTA offer?
+                                   │      │
+                                   │      └─ flush durable events; verify exact
+                                   │         signed artifacts; write inactive
+                                   │         slot; restart pending (no panel work)
+                                   │
                                    ├─ etag matches stored?  ──► sleep
                                    │
                                    └─ etag changed
@@ -127,6 +133,9 @@ behavior off":
 - `X-RSSI-Dbm` — RSSI at the moment of check-in.
 - `X-Boot-Count` / `X-Uptime-Sec` / `X-Free-PSRAM` — diagnostic.
 - `User-Agent` / `X-FW-Version` — firmware build.
+- Transport-enabled active credentials also send exact
+  `X-Firmware-Build-ID` and `X-Running-Partition`. The current hardware does
+  not send `X-External-Power`; absence means unknown.
 
 **Hard rule:** a brand-new device must always be able to check in.
 Treat any missing or unparseable `X-*` header as "unknown" and serve a
@@ -134,6 +143,12 @@ schedule anyway; **do not** 4xx or 401 the device for missing
 metadata. Aggressive header validation is a footgun: it locks out
 exactly the devices you most want to recover (the ones with bad
 clocks, low batteries, or reset NVS).
+
+The secure OTA extension is deliberately stricter without breaking this base
+rule. Missing or malformed OTA identity/power headers clear or omit the stored
+admission snapshot, so the ordinary image schedule still works but a new OTA
+attempt cannot be admitted. Device authentication itself still requires the
+exact active credential and `X-Device-MAC`.
 
 The mock server in [`tools/serve_test_image.py`](../tools/serve_test_image.py)
 prints every `X-*` header it sees on every request, which is the

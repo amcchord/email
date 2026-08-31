@@ -3,6 +3,60 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — At a Glance OTA control plane and firmware coordinator
+
+### Scope
+
+Add the durable, idempotent, independently gated OTA offer/artifact/event path
+and a real default-disabled firmware HTTPS/NVS coordinator without authorizing
+a physical write.
+
+### Completed
+
+- Added Alembic `c6d7e8f9a0b1` with explicit terminal hardware-revision and
+  coherent OTA telemetry fields, one-active-attempt enforcement, immutable
+  release/source/cohort snapshots, and append-only device events.
+- Added owner-idempotent create/read/cancel, active-credential schedule offers,
+  exact descriptor/signature/application delivery, bounded duplicate-free
+  event ingestion, runtime slot/build/boot validation, gap tracking, and
+  schedule ETags that include offer identity.
+- Added firmware commit `949bc87` with an independent transport compile gate,
+  strict scoped HTTPS fetches, signed/content-addressed inactive-slot writes,
+  fresh 4000 mV/80% measured reserve at the write boundary, CRC-protected NVS
+  attempt/event replay, pending validation, and rollback/recovery reporting.
+  Advanced the isolated branch to candidate.7 at `ea3547b`.
+
+### Verification
+
+- Focused server gate: 158 passed with 16 expected skips. Fresh disposable
+  PostgreSQL OTA gate: 4 passed. Migration round-trip `b5 → c6 → b5 → c6`
+  passed.
+- Exact post-Conversation-rebase gate: 273 passed with 16 expected skips;
+  formatting, compilation, and `git diff --check` passed.
+- Firmware host safety, generic E1001/E1002/E1004 builds, and keyed E1002
+  coordinator build passed at `949bc87`. Candidate.7 exact-SHA Actions remains
+  the private-main promotion gate.
+
+### Production Actions
+
+- Retained validated pre-migration backup
+  `/var/backups/mailapp/maildb-pre-terminal-ota-20260831T0019Z.dump`, 1,383,737,691
+  bytes, mode `0600`, SHA-256
+  `5d05849d9197b3a2ad513cee0c4263b7efe9869bc8e20dc430f0ffb83a13b80e`.
+- Fast-forwarded production from Conversation closeout `075a475` to exact app
+  runtime `9253eb4`, applied only `b5 → c6`, and replaced only `mailapp`.
+- The retired API process exhausted graceful drain; replacement PID 2130573 is
+  active with zero restarts and no warning+ entries after its start boundary.
+  All seven services and public health are healthy; anonymous OTA reads are
+  401; both OTA tables are empty; enablement is false, rollout is zero, and
+  qualified-release count is zero.
+
+### Next
+
+Promote candidate.7 after exact CI, then require the physical E1001/E1002
+18-case migration/interruption/rollback/recovery/rescue record before installing
+an eligible descriptor, confirming a revision, or enabling one canary cohort.
+
 ## 2026-08-30 — Conversation-first Inbox implementation
 
 ### Scope

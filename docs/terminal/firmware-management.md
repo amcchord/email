@@ -1,24 +1,20 @@
-# Terminal firmware management roadmap
+# Terminal firmware management and qualification
 
-This document defines the safe path from the current USB-flashed prototype to
-browser installation and managed over-the-air (OTA) releases. It is a roadmap,
-not a description of capabilities already available in production. The image
-wire contract remains in [`server-protocol.md`](server-protocol.md), and panel
+This document describes the implemented, default-locked browser/OTA foundation
+and the remaining qualification path to real device writes. The image wire
+contract remains in [`server-protocol.md`](server-protocol.md), and panel
 formats remain in [`firmware-variants.md`](firmware-variants.md).
 
 Baselines verified on 2026-08-30:
 
-- Email GitHub `main` and production application/runtime at
-  `35e3700e8a22eabf49e701fb873d4662d5b7abdc`, with first-class At a Glance,
-  candidate.5 battery/recovery identity, the default-locked secure enrollment
-  foundation, and Alembic at Universal Snooze head `a4b5c6d7e8f9`; the terminal
-  slice is migration-free and retains secure-enrollment revision
-  `f3a4b5c6d7e8` as its schema boundary;
+- Email OTA control-plane runtime `9253eb4`, deployed on Conversation-first
+  Inbox closeout `075a475`, with Alembic revision `c6d7e8f9a0b1` descending
+  directly from prior production head `b5c6d7e8f9a0`;
 - private `reterminal-color` `main` at
-  `f23d6302ae4bc64326f385fe44593e2ec47febd0` (`0.2.0-candidate.5`); and
-- Exact-main GitHub Actions run `33338824057`, which passed the candidate's
-  keyed RET1/OTA guards, cross-language and host safety tests, all-model
-  reproducibility, manifest, and bundle verification gates.
+  `5db28243f8dc56309492ae926c0b5186a5fffeb7` (`0.2.0-candidate.6`), with the
+  default-disabled transport coordinator isolated at `949bc87`; and
+- exact candidate.6 Actions run `33341323506`, plus green host safety and
+  generic E1001/E1002/E1004 and keyed E1002 transport builds for `949bc87`.
 
 ## Status today
 
@@ -26,10 +22,10 @@ Baselines verified on 2026-08-30:
 | --- | --- | --- |
 | USB build and flash | PlatformIO environments, pinned dependencies/toolchain evidence, exact per-model partitions, deterministic build metadata, and immutable checksummed bundles exist for E1001, E1002, and E1004. | Current artifacts truthfully declare `signed=false`; no browser may install them. Command-line PlatformIO/esptool remains the only qualified write path. |
 | Browser firmware gateway | Cookie-authenticated, rate-limited catalog/manifest/signature/artifact routes verify a signed approval catalog and every bundle byte from local immutable storage. The browser independently verifies exact manifest bytes with SHA-256 and detached Ed25519 against source-pinned contracts. | Production defaults contain no trusted key or approved catalog, and the browser key map is empty. The Admin surface is metadata-only; serial, artifact-download, provisioning, and write gates remain false. |
-| Runtime configuration | Candidate.5 retains bounded RET1 and three-slot atomic NVS configuration while keeping generic release images unkeyed, enrollment-disabled, and free of credentials. Exact status v2 adds read-only partition, boot-state, and source-build identity while the v1 handshake transcript stays unchanged; the application remains compatible with candidate.4 status v1. | Production has no online enrollment key or qualified release/model allowlist, and the shipped browser does not import serial transport. Command-line `uploadfs` remains the only hardware workflow until HIL passes. |
-| Application partitions | Candidate.5 validates the complete six-entry `ab-v1` table at runtime on E1001/E1002: the legacy NVS, `ota_0`, LittleFS, and coredump ranges are unchanged and `ota_1` is appended at `0x400000`. E1004 remains exact single-slot and OTA-ineligible. | Existing physical E1001/E1002 devices still need a qualified USB migration to install the new partition table. No model is OTA-eligible. |
-| Device check-in | Firmware reports bounded model, build, wake, battery, RSSI, memory, boot, and image metadata. Candidate.5 summarizes a seven-sample battery burst with median, spread, count, and explicit validity; the server excludes explicitly invalid readings from its sparse 90-day predictor. | MAC and the legacy shared terminal URL are routing data, not device authentication. Firmware lacks an external-power signal, so battery rises are only `possible_charging` and forecasts cannot gate a write. |
-| TLS and OTA | Candidate.5 requires fresh bounded SNTP, validates hostnames against an ISRG X1/X2 bundle, rejects plaintext/redirect downgrade, verifies exact Ed25519 OTA descriptors, writes only the inactive exact slot, and runs a bounded local self-test before accepting a pending image. | The OTA writer is compile-time disabled and unkeyed; schedule offers, artifact transport, event persistence, and HIL are absent. E1004 is hard-rejected. |
+| Runtime configuration | Candidate.6 retains bounded RET1 and three-slot atomic NVS configuration while keeping generic release images unkeyed, enrollment-disabled, and free of credentials. Exact status v2 adds read-only partition, boot-state, and source-build identity while the v1 handshake transcript stays unchanged; the application remains compatible with candidate.4 status v1. | Production has no online enrollment key or qualified release/model allowlist, and the shipped browser does not import serial transport. Command-line `uploadfs` remains the only hardware workflow until HIL passes. |
+| Application partitions | Candidate.6 validates the complete six-entry `ab-v1` table at runtime on E1001/E1002: the legacy NVS, `ota_0`, LittleFS, and coredump ranges are unchanged and `ota_1` is appended at `0x400000`. E1004 remains exact single-slot and OTA-ineligible. | Existing physical E1001/E1002 devices still need a qualified USB migration to install the new partition table. No production model/revision is HIL-qualified for OTA. |
+| Device check-in | Active enrolled firmware reports bounded model, build, wake, battery, RSSI, memory, boot, image, exact source-build, and running-slot metadata. Candidate.6 summarizes a seven-sample battery burst with median, spread, count, and explicit validity; the server excludes explicitly invalid readings from its sparse 90-day predictor. | The legacy shared terminal URL is routing data, not OTA authentication. Current hardware has no direct external-power signal, so OTA uses a fresh measured 4000 mV/80% reserve and forecasts never gate a write. |
+| TLS and OTA | The isolated coordinator at `949bc87` uses fresh bounded SNTP, CA/hostname validation, no redirects/downgrade, exact scoped offers, bounded artifact reads, Ed25519/content-address verification, inactive-slot streaming, a CRC-protected NVS attempt/event record, pending validation, and rollback/recovery reporting. The server persists idempotent attempts/events in PostgreSQL. | Generic E1001/E1002/E1004 artifacts remain transport-disabled, writer-disabled, and unkeyed. Server enablement, HIL map, and rollout default closed; no production offer or physical write is authorized. E1004 is hard-rejected. |
 | E1004 | The firmware builds reproducibly and its full-refresh dual-controller implementation is present. | No hardware qualification exists; E1004 browser installation and OTA are explicitly ineligible. |
 
 The personal checkout under `~/Development/reTerminalColor` remains dirty and
@@ -119,6 +115,7 @@ TERMINAL_FIRMWARE_MINIMUM_CATALOG_GENERATION=0
 TERMINAL_FIRMWARE_BROWSER_FLASH_ENABLED=false
 TERMINAL_OTA_ENABLED=false
 TERMINAL_OTA_QUALIFIED_RELEASES={}
+TERMINAL_OTA_ROLLOUT_PERCENTAGE=0
 ```
 
 Do not put signing private keys in the application environment or artifact
@@ -169,7 +166,7 @@ bootloader recovery instructions; it is not reported as a partial success.
 
 ### First-install partition migration
 
-Candidate.5 builds E1001/E1002 with `ab-v1`, but a device running the prior
+Candidate.6 builds E1001/E1002 with `ab-v1`, but a device running the prior
 single-slot partition table cannot safely rewrite that table through OTA. The
 first move is therefore a one-time USB/Web Serial migration:
 
@@ -241,19 +238,21 @@ physical E1001/E1002 HIL.
 
 ## TLS and device-side update sequence
 
-Candidate.5 implements the transport prerequisite: every wake requires a fresh
+Candidate.6 implements the transport prerequisite: every wake requires a fresh
 SNTP callback within 15 seconds and a plausible 2024–2041 clock, then validates
 the hostname and chain against compiled ISRG Root X1/X2. Certificate, clock, or
 handshake failure fails closed into the normal sleep/backoff path. Plain HTTP,
 scheme-relative URLs, redirect following, and `setInsecure()` are absent. The
 bundle must rotate before X2 expires in 2040 or before production changes CA.
 
-Candidate.5 also implements the local signed writer and calls the pending-image
+Candidate.6 also implements the local signed writer and calls the pending-image
 validation/rollback gate before enrollment, panel, network, restart, or sleep
 work. A pending image must prove the enabled/keyed policy, durable boot counter,
 preserved enrolled configuration, read-only LittleFS mount, and two frame-sized
-PSRAM allocations. Offer/artifact transport and durable device events remain
-absent, so no enabled/keyed image may be distributed.
+PSRAM allocations. Firmware commit `949bc87` adds the separately gated HTTPS/NVS
+coordinator and lifecycle transport. Generic artifacts still compile both
+writer and transport out, so no enabled/keyed image may be distributed without
+the exact physical qualification and release process below.
 
 For each offered update, firmware performs this sequence:
 
@@ -294,7 +293,8 @@ Example:
   "image": { "url": "image.bmp", "etag": "img-…", "format": "bmp4-spectra6-800x480" },
   "firmware": {
     "schema_version": 1,
-    "offer_id": "01K…",
+    "offer_id": "11111111-1111-4111-8111-111111111111",
+    "attempt_id": "22222222-2222-4222-8222-222222222222",
     "release_id": "<sha256-of-exact-ota-descriptor-bytes>",
     "version": "0.3.0",
     "manifest_url": "/terminal/device/…/firmware/…/manifest.json",
@@ -331,11 +331,12 @@ keys belong in the offline signing boundary, never in this repository, the
 application environment, browser, terminal, or database.
 
 The authenticated `GET /api/terminal/firmware/ota/capabilities` surface exposes
-these gates without enabling delivery. Current production has no descriptor,
-HIL allowlist, event ledger, offer route, artifact route, or event endpoint, so
-effective OTA remains locked.
+these gates without enabling delivery. The application now includes the
+attempt/event ledger and exact offer/artifact/event routes, but production has
+no installed eligible descriptor, HIL allowlist, confirmed device revision,
+nonzero rollout, or enablement. Effective OTA therefore remains locked.
 
-Server-side records should separate:
+Server-side records separate:
 
 - **release:** immutable signed artifact metadata and lifecycle
   (`draft`, `approved`, `active`, `paused`, `revoked`);
@@ -348,12 +349,14 @@ The acknowledgement endpoint accepts a per-device-authenticated body such as:
 ```json
 {
   "schema_version": 1,
-  "event_id": "01K…",
-  "attempt_id": "01K…",
-  "offer_id": "01K…",
-  "release_id": "terminal-e1002-0.2.0+4f52c9d",
+  "event_id": "33333333-3333-4333-8333-333333333333",
+  "attempt_id": "22222222-2222-4222-8222-222222222222",
+  "offer_id": "11111111-1111-4111-8111-111111111111",
+  "sequence": 2,
+  "release_id": "<64-lowercase-hex-descriptor-sha256>",
   "state": "staged",
   "running_version": "0.1.0",
+  "running_build_id": "0123456789abcdef0123456789abcdef01234567",
   "running_partition": "ota_0",
   "boot_count": 418,
   "reset_reason": null,
@@ -371,11 +374,13 @@ offered -> downloading -> staged -> booted_pending_validation -> succeeded
 ```
 
 The server creates `offered`; devices create all later events. `event_id` makes
-retries idempotent. Store received time server-side, validate transitions, keep
-bounded error codes rather than arbitrary logs, and retain the last unsent
-event in NVS so deep sleep or an outage does not erase the outcome. Never treat
-`staged` or a version header as success; only a validated image can emit
-`succeeded`.
+retries idempotent and `sequence` is monotonic per attempt. Received time is
+server-owned; binding, state transition, source/target build, slot, and boot
+identity are validated in the same transaction that appends the event and
+updates the attempt projection. Firmware retains one canonical unsent event in
+NVS so deep sleep or an outage does not erase the outcome. Never treat `staged`
+or a version header as success; only a validated target build in the opposite
+slot can emit `succeeded`.
 
 Extend check-in telemetry with exact hardware model/revision, firmware build,
 partition-layout ID, running slot, security counter, reset reason, OTA attempt
@@ -401,12 +406,16 @@ empty are server-derived presentation data, not trusted device facts.
   if later available, and either external power or enough reserve for download,
   flash, verification, and two boots. If charging state cannot be measured,
   use a higher voltage floor and show “charge before updating.”
-- Back off failed downloads across wakes. Never remain awake in an unbounded
-  retry loop and never perform a panel refresh merely to report OTA progress.
+- Artifact fetch, verification, or write failure terminally fails that attempt.
+  Only a previously persisted unsent event retries across wakes; the coordinator
+  posts at most three lifecycle events per wake and requests a 300-second retry
+  sleep. It never performs an awake-loop HTTP retry or panel refresh merely to
+  report OTA progress.
 
 ## Staged rollout and recovery
 
-Use deterministic cohorts derived from device ID plus rollout ID. A suggested
+Use deterministic cohorts derived from the device public UUID plus exact
+descriptor `release_id`. A suggested
 promotion is one physical lab unit, then canary, 10%, 25%, 50%, and 100%.
 Promotion is manual at first and requires a minimum observation window plus
 successful post-update check-ins; elapsed time alone is insufficient. Every
@@ -452,11 +461,15 @@ device that has the immediately previous production partition layout.
    preserve-config artifacts, verify ROM-loader output and rebooted identity,
    and keep a command-line rescue flow. The server and client write gates may
    then be changed through a separately reviewed release.
-5. **A/B OTA canary:** physically migrate to the implemented `ab-v1`, integrate
-   the existing signed descriptor/inactive-slot writer and pending-validation
-   APIs with authenticated offers, durable events, bounded self-tests, and a
-   one-device rollout. The conservative voltage gate remains independent from
-   the user-facing battery forecast.
+5. **A/B OTA canary — software-integrated, physically blocked:** authenticated
+   offers/artifacts/events, the PostgreSQL ledger, signed descriptor/inactive-
+   slot writer, durable NVS replay, and pending validation/rollback are wired
+   behind independent default-closed gates. Before a one-device rollout,
+   publish a signed/keyed transport-enabled release, physically migrate that
+   E1001/E1002 to `ab-v1`, complete the exact HIL/rescue record, confirm its
+   printed revision, install the migration/configuration, and enable only its
+   bounded cohort. The conservative measured-power gate remains independent
+   from the user-facing battery forecast.
 6. **Managed rollout:** add cohort promotion, pause/revoke, key rotation,
    charging notices, dashboards, and recovery drills before wider release.
 

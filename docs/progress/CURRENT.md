@@ -6,9 +6,10 @@ Last updated: 2026-08-30
 
 Continue from the shipped conversation-first Inbox baseline: build the next
 focused/split placement slice as policy over one authoritative row, while the
-isolated terminal track builds reserved revision `c6d7e8f9a0b1` for its OTA
-attempt/event ledger. Keep real mail/calendar QA read-only except for generated
-`.example.test` fixtures and preserve every terminal write gate.
+terminal track qualifies the now-deployed, default-locked OTA control plane and
+candidate.7 firmware coordinator on physical E1001/E1002 hardware. Keep real
+mail/calendar QA read-only except for generated `.example.test` fixtures and
+preserve every independent terminal write gate.
 
 ## Baseline
 
@@ -17,12 +18,17 @@ attempt/event ledger. Keep real mail/calendar QA read-only except for generated
   documentation only. Inbox, ordinary mailboxes, labels, and search now use one
   authoritative owned-account conversation row with a chronological reader and
   durable conversation-scoped actions.
+- The deployed terminal OTA control-plane application/runtime is
+  `9253eb42d884868a18f280bbf4ab1aae6b474b5e`. It adds owner-idempotent exact
+  offers, active-credential scoped artifacts, coherent source/target runtime
+  checks, conservative power and deterministic cohort gates, and an append-only
+  attempt/event ledger. Production remains disabled with an empty HIL map,
+  zero-percent rollout, no eligible descriptor, and zero attempt/event rows.
 - The deployed At a Glance firmware protocol/installer runtime is
   `84a854a5527c342b85bb2884ef43b89fea95a954`. The first-class page can select a
   signed release and exact physical model/revision, but artifact preflight is
-  still server-qualification-gated and production device transport is
-  source-hard-disabled. The pure OTA1 application contract has no route,
-  persistence, scheduler, or device write.
+  still server-qualification-gated and the shipped browser remains
+  source-hard-disabled for serial/device writes.
 - The deployed Gmail Labels & Move application/runtime commit is
   `a440801c18c8377b50a225af71f3937caa78c7af`. Existing synchronized user labels
   are account-safe, conversation-scoped durable actions across list, table,
@@ -60,23 +66,23 @@ attempt/event ledger. Keep real mail/calendar QA read-only except for generated
 - The deployed secure-enrollment application/runtime commit is
   `8ff01848a2be2818dfd9eb88b84be9aab4befb0a`; the following closeout is docs
   only. Production and GitHub were exact and clean at the runtime boundary.
-- Production Alembic is `b5c6d7e8f9a0 (head)`, the Labels & Move child of
-  Universal Snooze revision `a4b5c6d7e8f9`. The release widened only the
-  durable mail-action audit constraint; aggregate label-action rows remained
-  zero at release. Terminal credential and attempt tables remain empty, all
-  four existing terminals remain legacy, and the secure-MAC unique index is
-  present.
+- Production Alembic is `c6d7e8f9a0b1 (head)`, the terminal OTA child of Labels
+  & Move revision `b5c6d7e8f9a0`. The additive release adds owner-confirmed
+  revision/coherent OTA telemetry plus immutable attempt/event tables. Both OTA
+  tables remained empty at release; all four existing terminals remain legacy.
 - All seven checked production services are active, public health is `ok`, and
   the replacement API process has zero automatic restarts and no post-start
   warning-or-higher entries. Production has no secure-enrollment or OTA
   enablement, online key, approved catalog, qualified release/model pair,
-  durable OTA event ledger, or device update route.
+  nonzero rollout, or device update offer.
 - Private firmware `main` is
   `5db28243f8dc56309492ae926c0b5186a5fffeb7`
   (`0.2.0-candidate.6`). Exact-SHA run `33341323506` passed the complete
-  software/reproducibility gate; the identical main-ref provenance run is
-  `33342394221`. Generic bundles remain unkeyed, enrollment-disabled,
-  OTA-disabled, and physically unqualified.
+  software/reproducibility gate. Candidate.7 branch tip
+  `ea3547b8bdb96cd27a4b14f4ed0ce662445944b4` adds the separately gated HTTPS/
+  NVS coordinator; its exact-SHA promotion run is pending. Generic bundles
+  remain unkeyed, enrollment-disabled, OTA-disabled, and physically
+  unqualified.
 
 This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
@@ -112,23 +118,41 @@ live state.
   credentials, or replace the known-good slot. Only qualified exact
   release/model/hardware-revision tuples may enter either allowlist.
 - Next: attach dedicated E1001/E1002 devices and execute the 18-case HIL record
-  with bounded source evidence before importing Web Serial or adding a device
-  OTA transport.
+  with bounded source evidence before enabling either browser or OTA transport
+  for a real device.
 
 ### P2 — Durable device OTA control plane
 
-- State: isolated implementation is active from the exact `93b9375` baseline.
-  Terminal revision `c6d7e8f9a0b1`, the direct child of current production head
-  `b5c6d7e8f9a0`, is reserved exclusively for its attempt/event ledger. No merge
-  or deployment has occurred.
+- State: application runtime `9253eb4` and Alembic `c6d7e8f9a0b1` are deployed;
+  all production gates remain closed and both new tables are empty. Firmware
+  candidate.7 is pushed on `codex/ota-transport` pending its exact CI gate and
+  private-main promotion.
 - Scope: one additive event-ledger migration descending from b5, authenticated
   device offer/artifact/event endpoints,
   idempotent attempt state, power gates, rollout cohorts, and rescue controls.
 - Acceptance: a restart or repeated request cannot duplicate or lose update
   truth, only exact HIL-qualified evidence is offerable, and no single flag can
   enable a write.
-- Next: keep the implementation isolated from Inbox files and shared docs until
-  the conversation release provides its exact GitHub/production closeout SHA.
+- Next: promote candidate.7 only after exact CI, then attach dedicated hardware
+  and complete physical A/B migration, interrupted-write, rollback, recovery,
+  and USB-rescue evidence before installing any eligible descriptor or changing
+  rollout from zero.
+
+## Recent At a Glance OTA Control Plane Release
+
+- Owner-idempotent attempts snapshot exact signed release, device, active
+  credential, printed revision, source/target build and slot, fresh measured
+  reserve, and deterministic cohort truth. Device lifecycle events append and
+  project atomically; exact replay is safe and gaps remain non-promotion-quality.
+- Candidate.7 adds the independently gated HTTPS/NVS coordinator, bounded
+  content-addressed artifact verification, inactive-slot streaming, durable
+  event replay, pending validation, and rollback/recovery reporting. All generic
+  builds remain unkeyed and transport-disabled.
+- Post-rebase validation passed 273 terminal/migration-head tests with 16
+  expected skips; disposable PostgreSQL and `b5 → c6 → b5 → c6` passed. The
+  protected production backup, deployment, empty-table/default-lock postflight,
+  and remaining HIL gates are recorded in
+  `AT_A_GLANCE_OTA_CONTROL_PLANE_RELEASE_2026-08-30.md`.
 
 ## Recent Conversation-First Inbox Release
 

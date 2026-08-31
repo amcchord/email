@@ -646,3 +646,28 @@ add a new entry that explicitly supersedes the old one.
   after expansion. Full thread reading is chronological; focused/split Inbox is
   a later placement policy over this row primitive, not a second source of mail
   truth.
+
+## D-034 — OTA authority is an immutable offer plus append-only device truth
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Create one idempotent, owner-requested OTA attempt for an exact
+  owned terminal, active credential generation, verified content-addressed
+  descriptor and parent bundle, confirmed hardware revision, coherent running
+  build/slot/boot identity, fresh measured power reserve, and deterministic
+  rollout cohort. Persist every accepted device transition as an append-only
+  event and project the latest state in the same PostgreSQL transaction.
+- Reason: A schedule poll, Redis job, firmware version string, or successful
+  download cannot prove which device, credential, artifact, slot, boot, or
+  lifecycle transition actually occurred. Retrying after a lost response must
+  neither mint a second offer nor advance the device twice, and a global enable
+  flag must not silently turn an unqualified release into a fleet rollout.
+- Consequence: Only the current active credential can receive the exact
+  credential-scoped offer and artifacts. First event acceptance is `201`, exact
+  replay is `200`, conflicting identity/sequence/payload/runtime evidence fails
+  closed, and sequence gaps remain marked as non-promotion-quality evidence.
+  OTA stays independently locked by default behind signed release evidence,
+  exact HIL allowlisting, explicit device revision, fresh direct-or-conservative
+  power truth, nonzero rollout, and server enablement. Generic firmware remains
+  transport-disabled and unkeyed; physical E1001/E1002 interruption, rollback,
+  and recovery evidence is still required before any production offer.
