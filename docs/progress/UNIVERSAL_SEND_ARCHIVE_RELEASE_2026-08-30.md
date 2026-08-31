@@ -55,3 +55,13 @@ This release is migration-free and preserves production Alembic head
 build, and replacement of `mailapp` because the outbound response/service
 changed. Rollback is a Git fast-forward to the prior runtime plus frontend
 rebuild and API replacement; no database downgrade or data rewrite is needed.
+
+## Production result
+
+GitHub `main` and production received exact application/runtime commit
+`c7171466d075fc74f12ccb47fb2ee2d27ec830a6`. Production built 588 modules and
+replaced only `mailapp`; the known graceful-stop timeout affected the retired
+process, while the replacement is active with zero automatic restarts. All
+seven checked services and public health are healthy, Alembic remains
+`c6d7e8f9a0b1 (head)`, production Git is clean, and anonymous outbound history
+returns 401.

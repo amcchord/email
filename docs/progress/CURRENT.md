@@ -12,7 +12,7 @@ E1001/E1002 hardware. Keep real mail/calendar QA read-only except for generated
 
 ## Baseline
 
-- Universal Send & Archive application/runtime is
+- The deployed Universal Send & Archive application/runtime is
   `c7171466d075fc74f12ccb47fb2ee2d27ec830a6`. Full Compose and inline replies
   expose the same Send options and `Cmd/Ctrl+Shift+Enter` contract, while new
   messages fail closed to ordinary Send. The server archives the exact owned
@@ -159,7 +159,9 @@ live state.
 - Final verification passed 715 backend tests with 56 expected skips, all 422
   frontend tests, a 588-module production build, generated `.example.test`
   provider/self-test and browser QA, and independent release review. Full
-  evidence is in `UNIVERSAL_SEND_ARCHIVE_RELEASE_2026-08-30.md`.
+  evidence is in `UNIVERSAL_SEND_ARCHIVE_RELEASE_2026-08-30.md`. Production
+  built the same 588 modules; all seven services and public health are healthy,
+  Alembic remains `c6d7e8f9a0b1`, and anonymous outbound history is 401.
 
 ## Recent Focused/Split Inbox Release
 

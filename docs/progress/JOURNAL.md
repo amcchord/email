@@ -37,14 +37,23 @@ behavior, Gmail provider code, terminal work, or the database schema.
 
 ### Production Actions
 
-- Pending the authorized fast-forward deployment of exact application commit
-  `c7171466d075fc74f12ccb47fb2ee2d27ec830a6`; no migration is required and
-  Alembic remains `c6d7e8f9a0b1`.
+- Fast-forwarded GitHub `main` and production through the release docs with
+  exact application/runtime commit
+  `c7171466d075fc74f12ccb47fb2ee2d27ec830a6`. Restarted only `mailapp`, then
+  built 588 frontend modules. No migration, backup, dependency install, worker,
+  Caddy, terminal, or provider action was required.
+- The retired API process hit the host's known graceful-stop timeout; the
+  replacement is active with PID 2134395 and zero automatic restarts. The only
+  warning-priority entries were the three systemd timeout/kill/result lines;
+  there were no application warning identifiers.
+- All seven checked services are active, public health is `ok`, production Git
+  is exact and clean, Alembic remains `c6d7e8f9a0b1 (head)`, and anonymous
+  outbound history returns 401.
 
 ### Next
 
-Ship this frozen milestone, perform one short health/read-only postflight, and
-move further polish into Personal Snippets instead of reopening this release.
+Begin Personal Snippets from the final terminal baseline instead of reopening
+this frozen release for additional polish.
 
 ## 2026-08-30 — At a Glance browser transport, owner controls, and design registry
 
