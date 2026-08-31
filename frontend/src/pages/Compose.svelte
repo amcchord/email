@@ -57,6 +57,7 @@
   } from '../lib/followUpReminders.js';
   import {
     accountSignatureFor,
+    authoritativeSignatureSnapshot,
     normalizeAccountSignatureList,
     normalizeCompositionKind,
     normalizeSignatureMode,
@@ -395,6 +396,11 @@
     unsubscribeDraft = draftController.subscribe(state => {
       if (requestGeneration !== openingDraftGeneration || !sessionGuard?.isCurrent()) return;
       draftState = state;
+      const frozenSignature = authoritativeSignatureSnapshot(state.snapshot?.signature_snapshot);
+      if (frozenSignature) {
+        signatureSnapshot = frozenSignature;
+        signatureInitialized = true;
+      }
       autosaveStatus = '';
       lastPersistedFingerprint = draftFingerprint(state.snapshot);
     });

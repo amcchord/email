@@ -4,6 +4,8 @@ import test from 'node:test';
 
 import {
   accountSignatureFor,
+  authoritativeSignatureSnapshot,
+  canRestoreSignature,
   effectiveSignatureSnapshot,
   normalizeCompositionKind,
   normalizeSignatureMode,
@@ -167,11 +169,31 @@ test('an authoritative frozen unsigned snapshot is not replaced by later policy 
     policy,
     snapshot: frozenUnsigned,
   }), null);
+  assert.equal(effectiveSignatureSnapshot({
+    initialized: true,
+    mode: 'enabled',
+    compositionKind: 'new',
+    policy,
+    snapshot: frozenUnsigned,
+  }), null);
+  assert.equal(canRestoreSignature({
+    initialized: true,
+    mode: 'disabled',
+    policy,
+    snapshot: frozenUnsigned,
+  }), false);
   assert.equal(signatureSnapshotAfterModeChange({
     mode: 'default',
     policy,
     snapshot: frozenUnsigned,
   }).policy_revision, 0);
+  assert.deepEqual(authoritativeSignatureSnapshot(frozenUnsigned), frozenUnsigned);
+  assert.equal(authoritativeSignatureSnapshot({
+    ...policy,
+    applied: true,
+    policy_revision: policy.revision,
+    content_hash: '',
+  }), null);
 });
 
 test('wire fields are normalized while signatures alone never make a draft nonblank', () => {
@@ -214,6 +236,7 @@ test('all writing surfaces use the shared policy API and signature control', asy
     assert.match(source, /onretry=\{loadSignaturePolicies\}/);
     assert.match(source, /oncontinueunsigned=\{handleContinueWithoutSignature\}/);
     assert.match(source, /signatureReady/);
+    assert.match(source, /authoritativeSignatureSnapshot\(state\.snapshot\?\.signature_snapshot\)/);
     assert.doesNotMatch(source, /signatureMode = signaturePoliciesFailed \? 'disabled' : 'default'/);
   }
 });

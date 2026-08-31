@@ -66,6 +66,7 @@
   } from '../../lib/followUpReminders.js';
   import {
     accountSignatureFor,
+    authoritativeSignatureSnapshot,
     normalizeAccountSignatureList,
     normalizeSignatureMode,
     normalizeSignatureSnapshot,
@@ -845,6 +846,11 @@
       unsubscribeDurableReply = owner.controller.subscribe(state => {
         if (durableReplyController !== owner.controller || !sessionIsCurrent()) return;
         durableReplyState = state;
+        const frozenSignature = authoritativeSignatureSnapshot(state.snapshot?.signature_snapshot);
+        if (frozenSignature) {
+          signatureSnapshot = frozenSignature;
+          signatureInitialized = true;
+        }
       });
       const initialBody = seedBody ?? priorBody;
       const initialFollowUp = followUpRequestFields({

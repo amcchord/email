@@ -300,6 +300,25 @@ export function signatureSnapshotAfterModeChange({
   return signatureSnapshotFromPolicy(policy);
 }
 
+export function authoritativeSignatureSnapshot(snapshot) {
+  const normalized = normalizeSignatureSnapshot(snapshot);
+  return normalized?.content_hash ? normalized : null;
+}
+
+export function canRestoreSignature({
+  initialized = false,
+  mode = 'default',
+  policy = null,
+  snapshot = null,
+} = {}) {
+  if (!initialized || normalizeSignatureMode(mode) !== 'disabled') return false;
+  const frozenSnapshot = authoritativeSignatureSnapshot(snapshot);
+  if (frozenSnapshot) {
+    return Boolean(frozenSnapshot.body_html && frozenSnapshot.body_text);
+  }
+  return Boolean(policy?.body_html || policy?.body_text);
+}
+
 export function signatureDraftFields({
   compositionKind = 'new',
   mode = 'default',

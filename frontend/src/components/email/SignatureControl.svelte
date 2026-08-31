@@ -1,6 +1,7 @@
 <script>
   import Icon from '../common/Icon.svelte';
   import {
+    canRestoreSignature,
     effectiveSignatureSnapshot,
     normalizeSignatureSnapshot,
     signatureDefaultIncluded,
@@ -33,15 +34,7 @@
     const normalized = normalizeSignatureSnapshot(snapshot);
     return normalized?.content_hash ? normalized : null;
   });
-  let canRestore = $derived(
-    initialized
-    && mode === 'disabled'
-    && Boolean(
-      frozenSnapshot
-        ? frozenSnapshot.body_html && frozenSnapshot.body_text
-        : policy?.body_html || policy?.body_text
-    ),
-  );
+  let canRestore = $derived(canRestoreSignature({ initialized, mode, policy, snapshot }));
   let defaultIncluded = $derived(signatureDefaultIncluded(policy, compositionKind));
   let previewHtml = $derived(sanitizeComposeHtml(effective?.body_html || ''));
 </script>

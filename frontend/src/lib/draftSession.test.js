@@ -193,6 +193,48 @@ test('a save acknowledgement adopts its authoritative signature snapshot without
   assert.equal(stored.snapshot.signature_snapshot.content_hash, 'e'.repeat(64));
 });
 
+test('an acknowledged Continue unsigned draft retains the authoritative empty frozen snapshot', async () => {
+  const randomUUID = uuidFactory();
+  const frozenUnsigned = {
+    applied: false,
+    account_id: 7,
+    policy_revision: 0,
+    body_html: '',
+    body_text: '',
+    content_hash: 'f'.repeat(64),
+    sanitizer_version: 1,
+  };
+  const controller = createDraftSessionController(controllerOptions({
+    randomUUID,
+    api: {
+      async saveDraft(payload) {
+        return {
+          ...payload,
+          state: 'synced',
+          synced_revision: payload.revision,
+          signature_snapshot: frozenUnsigned,
+        };
+      },
+    },
+  }));
+  await controller.create({
+    intent: newComposeIntent({}, { randomUUID }),
+    initialSnapshot: {
+      account_id: 7,
+      body_html: '<p>Unsigned body</p>',
+      signature_mode: 'disabled',
+      signature_initialized: true,
+      signature_snapshot: null,
+    },
+  });
+  await controller.flush();
+
+  assert.equal(controller.getState().snapshot.signature_mode, 'disabled');
+  assert.equal(controller.getState().snapshot.signature_snapshot.applied, false);
+  assert.equal(controller.getState().snapshot.signature_snapshot.content_hash, 'f'.repeat(64));
+  assert.equal(controller.getState().snapshot.signature_initialized, true);
+});
+
 test('a 202-style pending response remains saving until GET reports provider synced', async () => {
   const randomUUID = uuidFactory();
   const timers = fakeTimers();
