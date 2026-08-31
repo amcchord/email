@@ -119,3 +119,23 @@ test('conflict reload closes and clears the stale editor before refreshing autho
   assert.match(surface, /onclick=\{recoverFromConflict\}>Reload Saved Views/);
   assert.doesNotMatch(surface, /Reload Saved Views<\/button>[\s\S]{0,80}refreshSavedViews/);
 });
+
+test('the editor disables its transformed Sidebar containing block while open', async () => {
+  const surface = await readFile(
+    new URL('../components/email/SavedViews.svelte', import.meta.url),
+    'utf8',
+  );
+  assert.match(surface, /if \(!dialogOpen\) return;[\s\S]*sidebar\.classList\.add\('saved-view-editor-owner'\)/);
+  assert.match(surface, /sidebar\.classList\.remove\('saved-view-editor-owner'\)/);
+  assert.match(surface, /mail-sidebar\.saved-view-editor-owner[\s\S]*transform: none !important;[\s\S]*pointer-events: auto !important/);
+  assert.equal((surface.match(/class="saved-view-layer"/g) || []).length, 1);
+});
+
+test('successful delete discards stale positions and revisions before authoritative refresh', async () => {
+  const surface = await readFile(
+    new URL('../components/email/SavedViews.svelte', import.meta.url),
+    'utf8',
+  );
+  assert.match(surface, /await api\.deleteSavedView[\s\S]*savedViews\.set\(\[\]\);[\s\S]*savedViewsLoaded\.set\(false\);[\s\S]*await refreshSavedViews\(session\)/);
+  assert.doesNotMatch(surface, /deleteSavedView[\s\S]{0,300}savedViews\.update\(items => items\.filter/);
+});

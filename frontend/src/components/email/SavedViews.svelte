@@ -190,8 +190,14 @@
     try {
       await api.deleteSavedView(editingView.id, editingView.revision);
       if (!session.isCurrent()) return;
-      savedViews.update(items => items.filter(item => item.id !== editingView.id));
       if ($activeSavedViewId === editingView.id) activeSavedViewId.set(null);
+      // DELETE compacts later positions and increments their revisions. Drop
+      // the entire stale snapshot before reading that authoritative collection
+      // so no surviving row can issue a mutation with its pre-delete revision.
+      savedViews.set([]);
+      savedViewsLoaded.set(false);
+      await refreshSavedViews(session);
+      if (!session.isCurrent()) return;
       deleting = false;
       closeEditor();
     } catch (error) {
@@ -240,6 +246,7 @@
   }
 
   function handleDialogKeydown(event) {
+    if (!dialogOpen) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       closeEditor();
@@ -264,6 +271,17 @@
   });
 
   $effect(() => {
+    if (!dialogOpen) return;
+    const sidebar = document.querySelector('.mail-sidebar');
+    if (!sidebar) return;
+    // A transformed mobile Sidebar becomes the containing block for fixed
+    // descendants. Temporarily remove that transform while its editor owns
+    // the modal; the backdrop still isolates the underlying navigation.
+    sidebar.classList.add('saved-view-editor-owner');
+    return () => sidebar.classList.remove('saved-view-editor-owner');
+  });
+
+  $effect(() => {
     const request = $savedViewFocusRequest;
     if (!request || request === lastFocusRequest) return;
     lastFocusRequest = request;
@@ -275,6 +293,8 @@
     if (!$savedViewsLoaded && !$savedViewsLoading) void refreshSavedViews();
   });
 </script>
+
+<svelte:window onkeydown={handleDialogKeydown} />
 
 {#if showSection}
 <section class="saved-views-section mt-4" aria-labelledby="saved-views-heading">
@@ -340,7 +360,7 @@
 {#if dialogOpen}
   <div class="saved-view-layer">
     <button class="saved-view-backdrop" onclick={closeEditor} aria-label="Close Saved View editor"></button>
-    <div class="saved-view-dialog" role="dialog" aria-modal="true" aria-labelledby="saved-view-dialog-title" tabindex="-1" bind:this={dialogEl} onkeydown={handleDialogKeydown}>
+    <div class="saved-view-dialog" role="dialog" aria-modal="true" aria-labelledby="saved-view-dialog-title" bind:this={dialogEl}>
       <header class="flex items-start gap-3 border-b p-4" style="border-color: var(--border-color)">
         <div class="min-w-0 flex-1">
           <h2 id="saved-view-dialog-title" class="text-base font-semibold" style="color: var(--text-primary)">{editingView ? 'Manage Saved View' : 'Save current search'}</h2>
@@ -412,6 +432,7 @@
   .saved-view-backdrop { position: absolute; inset: 0; border: 0; background: rgb(15 23 42 / 0.5); backdrop-filter: blur(3px); }
   .saved-view-dialog { position: relative; z-index: 1; display: flex; width: min(34rem, 100%); max-height: calc(100vh - 2rem); flex-direction: column; overflow: hidden; border: 1px solid var(--border-color); border-radius: 1rem; background: var(--bg-elevated); box-shadow: 0 24px 70px rgb(15 23 42 / 0.32); }
   .saved-view-dialog button { display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem; }
+  :global(.mail-sidebar.saved-view-editor-owner) { transform: none !important; pointer-events: auto !important; }
   @media (max-width: 767px) {
     .saved-view-layer { align-items: flex-end; padding: 0; }
     .saved-view-dialog { width: 100%; max-height: calc(100dvh - 1rem); border-radius: 1rem 1rem 0 0; }
