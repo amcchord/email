@@ -600,6 +600,12 @@ async def get_ui_preferences(user: User = Depends(get_current_user)):
         thread_order=prefs.get("thread_order", DEFAULT_UI_PREFERENCES["thread_order"]),
         theme=prefs.get("theme", DEFAULT_UI_PREFERENCES["theme"]),
         color_scheme=prefs.get("color_scheme", DEFAULT_UI_PREFERENCES["color_scheme"]),
+        swipe_left_action=prefs.get(
+            "swipe_left_action", DEFAULT_UI_PREFERENCES["swipe_left_action"]
+        ),
+        swipe_right_action=prefs.get(
+            "swipe_right_action", DEFAULT_UI_PREFERENCES["swipe_right_action"]
+        ),
     )
 
 
@@ -617,6 +623,10 @@ async def update_ui_preferences(
         current["theme"] = body.theme
     if body.color_scheme is not None:
         current["color_scheme"] = body.color_scheme
+    if body.swipe_left_action is not None:
+        current["swipe_left_action"] = body.swipe_left_action
+    if body.swipe_right_action is not None:
+        current["swipe_right_action"] = body.swipe_right_action
     user.ui_preferences = current
     from sqlalchemy.orm.attributes import flag_modified
     flag_modified(user, "ui_preferences")
@@ -628,6 +638,12 @@ async def update_ui_preferences(
         thread_order=prefs.get("thread_order", DEFAULT_UI_PREFERENCES["thread_order"]),
         theme=prefs.get("theme", DEFAULT_UI_PREFERENCES["theme"]),
         color_scheme=prefs.get("color_scheme", DEFAULT_UI_PREFERENCES["color_scheme"]),
+        swipe_left_action=prefs.get(
+            "swipe_left_action", DEFAULT_UI_PREFERENCES["swipe_left_action"]
+        ),
+        swipe_right_action=prefs.get(
+            "swipe_right_action", DEFAULT_UI_PREFERENCES["swipe_right_action"]
+        ),
     )
 
 

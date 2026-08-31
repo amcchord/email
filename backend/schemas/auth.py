@@ -1,5 +1,5 @@
 from pydantic import BaseModel, field_validator, model_validator
-from typing import Optional
+from typing import Literal, Optional
 
 from backend.services.ai_models import (
     ALLOWED_MODELS,
@@ -161,11 +161,14 @@ class KeyboardShortcutsUpdate(BaseModel):
 
 ALLOWED_THEMES = ["amber", "blue", "rose", "emerald", "purple", "mono"]
 ALLOWED_COLOR_SCHEMES = ["light", "dark", "system"]
+SwipeAction = Literal["archive", "snooze", "toggle_read", "toggle_star", "none"]
 
 DEFAULT_UI_PREFERENCES = {
     "thread_order": "newest_first",
     "theme": "amber",
     "color_scheme": "light",
+    "swipe_left_action": "archive",
+    "swipe_right_action": "snooze",
 }
 
 
@@ -173,12 +176,16 @@ class UIPreferencesResponse(BaseModel):
     thread_order: str = "newest_first"
     theme: str = "amber"
     color_scheme: str = "light"
+    swipe_left_action: SwipeAction = "archive"
+    swipe_right_action: SwipeAction = "snooze"
 
 
 class UIPreferencesUpdate(BaseModel):
     thread_order: Optional[str] = None
     theme: Optional[str] = None
     color_scheme: Optional[str] = None
+    swipe_left_action: Optional[SwipeAction] = None
+    swipe_right_action: Optional[SwipeAction] = None
 
     @field_validator("thread_order")
     @classmethod

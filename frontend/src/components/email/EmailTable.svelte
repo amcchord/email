@@ -1,11 +1,9 @@
 <script>
-  import { onMount } from 'svelte';
   import { slide } from 'svelte/transition';
   import { accountColorMap, accounts, labels as labelsStore, selectedAccountId } from '../../lib/stores.js';
   import Icon from '../common/Icon.svelte';
   import { cleanEmailText, categoryLabel, typeLabel } from '../../lib/emailText.js';
   import { focusEmailRow, shouldFocusAdjacentRow } from '../../lib/emailRowFocus.js';
-  import { selectedBooleanState } from '../../lib/inboxDataset.js';
   import { formatSnoozeWake } from '../../lib/remindLater.js';
   import { safeLabelColor, visibleUserLabels } from '../../lib/labelWorkflows.js';
   import { placementProvenanceLabel } from '../../lib/focusedInbox.js';
@@ -23,8 +21,12 @@
     actionsDisabled = false,
     sectionTotals = null,
     selectionEpoch = 0,
+    selectedIds = new Set(),
     onSelect = null,
     onFocus = null,
+    onToggleSelection = null,
+    onSelectLoaded = null,
+    onClearSelection = null,
     onAction = null,
     onLabel = null,
     allowMove = false,
@@ -36,28 +38,14 @@
 
   let showAccountCol = $derived($selectedAccountId === null);
 
-  let selectedIds = $state(new Set());
-  let bulkActionPending = $state(false);
   let expandedThreads = $state(new Set());
-  let selectAll = $state(false);
+  let selectAll = $derived(emails.length > 0 && emails.every(email => selectedIds.has(email.id)));
   let sentinelEl = $state(null);
   let tableEl = $state(null);
   let observer = null;
   let previousSelectedId = null;
   let previousEmailIds = new Set();
-  let selectedSpamState = $derived(selectedBooleanState(emails, selectedIds, 'is_spam'));
-  let selectedTrashState = $derived(selectedBooleanState(emails, selectedIds, 'is_trash'));
-  let selectedInProtectedMailbox = $derived(
-    emails.some(email => selectedIds.has(email.id) && (email.is_spam || email.is_trash))
-  );
   let conversationResults = $derived(emails.some(email => email?.conversation_scope));
-
-  $effect(() => {
-    void selectionEpoch;
-    void actionsDisabled;
-    selectedIds = new Set();
-    selectAll = false;
-  });
 
   $effect(() => {
     const currentEmailIds = new Set(emails.map(email => email.id));
@@ -164,16 +152,13 @@
   function toggleSelect(id, event) {
     event.stopPropagation();
     if (actionsDisabled) return;
-    const next = new Set(selectedIds);
-    if (next.has(id)) { next.delete(id); } else { next.add(id); }
-    selectedIds = next;
-    selectAll = next.size === emails.length && emails.length > 0;
+    onToggleSelection?.(id, { range: Boolean(event.shiftKey) });
   }
 
   function toggleSelectAll() {
     if (actionsDisabled) return;
-    if (selectAll) { selectedIds = new Set(); selectAll = false; }
-    else { selectedIds = new Set(emails.map(e => e.id)); selectAll = true; }
+    if (selectAll) onClearSelection?.();
+    else onSelectLoaded?.();
   }
 
   function activateRow(event, callback) {
@@ -182,29 +167,6 @@
       event.preventDefault();
       callback();
     }
-  }
-
-  async function handleBulkAction(action) {
-    if (actionsDisabled || bulkActionPending || selectedIds.size === 0 || !onAction) return;
-    bulkActionPending = true;
-    try {
-      const accepted = await onAction(action, Array.from(selectedIds));
-      if (accepted) {
-        selectedIds = new Set();
-        selectAll = false;
-      }
-    } finally {
-      bulkActionPending = false;
-    }
-  }
-
-  function openBulkLabels(mode) {
-    if (actionsDisabled || bulkActionPending || selectedIds.size === 0 || !onLabel) return;
-    const selected = emails.filter(email => selectedIds.has(email.id));
-    onLabel(mode, selected, () => {
-      selectedIds = new Set();
-      selectAll = false;
-    });
   }
 
   const categoryColors = {
@@ -328,37 +290,6 @@
 </script>
 
 <div class="flex flex-col h-full" class:select-none={resizing}>
-  <!-- Bulk actions toolbar -->
-  {#if selectedIds.size > 0}
-    <div class="flex flex-col items-stretch gap-1 px-3 py-2 border-b shrink-0 sm:flex-row sm:items-center sm:gap-2" style="border-color: var(--border-color); background: var(--bg-tertiary)" aria-busy={bulkActionPending}>
-      <span class="text-xs font-medium shrink-0" style="color: var(--text-secondary)">{selectedIds.size} {conversationResults ? (selectedIds.size === 1 ? 'conversation selected' : 'conversations selected') : 'selected'}</span>
-      <div class="grid grid-cols-3 gap-1 sm:ml-auto sm:flex sm:min-w-0 sm:flex-1 sm:flex-wrap sm:justify-end">
-        <button onclick={() => handleBulkAction('mark_read')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Read</button>
-        <button onclick={() => handleBulkAction('mark_unread')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Unread</button>
-        <button onclick={() => handleBulkAction('archive')} disabled={actionsDisabled || bulkActionPending || selectedInProtectedMailbox} title={selectedInProtectedMailbox ? 'Restore spam or trash results before archiving' : 'Archive selected email'} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Archive</button>
-        <button onclick={() => openBulkLabels('apply')} disabled={actionsDisabled || bulkActionPending || !onLabel} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)" data-shortcut="inbox.label">Label</button>
-        {#if allowMove}
-          <button onclick={() => openBulkLabels('move')} disabled={actionsDisabled || bulkActionPending || !onLabel} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)" data-shortcut="inbox.move">Move</button>
-        {/if}
-        <button onclick={() => handleBulkAction('star')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Star</button>
-        {#if selectedSpamState === true}
-          <button onclick={() => handleBulkAction('unspam')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Not Spam</button>
-        {:else if selectedSpamState === false}
-          <button onclick={() => handleBulkAction('spam')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded text-red-500 disabled:opacity-50">Spam</button>
-        {:else}
-          <button disabled title="Selected results have mixed spam states" class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Spam varies</button>
-        {/if}
-        {#if selectedTrashState === true}
-          <button onclick={() => handleBulkAction('untrash')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Restore</button>
-        {:else if selectedTrashState === false}
-          <button onclick={() => handleBulkAction('trash')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded text-red-500 disabled:opacity-50">Trash</button>
-        {:else}
-          <button disabled title="Selected results have mixed trash states" class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Trash varies</button>
-        {/if}
-      </div>
-    </div>
-  {/if}
-
   <!-- Table -->
   <div class="flex-1 overflow-auto" bind:this={tableEl}>
     {#if loading && emails.length === 0}
@@ -401,17 +332,16 @@
         <thead class="sticky top-0 z-10" style="background: var(--bg-tertiary)">
           <tr class="border-b" style="border-color: var(--border-color)">
             <!-- Checkbox col (fixed) -->
-            <th class="px-3 py-2 text-left" style="width: 40px; min-width: 40px; max-width: 40px">
+            <th class="px-0 py-0 text-center" style="width: 48px; min-width: 48px; max-width: 48px">
               <button
                 onclick={toggleSelectAll}
                 disabled={actionsDisabled}
-                class="w-4 h-4 rounded border flex items-center justify-center transition-fast"
-                style="border-color: var(--border-color); background: {selectAll ? 'var(--color-accent-500)' : 'transparent'}"
+                class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md transition-fast disabled:opacity-50"
                 aria-label={selectAll ? `Deselect all loaded ${conversationResults ? 'conversations' : 'emails'}` : `Select all loaded ${conversationResults ? 'conversations' : 'emails'}`}
               >
-                {#if selectAll}
-                  <Icon name="check" size={12} class="text-white" strokeWidth={3} />
-                {/if}
+                <span class="flex h-4 w-4 items-center justify-center rounded border" style="border-color: var(--border-color); background: {selectAll ? 'var(--color-accent-500)' : 'transparent'}">
+                  {#if selectAll}<Icon name="check" size={12} class="text-white" strokeWidth={3} />{/if}
+                </span>
               </button>
             </th>
             <!-- Star col (fixed) -->
@@ -504,7 +434,7 @@
                 aria-expanded={isExpanded}
                 aria-label="{cleanEmailText(email.subject) || 'No subject'} conversation"
               >
-                <td class="px-3 py-2" style="width: 40px">
+                <td class="px-0 py-2" style="width: 48px">
                   <div class="transition-transform" style="transform: rotate({isExpanded ? '90' : '0'}deg)">
                     <Icon name="chevron-right" size={16} />
                   </div>
@@ -569,7 +499,7 @@
                     aria-label="Open message from {cleanEmailText(child.from_name || child.from_address || 'Unknown')}"
                     data-email-row-id={child.id}
                   >
-                    <td class="py-2" style="width: 40px"></td>
+                    <td class="py-2" style="width: 48px"></td>
                     <td class="px-1 py-2" style="width: 32px"></td>
                     <td class="px-1 py-2" style="width: 36px"></td>
                     {#if showAccountCol}
@@ -604,19 +534,20 @@
                 onfocus={() => onFocus && onFocus(email.id)}
                 tabindex="0"
                 aria-label="Open {email.conversation_scope ? 'conversation' : 'email'}: {cleanEmailText(email.subject) || 'No subject'}"
+                aria-selected={selectedIds.has(email.id)}
+                data-triage-row-id={email.id}
                 data-email-row-id={email.id}
               >
-                <td class="px-3 py-2" style="width: 40px">
+                <td class="px-0 py-0 text-center" style="width: 48px">
                   <button
                     onclick={(e) => toggleSelect(email.id, e)}
                     disabled={actionsDisabled}
-                    class="w-4 h-4 rounded border flex items-center justify-center transition-fast"
-                    style="border-color: var(--border-color); background: {selectedIds.has(email.id) ? 'var(--color-accent-500)' : 'transparent'}"
+                    class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md transition-fast disabled:opacity-50"
                     aria-label="{selectedIds.has(email.id) ? 'Deselect' : 'Select'} {cleanEmailText(email.subject) || (email.conversation_scope ? 'conversation' : 'email')}"
                   >
-                    {#if selectedIds.has(email.id)}
-                      <Icon name="check" size={12} class="text-white" strokeWidth={3} />
-                    {/if}
+                    <span class="flex h-4 w-4 items-center justify-center rounded border" style="border-color: var(--border-color); background: {selectedIds.has(email.id) ? 'var(--color-accent-500)' : 'transparent'}">
+                      {#if selectedIds.has(email.id)}<Icon name="check" size={12} class="text-white" strokeWidth={3} />{/if}
+                    </span>
                   </button>
                 </td>
                 <td class="px-1 py-2" style="width: 32px">

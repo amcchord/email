@@ -8,6 +8,7 @@ test('labels and move are discoverable in commands, bulk surfaces, and reader', 
   const inbox = read('../pages/Inbox.svelte');
   const list = read('../components/email/EmailList.svelte');
   const table = read('../components/email/EmailTable.svelte');
+  const bulk = read('../components/email/InboxBulkActionBar.svelte');
   const reader = read('../components/email/EmailView.svelte');
   const shortcuts = read('./shortcutDefaults.js');
   const status = read('../components/email/MailActionStatus.svelte');
@@ -17,10 +18,11 @@ test('labels and move are discoverable in commands, bulk surfaces, and reader', 
   assert.match(inbox, /<LabelPicker/);
   assert.match(inbox, /expandVisibleLabelTargets/);
   assert.match(inbox, /submitMailAction\(uniqueIds, action, requestKey, context\.labelId, context\.scope\)/);
-  assert.match(list, /openBulkLabels\('apply'\)/);
-  assert.match(list, /openBulkLabels\('move'\)/);
-  assert.match(table, /openBulkLabels\('apply'\)/);
-  assert.match(table, /openBulkLabels\('move'\)/);
+  assert.match(inbox, /action === 'label' \|\| action === 'move'/);
+  assert.match(inbox, /openLabelPicker\(action === 'move' \? 'move' : 'apply', triageSelectedEmails/);
+  assert.match(inbox, /showLabels=\{true\}/);
+  assert.match(bulk, /onclick=\{\(\) => invoke\('label'\)\}/);
+  assert.match(bulk, /onclick=\{\(\) => invoke\('move'\)\}/);
   assert.match(reader, /Apply or remove label · L/);
   assert.match(reader, /Move out of Inbox to label · V/);
   assert.match(status, /move_to_label: 'move to label'/);
@@ -58,6 +60,7 @@ test('Move is rendered and accepted only for the active Inbox mailbox', () => {
   const inbox = read('../pages/Inbox.svelte');
   const list = read('../components/email/EmailList.svelte');
   const table = read('../components/email/EmailTable.svelte');
+  const bulk = read('../components/email/InboxBulkActionBar.svelte');
   const reader = read('../components/email/EmailView.svelte');
   const picker = read('../components/email/LabelPicker.svelte');
 
@@ -65,8 +68,8 @@ test('Move is rendered and accepted only for the active Inbox mailbox', () => {
   assert.match(inbox, /mode === 'move' && !moveAvailable/);
   assert.match(inbox, /if \(!moveAvailable\) return undefined;[\s\S]*registerActions\(\{[\s\S]*'inbox\.move'/);
   assert.match(inbox, /allowMove=\{moveAvailable\}/);
-  assert.match(list, /\{#if allowMove\}[\s\S]*openBulkLabels\('move'\)/);
-  assert.match(table, /\{#if allowMove\}[\s\S]*openBulkLabels\('move'\)/);
+  assert.match(inbox, /showMove=\{moveAvailable\}/);
+  assert.match(bulk, /\{#if showMove\}[\s\S]*invoke\('move'\)/);
   assert.match(reader, /\{#if allowMove\}[\s\S]*Move out of Inbox to label/);
   assert.match(picker, /removes every current message[\s\S]*from Inbox/);
 });
