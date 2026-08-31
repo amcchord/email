@@ -3,6 +3,66 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Personal Snippets
+
+### Scope
+
+Add a private reusable writing library and one keyboard-first insertion path
+across Compose, reader, and Flow. Keep real mail/calendar QA read-only, preserve
+the concurrent terminal/AI work, and stop broad test loops after one coherent
+release gate.
+
+### Completed
+
+- Added owner-scoped PostgreSQL snippets with stable client UUID create replay,
+  unique normalized shortcuts, full revisioned replacement, idempotent
+  non-disclosing deletion, quotas, strict body limits, and additive revision
+  `d7e8f9a0b1c2` directly from c6.
+- Added Settings → Writing CRUD plus one searchable accessible picker in
+  Compose, reader, and Flow. `Cmd/Ctrl+;`, captured-caret rich/plain insertion,
+  sanitizer boundaries, one-step Undo, focus trapping/restoration, and a narrow
+  bottom sheet share the same contract.
+- Extended the generated `.example.test` provider with two isolated users,
+  hostile markup, exact replay/conflict/ownership behavior, content-free audit,
+  and zero external networking.
+
+### Verification
+
+- Independent review found no P0. Its two P1 findings—unstable create retry
+  identity and modifier-key propagation to underlying Send actions—were fixed.
+- Final `make check`: 727 backend passed with 66 expected skips; 448 frontend
+  passed; production build transformed 595 modules. Exact disposable migration
+  `c6 → d7 → c6 → d7`, focused PostgreSQL lifecycle, and generated-provider
+  self-test passed before code freeze.
+- Desktop and 390×844 browser QA passed management, search/Enter insertion,
+  sanitizer rejection of hostile remote/script content, one-step Undo, focus,
+  touch targets, overflow, and console checks. Signed-in production QA then
+  loaded the empty Writing surface read-only without creating or inserting
+  real content.
+
+### Production Actions
+
+- Fast-forwarded GitHub and production through pre-closeout commit
+  `af235f6b8cbb079c7e2e7f6316bf52ce840fa316`; exact application/runtime is
+  `1397160c2318d4d48997e800dbda20c536d8b0d5`.
+- Created and restore-list validated protected backup
+  `/var/backups/mailapp/maildb-pre-personal-snippets-20260831T0247Z.dump`,
+  1,383,786,224 bytes, mode `0600`, SHA-256
+  `4fa32da76f8f3a8beab329aa20423d50abe1b0ba182f8ab7cabdc27fe6794bd8`.
+- Upgraded exactly `c6d7e8f9a0b1 → d7e8f9a0b1c2`, replaced only `mailapp`,
+  then built 595 frontend modules. The retired API hit the host's known
+  graceful-stop timeout; replacement PID 2137416 is active with zero automatic
+  restarts and zero warning-or-higher entries after startup.
+- All seven checked services and public health are healthy, production Git is
+  exact and clean, anonymous snippet access is 401, and the aggregate snippet
+  count is zero.
+
+### Next
+
+Ship follow-on writing improvements as bounded milestones. Inline semicolon
+expansion and variables can extend this exact library; per-account signatures
+should remain separate because they participate in durable draft recovery.
+
 ## 2026-08-30 — At a Glance same-port browser provisioning
 
 ### Scope

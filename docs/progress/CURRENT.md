@@ -4,14 +4,21 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Operate Universal Send & Archive, Focused/Split Inbox, and the terminal track
-as durable, truthful workflows. Continue physical qualification of the
-independently gated Web Serial installer and OTA control plane on exact
-E1001/E1002 hardware. Keep real mail/calendar QA read-only except for generated
-`.example.test` fixtures and preserve every independent terminal write gate.
+Operate Personal Snippets, Universal Send & Archive, Focused/Split Inbox, and
+the terminal track as durable, truthful workflows. Continue physical
+qualification of the independently gated Web Serial installer and OTA control
+plane on exact E1001/E1002 hardware. Keep real mail/calendar QA read-only except
+for generated `.example.test` fixtures and preserve every independent terminal
+write gate.
 
 ## Baseline
 
+- The deployed Personal Snippets application/runtime is
+  `1397160c2318d4d48997e800dbda20c536d8b0d5`. Settings → Writing owns private
+  revisioned CRUD, while Compose, reader, and Flow share one `Cmd/Ctrl+;`
+  picker with search, caret-preserving sanitized rich/plain insertion, one-step
+  Undo, narrow-screen support, and keyboard containment. Production started
+  with zero snippet rows.
 - The deployed Universal Send & Archive application/runtime is
   `c7171466d075fc74f12ccb47fb2ee2d27ec830a6`. Full Compose and inline replies
   expose the same Send options and `Cmd/Ctrl+Shift+Enter` contract, while new
@@ -86,10 +93,10 @@ E1001/E1002 hardware. Keep real mail/calendar QA read-only except for generated
 - The deployed secure-enrollment application/runtime commit is
   `8ff01848a2be2818dfd9eb88b84be9aab4befb0a`; the following closeout is docs
   only. Production and GitHub were exact and clean at the runtime boundary.
-- Production Alembic is `c6d7e8f9a0b1 (head)`, the terminal OTA child of Labels
-  & Move revision `b5c6d7e8f9a0`. The additive release adds owner-confirmed
-  revision/coherent OTA telemetry plus immutable attempt/event tables. Both OTA
-  tables remained empty at release; all four existing terminals remain legacy.
+- Production Alembic is `d7e8f9a0b1c2 (head)`, the additive Personal Snippets
+  child of terminal OTA revision `c6d7e8f9a0b1`. The new owner-scoped table
+  requires no backfill and began empty. Both OTA tables also remained empty at
+  their release; all four existing terminals remain legacy.
 - All seven checked production services are active, public health is `ok`, and
   the replacement API process has zero automatic restarts and no post-start
   warning-or-higher entries. Production has no secure-enrollment or OTA
@@ -149,6 +156,20 @@ live state.
 - Next: attach dedicated hardware and complete physical A/B migration,
   interrupted-write, rollback, recovery, and USB-rescue evidence before
   installing any eligible descriptor or changing rollout from zero.
+
+## Recent Personal Snippets Release
+
+- Every signed-in user can search and manage a private reusable writing library
+  under Settings → Writing, then insert a rich or plain snapshot from Compose,
+  reader, or Flow with `Cmd/Ctrl+;`.
+- Stable client UUID creates, revision-checked full updates, non-disclosing
+  deletes, owner/shortcut uniqueness, bounded content, and sanitized editor
+  insertion keep retries, concurrent edits, and hostile markup safe.
+- Final verification passed 727 backend tests with 66 expected skips, all 448
+  frontend tests, a 595-module build, exact `c6 → d7 → c6 → d7` disposable
+  migration coverage, generated-provider lifecycle/audit checks, desktop and
+  narrow browser QA, and independent P0/P1 review. Full evidence is in
+  `PERSONAL_SNIPPETS_RELEASE_2026-08-30.md`.
 
 ## Recent Universal Send & Archive Release
 

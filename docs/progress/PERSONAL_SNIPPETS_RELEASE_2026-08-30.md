@@ -63,3 +63,21 @@ frontend production build, `alembic upgrade head`, and replacement of only
 `c6d7e8f9a0b1` drops every user-created snippet and is intentionally data-lossy;
 normal rollback should retain d7 and roll application Git/frontend back unless
 the table itself must be removed with explicit acceptance of that data loss.
+
+## Production result
+
+- GitHub and production deployed exact application/runtime
+  `1397160c2318d4d48997e800dbda20c536d8b0d5`; production was exact and clean
+  through pre-closeout commit `af235f6b8cbb079c7e2e7f6316bf52ce840fa316`.
+- The protected pre-d7 backup is
+  `/var/backups/mailapp/maildb-pre-personal-snippets-20260831T0247Z.dump`,
+  1,383,786,224 bytes, `postgres:postgres`, mode `0600`, SHA-256
+  `4fa32da76f8f3a8beab329aa20423d50abe1b0ba182f8ab7cabdc27fe6794bd8`.
+- Production upgraded exactly `c6d7e8f9a0b1 → d7e8f9a0b1c2`, replaced only
+  `mailapp`, and built 595 frontend modules. The retired process hit the known
+  graceful-stop timeout; replacement PID 2137416 is active with `NRestarts=0`
+  and no warning-or-higher entries after its startup boundary.
+- All seven checked services are active, public health is `ok`, anonymous
+  snippet access is 401, and the aggregate new-table count is zero. Signed-in
+  read-only browser QA loaded Settings → Writing without creating or inserting
+  real content.
