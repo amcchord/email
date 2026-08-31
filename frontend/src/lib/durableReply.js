@@ -1,5 +1,9 @@
 import { createDraftSessionController } from './draftSession.js';
 import { normalizeFollowUpReminderMode } from './followUpReminders.js';
+import {
+  normalizeSignatureMode,
+  normalizeSignatureSnapshot,
+} from './accountSignatures.js';
 
 function positiveInteger(value) {
   const number = Number(value);
@@ -44,6 +48,9 @@ export function durableReplySnapshot(envelope = {}, {
   bodyText = null,
   followUpReminder = 'default',
   followUpTimeZone = null,
+  signatureInitialized = true,
+  signatureMode = 'default',
+  signatureSnapshot = null,
 } = {}) {
   const accountId = positiveInteger(envelope.account_id);
   const sourceEmailId = positiveInteger(envelope.source_email_id);
@@ -62,6 +69,12 @@ export function durableReplySnapshot(envelope = {}, {
     references: envelope.references || null,
     thread_id: envelope.thread_id || null,
     source_email_id: sourceEmailId,
+    composition_kind: 'reply',
+    signature_mode: normalizeSignatureMode(signatureMode),
+    signature_snapshot: normalizeSignatureSnapshot(signatureSnapshot),
+    signature_initialized: Boolean(signatureInitialized),
+    quoted_html: '',
+    quoted_text: '',
     follow_up_reminder: normalizeFollowUpReminderMode(followUpReminder),
     follow_up_time_zone: followUpTimeZone || null,
     attachments: [],
@@ -81,6 +94,14 @@ function snapshotFromDraftResponse(response = {}) {
     references: response.references || null,
     thread_id: response.thread_id || null,
     source_email_id: response.source_email_id || null,
+    composition_kind: 'reply',
+    signature_mode: response.signature_snapshot
+      ? normalizeSignatureMode(response.signature_mode)
+      : 'disabled',
+    signature_snapshot: normalizeSignatureSnapshot(response.signature_snapshot),
+    signature_initialized: Boolean(response.signature_snapshot),
+    quoted_html: '',
+    quoted_text: '',
     follow_up_reminder: normalizeFollowUpReminderMode(response.follow_up_reminder),
     follow_up_time_zone: response.follow_up_time_zone || null,
     attachments: response.attachments || [],
@@ -254,11 +275,14 @@ export function createDurableReplyController({
     intent,
     controller,
     open,
-    snapshot: (bodyHtml, bodyText = null, followUp = {}) => durableReplySnapshot(envelope, {
+    snapshot: (bodyHtml, bodyText = null, options = {}) => durableReplySnapshot(envelope, {
       bodyHtml,
       bodyText,
-      followUpReminder: followUp.followUpReminder,
-      followUpTimeZone: followUp.followUpTimeZone,
+      followUpReminder: options.followUpReminder,
+      followUpTimeZone: options.followUpTimeZone,
+      signatureInitialized: options.signatureInitialized,
+      signatureMode: options.signatureMode,
+      signatureSnapshot: options.signatureSnapshot,
     }),
     composeData() {
       const state = controller.getState();

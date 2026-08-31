@@ -232,6 +232,14 @@ function snapshotFromServerResponse(response = {}) {
     references: response.references || null,
     thread_id: response.thread_id || null,
     source_email_id: response.source_email_id || null,
+    composition_kind: response.composition_kind || 'new',
+    signature_mode: response.signature_snapshot
+      ? (response.signature_mode || 'default')
+      : 'disabled',
+    signature_snapshot: response.signature_snapshot || null,
+    signature_initialized: Boolean(response.signature_snapshot),
+    quoted_html: response.quoted_html || '',
+    quoted_text: response.quoted_text || '',
     follow_up_reminder: response.follow_up_reminder || 'default',
     follow_up_time_zone: response.follow_up_time_zone || null,
     attachments: response.attachments || [],

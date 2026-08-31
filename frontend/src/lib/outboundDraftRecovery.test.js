@@ -51,6 +51,23 @@ test('recovered sends use their own bounded Compose intent key', () => {
   );
 });
 
+test('outbound recovery retains signature and structured quote context', () => {
+  const recovered = outboundRecoveryDraft({
+    client_draft_id: '10000000-0000-4000-8000-000000000001',
+    composition_kind: 'forward',
+    signature_mode: 'disabled',
+    signature_initialized: true,
+    signature_snapshot: null,
+    quoted_html: '<blockquote>Earlier</blockquote>',
+    quoted_text: 'Earlier',
+  }, { send_id: 'send-signature' });
+  assert.equal(recovered.composition_kind, 'forward');
+  assert.equal(recovered.signature_mode, 'disabled');
+  assert.equal(recovered.signature_initialized, true);
+  assert.equal(recovered.quoted_html, '<blockquote>Earlier</blockquote>');
+  assert.equal(recovered.quoted_text, 'Earlier');
+});
+
 test('retained outbound recovery clones auth-scoped content and deletes only on request', async () => {
   const retained = {
     snapshot: {

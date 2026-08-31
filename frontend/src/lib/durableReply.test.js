@@ -96,6 +96,40 @@ test('reply snapshots preserve explicit follow-up intent through send payloads',
   assert.equal(owner.sendPayload().follow_up_time_zone, 'America/New_York');
 });
 
+test('reply snapshots preserve explicit signature intent through draft, handoff, and send', async () => {
+  const signatureSnapshot = {
+    applied: true,
+    account_id: 7,
+    policy_revision: 3,
+    body_html: '<p>Generated signature</p>',
+    body_text: 'Generated signature',
+    content_hash: 'b'.repeat(64),
+    sanitizer_version: 1,
+  };
+  const fake = fakeController();
+  const owner = createDurableReplyController({
+    userId: 5,
+    storage: { async findByIntent() { return { client_draft_id: CLIENT_ID }; } },
+    api: {},
+    envelope: envelope(),
+    controllerFactory: () => fake.controller,
+  });
+  await owner.open();
+  const snapshot = owner.snapshot('<p>Signed reply</p>', 'Signed reply', {
+    signatureInitialized: true,
+    signatureMode: 'enabled',
+    signatureSnapshot,
+  });
+  fake.controller.update(snapshot);
+
+  assert.equal(snapshot.composition_kind, 'reply');
+  assert.equal(snapshot.signature_mode, 'enabled');
+  assert.equal(snapshot.signature_snapshot.policy_revision, 3);
+  assert.equal(owner.composeData().signature_initialized, true);
+  assert.equal(owner.sendPayload().signature_mode, 'enabled');
+  assert.equal(owner.sendPayload().signature_snapshot.content_hash, 'b'.repeat(64));
+});
+
 test('local reply identity wins before any cross-device lookup', async () => {
   const fake = fakeController();
   let sourceLookups = 0;

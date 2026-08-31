@@ -111,6 +111,9 @@ export function newComposeIntent(data = {}, { randomUUID = defaultRandomUuid } =
   if (!isComposeDraftUuid(clientDraftId)) throw new Error('Draft identity must be a UUID');
   const normalizedId = clientDraftId.toLowerCase();
   return createComposeDraftIntent({
+    composition_kind: 'new',
+    signature_mode: 'default',
+    signature_initialized: true,
     ...data,
     client_draft_id: normalizedId,
     intent_key: `new:${normalizedId}`,
@@ -157,6 +160,7 @@ export function composeDraftHasContent(draft) {
   ));
   return Boolean(
     hasRecipients || draft.subject || draft.body_html
+    || draft.quoted_html || draft.quoted_text
     || (Array.isArray(draft.attachments) && draft.attachments.length > 0)
     || draft.in_reply_to || draft.thread_id || draft.source_email_id,
   );

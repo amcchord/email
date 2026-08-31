@@ -39,6 +39,8 @@
   import RecipientField from '../components/email/RecipientField.svelte';
   import SendSplitButton from '../components/common/SendSplitButton.svelte';
   import SnippetPicker from '../components/email/SnippetPicker.svelte';
+  import SignatureControl from '../components/email/SignatureControl.svelte';
+  import QuotedContentPreview from '../components/email/QuotedContentPreview.svelte';
   import { parseMailboxList } from '../lib/recipientField.js';
   import {
     exactSourceEmailId,
@@ -53,6 +55,15 @@
     normalizeFollowUpPolicyList,
     normalizeFollowUpReminderMode,
   } from '../lib/followUpReminders.js';
+  import {
+    accountSignatureFor,
+    normalizeAccountSignatureList,
+    normalizeCompositionKind,
+    normalizeSignatureMode,
+    normalizeSignatureSnapshot,
+    signatureDraftFields,
+    signatureSnapshotFromPolicy,
+  } from '../lib/accountSignatures.js';
 
   let toRecipients = $state([]);
   let ccRecipients = $state([]);
@@ -96,12 +107,25 @@
   let followUpPoliciesLoaded = $state(false);
   let followUpMode = $state('default');
   let followUpTimeZone = $state(browserFollowUpTimeZone());
+  let signaturePolicies = $state([]);
+  let signaturePoliciesLoaded = $state(false);
+  let signaturePoliciesFailed = $state(false);
+  let compositionKind = $state('new');
+  let signatureMode = $state('disabled');
+  let signatureSnapshot = $state.raw(null);
+  let signatureInitialized = $state(false);
+  let quotedHtml = $state('');
+  let quotedText = $state('');
 
   let senderAccount = $derived(accountList.find(account => account.id === Number(selectedAccountId)) || null);
   let selectedFollowUpPolicy = $derived(followUpPolicyForAccount(followUpPolicies, selectedAccountId));
   let followUpAvailable = $derived(followUpPoliciesLoaded && Boolean(selectedFollowUpPolicy));
   let followUpDefault = $derived(Boolean(selectedFollowUpPolicy?.enabled));
   let followUpSummary = $derived(followUpSendSummary(selectedFollowUpPolicy));
+  let selectedSignaturePolicy = $derived(accountSignatureFor(signaturePolicies, selectedAccountId));
+  let signatureReady = $derived(
+    !signatureInitialized || signaturePoliciesLoaded || signaturePoliciesFailed,
+  );
   let archiveSourceEmailId = $derived(exactSourceEmailId(replyContext.source_email_id));
   let recipientEntryPending = $derived(
     toRecipientPending || ccRecipientPending || bccRecipientPending,
@@ -115,6 +139,12 @@
     || draftState.sending
     || draftState.discardInProgress
     || draftState.sendInProgress,
+  );
+  let senderLocked = $derived(
+    Boolean(replyContext.source_email_id)
+    || Boolean(draftState.server?.draft_id)
+    || Number(draftState.syncedRevision || 0) > 0
+    || ['saving', 'synced', 'reconciling'].includes(draftState.status),
   );
 
   function recipientValues(value) {
@@ -150,6 +180,12 @@
       policy: selectedFollowUpPolicy,
       timeZone: followUpTimeZone,
     });
+    const signature = signatureDraftFields({
+      compositionKind,
+      mode: signatureMode,
+      quotedHtml,
+      quotedText,
+    });
     return {
       account_id: Number(selectedAccountId) || null,
       to: [...toRecipients],
@@ -164,6 +200,9 @@
       references: replyContext.references,
       thread_id: replyContext.thread_id,
       source_email_id: replyContext.source_email_id,
+      ...signature,
+      signature_snapshot: signatureSnapshot,
+      signature_initialized: signatureInitialized,
       ...followUp,
     };
   }
@@ -216,6 +255,17 @@
       selectedAccountId = Number(draft.account_id);
     }
     replyContext = composeReplyContext(draft);
+    compositionKind = normalizeCompositionKind(
+      draft.composition_kind,
+      replyContext.source_email_id ? 'reply' : 'new',
+    );
+    signatureInitialized = draft.signature_initialized === true || Boolean(draft.signature_snapshot);
+    signatureMode = signatureInitialized
+      ? normalizeSignatureMode(draft.signature_mode)
+      : 'disabled';
+    signatureSnapshot = normalizeSignatureSnapshot(draft.signature_snapshot);
+    quotedHtml = draft.quoted_html || '';
+    quotedText = draft.quoted_text || '';
     followUpMode = normalizeFollowUpReminderMode(draft.follow_up_reminder);
     followUpTimeZone = draft.follow_up_time_zone || browserFollowUpTimeZone();
     showCcBcc = ccRecipients.length > 0 || bccRecipients.length > 0;
@@ -376,11 +426,33 @@
         followUpPoliciesLoaded = false;
       });
 
+    void api.listAccountSignatures()
+      .then(response => {
+        if (disposed || !sessionGuard?.isCurrent()) return;
+        signaturePolicies = normalizeAccountSignatureList(response).accounts;
+        signaturePoliciesLoaded = true;
+        signaturePoliciesFailed = false;
+        if (signatureInitialized && signatureMode === 'default' && !signatureSnapshot) {
+          signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
+          persistLocalDraft();
+        }
+      })
+      .catch(() => {
+        if (disposed || !sessionGuard?.isCurrent()) return;
+        signaturePolicies = [];
+        signaturePoliciesLoaded = false;
+        signaturePoliciesFailed = true;
+        if (signatureInitialized && signatureMode === 'default' && !signatureSnapshot) {
+          signatureMode = 'disabled';
+          persistLocalDraft();
+        }
+      });
+
     // Register keyboard shortcut actions for the Compose page
     const cleanupShortcuts = registerActions({
       'compose.send': {
         run: () => handleSend(),
-        isEnabled: () => !sending && !recipientEntryPending && writingSurfaceReady && draftState.canSend,
+        isEnabled: () => !sending && !recipientEntryPending && writingSurfaceReady && draftState.canSend && signatureReady,
         disabledReason: () => sending
           ? 'Email is already sending'
           : recipientEntryPending
@@ -398,6 +470,7 @@
           && !recipientEntryPending
           && writingSurfaceReady
           && draftState.canSend
+          && signatureReady
           && archiveSourceEmailId !== null
         ),
         disabledReason: () => {
@@ -506,6 +579,34 @@
     writingSurfaceReady = true;
   }
 
+  function handleSenderChange(event) {
+    const nextAccountId = Number(event.currentTarget.value);
+    if (senderLocked || !Number.isSafeInteger(nextAccountId) || nextAccountId <= 0) {
+      event.currentTarget.value = String(selectedAccountId || '');
+      return;
+    }
+    selectedAccountId = nextAccountId;
+    if (signatureInitialized && signatureMode !== 'disabled') {
+      signatureSnapshot = signatureSnapshotFromPolicy(
+        accountSignatureFor(signaturePolicies, nextAccountId),
+      );
+      if (signatureMode === 'enabled' && !signatureSnapshot) {
+        signatureMode = 'disabled';
+        showToast('This sender has no available signature, so this draft will stay unsigned.', 'info');
+      }
+    }
+  }
+
+  function handleSignatureChange(mode) {
+    if (draftLocked || !signaturePoliciesLoaded) return;
+    signatureInitialized = true;
+    signatureMode = normalizeSignatureMode(mode);
+    if (signatureMode !== 'disabled') {
+      signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
+    }
+    persistLocalDraft();
+  }
+
   function capturePersonalSnippetSelection() {
     return editorHandle?.rememberSelection?.() ?? false;
   }
@@ -543,6 +644,17 @@
     const draft = draftSnapshot();
     suppressLocalPersistence = false;
     persistLocalDraft(draft);
+  });
+
+  $effect(() => {
+    if (!autosaveReady || !signatureInitialized || signatureSnapshot) return;
+    if (signaturePoliciesFailed && signatureMode === 'default') {
+      signatureMode = 'disabled';
+      return;
+    }
+    if (signaturePoliciesLoaded && signatureMode === 'default') {
+      signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
+    }
   });
 
   $effect(() => {
@@ -711,6 +823,10 @@
 
   async function handleSend(schedule = null, { archiveAfterSend = false } = {}) {
     if (sending || !writingSurfaceReady || !draftState.canSend || !sessionGuard?.isCurrent()) return false;
+    if (!signatureReady) {
+      showToast('Wait for this sender’s signature settings to finish loading.', 'info');
+      return false;
+    }
     if (recipientEntryPending) {
       showToast(recipientPendingMessage(), 'error');
       return false;
@@ -776,6 +892,12 @@
         attachments: attachments.map(({ size, ...item }) => item),
         client_draft_id: capturedDraftKey,
         draft_revision: capturedDraftRevision,
+        ...signatureDraftFields({
+          compositionKind,
+          mode: signatureMode,
+          quotedHtml,
+          quotedText,
+        }),
         ...followUpRequestFields({
           mode: followUpMode,
           policy: selectedFollowUpPolicy,
@@ -924,7 +1046,7 @@
       />
       <SendSplitButton
         compact={true}
-        disabled={!writingSurfaceReady || !draftState.canSend || recipientEntryPending}
+        disabled={!writingSurfaceReady || !draftState.canSend || recipientEntryPending || !signatureReady}
         busy={sending}
         busyLabel={sendMode === 'schedule' ? 'Scheduling…' : 'Sending…'}
         onsend={() => handleSend()}
@@ -949,8 +1071,9 @@
           <label for="compose-from" class="text-sm w-16 shrink-0" style="color: var(--text-secondary)">From</label>
           <select
             id="compose-from"
-            bind:value={selectedAccountId}
-            disabled={Boolean(replyContext.source_email_id) || draftLocked || recipientEntryPending}
+            value={selectedAccountId}
+            onchange={handleSenderChange}
+            disabled={senderLocked || draftLocked || recipientEntryPending}
             class="w-0 min-w-0 flex-1 h-full text-sm outline-none border-0"
             style="background: transparent; color: var(--text-primary)"
           >
@@ -1086,6 +1209,18 @@
           inlineSnippets={true}
         />
       {/key}
+    </div>
+    <div class="shrink-0 space-y-2 px-6 pb-5">
+      <SignatureControl
+        initialized={signatureInitialized}
+        mode={signatureMode}
+        {compositionKind}
+        policy={selectedSignaturePolicy}
+        snapshot={signatureSnapshot}
+        disabled={draftLocked || !signaturePoliciesLoaded}
+        onchange={handleSignatureChange}
+      />
+      <QuotedContentPreview html={quotedHtml} text={quotedText} />
     </div>
   </div>
 </div>

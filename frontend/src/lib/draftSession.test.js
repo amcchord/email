@@ -495,6 +495,19 @@ test('a server-only URL rehydrates without replaying an accepted revision', asyn
           state: 'pending',
           subject: 'Accepted remote draft',
           body_html: '<p>Accepted</p>',
+          composition_kind: 'forward',
+          signature_mode: 'enabled',
+          signature_snapshot: {
+            applied: true,
+            account_id: 2,
+            policy_revision: 5,
+            body_html: '<p>Generated signature</p>',
+            body_text: 'Generated signature',
+            content_hash: 'a'.repeat(64),
+            sanitizer_version: 1,
+          },
+          quoted_html: '<blockquote>Earlier</blockquote>',
+          quoted_text: 'Earlier',
           follow_up_reminder: 'enabled',
           follow_up_time_zone: 'America/New_York',
         };
@@ -511,6 +524,11 @@ test('a server-only URL rehydrates without replaying an accepted revision', asyn
   assert.equal(controller.getState().snapshot.subject, 'Accepted remote draft');
   assert.equal(controller.getState().snapshot.follow_up_reminder, 'enabled');
   assert.equal(controller.getState().snapshot.follow_up_time_zone, 'America/New_York');
+  assert.equal(controller.getState().snapshot.composition_kind, 'forward');
+  assert.equal(controller.getState().snapshot.signature_mode, 'enabled');
+  assert.equal(controller.getState().snapshot.signature_snapshot.policy_revision, 5);
+  assert.equal(controller.getState().snapshot.signature_initialized, true);
+  assert.equal(controller.getState().snapshot.quoted_text, 'Earlier');
   await controller.flush();
   assert.equal(saves, 0);
 

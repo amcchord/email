@@ -27,6 +27,7 @@
   import DraftStatus from '../components/email/DraftStatus.svelte';
   import SendSplitButton from '../components/common/SendSplitButton.svelte';
   import SnippetPicker from '../components/email/SnippetPicker.svelte';
+  import SignatureControl from '../components/email/SignatureControl.svelte';
   import SnoozePicker from '../components/common/SnoozePicker.svelte';
   import {
     buildSnoozeRequest,
@@ -44,6 +45,13 @@
     normalizeFollowUpPolicyList,
     normalizeFollowUpReminderMode,
   } from '../lib/followUpReminders.js';
+  import {
+    accountSignatureFor,
+    normalizeAccountSignatureList,
+    normalizeSignatureMode,
+    normalizeSignatureSnapshot,
+    signatureSnapshotFromPolicy,
+  } from '../lib/accountSignatures.js';
 
   // --- Day Summary State ---
   let summaryLoading = $state(true);
@@ -142,6 +150,15 @@
   let followUpPoliciesLoaded = $state(false);
   let followUpMode = $state('default');
   let followUpTimeZone = $state(browserFollowUpTimeZone());
+  let signaturePolicies = $state([]);
+  let signaturePoliciesLoaded = $state(false);
+  let signaturePoliciesFailed = $state(false);
+  let signatureMode = $state('disabled');
+  let signatureSnapshot = $state.raw(null);
+  let signatureInitialized = $state(false);
+  let signatureReady = $derived(
+    !signatureInitialized || signaturePoliciesLoaded || signaturePoliciesFailed,
+  );
 
   function replyUnavailableMessage(reason) {
     if (reason === REPLY_ENVELOPE_UNAVAILABLE.SOURCE_ACCOUNT_INACTIVE) {
@@ -504,6 +521,27 @@
         if (!sessionIsCurrent()) return;
         followUpPolicies = [];
         followUpPoliciesLoaded = false;
+      });
+    void api.listAccountSignatures()
+      .then(response => {
+        if (!sessionIsCurrent()) return;
+        signaturePolicies = normalizeAccountSignatureList(response).accounts;
+        signaturePoliciesLoaded = true;
+        signaturePoliciesFailed = false;
+        if (signatureInitialized && signatureMode === 'default' && !signatureSnapshot) {
+          signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
+          rememberCurrentReplyDraft();
+        }
+      })
+      .catch(() => {
+        if (!sessionIsCurrent()) return;
+        signaturePolicies = [];
+        signaturePoliciesLoaded = false;
+        signaturePoliciesFailed = true;
+        if (signatureInitialized && signatureMode === 'default' && !signatureSnapshot) {
+          signatureMode = 'disabled';
+          rememberCurrentReplyDraft();
+        }
       });
 
     try {
@@ -1022,6 +1060,9 @@
       durableReplyController.update(durableReply.snapshot(replyBodyHtml, null, {
         followUpReminder: followUp.follow_up_reminder,
         followUpTimeZone: followUp.follow_up_time_zone,
+        signatureInitialized,
+        signatureMode,
+        signatureSnapshot,
       }));
       return true;
     } catch (error) {
@@ -1108,6 +1149,9 @@
     durableReplyError = '';
     followUpMode = 'default';
     followUpTimeZone = browserFollowUpTimeZone();
+    signatureInitialized = true;
+    signatureMode = signaturePoliciesFailed ? 'disabled' : 'default';
+    signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
     const owner = createDurableReplyController({
       userId: sessionGuard.userId,
       storage: durableReplyStorage,
@@ -1138,6 +1182,9 @@
       const state = await owner.open(owner.snapshot(initialHtml, null, {
         followUpReminder: initialFollowUp.follow_up_reminder,
         followUpTimeZone: initialFollowUp.follow_up_time_zone,
+        signatureInitialized,
+        signatureMode,
+        signatureSnapshot,
       }));
       if (
         durableReplyController !== owner.controller
@@ -1147,6 +1194,12 @@
       replyBodyHtml = state.snapshot?.body_html || initialHtml || '';
       followUpMode = normalizeFollowUpReminderMode(state.snapshot?.follow_up_reminder);
       followUpTimeZone = state.snapshot?.follow_up_time_zone || browserFollowUpTimeZone();
+      signatureInitialized = state.snapshot?.signature_initialized === true
+        || Boolean(state.snapshot?.signature_snapshot);
+      signatureMode = signatureInitialized
+        ? normalizeSignatureMode(state.snapshot?.signature_mode)
+        : 'disabled';
+      signatureSnapshot = normalizeSignatureSnapshot(state.snapshot?.signature_snapshot);
       initialReplyContent = replyBodyHtml;
       durableReplyState = owner.controller.getState();
       durableReplyOpening = false;
@@ -1527,6 +1580,16 @@
     return true;
   }
 
+  function handleSignatureChange(mode) {
+    if (!signaturePoliciesLoaded || durableReplyOpening || durableReplyState.sendInProgress) return;
+    signatureInitialized = true;
+    signatureMode = normalizeSignatureMode(mode);
+    if (signatureMode !== 'disabled') {
+      signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
+    }
+    rememberCurrentReplyDraft();
+  }
+
   function useSuggestedReply() {
     if (!selectedReplyEmail?.suggested_reply) return;
     initialReplyContent = '<p>' + selectedReplyEmail.suggested_reply.replace(/\n/g, '</p><p>') + '</p>';
@@ -1808,6 +1871,7 @@
       && Boolean(durableReplyController)
       && Boolean(durableReplyState.canSend)
       && !durableReplyOpening
+      && signatureReady
       && !durableReplyError;
   }
 
@@ -2023,6 +2087,10 @@
   );
   let followUpDefault = $derived(Boolean(selectedFollowUpPolicy?.enabled));
   let followUpSummary = $derived(followUpSendSummary(selectedFollowUpPolicy));
+  let selectedSignaturePolicy = $derived(accountSignatureFor(
+    signaturePolicies,
+    replyContext?.envelope?.account_id,
+  ));
 </script>
 
 <div
@@ -2955,6 +3023,16 @@
                 }}
               />
             </div>
+            <SignatureControl
+              initialized={signatureInitialized}
+              mode={signatureMode}
+              compositionKind="reply"
+              policy={selectedSignaturePolicy}
+              snapshot={signatureSnapshot}
+              compact={true}
+              disabled={!signaturePoliciesLoaded || durableReplyOpening || durableReplyState.sendInProgress || durableReplyState.discardInProgress}
+              onchange={handleSignatureChange}
+            />
           </div>
         </div>
       </div>

@@ -186,3 +186,105 @@ export function accountSignatureSummary(policy) {
   ].filter(Boolean);
   return contexts.length ? `On for ${contexts.join(', ')}` : 'On — choose a message type';
 }
+
+export const COMPOSITION_KINDS = Object.freeze(['new', 'reply', 'forward']);
+export const SIGNATURE_MODES = Object.freeze(['default', 'enabled', 'disabled']);
+
+export function normalizeCompositionKind(value, fallback = 'new') {
+  const kind = String(value ?? '').trim().toLowerCase();
+  return COMPOSITION_KINDS.includes(kind) ? kind : fallback;
+}
+
+export function normalizeSignatureMode(value, fallback = 'default') {
+  const mode = String(value ?? '').trim().toLowerCase();
+  return SIGNATURE_MODES.includes(mode) ? mode : fallback;
+}
+
+export function accountSignatureFor(signatures, accountId) {
+  const id = Number(accountId);
+  if (!Number.isSafeInteger(id) || id <= 0 || !Array.isArray(signatures)) return null;
+  return signatures.find(signature => Number(signature?.account_id) === id) || null;
+}
+
+export function signatureDefaultIncluded(policy, compositionKind) {
+  if (!policy?.enabled) return false;
+  const kind = normalizeCompositionKind(compositionKind);
+  if (kind === 'reply') return Boolean(policy.include_on_replies);
+  if (kind === 'forward') return Boolean(policy.include_on_forwards);
+  return Boolean(policy.include_on_new);
+}
+
+export function signatureSnapshotFromPolicy(policy) {
+  if (!policy?.body_html || !policy?.body_text) return null;
+  return Object.freeze({
+    applied: true,
+    account_id: policy.account_id,
+    policy_revision: policy.revision,
+    body_html: policy.body_html,
+    body_text: policy.body_text,
+    content_hash: '',
+    sanitizer_version: Number(policy.sanitizer_version || 1),
+  });
+}
+
+export function normalizeSignatureSnapshot(record, { sanitizeHtml } = {}) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+  const accountId = Number(record.account_id);
+  const policyRevision = Number(record.policy_revision);
+  const sanitizerVersion = Number(record.sanitizer_version || 1);
+  const applied = record.applied !== false;
+  if (
+    !Number.isSafeInteger(accountId)
+    || accountId <= 0
+    || !Number.isSafeInteger(policyRevision)
+    || policyRevision < 0
+    || !Number.isSafeInteger(sanitizerVersion)
+    || sanitizerVersion < 1
+  ) return null;
+  const bodyHtml = normalizeBodyHtml(record.body_html, sanitizeHtml);
+  const bodyText = normalizeBodyText(record.body_text);
+  if (!bodyHtml || !bodyText) return null;
+  return Object.freeze({
+    applied,
+    account_id: accountId,
+    policy_revision: policyRevision,
+    body_html: bodyHtml,
+    body_text: bodyText,
+    content_hash: String(record.content_hash || ''),
+    sanitizer_version: sanitizerVersion,
+  });
+}
+
+export function effectiveSignatureSnapshot({
+  initialized = false,
+  mode = 'default',
+  compositionKind = 'new',
+  policy = null,
+  snapshot = null,
+} = {}) {
+  if (!initialized) return null;
+  const normalizedMode = normalizeSignatureMode(mode, 'disabled');
+  if (normalizedMode === 'disabled') return null;
+  if (normalizedMode === 'default' && !signatureDefaultIncluded(policy, compositionKind)) return null;
+  const normalizedSnapshot = normalizeSignatureSnapshot(snapshot);
+  if (normalizedSnapshot?.account_id === Number(policy?.account_id)) {
+    return normalizedSnapshot.applied
+      ? normalizedSnapshot
+      : Object.freeze({ ...normalizedSnapshot, applied: true });
+  }
+  return signatureSnapshotFromPolicy(policy);
+}
+
+export function signatureDraftFields({
+  compositionKind = 'new',
+  mode = 'default',
+  quotedHtml = '',
+  quotedText = '',
+} = {}) {
+  return {
+    composition_kind: normalizeCompositionKind(compositionKind),
+    signature_mode: normalizeSignatureMode(mode),
+    quoted_html: String(quotedHtml || ''),
+    quoted_text: String(quotedText || ''),
+  };
+}

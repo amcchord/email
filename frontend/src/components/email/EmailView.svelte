@@ -44,6 +44,7 @@
   import SendSplitButton from '../common/SendSplitButton.svelte';
   import InlineSnippetMenu from './InlineSnippetMenu.svelte';
   import SnippetPicker from './SnippetPicker.svelte';
+  import SignatureControl from './SignatureControl.svelte';
   import { safeLabelColor, visibleUserLabels } from '../../lib/labelWorkflows.js';
   import {
     canArchiveAfterSend,
@@ -63,6 +64,13 @@
     normalizeFollowUpPolicyList,
     normalizeFollowUpReminderMode,
   } from '../../lib/followUpReminders.js';
+  import {
+    accountSignatureFor,
+    normalizeAccountSignatureList,
+    normalizeSignatureMode,
+    normalizeSignatureSnapshot,
+    signatureSnapshotFromPolicy,
+  } from '../../lib/accountSignatures.js';
 
   let {
     email = null,
@@ -159,6 +167,19 @@
   );
   let followUpDefault = $derived(Boolean(selectedFollowUpPolicy?.enabled));
   let followUpSummary = $derived(followUpSendSummary(selectedFollowUpPolicy));
+  let signaturePolicies = $state([]);
+  let signaturePoliciesLoaded = $state(false);
+  let signaturePoliciesFailed = $state(false);
+  let signatureMode = $state('disabled');
+  let signatureSnapshot = $state.raw(null);
+  let signatureInitialized = $state(false);
+  let selectedSignaturePolicy = $derived(accountSignatureFor(
+    signaturePolicies,
+    activeReplyEnvelopeResult?.envelope?.account_id,
+  ));
+  let signatureReady = $derived(
+    !signatureInitialized || signaturePoliciesLoaded || signaturePoliciesFailed,
+  );
 
   function sessionIsCurrent() {
     return sessionGuard.isCurrent();
@@ -206,6 +227,7 @@
         && inlineReplyCanArchive
         && Boolean(inlineReplyBody.trim())
         && durableReplyState.canSend
+        && signatureReady
         && !inlineReplySending
         && !durableReplyError
       ),
@@ -250,6 +272,32 @@
         if (disposed || !sessionIsCurrent()) return;
         followUpPolicies = [];
         followUpPoliciesLoaded = false;
+      });
+    return () => { disposed = true; };
+  });
+
+  onMount(() => {
+    let disposed = false;
+    void api.listAccountSignatures()
+      .then(response => {
+        if (disposed || !sessionIsCurrent()) return;
+        signaturePolicies = normalizeAccountSignatureList(response).accounts;
+        signaturePoliciesLoaded = true;
+        signaturePoliciesFailed = false;
+        if (signatureInitialized && signatureMode === 'default' && !signatureSnapshot) {
+          signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
+          persistInlineReply();
+        }
+      })
+      .catch(() => {
+        if (disposed || !sessionIsCurrent()) return;
+        signaturePolicies = [];
+        signaturePoliciesLoaded = false;
+        signaturePoliciesFailed = true;
+        if (signatureInitialized && signatureMode === 'default' && !signatureSnapshot) {
+          signatureMode = 'disabled';
+          persistInlineReply();
+        }
       });
     return () => { disposed = true; };
   });
@@ -709,6 +757,9 @@
             policy: selectedFollowUpPolicy,
             timeZone: followUpTimeZone,
           }).follow_up_time_zone,
+          signatureInitialized,
+          signatureMode,
+          signatureSnapshot,
         },
       ));
       return true;
@@ -752,6 +803,9 @@
     durableReplyError = '';
     followUpMode = 'default';
     followUpTimeZone = browserFollowUpTimeZone();
+    signatureInitialized = true;
+    signatureMode = signaturePoliciesFailed ? 'disabled' : 'default';
+    signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
     inlineReplyOpen = true;
     inlineReplyMode = mode;
     lastDraftEmailId = email.id;
@@ -795,6 +849,9 @@
       const state = await owner.open(owner.snapshot(replyTextHtml(initialBody), initialBody, {
         followUpReminder: initialFollowUp.follow_up_reminder,
         followUpTimeZone: initialFollowUp.follow_up_time_zone,
+        signatureInitialized,
+        signatureMode,
+        signatureSnapshot,
       }));
       if (
         !sessionIsCurrent()
@@ -806,6 +863,12 @@
       inlineReplyBody = savedBody || initialBody || '';
       followUpMode = normalizeFollowUpReminderMode(state.snapshot?.follow_up_reminder);
       followUpTimeZone = state.snapshot?.follow_up_time_zone || browserFollowUpTimeZone();
+      signatureInitialized = state.snapshot?.signature_initialized === true
+        || Boolean(state.snapshot?.signature_snapshot);
+      signatureMode = signatureInitialized
+        ? normalizeSignatureMode(state.snapshot?.signature_mode)
+        : 'disabled';
+      signatureSnapshot = normalizeSignatureSnapshot(state.snapshot?.signature_snapshot);
       if (!savedBody && initialBody) persistInlineReply();
       durableReplyState = owner.controller.getState();
       durableReplyOpening = false;
@@ -841,6 +904,9 @@
       inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
       followUpMode = 'default';
       followUpTimeZone = browserFollowUpTimeZone();
+      signatureInitialized = false;
+      signatureMode = 'disabled';
+      signatureSnapshot = null;
       return;
     }
 
@@ -850,6 +916,9 @@
       inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
       followUpMode = 'default';
       followUpTimeZone = browserFollowUpTimeZone();
+      signatureInitialized = false;
+      signatureMode = 'disabled';
+      signatureSnapshot = null;
       lastDraftEmailId = email.id;
       // Clear the pending draft so it doesn't re-trigger
       pendingReplyDraft.set(null);
@@ -865,6 +934,9 @@
       inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
       followUpMode = 'default';
       followUpTimeZone = browserFollowUpTimeZone();
+      signatureInitialized = false;
+      signatureMode = 'disabled';
+      signatureSnapshot = null;
     }
   });
 
@@ -893,6 +965,9 @@
     inlineReplyBody = '';
     followUpMode = 'default';
     followUpTimeZone = browserFollowUpTimeZone();
+    signatureInitialized = false;
+    signatureMode = 'disabled';
+    signatureSnapshot = null;
     const finalState = controller?.getState();
     showToast(
       finalState?.status === 'conflict'
@@ -909,6 +984,10 @@
 
   async function sendInlineReply(schedule = null, { archiveAfterSend = false } = {}) {
     if (!email || !inlineReplyBody.trim() || !sessionIsCurrent() || !durableReplyController) return false;
+    if (!signatureReady) {
+      showToast('Wait for this account’s signature settings to finish loading.', 'info');
+      return false;
+    }
     const replyAtStart = activeReplyEnvelopeResult;
     if (!replyAtStart.available) {
       showToast(replyUnavailableMessage(replyAtStart.reason), 'error');
@@ -1008,6 +1087,16 @@
       }
     }
     return false;
+  }
+
+  function handleSignatureChange(mode) {
+    if (!signaturePoliciesLoaded || durableReplyOpening || durableReplyState.sendInProgress) return;
+    signatureInitialized = true;
+    signatureMode = normalizeSignatureMode(mode);
+    if (signatureMode !== 'disabled') {
+      signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
+    }
+    persistInlineReply();
   }
 
   function formatFullDate(dateStr) {
@@ -1372,13 +1461,22 @@
       .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     const forwardedSubject = String(email.subject || '')
       .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+    const forwardedText = String(email.body_text || '').trim();
+    const quoteHtml = `---------- Forwarded message ----------<br>From: ${forwardedFromName} &lt;${forwardedFromAddress}&gt;<br>Date: ${formatFullDate(email.date)}<br>Subject: ${forwardedSubject}<br><br>${forwardedBody}`;
+    const quoteText = `---------- Forwarded message ----------\nFrom: ${String(email.from_name || '')} <${String(email.from_address || '')}>\nDate: ${formatFullDate(email.date)}\nSubject: ${String(email.subject || '')}\n\n${forwardedText}`;
     composeData.set({
       draft_key: `forward:${email.account_id || 'account'}:${email.id}`,
       account_id: source.sourceAccount.id,
       to: [],
       cc: [],
       subject: email.subject?.startsWith('Fwd:') ? email.subject : `Fwd: ${email.subject || ''}`,
-      body_html: `<br><br>---------- Forwarded message ----------<br>From: ${forwardedFromName} &lt;${forwardedFromAddress}&gt;<br>Date: ${formatFullDate(email.date)}<br>Subject: ${forwardedSubject}<br><br>${forwardedBody}`,
+      body_html: '',
+      body_text: '',
+      composition_kind: 'forward',
+      signature_mode: 'default',
+      signature_initialized: true,
+      quoted_html: quoteHtml,
+      quoted_text: quoteText,
     });
     currentPage.set('compose');
   }
@@ -2027,6 +2125,16 @@
             ona11ychange={readerInlineSnippetA11yChanged}
           />
         </div>
+        <SignatureControl
+          initialized={signatureInitialized}
+          mode={signatureMode}
+          compositionKind="reply"
+          policy={selectedSignaturePolicy}
+          snapshot={signatureSnapshot}
+          compact={true}
+          disabled={!signaturePoliciesLoaded || durableReplyOpening || durableReplyState.sendInProgress || durableReplyState.discardInProgress}
+          onchange={handleSignatureChange}
+        />
         <div class="reply-actions flex items-center gap-2 mt-2">
           <SnippetPicker
             bind:open={snippetPickerOpen}
@@ -2038,7 +2146,7 @@
           />
           <SendSplitButton
             label={inlineReplyActionLabel}
-            disabled={!inlineReplyBody.trim() || !activeReplyEnvelopeResult.available || !durableReplyState.canSend || Boolean(durableReplyError)}
+            disabled={!inlineReplyBody.trim() || !activeReplyEnvelopeResult.available || !durableReplyState.canSend || Boolean(durableReplyError) || !signatureReady}
             busy={inlineReplySending}
             busyLabel={inlineReplySendMode === 'schedule' ? 'Scheduling…' : 'Sending…'}
             onsend={() => sendInlineReply()}
