@@ -115,12 +115,14 @@ function notify(callback, event) {
 }
 
 /**
- * Execute the transport-independent browser install state machine.
+ * Execute the transport-independent browser install state machine while
+ * leaving both injected transports open for a caller-owned continuation.
  *
  * No concrete Web Serial or esptool adapter is imported here. Both transports
  * are injected, and all artifact bytes are authenticated before probe/write.
+ * The caller must close the transports on every path.
  */
-export async function runTerminalFirmwareInstallWorkflow({
+export async function runTerminalFirmwareInstallPhase({
   plan,
   preparedPlan = null,
   fetchImpl,
@@ -246,8 +248,19 @@ export async function runTerminalFirmwareInstallWorkflow({
       : (wasAbort ? 'cancelled_before_write' : 'blocked');
     emit(terminalState, { code: error.code });
     return finish(false, terminalState, { error });
+  }
+}
+
+/**
+ * Preserve the original self-closing install contract for every existing
+ * caller. Provisioning continuations use runTerminalFirmwareInstallPhase()
+ * under one outer session owner instead.
+ */
+export async function runTerminalFirmwareInstallWorkflow(options = {}) {
+  try {
+    return await runTerminalFirmwareInstallPhase(options);
   } finally {
-    await safeClose(applicationTransport);
-    await safeClose(romTransport);
+    await safeClose(options.applicationTransport);
+    await safeClose(options.romTransport);
   }
 }

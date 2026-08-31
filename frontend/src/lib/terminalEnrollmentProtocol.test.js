@@ -21,6 +21,7 @@ import {
   sha256,
   validateHello,
   validateHelloAck,
+  validateEnrollmentWifi,
   validateStatus,
 } from './terminalEnrollmentProtocol.js';
 
@@ -258,6 +259,10 @@ test('transcript mutation and invalid P-256 points fail the handshake closed', a
 });
 
 test('config builder reproduces the exact fixture and enforces UTF-8, password, URL, and total bounds', async () => {
+  assert.deepEqual(validateEnrollmentWifi({ ssid: 'FixtureWiFi', password: 'correct horse' }), {
+    ssidBytes: 11,
+    passwordBytes: 13,
+  });
   const built = buildEnrollmentConfig({
     ssid: 'FixtureWiFi',
     password: 'correct horse',
@@ -267,6 +272,7 @@ test('config builder reproduces the exact fixture and enforces UTF-8, password, 
   assert.equal(toHex(await sha256(built.bytes)), vector.config_sha256_hex);
 
   assert.throws(() => buildEnrollmentConfig({ ssid: '😀'.repeat(9), password: '', scheduleUrl: 'https://host/x' }), expectCode('invalid_ssid'));
+  assert.throws(() => buildEnrollmentConfig({ ssid: '   ', password: '', scheduleUrl: 'https://host/x' }), expectCode('invalid_ssid'));
   assert.throws(() => buildEnrollmentConfig({ ssid: 'ok', password: 'x'.repeat(64), scheduleUrl: 'https://host/x' }), expectCode('invalid_password'));
   assert.doesNotThrow(() => buildEnrollmentConfig({ ssid: 'ok', password: 'a'.repeat(64), scheduleUrl: 'https://host/x' }));
   assert.throws(() => buildEnrollmentConfig({ ssid: 'ok', password: '', scheduleUrl: 'http://host/x' }), expectCode('invalid_schedule_url'));

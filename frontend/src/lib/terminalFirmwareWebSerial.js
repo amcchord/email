@@ -1,10 +1,16 @@
 import { TerminalFirmwareInstallError } from './terminalFirmwareInstallPlan.js';
+import {
+  encodeRet1Frame,
+  parseRet1Line,
+  Ret1ProtocolError,
+} from './terminalEnrollmentProtocol.js';
 
 const ROM_BAUD_RATE = 115200;
 const APPLICATION_BAUD_RATE = 115200;
 const APPLICATION_BOOT_DELAY_MS = 750;
 const LOCK_NAME = 'mailapp-terminal-firmware-web-serial-v1';
 const EXPECTED_CHIP = 'ESP32-S3';
+const MAX_QUEUED_APPLICATION_BYTES = 16 * 1024;
 const STATUS_REQUEST = new TextEncoder().encode('@RET1 {"v":2,"type":"status_request"}\n');
 const PRESERVE_CONFIG_LAYOUT = Object.freeze([
   Object.freeze({ role: 'bootloader', offset: 0x0000 }),
@@ -15,6 +21,10 @@ const PRESERVE_CONFIG_LAYOUT = Object.freeze([
 
 function fail(code, message) {
   throw new TerminalFirmwareInstallError(code, message);
+}
+
+function transportError(code, message) {
+  return new TerminalFirmwareInstallError(code, message);
 }
 
 function abortError() {
@@ -166,6 +176,7 @@ class SharedSerialSession {
     this.closePromise = null;
     this.romCloser = null;
     this.applicationCloser = null;
+    this.applicationLost = null;
     this.lost = false;
     this.disconnectListener = event => {
       if (event?.target === this.port || event?.port === this.port) this.markLost();
@@ -173,14 +184,21 @@ class SharedSerialSession {
     this.serial?.addEventListener?.('disconnect', this.disconnectListener);
   }
 
-  register({ romCloser, applicationCloser }) {
+  register({ romCloser, applicationCloser, applicationLost }) {
     this.romCloser = romCloser;
     this.applicationCloser = applicationCloser;
+    this.applicationLost = applicationLost;
   }
 
   markLost() {
     if (this.lost) return;
     this.lost = true;
+    try {
+      this.applicationLost?.();
+    } catch {
+      // The application queue is best-effort notification of authoritative
+      // device loss. throwIfLost() independently protects every operation.
+    }
     try {
       this.onDisconnect();
     } catch {
@@ -207,6 +225,137 @@ class SharedSerialSession {
       }
     })();
     return this.closePromise;
+  }
+}
+
+class BoundedApplicationQueue {
+  constructor(maximumBytes) {
+    this.maximumBytes = maximumBytes;
+    this.chunks = [];
+    this.queuedBytes = 0;
+    this.consumer = null;
+    this.failure = null;
+    this.closed = false;
+  }
+
+  push(value) {
+    if (this.closed || this.failure) return;
+    const chunk = Uint8Array.from(bytes(value, 'The terminal returned invalid application serial bytes.'));
+    if (chunk.byteLength > this.maximumBytes) {
+      this.fail(transportError(
+        'transport_invalid',
+        'The terminal exceeded the bounded application serial receive queue.',
+      ));
+      return;
+    }
+    const waiter = this.consumer?.waiter;
+    if (waiter) {
+      this.consumer.waiter = null;
+      waiter.resolve({ done: false, value: chunk });
+      return;
+    }
+    if (this.queuedBytes + chunk.byteLength > this.maximumBytes) {
+      this.fail(transportError(
+        'transport_invalid',
+        'The terminal exceeded the bounded application serial receive queue.',
+      ));
+      return;
+    }
+    this.chunks.push(chunk);
+    this.queuedBytes += chunk.byteLength;
+  }
+
+  fail(error) {
+    if (this.closed || this.failure) return;
+    this.failure = error instanceof Error
+      ? error
+      : transportError('transport_invalid', 'The terminal application serial reader failed closed.');
+    this.chunks = [];
+    this.queuedBytes = 0;
+    const waiter = this.consumer?.waiter;
+    if (waiter) {
+      this.consumer.waiter = null;
+      this.consumer.release?.();
+      waiter.reject(this.failure);
+    }
+  }
+
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    const waiter = this.consumer?.waiter;
+    if (waiter) {
+      this.consumer.waiter = null;
+      this.consumer.release?.();
+      waiter.resolve({ done: true, value: undefined });
+    }
+  }
+
+  subscribe(signal) {
+    if (this.consumer) {
+      fail('transport_invalid', 'Only one RET1 application serial consumer may be active.');
+    }
+    const consumer = { active: true, waiter: null, onAbort: null };
+    this.consumer = consumer;
+
+    const release = () => {
+      if (!consumer.active) return;
+      consumer.active = false;
+      signal?.removeEventListener?.('abort', consumer.onAbort);
+      if (this.consumer === consumer) this.consumer = null;
+    };
+    consumer.release = release;
+    consumer.onAbort = () => {
+      const waiter = consumer.waiter;
+      consumer.waiter = null;
+      release();
+      waiter?.reject(abortError());
+    };
+    signal?.addEventListener?.('abort', consumer.onAbort, { once: true });
+
+    const queue = this;
+    return {
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+      next() {
+        if (!consumer.active) return Promise.resolve({ done: true, value: undefined });
+        if (signal?.aborted) {
+          consumer.onAbort();
+          return Promise.reject(abortError());
+        }
+        if (queue.chunks.length > 0) {
+          const value = queue.chunks.shift();
+          queue.queuedBytes -= value.byteLength;
+          return Promise.resolve({ done: false, value });
+        }
+        if (queue.failure) {
+          const error = queue.failure;
+          release();
+          return Promise.reject(error);
+        }
+        if (queue.closed) {
+          release();
+          return Promise.resolve({ done: true, value: undefined });
+        }
+        if (consumer.waiter) {
+          return Promise.reject(transportError(
+            'transport_invalid',
+            'Concurrent reads from one RET1 serial consumer are not allowed.',
+          ));
+        }
+        const waiter = deferred();
+        consumer.waiter = waiter;
+        return waiter.promise;
+      },
+      return() {
+        const waiter = consumer.waiter;
+        consumer.waiter = null;
+        release();
+        waiter?.resolve({ done: true, value: undefined });
+        return Promise.resolve({ done: true, value: undefined });
+      },
+    };
   }
 }
 
@@ -382,7 +531,10 @@ class WebSerialApplicationTransport {
     this.shared = shared;
     this.portOpen = false;
     this.reader = null;
-    this.readerDone = null;
+    this.readerPump = null;
+    this.queue = new BoundedApplicationQueue(MAX_QUEUED_APPLICATION_BYTES);
+    this.closing = false;
+    this.writeActive = false;
   }
 
   async sendStatusRequest({ baudRate, bytes: requestBytes, signal } = {}) {
@@ -401,63 +553,121 @@ class WebSerialApplicationTransport {
       bufferSize: 4096,
     });
     this.portOpen = true;
+    this.#startReaderPump();
     throwIfAborted(signal);
     this.shared.throwIfLost();
-    if (!this.shared.port.writable) fail('device_disconnected', 'The terminal serial output stream is unavailable.');
-    const writer = this.shared.port.writable.getWriter();
-    try {
-      await writer.write(payload);
-    } finally {
-      writer.releaseLock();
-    }
+    await this.#write(payload, signal);
     throwIfAborted(signal);
     return true;
   }
 
   readChunks({ baudRate, signal } = {}) {
-    if (baudRate !== APPLICATION_BAUD_RATE || !this.portOpen || this.reader) {
+    if (baudRate !== APPLICATION_BAUD_RATE || !this.portOpen) {
       fail('transport_invalid', 'The RET1 application serial reader is invalid.');
     }
-    const self = this;
-    return (async function* readApplicationSerial() {
-      throwIfAborted(signal);
-      self.shared.throwIfLost();
-      if (!self.shared.port.readable) fail('device_disconnected', 'The terminal serial input stream is unavailable.');
-      const reader = self.shared.port.readable.getReader();
-      const finished = deferred();
-      self.reader = reader;
-      self.readerDone = finished.promise;
-      const onAbort = () => {
-        void reader.cancel().catch(() => {});
-      };
-      signal?.addEventListener?.('abort', onAbort, { once: true });
+    throwIfAborted(signal);
+    this.shared.throwIfLost();
+    return this.queue.subscribe(signal);
+  }
+
+  async sendRet1Frame({ bytes: frameBytes, signal } = {}) {
+    throwIfAborted(signal);
+    this.shared.throwIfLost();
+    const payload = bytes(frameBytes, 'The RET1 application frame is not a byte buffer.');
+    if (!this.portOpen || payload.byteLength === 0 || payload[payload.byteLength - 1] !== 0x0a) {
+      fail('transport_invalid', 'The RET1 application frame is invalid.');
+    }
+    let parsed;
+    try {
+      parsed = parseRet1Line(payload);
+    } catch (error) {
+      if (error instanceof Ret1ProtocolError) {
+        fail('transport_invalid', 'The RET1 application frame is invalid.');
+      }
+      throw error;
+    }
+    if (!equalBytes(encodeRet1Frame(parsed), payload)) {
+      fail('transport_invalid', 'The RET1 application frame is not canonical.');
+    }
+    await this.#write(payload, signal);
+    return true;
+  }
+
+  markLost() {
+    this.queue.fail(transportError(
+      'device_disconnected',
+      'The selected terminal disconnected from Web Serial.',
+    ));
+  }
+
+  #startReaderPump() {
+    if (!this.shared.port.readable) {
+      fail('device_disconnected', 'The terminal serial input stream is unavailable.');
+    }
+    this.reader = this.shared.port.readable.getReader();
+    this.readerPump = (async () => {
       try {
         while (true) {
-          const { value, done } = await reader.read();
-          throwIfAborted(signal);
-          self.shared.throwIfLost();
-          if (done) return;
-          if (value?.byteLength) yield bytes(value, 'The terminal returned invalid application serial bytes.');
+          const { value, done } = await this.reader.read();
+          if (done) {
+            if (this.closing) this.queue.close();
+            else this.queue.fail(transportError(
+              'device_disconnected',
+              'The terminal application serial input stream ended unexpectedly.',
+            ));
+            return;
+          }
+          this.shared.throwIfLost();
+          if (value?.byteLength) this.queue.push(value);
+          if (this.queue.failure) {
+            await this.reader.cancel().catch(() => {});
+            return;
+          }
+        }
+      } catch (error) {
+        if (!this.closing) {
+          this.queue.fail(
+            error instanceof TerminalFirmwareInstallError
+              ? error
+              : transportError('device_disconnected', 'The terminal application serial reader failed.'),
+          );
         }
       } finally {
-        signal?.removeEventListener?.('abort', onAbort);
         try {
-          reader.releaseLock();
+          this.reader?.releaseLock();
         } finally {
-          self.reader = null;
-          self.readerDone = null;
-          finished.resolve();
+          this.reader = null;
         }
       }
-    }());
+    })();
+  }
+
+  async #write(payload, signal) {
+    throwIfAborted(signal);
+    this.shared.throwIfLost();
+    if (this.writeActive) fail('transport_invalid', 'Concurrent RET1 application serial writes are not allowed.');
+    if (!this.shared.port.writable) fail('device_disconnected', 'The terminal serial output stream is unavailable.');
+    this.writeActive = true;
+    let writer;
+    try {
+      writer = this.shared.port.writable.getWriter();
+      await writer.write(payload);
+      throwIfAborted(signal);
+      this.shared.throwIfLost();
+    } finally {
+      writer?.releaseLock();
+      this.writeActive = false;
+    }
   }
 
   async closeLocal() {
+    this.closing = true;
+    this.queue.close();
     if (this.reader) {
-      const done = this.readerDone;
       await this.reader.cancel().catch(() => {});
-      if (done) await done.catch(() => {});
     }
+    await this.readerPump?.catch(() => {});
+    this.readerPump = null;
     if (this.portOpen) {
       try {
         await this.shared.port.close();
@@ -521,8 +731,10 @@ export async function createTerminalFirmwareWebSerialTransports({
     shared.register({
       romCloser: () => romTransport.closeLocal(),
       applicationCloser: () => applicationTransport.closeLocal(),
+      applicationLost: () => applicationTransport.markLost(),
     });
-    return Object.freeze({ romTransport, applicationTransport });
+    const session = Object.freeze({ close: () => shared.close() });
+    return Object.freeze({ session, romTransport, applicationTransport });
   } catch (error) {
     await releaseLock();
     throw error;
@@ -533,4 +745,8 @@ export const TERMINAL_FIRMWARE_WEB_SERIAL_VERSION = Object.freeze({
   package: 'esptool-js',
   version: '0.6.1',
   lockName: LOCK_NAME,
+});
+
+export const TERMINAL_FIRMWARE_WEB_SERIAL_LIMITS = Object.freeze({
+  maxQueuedApplicationBytes: MAX_QUEUED_APPLICATION_BYTES,
 });

@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { runTerminalFirmwareInstallWorkflow } from './terminalFirmwareInstallWorkflow.js';
+import {
+  runTerminalFirmwareInstallPhase,
+  runTerminalFirmwareInstallWorkflow,
+} from './terminalFirmwareInstallWorkflow.js';
 import { loadTerminalFirmwareInstallArtifacts } from './terminalFirmwareInstallPlan.js';
 import {
   createFixtureFetch,
@@ -142,6 +145,25 @@ test('prepared package is re-hashed without a second network fetch before transp
   assert.equal(result.ok, true);
   assert.equal(fetchCalls, 0);
   assert.deepEqual(result.history.slice(0, 2).map(event => event.state), ['preflight', 'verifying']);
+});
+
+test('caller-owned install phase preserves successful transports for a same-session continuation', async () => {
+  const fixture = await createTerminalFirmwareInstallFixture();
+  const transport = fakeTransports(fixture);
+  const result = await runTerminalFirmwareInstallPhase({
+    plan: fixture.plan,
+    fetchImpl: createFixtureFetch(fixture),
+    romTransport: transport.rom,
+    applicationTransport: transport.application,
+    statusSettleMs: 0,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(transport.calls.includes('close-application'), false);
+  assert.equal(transport.calls.includes('close-rom'), false);
+  await transport.application.close();
+  await transport.rom.close();
+  assert.deepEqual(transport.calls.slice(-2), ['close-application', 'close-rom']);
 });
 
 test('throwing UI observers cannot interrupt an in-flight flash or hide success', async () => {

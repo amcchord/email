@@ -3,11 +3,16 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import { loadTerminalFirmwareInstallArtifacts } from './terminalFirmwareInstallPlan.js';
-import { runTerminalFirmwareInstallWorkflow } from './terminalFirmwareInstallWorkflow.js';
+import {
+  runTerminalFirmwareInstallPhase,
+  runTerminalFirmwareInstallWorkflow,
+} from './terminalFirmwareInstallWorkflow.js';
 import {
   createTerminalFirmwareWebSerialTransports,
+  TERMINAL_FIRMWARE_WEB_SERIAL_LIMITS,
   TERMINAL_FIRMWARE_WEB_SERIAL_VERSION,
 } from './terminalFirmwareWebSerial.js';
+import { encodeRet1Frame } from './terminalEnrollmentProtocol.js';
 import {
   createFixtureFetch,
   createTerminalFirmwareInstallFixture,
@@ -19,6 +24,7 @@ class FakeReadable {
     this.chunks = chunks.map(chunk => Uint8Array.from(chunk));
     this.locked = false;
     this.cancelled = false;
+    this.waiters = [];
   }
 
   getReader() {
@@ -29,15 +35,25 @@ class FakeReadable {
       async read() {
         if (stream.cancelled) return { done: true, value: undefined };
         if (stream.chunks.length > 0) return { done: false, value: stream.chunks.shift() };
-        return { done: true, value: undefined };
+        return new Promise(resolve => stream.waiters.push(resolve));
       },
       async cancel() {
         stream.cancelled = true;
+        for (const resolve of stream.waiters.splice(0)) {
+          resolve({ done: true, value: undefined });
+        }
       },
       releaseLock() {
         stream.locked = false;
       },
     };
+  }
+
+  enqueue(chunk) {
+    const value = Uint8Array.from(chunk);
+    const resolve = this.waiters.shift();
+    if (resolve) resolve({ done: false, value });
+    else this.chunks.push(value);
   }
 }
 
@@ -169,7 +185,7 @@ class FakeEspLoader {
 
 function fakeRuntime(port, events, { lockAvailable = true } = {}) {
   const listeners = new Map();
-  return {
+  const runtime = {
     isSecureContext: true,
     navigator: {
       serial: {
@@ -196,6 +212,8 @@ function fakeRuntime(port, events, { lockAvailable = true } = {}) {
       },
     },
   };
+  runtime.disconnect = () => listeners.get('disconnect')?.({ target: port, port });
+  return runtime;
 }
 
 async function preparedFixture() {
@@ -247,6 +265,100 @@ test('official adapter selects under user activation, holds one Web Lock, flashe
     operation: 'after',
     mode: 'hard_reset',
   });
+});
+
+test('caller-owned install phase retains the same port and Web Lock for sequential RET1 exchanges', async () => {
+  const { fixture, preparedPlan } = await preparedFixture();
+  const port = new FakePort(fixture.status);
+  const events = [];
+  const transports = await createTerminalFirmwareWebSerialTransports({
+    runtime: fakeRuntime(port, events),
+    esptool: { ESPLoader: FakeEspLoader, Transport: FakeEspressifTransport },
+  });
+
+  const result = await runTerminalFirmwareInstallPhase({
+    preparedPlan,
+    romTransport: transports.romTransport,
+    applicationTransport: transports.applicationTransport,
+    statusSettleMs: 0,
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(events, ['request-port', 'request-lock']);
+  assert.equal(port.opened, true);
+  assert.equal(port.closeCalls, 1, 'only the ROM-mode open is closed before the retained application phase');
+
+  const hello = encodeRet1Frame({ v: 1, type: 'hello', seq: 0 });
+  assert.equal(await transports.applicationTransport.sendRet1Frame({ bytes: hello }), true);
+  const response = transports.applicationTransport.readChunks({ baudRate: 115200 });
+  assert.throws(
+    () => transports.applicationTransport.readChunks({ baudRate: 115200 }),
+    error => error.code === 'transport_invalid',
+  );
+  const helloAck = encodeRet1Frame({ v: 1, type: 'hello_ack', seq: 0 });
+  const next = response.next();
+  port.readable.enqueue(helloAck);
+  assert.deepEqual((await next).value, helloAck);
+  await response.return();
+
+  await transports.session.close();
+  await transports.session.close();
+  await transports.applicationTransport.close();
+  assert.deepEqual(events, ['request-port', 'request-lock', 'release-lock']);
+  assert.equal(port.closeCalls, 2, 'the retained application open closes exactly once');
+  assert.equal(port.opened, false);
+  assert.deepEqual(port.writes.map(value => new TextDecoder().decode(value)), [
+    '@RET1 {"v":2,"type":"status_request"}\n',
+    '@RET1 {"v":1,"type":"hello","seq":0}\n',
+  ]);
+});
+
+test('application queue overflow and non-canonical RET1 writes fail closed', async () => {
+  const fixture = await createTerminalFirmwareInstallFixture();
+  const port = new FakePort(fixture.status);
+  const events = [];
+  const transports = await createTerminalFirmwareWebSerialTransports({
+    runtime: fakeRuntime(port, events),
+    esptool: { ESPLoader: FakeEspLoader, Transport: FakeEspressifTransport },
+  });
+  const statusRequest = new TextEncoder().encode('@RET1 {"v":2,"type":"status_request"}\n');
+  await transports.applicationTransport.sendStatusRequest({ baudRate: 115200, bytes: statusRequest });
+
+  await assert.rejects(
+    transports.applicationTransport.sendRet1Frame({
+      bytes: new TextEncoder().encode('@RET1 { "v": 1, "type": "hello", "seq": 0 }\n'),
+    }),
+    error => error.code === 'transport_invalid',
+  );
+
+  port.readable.enqueue(new Uint8Array(
+    TERMINAL_FIRMWARE_WEB_SERIAL_LIMITS.maxQueuedApplicationBytes + 1,
+  ));
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const chunks = transports.applicationTransport.readChunks({ baudRate: 115200 });
+  await assert.rejects(chunks.next(), error => error.code === 'transport_invalid');
+  await transports.session.close();
+  assert.deepEqual(events, ['request-port', 'request-lock', 'release-lock']);
+});
+
+test('Web Serial disconnect rejects a pending application consumer without relying on UI abort', async () => {
+  const fixture = await createTerminalFirmwareInstallFixture();
+  const port = new FakePort(fixture.status);
+  const events = [];
+  const runtime = fakeRuntime(port, events);
+  const transports = await createTerminalFirmwareWebSerialTransports({
+    runtime,
+    esptool: { ESPLoader: FakeEspLoader, Transport: FakeEspressifTransport },
+  });
+  const statusRequest = new TextEncoder().encode('@RET1 {"v":2,"type":"status_request"}\n');
+  await transports.applicationTransport.sendStatusRequest({ baudRate: 115200, bytes: statusRequest });
+  const chunks = transports.applicationTransport.readChunks({ baudRate: 115200 });
+  assert.equal((await chunks.next()).done, false);
+  const pending = chunks.next();
+  runtime.disconnect();
+  await assert.rejects(pending, error => error.code === 'device_disconnected');
+  await transports.session.close();
+  assert.deepEqual(events, ['request-port', 'request-lock', 'release-lock']);
 });
 
 test('byte-for-byte readback mismatch remains recovery-required after writing', async () => {

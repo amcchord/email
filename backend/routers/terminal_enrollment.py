@@ -50,7 +50,6 @@ from backend.services.terminal.enrollment_protocol import (
 )
 from backend.services.terminal.variants import aligned_next_checkin_sec, parse_variant
 
-
 logger = logging.getLogger(__name__)
 settings = get_settings()
 router = APIRouter(tags=["terminal-enrollment"])
@@ -158,6 +157,11 @@ class EnrollmentCompleteRequest(StrictModel):
     operation: Literal["provision"]
     generation: int = Field(ge=1, lt=4_294_967_295)
     config_sha256: str = Field(min_length=64, max_length=64)
+
+
+class EnrollmentCancelRequest(StrictModel):
+    client_intent_id: UUID
+    operation: Literal["cancel"]
 
 
 def _utcnow() -> datetime:
@@ -360,6 +364,112 @@ async def _expire_stale_attempt(
     return True
 
 
+async def _reconcile_observed_generation(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    device: TerminalDevice,
+    model: str,
+    mac: str,
+    observed_generation: int,
+    now: datetime,
+) -> bool:
+    """Reconcile one exact, recent candidate observed over a fresh RET1 link.
+
+    A cable transcript does not activate a credential. It can, however, prove
+    that the terminal has advanced to the target of one prior owner-scoped
+    attempt. Superseding that attempt and revoking only its candidate lets a
+    fresh attempt repair the device at ``observed + 1`` without treating the
+    browser observation as a scoped HTTPS check-in.
+    """
+    if device.enrollment_generation == observed_generation:
+        return False
+    if observed_generation < device.enrollment_generation:
+        raise HTTPException(
+            status_code=409,
+            detail="Terminal generation does not match server state",
+        )
+
+    prior_attempts = list(
+        (
+            await db.scalars(
+                select(TerminalEnrollmentAttempt)
+                .where(
+                    TerminalEnrollmentAttempt.device_id == device.id,
+                    TerminalEnrollmentAttempt.target_generation == observed_generation,
+                    TerminalEnrollmentAttempt.credential_id.is_not(None),
+                )
+                .order_by(TerminalEnrollmentAttempt.id)
+                .with_for_update()
+            )
+        ).all()
+    )
+    if len(prior_attempts) != 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Terminal generation does not match server state",
+        )
+    prior_attempt = prior_attempts[0]
+    if (
+        prior_attempt.user_id != user_id
+        or prior_attempt.device_model != model
+        or prior_attempt.device_mac != mac
+        or prior_attempt.status
+        not in {"issued", "client_confirmed", "superseded"}
+        or prior_attempt.created_at < now - ACTIVE_ATTEMPT_WINDOW
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Terminal generation does not match server state",
+        )
+    credentials = list(
+        (
+            await db.scalars(
+                select(TerminalDeviceCredential)
+                .where(TerminalDeviceCredential.device_id == device.id)
+                .order_by(TerminalDeviceCredential.id)
+                .with_for_update()
+            )
+        ).all()
+    )
+    candidate = next(
+        (
+            credential
+            for credential in credentials
+            if credential.id == prior_attempt.credential_id
+        ),
+        None,
+    )
+    live_candidate = (
+        prior_attempt.status in {"issued", "client_confirmed"}
+        and candidate is not None
+        and candidate.state == "candidate"
+    )
+    explicitly_superseded_candidate = (
+        prior_attempt.status == "superseded"
+        and candidate is not None
+        and candidate.state == "revoked"
+    )
+    if (
+        not (live_candidate or explicitly_superseded_candidate)
+        or candidate.device_id != device.id
+        or candidate.generation != observed_generation
+        or candidate.config_sha256 != prior_attempt.config_sha256
+        or candidate.created_at < now - CANDIDATE_LIFETIME
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Terminal generation does not match server state",
+        )
+    if live_candidate:
+        prior_attempt.status = "superseded"
+        prior_attempt.updated_at = now
+        candidate.state = "revoked"
+        candidate.revoked_at = now
+        candidate.updated_at = now
+    return True
+
+
 async def _existing_intent_response(
     db: AsyncSession,
     *,
@@ -468,16 +578,6 @@ async def create_enrollment_intent(
     if transcript_result.scalar_one_or_none() is not None:
         raise HTTPException(status_code=409, detail="Enrollment transcript has already been used")
 
-    active_count = await db.scalar(
-        select(func.count(TerminalEnrollmentAttempt.id)).where(
-            TerminalEnrollmentAttempt.user_id == user.id,
-            TerminalEnrollmentAttempt.status.in_(("initialized", "issued", "client_confirmed")),
-            TerminalEnrollmentAttempt.created_at >= _utcnow() - ACTIVE_ATTEMPT_WINDOW,
-        )
-    )
-    if int(active_count or 0) >= MAX_ACTIVE_ATTEMPTS:
-        raise HTTPException(status_code=429, detail="Too many active terminal enrollment attempts")
-
     devices_result = await db.execute(
         select(TerminalDevice)
         .where(TerminalDevice.mac == handshake.mac)
@@ -496,13 +596,21 @@ async def create_enrollment_intent(
             and device.hardware_model != handshake.model
         ):
             raise HTTPException(status_code=409, detail="Terminal identity requires operator review")
-        if device.enrollment_generation != handshake.generation:
-            raise HTTPException(status_code=409, detail="Terminal generation does not match server state")
+        now = _utcnow()
+        await _reconcile_observed_generation(
+            db,
+            user_id=user.id,
+            device=device,
+            model=handshake.model,
+            mac=handshake.mac,
+            observed_generation=handshake.generation,
+            now=now,
+        )
         pending_result = await db.execute(
             select(TerminalEnrollmentAttempt).where(
                 TerminalEnrollmentAttempt.device_id == device.id,
                 TerminalEnrollmentAttempt.status.in_(("initialized", "issued", "client_confirmed")),
-            ).with_for_update()
+            ).order_by(TerminalEnrollmentAttempt.id).with_for_update()
         )
         pending_attempts = list(pending_result.scalars().all())
         for pending_attempt in pending_attempts:
@@ -552,6 +660,16 @@ async def create_enrollment_intent(
                 status_code=409,
                 detail="Terminal identity conflicts with existing state",
             ) from exc
+
+    active_count = await db.scalar(
+        select(func.count(TerminalEnrollmentAttempt.id)).where(
+            TerminalEnrollmentAttempt.user_id == user.id,
+            TerminalEnrollmentAttempt.status.in_(("initialized", "issued", "client_confirmed")),
+            TerminalEnrollmentAttempt.created_at >= _utcnow() - ACTIVE_ATTEMPT_WINDOW,
+        )
+    )
+    if int(active_count or 0) >= MAX_ACTIVE_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Too many active terminal enrollment attempts")
 
     now = _utcnow()
     retained_secure_isolation = device.enrollment_state in {"enrolled", "revoked"}
@@ -633,14 +751,65 @@ async def issue_enrollment_ticket(
     if release.release_id != attempt.firmware_release_id:
         raise HTTPException(status_code=409, detail="Enrollment firmware approval changed")
 
-    existing_credential = await db.scalar(
-        select(TerminalDeviceCredential.id).where(
+    credential = await db.scalar(
+        select(TerminalDeviceCredential).where(
             TerminalDeviceCredential.device_id == attempt.device_id,
             TerminalDeviceCredential.generation == attempt.target_generation,
-        )
+        ).with_for_update()
     )
-    if existing_credential is not None:
-        raise HTTPException(status_code=409, detail="Terminal generation already has a credential")
+    if credential is not None:
+        prior_attempts = list(
+            (
+                await db.scalars(
+                    select(TerminalEnrollmentAttempt)
+                    .where(
+                        TerminalEnrollmentAttempt.credential_id == credential.id,
+                        TerminalEnrollmentAttempt.id != attempt.id,
+                    )
+                    .order_by(TerminalEnrollmentAttempt.id)
+                    .with_for_update()
+                )
+            ).all()
+        )
+        reusable_generation = (
+            credential.state == "revoked"
+            and credential.revoked_at is not None
+            and len(prior_attempts) == 1
+            and prior_attempts[0].user_id == user.id
+            and prior_attempts[0].device_id == attempt.device_id
+            and (
+                prior_attempts[0].status == "expired"
+                or (
+                    prior_attempts[0].status == "superseded"
+                    and prior_attempts[0].created_at
+                    >= now - ACTIVE_ATTEMPT_WINDOW
+                )
+            )
+            and prior_attempts[0].credential_id == credential.id
+            and prior_attempts[0].observed_generation == attempt.observed_generation
+            and prior_attempts[0].target_generation == attempt.target_generation
+            and prior_attempts[0].config_sha256 == credential.config_sha256
+            and attempt.observed_generation == device.enrollment_generation
+            and attempt.target_generation == credential.generation
+        )
+        if not reusable_generation:
+            raise HTTPException(
+                status_code=409,
+                detail="Terminal generation already has a credential",
+            )
+        prior_attempt = prior_attempts[0]
+        prior_attempt.credential_id = None
+        prior_attempt.client_ticket_id = None
+        prior_attempt.ticket_fingerprint = None
+        prior_attempt.config_sha256 = None
+        prior_attempt.jti_sha256 = None
+        prior_attempt.compact_jws = None
+        prior_attempt.issued_at = None
+        prior_attempt.expires_at = None
+        prior_attempt.updated_at = now
+        await db.flush()
+        await db.delete(credential)
+        await db.flush()
 
     credential = TerminalDeviceCredential(
         device_id=attempt.device_id,
@@ -751,6 +920,96 @@ async def get_enrollment_intent(
     policy = await _policy()
     attempt, device = await _lock_owned_attempt_graph(db, user.id, attempt_id)
     await _expire_stale_attempt(db, attempt, device)
+    await db.commit()
+    await db.refresh(attempt)
+    await db.refresh(device)
+    response.headers.update(PRIVATE_HEADERS)
+    return _attempt_response(attempt, device, policy)
+
+
+@router.post("/api/terminal/enrollment/intents/{attempt_id}/cancel")
+@limiter.limit("6/minute")
+async def cancel_enrollment_intent(
+    request: Request,
+    response: Response,
+    attempt_id: UUID,
+    payload: EnrollmentCancelRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Idempotently supersede one owned attempt and only its candidate."""
+    policy = await _policy()
+    _require_same_origin_session(request, policy)
+    attempt, device = await _lock_owned_attempt_graph(db, user.id, attempt_id)
+    if payload.client_intent_id != attempt.client_intent_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Enrollment cancellation does not match its intent",
+        )
+
+    credentials = list(
+        (
+            await db.scalars(
+                select(TerminalDeviceCredential)
+                .where(TerminalDeviceCredential.device_id == device.id)
+                .order_by(TerminalDeviceCredential.id)
+                .with_for_update()
+            )
+        ).all()
+    )
+    candidate = next(
+        (
+            credential
+            for credential in credentials
+            if credential.id == attempt.credential_id
+        ),
+        None,
+    )
+    if attempt.status == "superseded":
+        if attempt.credential_id is not None and (
+            candidate is None or candidate.state != "revoked"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Enrollment cancellation state is inconsistent",
+            )
+        await db.commit()
+        response.headers.update(PRIVATE_HEADERS)
+        return _attempt_response(attempt, device, policy)
+    if attempt.status not in {"initialized", "issued", "client_confirmed"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Enrollment attempt can no longer be cancelled",
+        )
+    if attempt.status == "initialized":
+        if attempt.credential_id is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Enrollment cancellation state is inconsistent",
+            )
+    elif candidate is None or candidate.state != "candidate":
+        raise HTTPException(
+            status_code=409,
+            detail="Enrollment cancellation state is inconsistent",
+        )
+
+    now = _utcnow()
+    attempt.status = "superseded"
+    attempt.updated_at = now
+    if candidate is not None:
+        candidate.state = "revoked"
+        candidate.revoked_at = now
+        candidate.updated_at = now
+    active_credential = next(
+        (credential for credential in credentials if credential.state == "active"),
+        None,
+    )
+    if device.enrollment_state == "pending" and active_credential is None:
+        device.enrollment_state = "legacy"
+        device.enrollment_release_id = None
+        device.enrollment_key_id = None
+        device.enrollment_config_sha256 = None
+        device.enrollment_updated_at = now
     await db.commit()
     await db.refresh(attempt)
     await db.refresh(device)
@@ -920,7 +1179,13 @@ async def _scoped_device(
             if prior.id == credential.id:
                 continue
             if prior.state == "active":
-                prior.state = "rollback"
+                prior.state = (
+                    "rollback"
+                    if prior.generation + 1 == credential.generation
+                    else "revoked"
+                )
+                if prior.state == "revoked":
+                    prior.revoked_at = now
                 prior.updated_at = now
             elif prior.state in {"rollback", "candidate"}:
                 prior.state = "revoked"

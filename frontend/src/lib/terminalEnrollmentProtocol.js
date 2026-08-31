@@ -581,18 +581,28 @@ function validateScheduleUrl(value) {
   return value;
 }
 
-export function buildEnrollmentConfig({ ssid, password, scheduleUrl }) {
+export function validateEnrollmentWifi({ ssid, password }) {
   assertWellFormedString(ssid, 'invalid_ssid');
   assertWellFormedString(password, 'invalid_password');
   const ssidBytes = UTF8.encode(ssid);
   const passwordBytes = UTF8.encode(password);
-  if (ssidBytes.length === 0 || ssidBytes.length > 32 || hasControl(ssid)) {
-    fail('invalid_ssid', 'SSID must be 1 to 32 UTF-8 bytes without controls.');
+  try {
+    if (ssidBytes.length === 0 || ssidBytes.length > 32 || ssid.trim().length === 0 || hasControl(ssid)) {
+      fail('invalid_ssid', 'SSID must be 1 to 32 UTF-8 bytes, contain a non-space character, and have no controls.');
+    }
+    if (hasControl(password)
+      || !(passwordBytes.length <= 63 || (passwordBytes.length === 64 && HEX_PSK_RE.test(password)))) {
+      fail('invalid_password', 'Wi-Fi password is outside the RET1 bounds.');
+    }
+    return Object.freeze({ ssidBytes: ssidBytes.length, passwordBytes: passwordBytes.length });
+  } finally {
+    clearMutableBytes(ssidBytes);
+    clearMutableBytes(passwordBytes);
   }
-  if (hasControl(password)
-    || !(passwordBytes.length <= 63 || (passwordBytes.length === 64 && HEX_PSK_RE.test(password)))) {
-    fail('invalid_password', 'Wi-Fi password is outside the RET1 bounds.');
-  }
+}
+
+export function buildEnrollmentConfig({ ssid, password, scheduleUrl }) {
+  validateEnrollmentWifi({ ssid, password });
   validateScheduleUrl(scheduleUrl);
   const value = {
     schema_version: 1,
@@ -600,8 +610,6 @@ export function buildEnrollmentConfig({ ssid, password, scheduleUrl }) {
     server: { schedule_url: scheduleUrl },
   };
   const encoded = UTF8.encode(JSON.stringify(value));
-  clearMutableBytes(ssidBytes);
-  clearMutableBytes(passwordBytes);
   if (encoded.length === 0 || encoded.length > RET1_LIMITS.maxConfigBytes) {
     clearMutableBytes(encoded);
     fail('config_too_large', 'Enrollment configuration exceeds 1536 bytes.');

@@ -1,6 +1,10 @@
 <script>
   import { onDestroy, onMount } from 'svelte';
-  import { createAuthenticatedSessionGuard } from '../stores.js';
+  import {
+    authenticatedSessionGeneration,
+    createAuthenticatedSessionGuard,
+  } from '../stores.js';
+  import { getTerminalEnrollmentCapabilities } from '../terminalEnrollmentApi.js';
   import {
     getTerminalFirmwareCatalog,
     getTerminalFirmwareReleaseEvidence,
@@ -9,6 +13,7 @@
   import {
     createTerminalFirmwareDeviceSession,
     describeTerminalFirmwareInstallState,
+    getSelectedTerminalEnrollmentQualification,
     getTerminalInstallerLock,
     detectTerminalFirmwareSupport,
   } from '../terminalFirmwareInstaller.js';
@@ -16,11 +21,13 @@
     compileTerminalFirmwareInstallPlan,
     loadTerminalFirmwareInstallArtifacts,
   } from '../terminalFirmwareInstallPlan.js';
-  import {
-    TERMINAL_FIRMWARE_INSTALL_STATES,
-    runTerminalFirmwareInstallWorkflow,
-  } from '../terminalFirmwareInstallWorkflow.js';
+  import { TERMINAL_FIRMWARE_INSTALL_STATES } from '../terminalFirmwareInstallWorkflow.js';
   import { createTerminalFirmwareWebSerialTransports } from '../terminalFirmwareWebSerial.js';
+  import {
+    TERMINAL_ENROLLMENT_WORKFLOW_STATES,
+    describeTerminalEnrollmentState,
+    runTerminalFirmwareProvisioningWorkflow,
+  } from '../terminalEnrollmentWorkflow.js';
   import { validateTerminalFirmwareCatalog } from '../terminalFirmwarePolicy.js';
   import { verifyTerminalFirmwareRelease } from '../terminalFirmwareVerifier.js';
 
@@ -37,6 +44,17 @@
     effective_offer_enabled: false,
     blockers: ['Device OTA capability has not been checked.'],
   });
+  let enrollmentCapabilities = $state({
+    schema_version: 1,
+    state: 'locked',
+    enabled: false,
+    protocol: 'RET1',
+    identity_strength: 'physical_cable_only',
+    attestation: false,
+    allowed_models: [],
+    qualified_releases: [],
+    blockers: ['Secure terminal enrollment policy has not been checked.'],
+  });
   let support = $state({ secureContext: false, webSerial: false, webLocks: false, supported: false, blockers: [] });
   let selectedReleaseId = $state('');
   let selectedModelName = $state('');
@@ -48,13 +66,20 @@
   let workflowState = $state('preflight');
   let workflowErrorCode = $state('');
   let workflowProgress = $state(null);
+  let enrollmentState = $state('preflight');
+  let enrollmentErrorCode = $state('');
+  let wifiSsid = $state('');
+  let wifiPassword = $state('');
+  let showWifiPassword = $state(false);
   let connecting = $state(false);
   let deviceConnected = $state(false);
   let disconnecting = $state(false);
   let preflightController = null;
   let preflightGeneration = 0;
   let operationController = null;
-  let lock = $derived(getTerminalInstallerLock(audit, support));
+  let sessionGenerationUnsubscribe = null;
+  let observedSessionGeneration = null;
+  let lock = $derived(getTerminalInstallerLock(audit, support, enrollmentCapabilities));
   let selectedRelease = $derived(
     audit.catalog?.releases?.find(release => release.release_id === selectedReleaseId) || null,
   );
@@ -62,20 +87,39 @@
     selectedRelease?.models?.find(model => model.model === selectedModelName) || null,
   );
   let selectedVerification = $derived(releaseVerification[selectedReleaseId] || null);
+  let selectedEnrollment = $derived(getSelectedTerminalEnrollmentQualification(
+    enrollmentCapabilities,
+    selectedRelease,
+    selectedModelName,
+  ));
   let preflightBlockers = $derived(selectionBlockers());
   let canPreparePackage = $derived(
     preflightBlockers.length === 0 && !['fetching', 'verifying'].includes(packageState),
   );
-  let canConnectInstall = $derived(
+  let canShowEnrollmentInputs = $derived(
+    !lock.locked
+      && preflightBlockers.length === 0
+      && Boolean(selectedEnrollment),
+  );
+  let canConnectProvision = $derived(
     PRODUCTION_TRANSPORT_AVAILABLE
       && support.supported
       && !lock.locked
+      && Boolean(selectedEnrollment)
       && Boolean(preparedPlan)
+      && wifiCredentialsReady(wifiSsid, wifiPassword)
       && !connecting
       && !deviceConnected,
   );
-  let workflowPresentation = $derived(
+  let firmwarePresentation = $derived(
     describeTerminalFirmwareInstallState(workflowState, workflowErrorCode),
+  );
+  let enrollmentPresentation = $derived(
+    describeTerminalEnrollmentState(enrollmentState, enrollmentErrorCode),
+  );
+  let showingEnrollmentState = $derived(enrollmentState !== 'preflight');
+  let workflowPresentation = $derived(
+    showingEnrollmentState ? enrollmentPresentation : firmwarePresentation,
   );
 
   function formatGitSha(value) {
@@ -119,6 +163,26 @@
       return workflowPresentation.detail;
     }
     return packageState === 'idle' ? workflowPresentation.detail : packageDetail;
+  }
+
+  function wifiCredentialsReady(ssid, password) {
+    if (typeof ssid !== 'string' || typeof password !== 'string' || ssid.trim().length === 0) return false;
+    const ssidBytes = new TextEncoder().encode(ssid).length;
+    const passwordBytes = new TextEncoder().encode(password).length;
+    const hasControl = value => [...value].some(character => {
+      const codepoint = character.codePointAt(0);
+      return codepoint < 0x20 || codepoint === 0x7f;
+    });
+    return ssidBytes <= 32
+      && !hasControl(ssid)
+      && !hasControl(password)
+      && (passwordBytes <= 63 || (passwordBytes === 64 && /^[0-9A-Fa-f]{64}$/u.test(password)));
+  }
+
+  function clearLocalCredentials() {
+    wifiSsid = '';
+    wifiPassword = '';
+    showWifiPassword = false;
   }
 
   function progressLabel(progress) {
@@ -172,10 +236,13 @@
     packageState = 'idle';
     packageDetail = 'Choose an exact release, model, and physical hardware revision.';
     packageProgress = { completed: 0, total: 4, role: '' };
+    clearLocalCredentials();
     if (!deviceConnected) {
       workflowState = 'preflight';
       workflowErrorCode = '';
       workflowProgress = null;
+      enrollmentState = 'preflight';
+      enrollmentErrorCode = '';
     }
   }
 
@@ -249,35 +316,48 @@
     }
   }
 
-  async function runPreparedInstall({ romTransport, applicationTransport }) {
-    if (!preparedPlan
-      || !PRODUCTION_TRANSPORT_AVAILABLE
-      || lock.locked
-      || !support.supported
-      || !sessionGuard.isCurrent()) return null;
+  async function runPreparedProvision({ session, romTransport, applicationTransport }, {
+    prepared,
+    expectedEnrollment,
+    credentials,
+  }) {
+    if (!prepared || !expectedEnrollment || !sessionGuard.isCurrent()) return null;
     operationController = new AbortController();
     deviceSession.attach({
       abortController: operationController,
-      transports: [applicationTransport, romTransport],
+      transports: session ? [session] : [applicationTransport, romTransport],
     });
     deviceConnected = true;
     try {
-      const result = await runTerminalFirmwareInstallWorkflow({
-        preparedPlan,
+      const result = await runTerminalFirmwareProvisioningWorkflow({
+        preparedPlan: prepared,
+        expectedEnrollment,
+        credentials,
         romTransport,
         applicationTransport,
         signal: operationController.signal,
-        onState(event) {
+        onFirmwareState(event) {
           if (!sessionGuard.isCurrent() || !TERMINAL_FIRMWARE_INSTALL_STATES.includes(event.state)) return;
           workflowState = event.state;
           workflowErrorCode = event.code || '';
+        },
+        onEnrollmentState(event) {
+          if (!sessionGuard.isCurrent() || !TERMINAL_ENROLLMENT_WORKFLOW_STATES.includes(event.state)) return;
+          enrollmentState = event.state;
+          enrollmentErrorCode = event.code || '';
         },
         onProgress(progress) {
           if (sessionGuard.isCurrent()) workflowProgress = progress;
         },
       });
-      workflowState = result.state;
-      workflowErrorCode = result.error?.code || '';
+      if (result.firmware) {
+        workflowState = result.firmware.state;
+        workflowErrorCode = result.firmware.error?.code || '';
+      }
+      if (result.enrollment || TERMINAL_ENROLLMENT_WORKFLOW_STATES.includes(result.state)) {
+        enrollmentState = result.enrollment?.state || result.state;
+        enrollmentErrorCode = result.enrollment?.error?.code || '';
+      }
       return result;
     } finally {
       await deviceSession.disconnect();
@@ -286,12 +366,28 @@
     }
   }
 
-  async function connectAndInstall() {
-    if (!canConnectInstall || !sessionGuard.isCurrent()) return;
+  async function closeTransportSession(transports) {
+    if (!transports) return;
+    if (transports.session?.close) {
+      await transports.session.close();
+      return;
+    }
+    await Promise.allSettled([
+      transports.applicationTransport?.close?.(),
+      transports.romTransport?.close?.(),
+    ]);
+  }
+
+  async function connectInstallAndEnroll() {
+    if (!canConnectProvision || !sessionGuard.isCurrent()) return;
+    const prepared = preparedPlan;
+    const expectedEnrollment = Object.freeze({ ...selectedEnrollment });
     connecting = true;
     workflowState = 'awaiting_rom';
     workflowErrorCode = '';
     workflowProgress = null;
+    enrollmentState = 'preflight';
+    enrollmentErrorCode = '';
     let transports = null;
     try {
       transports = await createTerminalFirmwareWebSerialTransports({
@@ -300,22 +396,24 @@
         },
       });
       if (!sessionGuard.isCurrent()) {
-        await Promise.allSettled([
-          transports.applicationTransport.close(),
-          transports.romTransport.close(),
-        ]);
+        clearLocalCredentials();
+        await closeTransportSession(transports);
         return;
       }
-      await runPreparedInstall(transports);
+      const credentials = Object.freeze({ ssid: wifiSsid, password: wifiPassword });
+      const operation = runPreparedProvision(transports, {
+        prepared,
+        expectedEnrollment,
+        credentials,
+      });
+      clearLocalCredentials();
+      await operation;
     } catch (error) {
       if (!sessionGuard.isCurrent()) return;
       workflowErrorCode = error?.code || 'permission_denied';
       workflowState = error?.code === 'permission_denied' ? 'cancelled_before_write' : 'blocked';
       if (transports) {
-        await Promise.allSettled([
-          transports.applicationTransport.close(),
-          transports.romTransport.close(),
-        ]);
+        await closeTransportSession(transports);
       }
     } finally {
       connecting = false;
@@ -394,10 +492,44 @@
     }
   }
 
+  async function loadEnrollmentCapabilities() {
+    try {
+      const capabilities = await getTerminalEnrollmentCapabilities();
+      if (!sessionGuard.isCurrent()) return;
+      enrollmentCapabilities = capabilities;
+      if (capabilities?.state !== 'ready' || capabilities?.enabled !== true) clearLocalCredentials();
+    } catch (error) {
+      if (!sessionGuard.isCurrent()) return;
+      enrollmentCapabilities = {
+        schema_version: 1,
+        state: 'locked',
+        enabled: false,
+        protocol: 'RET1',
+        identity_strength: 'physical_cable_only',
+        attestation: false,
+        allowed_models: [],
+        qualified_releases: [],
+        blockers: [error?.message || 'Secure terminal enrollment policy is unavailable.'],
+      };
+    }
+  }
+
   onMount(() => {
     support = detectTerminalFirmwareSupport();
     void loadCatalog();
     void loadOtaCapabilities();
+    void loadEnrollmentCapabilities();
+    sessionGenerationUnsubscribe = authenticatedSessionGeneration.subscribe(generation => {
+      if (observedSessionGeneration === null) {
+        observedSessionGeneration = generation;
+        return;
+      }
+      if (generation !== observedSessionGeneration) {
+        observedSessionGeneration = generation;
+        clearLocalCredentials();
+        operationController?.abort();
+      }
+    });
   });
 
   onDestroy(() => {
@@ -405,6 +537,9 @@
     preflightController?.abort();
     operationController?.abort();
     preparedPlan = null;
+    clearLocalCredentials();
+    sessionGenerationUnsubscribe?.();
+    sessionGenerationUnsubscribe = null;
     void deviceSession.disconnect();
     sessionGuard.dispose();
   });
@@ -418,16 +553,39 @@
   <div class="flex flex-wrap items-start justify-between gap-3">
     <div>
       <h4 id="browser-firmware-installer-title" class="text-sm font-semibold" style="color: var(--text-primary)">
-        Browser firmware installer
+        Browser terminal installer
       </h4>
       <p class="text-[11px] mt-0.5 max-w-3xl" style="color: var(--text-tertiary)">
-        Verify a signed preserve-config package, then install it through an exclusive Web Serial session once every independent release, enrollment, and physical recovery gate is satisfied.
+        Verify a signed preserve-config package, then flash and securely enroll one terminal through the same exclusive Web Serial session once every independent release, enrollment, and physical qualification gate is satisfied.
       </p>
     </div>
     <span
       class="inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider"
       style="background: var(--status-warning-bg); border-color: var(--status-warning-border); color: var(--status-warning-text)"
     >{!support.supported ? 'Browser unsupported' : lock.locked ? 'Transport gated' : 'Transport ready'}</span>
+  </div>
+
+  <div
+    class="mt-4 rounded-lg border px-3 py-3 text-xs"
+    style="background: var(--bg-primary); border-color: var(--border-color)"
+    aria-label="Secure RET1 enrollment capability"
+  >
+    <div class="flex flex-wrap items-baseline justify-between gap-2">
+      <p class="font-semibold" style="color: var(--text-secondary)">Secure RET1 enrollment</p>
+      <span class="text-[10px] font-semibold uppercase tracking-wider" style="color: var(--text-tertiary)">
+        {enrollmentCapabilities?.state === 'ready' && enrollmentCapabilities?.enabled === true ? 'Policy ready' : 'Locked'}
+      </span>
+    </div>
+    <p class="mt-1 text-[10px]" style="color: var(--text-tertiary)">
+      Identity is observed through one physical cable session. This is not hardware attestation or proof of cryptographic hardware identity.
+    </p>
+    {#if enrollmentCapabilities?.state !== 'ready' || enrollmentCapabilities?.enabled !== true}
+      <ul class="mt-1.5 space-y-1 list-disc pl-4" style="color: var(--text-tertiary)">
+        {#each (enrollmentCapabilities?.blockers || ['No exact release and model is enrollment-qualified.']).slice(0, 4) as blocker}
+          <li>{blocker}</li>
+        {/each}
+      </ul>
+    {/if}
   </div>
 
   <div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2" aria-label="Browser firmware prerequisites">
@@ -623,6 +781,60 @@
       </ul>
     {/if}
 
+    {#if canShowEnrollmentInputs}
+      <fieldset class="mt-3 rounded-md border p-3" style="background: var(--bg-secondary); border-color: var(--border-color)">
+        <legend class="px-1 text-[10px] font-semibold uppercase tracking-wider" style="color: var(--text-tertiary)">
+          Local Wi-Fi configuration
+        </legend>
+        <p class="text-[10px] leading-4" style="color: var(--text-tertiary)">
+          These values stay local to this one browser-to-terminal transaction. They are never stored, sent to the application API, or shown in the resulting device URL.
+        </p>
+        <div class="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label class="block" for="terminal-wifi-ssid">
+            <span class="text-[10px] font-semibold" style="color: var(--text-secondary)">Wi-Fi network</span>
+            <input
+              id="terminal-wifi-ssid"
+              type="text"
+              bind:value={wifiSsid}
+              autocomplete="off"
+              autocapitalize="none"
+              spellcheck="false"
+              disabled={connecting || deviceConnected}
+              maxlength="32"
+              class="mt-1 h-10 w-full rounded-lg border px-3 text-xs disabled:opacity-50"
+              style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
+            />
+          </label>
+          <label class="block" for="terminal-wifi-password">
+            <span class="text-[10px] font-semibold" style="color: var(--text-secondary)">Wi-Fi password</span>
+            <div class="mt-1 flex rounded-lg border" style="background: var(--bg-primary); border-color: var(--border-color)">
+              <input
+                id="terminal-wifi-password"
+                type={showWifiPassword ? 'text' : 'password'}
+                bind:value={wifiPassword}
+                autocomplete="off"
+                autocapitalize="none"
+                spellcheck="false"
+                disabled={connecting || deviceConnected}
+                maxlength="64"
+                class="h-10 min-w-0 flex-1 rounded-l-lg bg-transparent px-3 text-xs disabled:opacity-50"
+                style="color: var(--text-primary)"
+              />
+              <button
+                type="button"
+                onclick={() => { showWifiPassword = !showWifiPassword; }}
+                disabled={connecting || deviceConnected}
+                aria-label={showWifiPassword ? 'Hide Wi-Fi password' : 'Show Wi-Fi password'}
+                aria-pressed={showWifiPassword}
+                class="min-h-10 rounded-r-lg border-l px-3 text-[10px] font-medium disabled:opacity-50"
+                style="border-color: var(--border-color); color: var(--text-secondary)"
+              >{showWifiPassword ? 'Hide' : 'Show'}</button>
+            </div>
+          </label>
+        </div>
+      </fieldset>
+    {/if}
+
     <div class="mt-3 rounded-md border p-3 text-[10px]" style={operatorToneStyle(workflowPresentation.tone)} aria-live="polite">
       <p class="font-semibold">{workflowPresentation.title}</p>
       <p class="mt-1">{operatorDetail()}</p>
@@ -632,7 +844,11 @@
       {#if workflowProgress?.role}
         <p class="mt-1 font-mono">{progressLabel(workflowProgress)}</p>
       {/if}
-      {#if workflowErrorCode}<p class="mt-1 font-mono">{workflowErrorCode}</p>{/if}
+      {#if showingEnrollmentState && enrollmentErrorCode}
+        <p class="mt-1 font-mono">{enrollmentErrorCode}</p>
+      {:else if workflowErrorCode}
+        <p class="mt-1 font-mono">{workflowErrorCode}</p>
+      {/if}
     </div>
 
     {#if preparedPlan}
@@ -661,6 +877,18 @@
       </div>
     {/if}
 
+    {#if enrollmentState === 'result_unknown'}
+      <div class="mt-3 rounded-md border p-3 text-xs" style="background: var(--status-error-bg); border-color: var(--status-error-border); color: var(--status-error-text)" role="alert">
+        <p class="font-semibold">Configuration result unknown — do not retry automatically.</p>
+        <p class="mt-1 text-[10px]">The encrypted frame may have committed before the cable or response was lost. Keep the terminal powered and reconcile its durable generation or authenticated check-in before starting a new handshake.</p>
+      </div>
+    {:else if enrollmentState === 'activation_delayed'}
+      <div class="mt-3 rounded-md border p-3 text-xs" style="background: var(--status-warning-bg); border-color: var(--status-warning-border); color: var(--status-warning-text)" role="status">
+        <p class="font-semibold">Configuration committed; secure check-in is delayed.</p>
+        <p class="mt-1 text-[10px]">The terminal authenticated its local write, but the server has not observed the first credential-scoped HTTPS check-in. Check terminal power and Wi-Fi reachability; browser completion alone never activates enrollment.</p>
+      </div>
+    {/if}
+
     <div class="mt-3 flex flex-wrap gap-2">
       <button
         type="button"
@@ -679,29 +907,33 @@
       >Clear package</button>
       <button
         type="button"
-        onclick={connectAndInstall}
-        disabled={!canConnectInstall}
+        onclick={connectInstallAndEnroll}
+        disabled={!canConnectProvision}
         class="inline-flex min-h-9 items-center justify-center rounded-lg border px-3 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
         style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-secondary)"
-        title={lock.locked ? 'Independent browser signature, enrollment, server qualification, and E1001/E1002 recovery gates remain closed.' : 'Select the terminal serial port and install the verified preserve-config package.'}
-      >{connecting ? 'Choose serial port…' : 'Connect &amp; install'}</button>
+        title={lock.locked || !selectedEnrollment ? 'Signed catalog, enrollment policy, and exact release/model qualification must all be ready.' : 'Select one terminal port, install the verified package, and enroll it without releasing the session.'}
+      >{connecting ? 'Choose serial port…' : 'Connect, install &amp; enroll'}</button>
       <button
         type="button"
         onclick={disconnectDevice}
-        disabled={!deviceConnected || disconnecting || !workflowPresentation.canDisconnect}
+        disabled={!deviceConnected || disconnecting || workflowPresentation.irreversible === true || firmwarePresentation.canDisconnect === false}
         class="inline-flex min-h-9 items-center justify-center rounded-lg border px-3 text-xs font-medium disabled:opacity-50"
         style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-secondary)"
       >{disconnecting ? 'Disconnecting…' : 'Disconnect device'}</button>
     </div>
     <p class="mt-2 text-[10px]" style="color: var(--text-tertiary)">
-      Package verification may download signed firmware bytes, but does not request a serial port. Only the enabled Connect &amp; install button opens the browser chooser; the adapter never uses erase-all.
+      Package verification may download signed firmware bytes, but does not request a serial port. Only the enabled Connect, install &amp; enroll button opens one browser chooser; flashing, RET1 provisioning, and cleanup retain the same port and exclusive lock, and the adapter never uses erase-all.
     </p>
   </div>
 
   <div class="mt-4 rounded-lg border px-3 py-3 text-xs" style="background: var(--bg-primary); border-color: var(--border-color)">
-    <p class="font-semibold" style="color: var(--text-secondary)">Why flashing is locked</p>
+    <p class="font-semibold" style="color: var(--text-secondary)">Install and enrollment gates</p>
     <ul class="mt-1.5 space-y-1 list-disc pl-4" style="color: var(--text-tertiary)">
-      {#each lock.blockers as blocker}
+      {#each [...new Set([
+        ...lock.blockers,
+        ...preflightBlockers,
+        ...(selectedEnrollment ? [] : ['The selected signed release and model are not exactly qualified by server enrollment policy.']),
+      ])] as blocker}
         <li>{blocker}</li>
       {/each}
     </ul>

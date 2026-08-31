@@ -28,27 +28,92 @@ export function detectTerminalFirmwareSupport(runtime = globalThis) {
   }
 }
 
-export const BROWSER_INSTALLER_SAFETY_GATES = Object.freeze({
-  browserSignatureVerification: false,
-  secureDeviceProvisioning: false,
-  hardwareInLoopQualification: false,
-});
+const IDENTIFIER_PATTERN = /^[A-Za-z0-9._-]{1,64}$/u;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/u;
 
-export function getTerminalInstallerLock(catalogAudit, support) {
+function exactQualifiedRelease(candidate) {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return false;
+  const keys = Object.keys(candidate);
+  return keys.length === 4
+    && ['release_id', 'firmware_version', 'git_sha', 'models'].every(key => Object.hasOwn(candidate, key))
+    && SHA256_PATTERN.test(candidate.release_id || '')
+    && typeof candidate.firmware_version === 'string'
+    && candidate.firmware_version.length > 0
+    && candidate.firmware_version.length <= 128
+    && GIT_SHA_PATTERN.test(candidate.git_sha || '')
+    && Array.isArray(candidate.models)
+    && candidate.models.length > 0
+    && candidate.models.every(model => ['E1001', 'E1002'].includes(model))
+    && new Set(candidate.models).size === candidate.models.length;
+}
+
+export function terminalEnrollmentCapabilitiesReady(capabilities) {
+  return capabilities?.schema_version === 1
+    && capabilities.state === 'ready'
+    && capabilities.enabled === true
+    && capabilities.protocol === 'RET1'
+    && capabilities.identity_strength === 'physical_cable_only'
+    && capabilities.attestation === false
+    && Array.isArray(capabilities.allowed_models)
+    && capabilities.allowed_models.length > 0
+    && capabilities.allowed_models.every(model => ['E1001', 'E1002'].includes(model))
+    && new Set(capabilities.allowed_models).size === capabilities.allowed_models.length
+    && Array.isArray(capabilities.qualified_releases)
+    && capabilities.qualified_releases.length > 0
+    && capabilities.qualified_releases.every(exactQualifiedRelease)
+    && Array.isArray(capabilities.blockers)
+    && capabilities.blockers.length === 0;
+}
+
+export function getSelectedTerminalEnrollmentQualification(capabilities, release, model) {
+  if (!terminalEnrollmentCapabilitiesReady(capabilities)
+    || !release
+    || !['E1001', 'E1002'].includes(model)
+    || release.manifest_schema_version !== 2
+    || !SHA256_PATTERN.test(release.release_id || '')
+    || !GIT_SHA_PATTERN.test(release.git_sha || '')
+    || typeof release.firmware_version !== 'string'
+    || release.firmware_version.length < 1
+    || release.firmware_version.length > 128
+    || release.serial_enrollment?.protocol !== 'RET1'
+    || release.serial_enrollment?.enabled !== true
+    || !IDENTIFIER_PATTERN.test(release.serial_enrollment?.trust_key_id || '')
+    || !SHA256_PATTERN.test(release.serial_enrollment?.public_key_sha256 || '')
+    || release.serial_enrollment?.identity_strength !== 'physical_cable_only'
+    || release.serial_enrollment?.attestation !== false) {
+    return null;
+  }
+  const matches = capabilities.qualified_releases.filter(candidate => (
+    candidate?.release_id === release.release_id
+    && candidate?.firmware_version === release.firmware_version
+    && candidate?.git_sha === release.git_sha
+    && Array.isArray(candidate.models)
+    && candidate.models.includes(model)
+  ));
+  if (matches.length !== 1 || !capabilities.allowed_models.includes(model)) return null;
+  return Object.freeze({
+    releaseId: release.release_id,
+    enrollmentKeyId: release.serial_enrollment.trust_key_id,
+    model,
+    firmwareVersion: release.firmware_version,
+  });
+}
+
+export function getTerminalInstallerLock(catalogAudit, support, enrollmentCapabilities) {
   const blockers = [];
   if (!catalogAudit?.valid) blockers.push('The signed firmware catalog did not pass the browser metadata audit.');
   if (catalogAudit?.valid && Array.isArray(catalogAudit.catalog?.blockers)) {
     blockers.push(...catalogAudit.catalog.blockers);
   }
   if (!support?.supported) blockers.push(...(support?.blockers || ['Browser support is incomplete.']));
-  if (!BROWSER_INSTALLER_SAFETY_GATES.browserSignatureVerification) {
-    blockers.push('Pinned browser-side signature verification is not yet enabled.');
-  }
-  if (!BROWSER_INSTALLER_SAFETY_GATES.secureDeviceProvisioning) {
-    blockers.push('Secure device enrollment and provisioning are not yet qualified.');
-  }
-  if (!BROWSER_INSTALLER_SAFETY_GATES.hardwareInLoopQualification) {
-    blockers.push('Hardware-in-the-loop recovery testing is not yet complete.');
+  if (!terminalEnrollmentCapabilitiesReady(enrollmentCapabilities)) {
+    const reported = Array.isArray(enrollmentCapabilities?.blockers)
+      ? enrollmentCapabilities.blockers.filter(item => typeof item === 'string' && item.trim())
+      : [];
+    blockers.push(...(reported.length > 0
+      ? reported
+      : ['Server enrollment policy has not qualified an exact RET1 release and physical model.']));
   }
   const uniqueBlockers = [...new Set(blockers)];
   return { locked: uniqueBlockers.length > 0, blockers: uniqueBlockers };

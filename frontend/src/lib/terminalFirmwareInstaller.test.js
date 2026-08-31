@@ -2,12 +2,46 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  BROWSER_INSTALLER_SAFETY_GATES,
   createTerminalFirmwareDeviceSession,
   describeTerminalFirmwareInstallState,
   detectTerminalFirmwareSupport,
+  getSelectedTerminalEnrollmentQualification,
   getTerminalInstallerLock,
+  terminalEnrollmentCapabilitiesReady,
 } from './terminalFirmwareInstaller.js';
+
+const RELEASE_ID = 'a'.repeat(64);
+const READY_ENROLLMENT = {
+  schema_version: 1,
+  state: 'ready',
+  enabled: true,
+  protocol: 'RET1',
+  identity_strength: 'physical_cable_only',
+  attestation: false,
+  allowed_models: ['E1001', 'E1002'],
+  qualified_releases: [{
+    release_id: RELEASE_ID,
+    firmware_version: '0.2.0-candidate.8',
+    git_sha: 'b'.repeat(40),
+    models: ['E1002'],
+  }],
+  blockers: [],
+};
+
+const SIGNED_RELEASE = {
+  release_id: RELEASE_ID,
+  firmware_version: '0.2.0-candidate.8',
+  git_sha: 'b'.repeat(40),
+  manifest_schema_version: 2,
+  serial_enrollment: {
+    protocol: 'RET1',
+    enabled: true,
+    trust_key_id: 'ret1-2026',
+    public_key_sha256: 'c'.repeat(64),
+    identity_strength: 'physical_cable_only',
+    attestation: false,
+  },
+};
 
 test('support detection observes HTTPS, Web Serial, and Web Locks without invoking them', () => {
   let serialCalls = 0;
@@ -44,31 +78,66 @@ test('support detection fails closed when browser primitives are absent or hosti
   });
 });
 
-test('installer remains unconditionally locked behind all three future safety gates', () => {
-  assert.deepEqual(BROWSER_INSTALLER_SAFETY_GATES, {
-    browserSignatureVerification: false,
-    secureDeviceProvisioning: false,
-    hardwareInLoopQualification: false,
-  });
-  const lock = getTerminalInstallerLock(
+test('installer lock is driven by signed catalog, browser support, and live enrollment qualification', () => {
+  const locked = getTerminalInstallerLock(
     { valid: true },
     { supported: true, blockers: [] },
+    {
+      ...READY_ENROLLMENT,
+      state: 'locked',
+      enabled: false,
+      qualified_releases: [],
+      blockers: ['Physical E1002 enrollment qualification is incomplete.'],
+    },
   );
-  assert.equal(lock.locked, true);
-  assert.equal(lock.blockers.length, 3);
-  assert.match(lock.blockers.join(' '), /signature verification/i);
-  assert.match(lock.blockers.join(' '), /provisioning/i);
-  assert.match(lock.blockers.join(' '), /hardware-in-the-loop/i);
+  assert.deepEqual(locked, {
+    locked: true,
+    blockers: ['Physical E1002 enrollment qualification is incomplete.'],
+  });
+
+  const ready = getTerminalInstallerLock(
+    { valid: true, catalog: { blockers: [] } },
+    { supported: true, blockers: [] },
+    READY_ENROLLMENT,
+  );
+  assert.deepEqual(ready, { locked: false, blockers: [] });
+  assert.equal(terminalEnrollmentCapabilitiesReady(READY_ENROLLMENT), true);
+  assert.equal(terminalEnrollmentCapabilitiesReady({ ...READY_ENROLLMENT, attestation: true }), false);
 });
 
-test('installer preserves server-side catalog blockers while remaining client-locked', () => {
+test('installer preserves server-side catalog blockers without a software hard-lock', () => {
   const lock = getTerminalInstallerLock(
     { valid: true, catalog: { blockers: ['Server writing is disabled.'] } },
     { supported: true, blockers: [] },
+    READY_ENROLLMENT,
   );
   assert.equal(lock.locked, true);
   assert.equal(lock.blockers[0], 'Server writing is disabled.');
-  assert.equal(lock.blockers.length, 4);
+  assert.equal(lock.blockers.length, 1);
+});
+
+test('exact server-qualified release and model derives the immutable RET1 workflow contract', () => {
+  assert.deepEqual(
+    getSelectedTerminalEnrollmentQualification(READY_ENROLLMENT, SIGNED_RELEASE, 'E1002'),
+    {
+      releaseId: RELEASE_ID,
+      enrollmentKeyId: 'ret1-2026',
+      model: 'E1002',
+      firmwareVersion: '0.2.0-candidate.8',
+    },
+  );
+  assert.equal(
+    getSelectedTerminalEnrollmentQualification(READY_ENROLLMENT, SIGNED_RELEASE, 'E1001'),
+    null,
+  );
+  assert.equal(
+    getSelectedTerminalEnrollmentQualification(
+      READY_ENROLLMENT,
+      { ...SIGNED_RELEASE, release_id: 'd'.repeat(64) },
+      'E1002',
+    ),
+    null,
+  );
 });
 
 test('operator state presentation distinguishes recovery from safe pre-write cancellation', () => {

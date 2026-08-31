@@ -28,19 +28,19 @@ from backend.models.terminal import (
     TerminalSettings,
 )
 from backend.models.user import User
+from backend.routers.terminal import _upsert_device
 from backend.routers.terminal_enrollment import (
+    EnrollmentCancelRequest,
     EnrollmentCompleteRequest,
     EnrollmentIntentRequest,
     EnrollmentTicketRequest,
 )
-from backend.routers.terminal import _upsert_device
 from backend.services.terminal.enrollment_policy import (
     EnrollmentPolicy,
     QualifiedEnrollmentRelease,
 )
 from backend.services.terminal.enrollment_protocol import ValidatedHandshake
 from backend.services.terminal.variants import parse_variant
-
 
 DATABASE_URL = os.getenv("TERMINAL_ENROLLMENT_POSTGRES_TEST_URL")
 pytestmark = [
@@ -228,8 +228,43 @@ def _issued_attempt(
     )
 
 
+def _install_generation_handshake(monkeypatch):
+    def validate(status, hello, hello_ack, *, expected_key_id):
+        assert expected_key_id == "ret1-postgres-test"
+        assert status["config_generation"] == hello_ack["config_generation"]
+        digest = hashlib.sha256(
+            json.dumps(
+                {"status": status, "hello": hello, "hello_ack": hello_ack},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return ValidatedHandshake(
+            model=hello_ack["model"],
+            mac=hello_ack["factory_mac"],
+            firmware_version=hello_ack["firmware_version"],
+            generation=hello_ack["config_generation"],
+            transcript_sha256_hex=digest,
+            session_id=base64.urlsafe_b64encode(bytes.fromhex(digest)[:16])
+            .rstrip(b"=")
+            .decode("ascii"),
+        )
+
+    monkeypatch.setattr(enrollment_router, "validate_handshake", validate)
+
+
+def _intent_at_generation(generation: int, marker: str) -> EnrollmentIntentRequest:
+    payload = _intent()
+    payload.client_intent_id = uuid4()
+    payload.status.config_generation = generation
+    payload.hello_ack.config_generation = generation
+    payload.hello.client_nonce = marker * 43
+    return payload
+
+
 @pytest.fixture(autouse=True)
 def _fixed_policy(monkeypatch):
+    enrollment_router.limiter._storage.reset()
     policy = _policy()
 
     async def ready_policy():
@@ -348,6 +383,594 @@ async def test_ticket_is_idempotent_and_activation_requires_device_checkin(_fixe
             assert activated_device.last_secure_checkin_at is not None
             assert credential.state == "active"
             assert attempt.status == "activated"
+    finally:
+        await engine.dispose()
+
+
+async def test_cancel_first_enrollment_is_owner_scoped_and_idempotent(
+    _fixed_policy,
+    monkeypatch,
+):
+    engine, sessions = _sessions()
+    try:
+        await _reset(engine)
+        _install_generation_handshake(monkeypatch)
+        async with sessions() as db:
+            owner = User(username="ret1-cancel-owner", is_active=True)
+            other = User(username="ret1-cancel-other", is_active=True)
+            db.add_all((owner, other))
+            await db.commit()
+
+            intent_payload = _intent()
+            intent = await enrollment_router.create_enrollment_intent(
+                _request("/api/terminal/enrollment/intents"),
+                Response(),
+                intent_payload,
+                db,
+                owner,
+            )
+            attempt_id = UUID(intent["attempt_id"])
+            ticket_payload = EnrollmentTicketRequest(
+                client_ticket_id=uuid4(),
+                credential_sha256=hashlib.sha256(b"cancel-candidate").hexdigest(),
+                config_sha256=VECTOR["config_sha256_hex"],
+            )
+            await enrollment_router.issue_enrollment_ticket(
+                _request(f"/api/terminal/enrollment/intents/{attempt_id}/ticket"),
+                Response(),
+                attempt_id,
+                ticket_payload,
+                db,
+                owner,
+            )
+            cancel_payload = EnrollmentCancelRequest(
+                client_intent_id=intent_payload.client_intent_id,
+                operation="cancel",
+            )
+            with pytest.raises(HTTPException) as foreign:
+                await enrollment_router.cancel_enrollment_intent(
+                    _request(f"/api/terminal/enrollment/intents/{attempt_id}/cancel"),
+                    Response(),
+                    attempt_id,
+                    cancel_payload,
+                    db,
+                    other,
+                )
+            assert foreign.value.status_code == 404
+
+            first = await enrollment_router.cancel_enrollment_intent(
+                _request(f"/api/terminal/enrollment/intents/{attempt_id}/cancel"),
+                Response(),
+                attempt_id,
+                cancel_payload,
+                db,
+                owner,
+            )
+            second = await enrollment_router.cancel_enrollment_intent(
+                _request(f"/api/terminal/enrollment/intents/{attempt_id}/cancel"),
+                Response(),
+                attempt_id,
+                cancel_payload,
+                db,
+                owner,
+            )
+            assert first["state"] == second["state"] == "superseded"
+            attempt = await db.scalar(
+                select(TerminalEnrollmentAttempt).where(
+                    TerminalEnrollmentAttempt.attempt_id == attempt_id
+                )
+            )
+            device = await db.get(TerminalDevice, attempt.device_id)
+            candidate = await db.get(TerminalDeviceCredential, attempt.credential_id)
+            prior_credential_id = candidate.id
+            assert device.enrollment_state == "legacy"
+            assert device.enrollment_generation == 0
+            assert device.enrollment_release_id is None
+            assert device.enrollment_key_id is None
+            assert candidate.state == "revoked"
+            assert candidate.revoked_at is not None
+
+            retry_payload = _intent_at_generation(0, "O")
+            retry = await enrollment_router.create_enrollment_intent(
+                _request("/api/terminal/enrollment/intents"),
+                Response(),
+                retry_payload,
+                db,
+                owner,
+            )
+            retry_id = UUID(retry["attempt_id"])
+            retry_ticket = await enrollment_router.issue_enrollment_ticket(
+                _request(f"/api/terminal/enrollment/intents/{retry_id}/ticket"),
+                Response(),
+                retry_id,
+                EnrollmentTicketRequest(
+                    client_ticket_id=uuid4(),
+                    credential_sha256=hashlib.sha256(
+                        b"different-retry-candidate"
+                    ).hexdigest(),
+                    config_sha256="f" * 64,
+                ),
+                db,
+                owner,
+            )
+            assert retry_ticket["state"] == "issued"
+            await db.refresh(attempt)
+            retry_attempt = await db.scalar(
+                select(TerminalEnrollmentAttempt).where(
+                    TerminalEnrollmentAttempt.attempt_id == retry_id
+                )
+            )
+            assert attempt.status == "superseded"
+            assert attempt.credential_id is None
+            assert attempt.client_ticket_id is None
+            assert attempt.config_sha256 is None
+            assert attempt.compact_jws is None
+            assert attempt.transcript_sha256
+            assert await db.get(TerminalDeviceCredential, prior_credential_id) is None
+            assert retry_attempt.credential_id is not None
+            assert retry_attempt.credential_id != prior_credential_id
+
+            with pytest.raises(HTTPException) as mismatch:
+                await enrollment_router.cancel_enrollment_intent(
+                    _request(f"/api/terminal/enrollment/intents/{attempt_id}/cancel"),
+                    Response(),
+                    attempt_id,
+                    cancel_payload.model_copy(update={"client_intent_id": uuid4()}),
+                    db,
+                    owner,
+                )
+            assert mismatch.value.status_code == 409
+    finally:
+        await engine.dispose()
+
+
+async def test_cancel_reenrollment_preserves_active_enrollment(monkeypatch):
+    engine, sessions = _sessions()
+    try:
+        await _reset(engine)
+        _install_generation_handshake(monkeypatch)
+        async with sessions() as db:
+            owner = User(username="ret1-cancel-reenroll", is_active=True)
+            db.add(owner)
+            await db.flush()
+            device = TerminalDevice(
+                user_id=owner.id,
+                mac="aa:bb:cc:dd:ee:ff",
+                name="Re-enrollment cancel",
+                hardware_model="E1002",
+                enrollment_state="enrolled",
+                enrollment_generation=1,
+                enrollment_config_sha256="1" * 64,
+                enrollment_release_id="a" * 64,
+                enrollment_key_id="ret1-postgres-test",
+                enrollment_activated_at=datetime.now(timezone.utc),
+                enrollment_updated_at=datetime.now(timezone.utc),
+            )
+            db.add(device)
+            await db.flush()
+            active = _credential(
+                "A" * 43,
+                device_id=device.id,
+                generation=1,
+                state="active",
+            )
+            db.add(active)
+            await db.commit()
+
+            intent_payload = _intent_at_generation(1, "B")
+            intent = await enrollment_router.create_enrollment_intent(
+                _request("/api/terminal/enrollment/intents"),
+                Response(),
+                intent_payload,
+                db,
+                owner,
+            )
+            attempt_id = UUID(intent["attempt_id"])
+            await enrollment_router.issue_enrollment_ticket(
+                _request(f"/api/terminal/enrollment/intents/{attempt_id}/ticket"),
+                Response(),
+                attempt_id,
+                EnrollmentTicketRequest(
+                    client_ticket_id=uuid4(),
+                    credential_sha256=hashlib.sha256(b"new-candidate").hexdigest(),
+                    config_sha256="2" * 64,
+                ),
+                db,
+                owner,
+            )
+            cancelled = await enrollment_router.cancel_enrollment_intent(
+                _request(f"/api/terminal/enrollment/intents/{attempt_id}/cancel"),
+                Response(),
+                attempt_id,
+                EnrollmentCancelRequest(
+                    client_intent_id=intent_payload.client_intent_id,
+                    operation="cancel",
+                ),
+                db,
+                owner,
+            )
+            assert cancelled["state"] == "superseded"
+            await db.refresh(device)
+            await db.refresh(active)
+            attempt = await db.scalar(
+                select(TerminalEnrollmentAttempt).where(
+                    TerminalEnrollmentAttempt.attempt_id == attempt_id
+                )
+            )
+            candidate = await db.get(TerminalDeviceCredential, attempt.credential_id)
+            assert device.enrollment_state == "enrolled"
+            assert device.enrollment_generation == 1
+            assert device.enrollment_config_sha256 == "1" * 64
+            assert active.state == "active"
+            assert active.revoked_at is None
+            assert candidate.state == "revoked"
+    finally:
+        await engine.dispose()
+
+
+async def test_expired_candidate_generation_is_reusable_after_unchanged_hello(
+    monkeypatch,
+):
+    engine, sessions = _sessions()
+    try:
+        await _reset(engine)
+        _install_generation_handshake(monkeypatch)
+        async with sessions() as db:
+            owner = User(username="ret1-expired-retry", is_active=True)
+            db.add(owner)
+            await db.flush()
+            device = TerminalDevice(
+                user_id=owner.id,
+                mac="aa:bb:cc:dd:ee:ff",
+                name="Expired retry terminal",
+                hardware_model="E1002",
+                enrollment_state="pending",
+                enrollment_generation=0,
+                enrollment_release_id="a" * 64,
+                enrollment_key_id="ret1-postgres-test",
+                enrollment_updated_at=datetime.now(timezone.utc),
+            )
+            db.add(device)
+            await db.flush()
+            old_candidate = _credential(
+                "P" * 43,
+                device_id=device.id,
+                generation=1,
+                state="candidate",
+            )
+            old_candidate.created_at = (
+                datetime.now(timezone.utc)
+                - enrollment_router.ACTIVE_ATTEMPT_WINDOW
+                - timedelta(hours=1)
+            )
+            db.add(old_candidate)
+            await db.flush()
+            old_attempt = _issued_attempt(
+                user_id=owner.id,
+                device=device,
+                credential=old_candidate,
+                created_at=old_candidate.created_at,
+            )
+            db.add(old_attempt)
+            await db.commit()
+            old_credential_id = old_candidate.id
+
+            locked_attempt, locked_device = await enrollment_router._lock_owned_attempt_graph(
+                db,
+                owner.id,
+                old_attempt.attempt_id,
+            )
+            assert await enrollment_router._expire_stale_attempt(
+                db,
+                locked_attempt,
+                locked_device,
+            )
+            await db.commit()
+            assert locked_attempt.status == "expired"
+            assert locked_device.enrollment_state == "legacy"
+            assert old_candidate.state == "revoked"
+
+            retry_payload = _intent_at_generation(0, "Q")
+            retry = await enrollment_router.create_enrollment_intent(
+                _request("/api/terminal/enrollment/intents"),
+                Response(),
+                retry_payload,
+                db,
+                owner,
+            )
+            retry_id = UUID(retry["attempt_id"])
+            ticket = await enrollment_router.issue_enrollment_ticket(
+                _request(f"/api/terminal/enrollment/intents/{retry_id}/ticket"),
+                Response(),
+                retry_id,
+                EnrollmentTicketRequest(
+                    client_ticket_id=uuid4(),
+                    credential_sha256=hashlib.sha256(
+                        b"fresh-after-expiry"
+                    ).hexdigest(),
+                    config_sha256="e" * 64,
+                ),
+                db,
+                owner,
+            )
+            assert ticket["state"] == "issued"
+            await db.refresh(old_attempt)
+            assert old_attempt.status == "expired"
+            assert old_attempt.credential_id is None
+            assert old_attempt.config_sha256 is None
+            assert old_attempt.transcript_sha256
+            assert await db.get(TerminalDeviceCredential, old_credential_id) is None
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize("prior_state", ["issued", "client_confirmed", "superseded"])
+async def test_exact_observed_candidate_recovers_to_next_generation(
+    monkeypatch,
+    prior_state,
+):
+    engine, sessions = _sessions()
+    try:
+        await _reset(engine)
+        _install_generation_handshake(monkeypatch)
+        async with sessions() as db:
+            owner = User(username=f"ret1-recover-{prior_state}", is_active=True)
+            db.add(owner)
+            await db.flush()
+            db.add(
+                TerminalSettings(
+                    user_id=owner.id,
+                    code=f"recover-{prior_state[:8]}",
+                    timezone="UTC",
+                )
+            )
+            await db.commit()
+
+            prior_payload = _intent_at_generation(0, "C")
+            prior = await enrollment_router.create_enrollment_intent(
+                _request("/api/terminal/enrollment/intents"),
+                Response(),
+                prior_payload,
+                db,
+                owner,
+            )
+            prior_id = UUID(prior["attempt_id"])
+            prior_ticket_payload = EnrollmentTicketRequest(
+                client_ticket_id=uuid4(),
+                credential_sha256=hashlib.sha256(b"prior-candidate").hexdigest(),
+                config_sha256="1" * 64,
+            )
+            await enrollment_router.issue_enrollment_ticket(
+                _request(f"/api/terminal/enrollment/intents/{prior_id}/ticket"),
+                Response(),
+                prior_id,
+                prior_ticket_payload,
+                db,
+                owner,
+            )
+            if prior_state in {"client_confirmed", "superseded"}:
+                await enrollment_router.complete_enrollment_intent(
+                    _request(f"/api/terminal/enrollment/intents/{prior_id}/complete"),
+                    Response(),
+                    prior_id,
+                    EnrollmentCompleteRequest(
+                        client_ticket_id=prior_ticket_payload.client_ticket_id,
+                        operation="provision",
+                        generation=1,
+                        config_sha256="1" * 64,
+                    ),
+                    db,
+                    owner,
+                )
+            if prior_state == "superseded":
+                await enrollment_router.cancel_enrollment_intent(
+                    _request(f"/api/terminal/enrollment/intents/{prior_id}/cancel"),
+                    Response(),
+                    prior_id,
+                    EnrollmentCancelRequest(
+                        client_intent_id=prior_payload.client_intent_id,
+                        operation="cancel",
+                    ),
+                    db,
+                    owner,
+                )
+
+            recovery_payload = _intent_at_generation(1, "D")
+            recovery = await enrollment_router.create_enrollment_intent(
+                _request("/api/terminal/enrollment/intents"),
+                Response(),
+                recovery_payload,
+                db,
+                owner,
+            )
+            assert recovery["terminal"]["observed_generation"] == 1
+            assert recovery["terminal"]["target_generation"] == 2
+            prior_attempt = await db.scalar(
+                select(TerminalEnrollmentAttempt).where(
+                    TerminalEnrollmentAttempt.attempt_id == prior_id
+                )
+            )
+            prior_candidate = await db.get(
+                TerminalDeviceCredential,
+                prior_attempt.credential_id,
+            )
+            assert prior_attempt.status == "superseded"
+            assert prior_candidate.state == "revoked"
+
+            recovery_id = UUID(recovery["attempt_id"])
+            recovery_token = "R" * 43
+            recovery_ticket_payload = EnrollmentTicketRequest(
+                client_ticket_id=uuid4(),
+                credential_sha256=hashlib.sha256(
+                    recovery_token.encode("ascii")
+                ).hexdigest(),
+                config_sha256="2" * 64,
+            )
+            await enrollment_router.issue_enrollment_ticket(
+                _request(f"/api/terminal/enrollment/intents/{recovery_id}/ticket"),
+                Response(),
+                recovery_id,
+                recovery_ticket_payload,
+                db,
+                owner,
+            )
+            recovery_attempt = await db.scalar(
+                select(TerminalEnrollmentAttempt).where(
+                    TerminalEnrollmentAttempt.attempt_id == recovery_id
+                )
+            )
+            device = await db.get(TerminalDevice, recovery_attempt.device_id)
+            activated, _settings, _variant = await enrollment_router._scoped_device(
+                db,
+                public_id=device.public_id,
+                credential_token=recovery_token,
+                request=_request("/terminal/device/recovered", mac=device.mac),
+                variant_name=None,
+            )
+            await db.refresh(recovery_attempt)
+            assert activated.enrollment_state == "enrolled"
+            assert activated.enrollment_generation == 2
+            assert activated.enrollment_config_sha256 == "2" * 64
+            assert recovery_attempt.status == "activated"
+    finally:
+        await engine.dispose()
+
+
+async def test_generation_recovery_rejects_gap_and_ambiguous_provenance(monkeypatch):
+    engine, sessions = _sessions()
+    try:
+        await _reset(engine)
+        _install_generation_handshake(monkeypatch)
+        async with sessions() as db:
+            owner = User(username="ret1-recovery-reject", is_active=True)
+            db.add(owner)
+            await db.flush()
+            device = TerminalDevice(
+                user_id=owner.id,
+                mac="aa:bb:cc:dd:ee:ff",
+                name="Ambiguous recovery",
+                hardware_model="E1002",
+                enrollment_state="pending",
+                enrollment_generation=0,
+                enrollment_release_id="a" * 64,
+                enrollment_key_id="ret1-postgres-test",
+                enrollment_updated_at=datetime.now(timezone.utc),
+            )
+            db.add(device)
+            await db.commit()
+            owner_id = owner.id
+            device_id = device.id
+
+            with pytest.raises(HTTPException) as gap:
+                await enrollment_router.create_enrollment_intent(
+                    _request("/api/terminal/enrollment/intents"),
+                    Response(),
+                    _intent_at_generation(2, "E"),
+                    db,
+                    owner,
+                )
+            assert gap.value.status_code == 409
+            assert gap.value.detail == "Terminal generation does not match server state"
+            await db.rollback()
+            owner = await db.get(User, owner_id)
+            device = await db.get(TerminalDevice, device_id)
+
+            candidate = _credential(
+                "F" * 43,
+                device_id=device.id,
+                generation=1,
+                state="candidate",
+            )
+            db.add(candidate)
+            await db.flush()
+            first = _issued_attempt(
+                user_id=owner.id,
+                device=device,
+                credential=candidate,
+            )
+            second = _issued_attempt(
+                user_id=owner.id,
+                device=device,
+                credential=candidate,
+            )
+            second.status = "superseded"
+            db.add_all((first, second))
+            await db.commit()
+
+            with pytest.raises(HTTPException) as ambiguous:
+                await enrollment_router.create_enrollment_intent(
+                    _request("/api/terminal/enrollment/intents"),
+                    Response(),
+                    _intent_at_generation(1, "G"),
+                    db,
+                    owner,
+                )
+            assert ambiguous.value.status_code == 409
+            assert ambiguous.value.detail == "Terminal generation does not match server state"
+            await db.rollback()
+            await db.refresh(first)
+            await db.refresh(second)
+            await db.refresh(candidate)
+            assert first.status == "issued"
+            assert second.status == "superseded"
+            assert candidate.state == "candidate"
+    finally:
+        await engine.dispose()
+
+
+async def test_generation_recovery_rejects_foreign_and_review_identity(monkeypatch):
+    engine, sessions = _sessions()
+    try:
+        await _reset(engine)
+        _install_generation_handshake(monkeypatch)
+        async with sessions() as db:
+            owner = User(username="ret1-recovery-owner", is_active=True)
+            other = User(username="ret1-recovery-foreign", is_active=True)
+            db.add_all((owner, other))
+            await db.flush()
+            device = TerminalDevice(
+                user_id=owner.id,
+                mac="aa:bb:cc:dd:ee:ff",
+                name="Recovery ownership",
+                hardware_model="E1002",
+                enrollment_state="review",
+                enrollment_generation=0,
+                enrollment_updated_at=datetime.now(timezone.utc),
+            )
+            db.add(device)
+            await db.flush()
+            candidate = _credential(
+                "H" * 43,
+                device_id=device.id,
+                generation=1,
+                state="candidate",
+            )
+            db.add(candidate)
+            await db.flush()
+            db.add(
+                _issued_attempt(
+                    user_id=owner.id,
+                    device=device,
+                    credential=candidate,
+                )
+            )
+            await db.commit()
+            owner_id = owner.id
+            other_id = other.id
+
+            for actor_id, marker in ((owner_id, "I"), (other_id, "J")):
+                actor = await db.get(User, actor_id)
+                with pytest.raises(HTTPException) as rejected:
+                    await enrollment_router.create_enrollment_intent(
+                        _request("/api/terminal/enrollment/intents"),
+                        Response(),
+                        _intent_at_generation(1, marker),
+                        db,
+                        actor,
+                    )
+                assert rejected.value.status_code == 409
+                assert rejected.value.detail == "Terminal identity requires operator review"
+                await db.rollback()
     finally:
         await engine.dispose()
 
@@ -1335,5 +1958,144 @@ async def test_activation_and_revoke_serialize_on_the_device_row(monkeypatch):
                 assert credential.activated_at is not None
             else:
                 assert attempt.status == "superseded"
+    finally:
+        await engine.dispose()
+
+
+async def test_activation_and_attempt_cancel_serialize_on_the_device_row():
+    engine, sessions = _sessions()
+    try:
+        await _reset(engine)
+        async with sessions() as db:
+            user = User(username="ret1-cancel-race", is_active=True)
+            db.add(user)
+            await db.flush()
+            db.add(
+                TerminalSettings(
+                    user_id=user.id,
+                    code="ret1-cancel-race",
+                    timezone="UTC",
+                )
+            )
+            device = TerminalDevice(
+                user_id=user.id,
+                mac="aa:bb:cc:dd:ee:ff",
+                name="Cancel race terminal",
+                hardware_model="E1002",
+                enrollment_state="pending",
+                enrollment_generation=0,
+                enrollment_release_id="a" * 64,
+                enrollment_key_id="ret1-postgres-test",
+                enrollment_updated_at=datetime.now(timezone.utc),
+            )
+            db.add(device)
+            await db.flush()
+            candidate_token = "N" * 43
+            candidate = _credential(
+                candidate_token,
+                device_id=device.id,
+                generation=1,
+                state="candidate",
+            )
+            db.add(candidate)
+            await db.flush()
+            attempt = _issued_attempt(
+                user_id=user.id,
+                device=device,
+                credential=candidate,
+            )
+            db.add(attempt)
+            await db.commit()
+            user_id = user.id
+            device_id = device.id
+            public_id = device.public_id
+            credential_id = candidate.id
+            attempt_id = attempt.attempt_id
+            client_intent_id = attempt.client_intent_id
+
+        activation_started = asyncio.Event()
+        cancel_started = asyncio.Event()
+
+        async def activate():
+            async with sessions() as db:
+                activation_started.set()
+                try:
+                    await enrollment_router._scoped_device(
+                        db,
+                        public_id=public_id,
+                        credential_token=candidate_token,
+                        request=_request(
+                            "/terminal/device/cancel-race",
+                            mac="aa:bb:cc:dd:ee:ff",
+                        ),
+                        variant_name=None,
+                    )
+                    return "activated"
+                except HTTPException as exc:
+                    await db.rollback()
+                    assert exc.status_code == 404
+                    return "rejected"
+
+        async def cancel():
+            async with sessions() as db:
+                user = await db.get(User, user_id)
+                cancel_started.set()
+                try:
+                    result = await enrollment_router.cancel_enrollment_intent(
+                        _request(
+                            f"/api/terminal/enrollment/intents/{attempt_id}/cancel"
+                        ),
+                        Response(),
+                        attempt_id,
+                        EnrollmentCancelRequest(
+                            client_intent_id=client_intent_id,
+                            operation="cancel",
+                        ),
+                        db,
+                        user,
+                    )
+                    return result["state"]
+                except HTTPException as exc:
+                    await db.rollback()
+                    assert exc.status_code == 409
+                    return "rejected"
+
+        async with sessions() as blocker:
+            locked_device = await blocker.scalar(
+                select(TerminalDevice)
+                .where(TerminalDevice.id == device_id)
+                .with_for_update()
+            )
+            assert locked_device is not None
+            tasks = (asyncio.create_task(activate()), asyncio.create_task(cancel()))
+            await asyncio.wait_for(
+                asyncio.gather(
+                    activation_started.wait(),
+                    cancel_started.wait(),
+                ),
+                timeout=1,
+            )
+            await asyncio.sleep(0.05)
+            assert all(not task.done() for task in tasks)
+            await blocker.commit()
+        results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=3)
+
+        async with sessions() as db:
+            device = await db.get(TerminalDevice, device_id)
+            credential = await db.get(TerminalDeviceCredential, credential_id)
+            attempt = await db.scalar(
+                select(TerminalEnrollmentAttempt).where(
+                    TerminalEnrollmentAttempt.attempt_id == attempt_id
+                )
+            )
+            assert (
+                tuple(results),
+                device.enrollment_state,
+                attempt.status,
+                credential.state,
+            ) in {
+                (("activated", "rejected"), "enrolled", "activated", "active"),
+                (("rejected", "superseded"), "legacy", "superseded", "revoked"),
+            }
     finally:
         await engine.dispose()

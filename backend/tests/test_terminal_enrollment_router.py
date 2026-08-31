@@ -7,6 +7,7 @@ from alembic.config import Config
 from alembic.script import ScriptDirectory
 from fastapi import HTTPException, Request, Response
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 import backend.routers.terminal_enrollment as enrollment_router
 from backend.main import app
@@ -79,6 +80,7 @@ def test_enrollment_api_routes_require_session_auth_and_device_routes_do_not():
         ("/api/terminal/enrollment/intents/{attempt_id}/ticket", "POST"),
         ("/api/terminal/enrollment/intents/{attempt_id}/complete", "POST"),
         ("/api/terminal/enrollment/intents/{attempt_id}", "GET"),
+        ("/api/terminal/enrollment/intents/{attempt_id}/cancel", "POST"),
         ("/api/terminal/enrollment/devices/{public_id}/revoke", "POST"),
     }
     assert all(
@@ -198,6 +200,32 @@ def test_raw_device_credentials_are_canonical_and_only_persisted_as_hashes():
     assert digest == enrollment_router._hash_token(token)
     assert len(digest) == 64
     assert token not in digest
+
+
+def test_cancel_request_is_exact_and_contains_no_device_secret():
+    intent_id = "12345678-1234-4234-9234-1234567890ab"
+    payload = enrollment_router.EnrollmentCancelRequest.model_validate_json(
+        '{"client_intent_id":"' + intent_id + '","operation":"cancel"}'
+    )
+
+    assert str(payload.client_intent_id) == intent_id
+    assert payload.operation == "cancel"
+    assert payload.model_dump(mode="json") == {
+        "client_intent_id": intent_id,
+        "operation": "cancel",
+    }
+    with pytest.raises(ValidationError):
+        enrollment_router.EnrollmentCancelRequest.model_validate_json(
+            '{"client_intent_id":"'
+            + intent_id
+            + '","operation":"cancel","credential":"secret"}'
+        )
+    with pytest.raises(ValidationError):
+        enrollment_router.EnrollmentCancelRequest.model_validate_json(
+            '{"client_intent_id":"'
+            + intent_id
+            + '","operation":"cancel_after_write"}'
+        )
 
 
 def test_enrollment_models_and_migration_form_one_additive_head():
