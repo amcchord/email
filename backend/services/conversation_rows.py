@@ -18,12 +18,18 @@ from sqlalchemy.orm import aliased, joinedload, selectinload
 
 from backend.models.ai import AIAnalysis
 from backend.models.email import Email
+from backend.models.inbox_placement_rule import InboxPlacementRule
+from backend.services.inbox_placement_rules import (
+    conversation_rule_value,
+    domain_rule_value,
+    sender_rule_value,
+)
 from backend.services.workflow_context import TRUSTED_CONTACTS, delegated_scheduling_sql
 
 
 INBOX_PLACEMENTS = frozenset({"focused", "other"})
 OTHER_PLACEMENT_REASONS = frozenset(
-    {"delegated_scheduling", "subscription", "low_priority"}
+    {"user_rule_other", "delegated_scheduling", "subscription", "low_priority"}
 )
 
 
@@ -39,6 +45,10 @@ class ConversationRow:
     member_labels: list[list[str]]
     inbox_placement: str | None = None
     inbox_placement_reason: str | None = None
+    inbox_placement_source: str | None = None
+    inbox_placement_rule_id: Any | None = None
+    inbox_placement_rule_scope: str | None = None
+    inbox_placement_rule_revision: int | None = None
 
 
 def _conversation_identity(email_id, gmail_thread_id):
@@ -150,6 +160,35 @@ def _inbox_placement_reason(email, analysis):
 
 def _placed_conversation_anchors(filtered_messages: Select[Any]):
     anchors = _conversation_anchors(filtered_messages)
+    conversation_rule = aliased(InboxPlacementRule, name="conversation_rule")
+    sender_rule = aliased(InboxPlacementRule, name="sender_rule")
+    domain_rule = aliased(InboxPlacementRule, name="domain_rule")
+    winning_rule_id = case(
+        (conversation_rule.row_id.is_not(None), conversation_rule.id),
+        (sender_rule.row_id.is_not(None), sender_rule.id),
+        (domain_rule.row_id.is_not(None), domain_rule.id),
+    )
+    winning_rule_scope = case(
+        (conversation_rule.row_id.is_not(None), "conversation"),
+        (sender_rule.row_id.is_not(None), "sender"),
+        (domain_rule.row_id.is_not(None), "domain"),
+    )
+    winning_rule_placement = case(
+        (conversation_rule.row_id.is_not(None), conversation_rule.placement),
+        (sender_rule.row_id.is_not(None), sender_rule.placement),
+        (domain_rule.row_id.is_not(None), domain_rule.placement),
+    )
+    winning_rule_revision = case(
+        (conversation_rule.row_id.is_not(None), conversation_rule.revision),
+        (sender_rule.row_id.is_not(None), sender_rule.revision),
+        (domain_rule.row_id.is_not(None), domain_rule.revision),
+    )
+    system_reason = _inbox_placement_reason(Email, AIAnalysis)
+    resolved_reason = case(
+        (winning_rule_placement == "focused", "user_rule_focused"),
+        (winning_rule_placement == "other", "user_rule_other"),
+        else_=system_reason,
+    )
     reasoned = (
         select(
             anchors.c.anchor_email_id,
@@ -158,10 +197,44 @@ def _placed_conversation_anchors(filtered_messages: Select[Any]):
             anchors.c.conversation_identity,
             anchors.c.matched_date,
             anchors.c.matched_count,
-            _inbox_placement_reason(Email, AIAnalysis).label("inbox_placement_reason"),
+            resolved_reason.label("inbox_placement_reason"),
+            case(
+                (winning_rule_id.is_not(None), "rule"),
+                else_="system",
+            ).label("inbox_placement_source"),
+            winning_rule_id.label("inbox_placement_rule_id"),
+            winning_rule_scope.label("inbox_placement_rule_scope"),
+            winning_rule_revision.label("inbox_placement_rule_revision"),
         )
         .join(Email, Email.id == anchors.c.anchor_email_id)
         .outerjoin(AIAnalysis, AIAnalysis.email_id == Email.id)
+        .outerjoin(
+            conversation_rule,
+            and_(
+                conversation_rule.account_id == Email.account_id,
+                conversation_rule.scope == "conversation",
+                conversation_rule.match_value == conversation_rule_value(Email),
+                conversation_rule.enabled.is_(True),
+            ),
+        )
+        .outerjoin(
+            sender_rule,
+            and_(
+                sender_rule.account_id == Email.account_id,
+                sender_rule.scope == "sender",
+                sender_rule.match_value == sender_rule_value(Email),
+                sender_rule.enabled.is_(True),
+            ),
+        )
+        .outerjoin(
+            domain_rule,
+            and_(
+                domain_rule.account_id == Email.account_id,
+                domain_rule.scope == "domain",
+                domain_rule.match_value == domain_rule_value(Email),
+                domain_rule.enabled.is_(True),
+            ),
+        )
         .cte("reasoned_conversation_anchors")
     )
     placement = case(
@@ -181,6 +254,10 @@ def _placed_conversation_anchors(filtered_messages: Select[Any]):
             reasoned.c.matched_count,
             placement.label("inbox_placement"),
             reasoned.c.inbox_placement_reason,
+            reasoned.c.inbox_placement_source,
+            reasoned.c.inbox_placement_rule_id,
+            reasoned.c.inbox_placement_rule_scope,
+            reasoned.c.inbox_placement_rule_revision,
         )
         .cte("placed_conversation_anchors")
     )
@@ -230,7 +307,14 @@ def conversation_page_statement(
     ]
     if inbox_placement is not None:
         selected_columns.extend(
-            [anchors.c.inbox_placement, anchors.c.inbox_placement_reason]
+            [
+                anchors.c.inbox_placement,
+                anchors.c.inbox_placement_reason,
+                anchors.c.inbox_placement_source,
+                anchors.c.inbox_placement_rule_id,
+                anchors.c.inbox_placement_rule_scope,
+                anchors.c.inbox_placement_rule_revision,
+            ]
         )
     statement = (
         select(*selected_columns)
@@ -331,6 +415,10 @@ def conversation_split_page_statement(
             anchors.c.matched_count,
             anchors.c.inbox_placement,
             anchors.c.inbox_placement_reason,
+            anchors.c.inbox_placement_source,
+            anchors.c.inbox_placement_rule_id,
+            anchors.c.inbox_placement_rule_scope,
+            anchors.c.inbox_placement_rule_revision,
             aggregates.c.member_count,
             aggregates.c.unread_count,
             aggregates.c.starred_count,
@@ -386,6 +474,10 @@ def conversation_split_page_statement(
             page_rows.c.member_labels,
             page_rows.c.inbox_placement,
             page_rows.c.inbox_placement_reason,
+            page_rows.c.inbox_placement_source,
+            page_rows.c.inbox_placement_rule_id,
+            page_rows.c.inbox_placement_rule_scope,
+            page_rows.c.inbox_placement_rule_revision,
             totals.c.focused_total,
             totals.c.other_total,
         )
@@ -415,6 +507,22 @@ def _conversation_row_from_result(row, *, with_placement: bool):
         inbox_placement=(str(row.inbox_placement) if with_placement else None),
         inbox_placement_reason=(
             str(row.inbox_placement_reason) if with_placement else None
+        ),
+        inbox_placement_source=(
+            str(row.inbox_placement_source) if with_placement else None
+        ),
+        inbox_placement_rule_id=(
+            row.inbox_placement_rule_id if with_placement else None
+        ),
+        inbox_placement_rule_scope=(
+            str(row.inbox_placement_rule_scope)
+            if with_placement and row.inbox_placement_rule_scope is not None
+            else None
+        ),
+        inbox_placement_rule_revision=(
+            int(row.inbox_placement_rule_revision)
+            if with_placement and row.inbox_placement_rule_revision is not None
+            else None
         ),
     )
 

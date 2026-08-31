@@ -2,6 +2,7 @@
 
 import os
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import text
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from backend.models.account import GoogleAccount
 from backend.models.ai import AIAnalysis, ThreadDigest
 from backend.models.email import Email
+from backend.models.inbox_placement_rule import InboxPlacementRule
 from backend.models.user import User
 from backend.routers.emails import list_conversations, list_split_conversations
 
@@ -249,18 +251,21 @@ async def test_split_inbox_places_each_conversation_once_from_its_newest_anchor(
                 "mixed-thread",
                 "Generated mixed older",
                 NOW - timedelta(hours=8),
+                sender="overlap@precedence.example",
             )
             mixed_newer = message(
                 "generated-mixed-newer",
                 "mixed-thread",
                 "Generated mixed newest",
                 NOW - timedelta(hours=7),
+                sender="overlap@precedence.example",
             )
             subscription = message(
                 "generated-subscription",
                 "subscription-thread",
                 "Generated subscription",
                 NOW - timedelta(hours=6),
+                sender="newsletter@subscription.example",
             )
             delegated = message(
                 "generated-delegated",
@@ -274,6 +279,7 @@ async def test_split_inbox_places_each_conversation_once_from_its_newest_anchor(
                 "unclassified-thread",
                 "Generated new mail",
                 NOW - timedelta(hours=4),
+                sender="person@domain-rule.example",
             )
             replied = message(
                 "generated-needs-reply",
@@ -297,6 +303,13 @@ async def test_split_inbox_places_each_conversation_once_from_its_newest_anchor(
                 NOW - timedelta(hours=1),
                 sender="andrea@mcchord.net",
             )
+            malformed_sender = message(
+                "generated-malformed-sender",
+                "malformed-sender-thread",
+                "Generated malformed sender",
+                NOW - timedelta(minutes=30),
+                sender="newsletter@subscription.example@attacker.example",
+            )
             db.add_all([
                 mixed_older,
                 mixed_newer,
@@ -306,6 +319,7 @@ async def test_split_inbox_places_each_conversation_once_from_its_newest_anchor(
                 replied,
                 sent_reply,
                 trusted,
+                malformed_sender,
             ])
             await db.flush()
             db.add_all([
@@ -347,6 +361,56 @@ async def test_split_inbox_places_each_conversation_once_from_its_newest_anchor(
                     is_subscription=True,
                 ),
             ])
+            db.add_all([
+                InboxPlacementRule(
+                    create_id=uuid4(),
+                    account_id=account.id,
+                    scope="conversation",
+                    match_value="thread:mixed-thread",
+                    placement="other",
+                    enabled=True,
+                ),
+                InboxPlacementRule(
+                    create_id=uuid4(),
+                    account_id=account.id,
+                    scope="sender",
+                    match_value="newsletter@subscription.example",
+                    placement="focused",
+                    enabled=True,
+                ),
+                InboxPlacementRule(
+                    create_id=uuid4(),
+                    account_id=account.id,
+                    scope="domain",
+                    match_value="subscription.example",
+                    placement="other",
+                    enabled=True,
+                ),
+                InboxPlacementRule(
+                    create_id=uuid4(),
+                    account_id=account.id,
+                    scope="sender",
+                    match_value="overlap@precedence.example",
+                    placement="focused",
+                    enabled=True,
+                ),
+                InboxPlacementRule(
+                    create_id=uuid4(),
+                    account_id=account.id,
+                    scope="domain",
+                    match_value="domain-rule.example",
+                    placement="other",
+                    enabled=True,
+                ),
+                InboxPlacementRule(
+                    create_id=uuid4(),
+                    account_id=account.id,
+                    scope="sender",
+                    match_value="andrea@mcchord.net",
+                    placement="other",
+                    enabled=False,
+                ),
+            ])
             await db.commit()
             user_id = user.id
 
@@ -369,28 +433,40 @@ async def test_split_inbox_places_each_conversation_once_from_its_newest_anchor(
         focused_by_subject = {row.subject: row for row in focused.conversations}
         other_by_subject = {row.subject: row for row in other.conversations}
         assert focused.total == 4
-        assert other.total == 2
+        assert other.total == 3
         assert set(focused_by_subject) == {
-            "Generated mixed newest",
-            "Generated new mail",
+            "Generated subscription",
             "Generated already answered",
             "Generated trusted sender",
+            "Generated malformed sender",
         }
         assert set(other_by_subject) == {
-            "Generated subscription",
+            "Generated mixed newest",
+            "Generated new mail",
             "Generated delegated scheduling",
         }
-        assert focused_by_subject["Generated mixed newest"].inbox_placement_reason == "high_priority"
-        assert focused_by_subject["Generated new mail"].inbox_placement_reason == "unclassified"
+        assert other_by_subject["Generated mixed newest"].inbox_placement_reason == "user_rule_other"
+        assert other_by_subject["Generated mixed newest"].inbox_placement_rule_scope == "conversation"
+        assert other_by_subject["Generated new mail"].inbox_placement_reason == "user_rule_other"
+        assert other_by_subject["Generated new mail"].inbox_placement_rule_scope == "domain"
+        assert focused_by_subject["Generated subscription"].inbox_placement_reason == "user_rule_focused"
+        assert focused_by_subject["Generated subscription"].inbox_placement_rule_scope == "sender"
+        assert focused_by_subject["Generated subscription"].inbox_placement_source == "rule"
+        assert focused_by_subject["Generated subscription"].inbox_placement_rule_revision == 1
+        assert focused_by_subject["Generated subscription"].inbox_placement_rule_id is not None
         assert focused_by_subject["Generated already answered"].inbox_placement_reason == "direct_or_fyi"
         assert focused_by_subject["Generated trusted sender"].inbox_placement_reason == "trusted_contact"
-        assert other_by_subject["Generated subscription"].inbox_placement_reason == "subscription"
+        assert focused_by_subject["Generated trusted sender"].inbox_placement_source == "system"
+        assert focused_by_subject["Generated trusted sender"].inbox_placement_rule_id is None
+        assert focused_by_subject["Generated malformed sender"].inbox_placement_reason == "unclassified"
+        assert focused_by_subject["Generated malformed sender"].inbox_placement_source == "system"
+        assert focused_by_subject["Generated malformed sender"].inbox_placement_rule_id is None
         assert other_by_subject["Generated delegated scheduling"].inbox_placement_reason == "delegated_scheduling"
         assert other_by_subject["Generated delegated scheduling"].needs_reply is False
-        assert split.total == focused.total + other.total == 6
-        assert empty_page.total == 6
+        assert split.total == focused.total + other.total == 7
+        assert empty_page.total == 7
         assert empty_page.focused.total == 4
-        assert empty_page.other.total == 2
+        assert empty_page.other.total == 3
         assert empty_page.focused.conversations == []
         assert empty_page.other.conversations == []
         assert {row.conversation_key for row in focused.conversations}.isdisjoint(

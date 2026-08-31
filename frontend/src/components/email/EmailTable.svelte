@@ -8,7 +8,7 @@
   import { selectedBooleanState } from '../../lib/inboxDataset.js';
   import { formatSnoozeWake } from '../../lib/remindLater.js';
   import { safeLabelColor, visibleUserLabels } from '../../lib/labelWorkflows.js';
-  import { placementReasonLabel } from '../../lib/focusedInbox.js';
+  import { placementProvenanceLabel } from '../../lib/focusedInbox.js';
 
   let {
     emails = [],
@@ -29,6 +29,8 @@
     onLabel = null,
     allowMove = false,
     onSnooze = null,
+    onTeachSplit = null,
+    onManageSplitRules = null,
     onLoadMore = null,
   } = $props();
 
@@ -456,6 +458,14 @@
                 <span role="heading" aria-level="2" class="text-sm font-semibold" style="color: var(--text-primary)">Focused</span>
                 <span class="ml-2 text-xs tabular-nums font-normal" style="color: var(--text-tertiary)">{sectionTotals.focused.toLocaleString()}</span>
                 <span class="ml-3 text-[11px] font-normal" style="color: var(--text-secondary)">Priority, reply, trusted, and direct conversations</span>
+                <button
+                  type="button"
+                  class="float-right inline-flex min-h-11 items-center justify-center rounded-lg border px-3 text-xs font-semibold"
+                  style="border-color: var(--border-color); color: var(--text-secondary); background: var(--bg-primary)"
+                  disabled={actionsDisabled || !onManageSplitRules}
+                  data-shortcut="inbox.manageSplitRules"
+                  onclick={() => onManageSplitRules?.()}
+                >Rules</button>
               </td>
             </tr>
             {#if sectionTotals.focused === 0}
@@ -692,12 +702,27 @@
                         Needs reply
                       </span>
                     {/if}
-                    {#if sectionTotals && placementReasonLabel(email.inbox_placement_reason)}
-                      <span
-                        class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap"
+                    {#if sectionTotals && placementProvenanceLabel(email)}
+                      <button
+                        type="button"
+                        class="min-h-7 rounded-full px-2 text-[10px] font-medium whitespace-nowrap"
                         style="background: var(--bg-tertiary); color: var(--text-secondary)"
-                        title="Why this conversation is in {email.inbox_placement === 'other' ? 'Other' : 'Focused'}"
-                      >{placementReasonLabel(email.inbox_placement_reason)}</span>
+                        disabled={actionsDisabled || !onTeachSplit}
+                        title="Explain or change this Split Inbox placement"
+                        aria-label="Why this conversation is in {email.inbox_placement === 'other' ? 'Other' : 'Focused'}: {placementProvenanceLabel(email)}. Open Teach Split Inbox"
+                        onclick={(event) => { event.stopPropagation(); onTeachSplit?.(email); }}
+                      >{placementProvenanceLabel(email)}</button>
+                    {/if}
+                    {#if sectionTotals}
+                      <button
+                        type="button"
+                        class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md disabled:opacity-50"
+                        style="color: var(--text-tertiary)"
+                        disabled={actionsDisabled}
+                        aria-label="Teach Split Inbox for this conversation"
+                        title="Teach Split Inbox"
+                        onclick={(event) => { event.stopPropagation(); onTeachSplit?.(email); }}
+                      ><Icon name="target" size={16} /></button>
                     {/if}
                     {#if email.is_subscription}
                       <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300">

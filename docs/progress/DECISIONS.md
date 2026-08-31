@@ -1016,3 +1016,32 @@ add a new entry that explicitly supersedes the old one.
   outgoing message. Persistent policies, delegated/subscribed calendars,
   scheduling links, holds, event creation, and booking workflows require a
   separately reviewed contract.
+
+## D-051 — Focused/Other training is an inspectable local rule ledger
+
+- Date: 2026-08-31
+- Status: accepted
+- Decision: Persist only explicit exact-account conversation, sender, or exact
+  domain placement rules derived by the server from an owned synchronized Inbox
+  anchor. Resolve conversation before sender before domain before the existing
+  deterministic system placement, and join the winning enabled rule before
+  split totals, ranking, windowing, or pagination. Expose its safe scope,
+  revision, and provenance in the Inbox and an editable rule manager. Apply
+  mutations with optimistic revisions and make immediate Undo restore the
+  exact prior rule state before authoritatively reloading both sections.
+- Reason: Training that only rearranges loaded rows produces false totals and
+  missing pages, while opaque classifier feedback cannot be inspected,
+  corrected, or bounded to one connected account. Provider labels and AI
+  analysis also have separate semantics and lifecycles; rewriting either would
+  make a local display preference unexpectedly mutate mail or background
+  classification.
+- Consequence: A narrow human instruction can intentionally override every
+  broader human or system signal without hiding, archiving, relabeling, or
+  moving the message at Gmail. Conversation rules continue to cover later
+  synchronized replies in the same provider thread; sender and exact-domain
+  rules cover existing and future synchronized Inbox anchors for only that
+  account. Selectors remain server-derived, domains do not imply subdomains,
+  raw provider thread identifiers never leave the API, disabled rules remain
+  inspectable, and conflict or session ambiguity fails closed. Wildcards,
+  cross-account rules, arbitrary selector entry, provider training, and AI
+  policy changes require a separately reviewed contract.

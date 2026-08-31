@@ -52,8 +52,11 @@
     nextInboxSectionFocus,
     normalizeInboxSectionResult,
   } from '../lib/focusedInbox.js';
+  import { inboxRuleUndoOperation } from '../lib/inboxPlacementRules.js';
   import EmailList from '../components/email/EmailList.svelte';
   import EmailTable from '../components/email/EmailTable.svelte';
+  import InboxRuleManager from '../components/email/InboxRuleManager.svelte';
+  import InboxRulePicker from '../components/email/InboxRulePicker.svelte';
   import EmailView from '../components/email/EmailView.svelte';
   import ConversationView from '../components/email/ConversationView.svelte';
   import LabelPicker from '../components/email/LabelPicker.svelte';
@@ -158,6 +161,12 @@
   let labelPicker = $state(null);
   let focusSectionTotals = $state(null);
   let pendingActionRestoreFocus = null;
+  let inboxRulePickerOpen = $state(false);
+  let inboxRuleTarget = $state(null);
+  let inboxRuleManagerOpen = $state(false);
+  let inboxRuleManagerRefreshToken = $state(0);
+  let inboxRuleAnnouncement = $state('');
+  let inboxRuleMutationGeneration = 0;
 
   function registerEmailViewTransitionGuard(guard) {
     emailViewTransitionGuard = typeof guard === 'function' ? guard : null;
@@ -293,6 +302,16 @@
         isEnabled: () => Boolean(focusSectionTotals && get(emails).length > 0),
         disabledReason: 'Split Inbox is not active',
       },
+      'inbox.teachSplit': {
+        run: openFocusedInboxRulePicker,
+        isEnabled: () => Boolean(ruleActionsAvailable() && currentInboxRuleTarget()),
+        disabledReason: 'Focus a Split Inbox conversation first',
+      },
+      'inbox.manageSplitRules': {
+        run: openInboxRuleManager,
+        isEnabled: ruleActionsAvailable,
+        disabledReason: 'Split Inbox rules are available in the standard Split Inbox',
+      },
       'inbox.undo': {
         run: runLatestUndo,
         isEnabled: () => Boolean(latestUndo && latestUndo.expiresAt > Date.now()),
@@ -354,6 +373,11 @@
     selectedThread = null;
     focusedEmailId = null;
     pendingActionRestoreFocus = null;
+    inboxRuleMutationGeneration += 1;
+    inboxRulePickerOpen = false;
+    inboxRuleTarget = null;
+    inboxRuleManagerOpen = false;
+    inboxRuleAnnouncement = '';
     emailLoading = false;
     loadingMore = false;
     focusSectionTotals = null;
@@ -397,6 +421,159 @@
     } else {
       queueMicrotask(() => focusEmailRow(document.querySelector('.inbox-page'), nextId));
     }
+  }
+
+  function ruleActionsAvailable() {
+    return inboxSessionIsCurrent()
+      && datasetAuthoritative
+      && !datasetUpdating
+      && Boolean(focusSectionTotals);
+  }
+
+  function currentInboxRuleTarget() {
+    const id = actionTargetId();
+    return get(emails).find(email => Number(email.id) === Number(id)) || null;
+  }
+
+  function openFocusedInboxRulePicker() {
+    const target = currentInboxRuleTarget();
+    if (target) openInboxRulePicker(target);
+  }
+
+  function openInboxRulePicker(email) {
+    if (!ruleActionsAvailable() || !email) return;
+    focusedEmailId = email.id;
+    inboxRuleTarget = email;
+    inboxRulePickerOpen = true;
+  }
+
+  function openInboxRuleManager() {
+    if (!ruleActionsAvailable()) return;
+    inboxRuleManagerOpen = true;
+  }
+
+  function prepareRuleFocusRestore(email, preferredPlacement = null) {
+    if (!email || !committedDatasetKey) return;
+    pendingActionRestoreFocus = {
+      datasetKey: committedDatasetKey,
+      conversationKey: email.conversation_key || null,
+      emailId: email.id,
+      expectedFocusedId: focusedEmailId,
+      restoreSelection: Number(get(selectedEmailId)) === Number(email.id),
+      preferredPlacement,
+      allowFallback: true,
+    };
+  }
+
+  async function refreshAfterInboxRuleChange(email, preferredPlacement = null) {
+    prepareRuleFocusRestore(email, preferredPlacement);
+    const refreshed = await refreshDataset();
+    if (!refreshed) {
+      pendingActionRestoreFocus = null;
+      throw new Error('The rule was saved, but Split Inbox could not refresh. Try again to confirm the result.');
+    }
+    return true;
+  }
+
+  async function refreshAfterInboxRuleConflict() {
+    if (!inboxSessionIsCurrent()) return false;
+    const refreshed = await refreshDataset();
+    if (refreshed) {
+      inboxRuleAnnouncement = 'Split Inbox refreshed with the latest rule state.';
+    }
+    return refreshed;
+  }
+
+  async function restoreInboxRuleDialogFocus() {
+    await tick();
+    if (inboxSessionIsCurrent()) focusInboxSelection();
+  }
+
+  function scheduleInboxRuleUndo(mutation, focusEmail) {
+    const operation = inboxRuleUndoOperation(mutation);
+    if (!operation) return;
+    const undoId = `inbox-rule:${mutation.rule.id}:${mutation.rule.revision}`;
+    let undoPromise = null;
+    const run = () => {
+      if (undoPromise) return undoPromise;
+      undoPromise = undoInboxRule(undoId, operation, focusEmail).finally(() => {
+        undoPromise = null;
+      });
+      return undoPromise;
+    };
+    latestUndo = {
+      kind: 'inbox-rule',
+      requestId: undoId,
+      expiresAt: Date.now() + 10_000,
+      run,
+    };
+    showToast('Split Inbox rule saved. Inbox refreshed.', 'success', 10_000, {
+      actionLabel: 'Undo rule change',
+      onAction: run,
+      dismissLabel: 'Dismiss rule confirmation',
+    });
+  }
+
+  async function undoInboxRule(undoId, operation, focusEmail) {
+    if (!inboxSessionIsCurrent() || latestUndo?.requestId !== undoId) return false;
+    const generation = ++inboxRuleMutationGeneration;
+    try {
+      if (operation.type === 'delete') {
+        await api.deleteInboxPlacementRule(operation.ruleId, operation.revision);
+      } else {
+        await api.updateInboxPlacementRule(operation.ruleId, operation.payload);
+      }
+      if (
+        !inboxSessionIsCurrent()
+        || generation !== inboxRuleMutationGeneration
+        || latestUndo?.requestId !== undoId
+      ) return false;
+      await refreshAfterInboxRuleChange(focusEmail);
+      if (!inboxSessionIsCurrent() || generation !== inboxRuleMutationGeneration) return false;
+      latestUndo = null;
+      inboxRuleManagerRefreshToken += 1;
+      inboxRuleAnnouncement = 'Split Inbox rule change undone. Focused and Other counts refreshed.';
+      showToast('Split Inbox rule change undone. Inbox refreshed.', 'success');
+      return true;
+    } catch (error) {
+      if (inboxSessionIsCurrent() && generation === inboxRuleMutationGeneration) {
+        if (Number(error?.status) === 409) {
+          latestUndo = null;
+          inboxRuleManagerRefreshToken += 1;
+          await refreshDataset();
+        }
+        inboxRuleAnnouncement = Number(error?.status) === 409
+          ? 'Undo unavailable because this rule changed in another session.'
+          : 'Rule Undo failed. Try again while the Undo action remains available.';
+        showToast(error?.message || inboxRuleAnnouncement, 'error');
+      }
+      return false;
+    }
+  }
+
+  async function acceptInboxRuleMutation({ mutation, candidate = null }) {
+    if (!inboxSessionIsCurrent()) return false;
+    const generation = ++inboxRuleMutationGeneration;
+    const focusEmail = candidate
+      ? inboxRuleTarget
+      : currentInboxRuleTarget();
+    await refreshAfterInboxRuleChange(focusEmail, mutation.rule.placement);
+    if (!inboxSessionIsCurrent() || generation !== inboxRuleMutationGeneration) return false;
+    scheduleInboxRuleUndo(mutation, focusEmail);
+    inboxRuleAnnouncement = `Rule saved for ${mutation.rule.account_email}. Focused and Other counts refreshed.`;
+    return true;
+  }
+
+  async function acceptInboxRuleDelete({ rule }) {
+    if (!inboxSessionIsCurrent()) return false;
+    const generation = ++inboxRuleMutationGeneration;
+    const focusEmail = currentInboxRuleTarget();
+    await refreshAfterInboxRuleChange(focusEmail);
+    if (!inboxSessionIsCurrent() || generation !== inboxRuleMutationGeneration) return false;
+    latestUndo = null;
+    inboxRuleAnnouncement = `Rule deleted for ${rule.account_email}. Focused and Other counts refreshed.`;
+    showToast('Split Inbox rule deleted. Inbox refreshed.', 'success');
+    return true;
   }
 
   $effect(() => {
@@ -652,10 +829,14 @@
           const pending = pendingActionRestoreFocus;
           pendingActionRestoreFocus = null;
           if (pending.datasetKey === snapshot.key) {
-            const restored = result.emails.find(email =>
+            const exactRestore = result.emails.find(email =>
               (pending.conversationKey
                 && email.conversation_key === pending.conversationKey)
               || Number(email.id) === Number(pending.emailId));
+            const restored = exactRestore || (pending.allowFallback
+              ? result.emails.find(email => email.inbox_placement === pending.preferredPlacement)
+                || result.emails[0]
+              : null);
             const focusStillOwned = [
               pending.expectedFocusedId,
               pending.emailId,
@@ -664,9 +845,11 @@
               || (value === null && focusedEmailId === null));
             if (restored && focusStillOwned) {
               focusedEmailId = restored.id;
-              if (pending.restoreSelection) selectedEmailId.set(restored.id);
+              if (pending.restoreSelection && exactRestore) selectedEmailId.set(restored.id);
               await tick();
-              if (listRequestIsCurrent(requestId)
+              if (!inboxRulePickerOpen
+                && !inboxRuleManagerOpen
+                && listRequestIsCurrent(requestId)
                 && focusedEmailId === restored.id) {
                 focusInboxSelection();
               }
@@ -1875,6 +2058,8 @@
           onLabel={openLabelPicker}
           allowMove={moveAvailable}
           onSnooze={openSnoozePicker}
+          onTeachSplit={openInboxRulePicker}
+          onManageSplitRules={openInboxRuleManager}
           onLoadMore={handleLoadMore}
         />
       </div>
@@ -1942,6 +2127,8 @@
         onLabel={openLabelPicker}
         allowMove={moveAvailable}
         onSnooze={openSnoozePicker}
+        onTeachSplit={openInboxRulePicker}
+        onManageSplitRules={openInboxRuleManager}
         onLoadMore={handleLoadMore}
       />
     </div>
@@ -1984,6 +2171,24 @@
     {/if}
   {/if}
   </div>
+  <p class="sr-only" aria-live="polite">{inboxRuleAnnouncement}</p>
+  <InboxRulePicker
+    bind:open={inboxRulePickerOpen}
+    email={inboxRuleTarget}
+    onmutated={acceptInboxRuleMutation}
+    onconflict={refreshAfterInboxRuleConflict}
+    onfocusfallback={restoreInboxRuleDialogFocus}
+  />
+  <InboxRuleManager
+    bind:open={inboxRuleManagerOpen}
+    accounts={$accounts}
+    initialAccountId={$selectedAccountId}
+    refreshToken={inboxRuleManagerRefreshToken}
+    onmutated={acceptInboxRuleMutation}
+    ondeleted={acceptInboxRuleDelete}
+    onconflict={refreshAfterInboxRuleConflict}
+    onfocusfallback={restoreInboxRuleDialogFocus}
+  />
   <SnoozePicker
     open={Boolean(snoozeTarget)}
     email={snoozeTarget}

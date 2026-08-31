@@ -295,6 +295,34 @@ export const api = {
     }
     return request('GET', `/emails/conversations/split?${searchParams.toString()}`);
   },
+  getInboxPlacementRuleCandidate: (accountId, anchorEmailId, options = {}) => {
+    const params = new URLSearchParams({
+      account_id: String(accountId),
+      anchor_email_id: String(anchorEmailId),
+    });
+    return request('GET', `/inbox-placement-rules/candidate?${params.toString()}`, null, options);
+  },
+  listInboxPlacementRules: (accountId = null, options = {}) => {
+    const params = new URLSearchParams();
+    if (accountId !== null && accountId !== undefined && accountId !== '') {
+      params.set('account_id', String(accountId));
+    }
+    const query = params.toString();
+    return request('GET', `/inbox-placement-rules${query ? `?${query}` : ''}`, null, options);
+  },
+  createInboxPlacementRule: (payload, options = {}) =>
+    request('POST', '/inbox-placement-rules', payload, options),
+  updateInboxPlacementRule: (ruleId, payload, options = {}) =>
+    request('PUT', `/inbox-placement-rules/${encodeURIComponent(ruleId)}`, payload, options),
+  deleteInboxPlacementRule: (ruleId, revision, options = {}) => {
+    const params = new URLSearchParams({ revision: String(revision) });
+    return request(
+      'DELETE',
+      `/inbox-placement-rules/${encodeURIComponent(ruleId)}?${params.toString()}`,
+      null,
+      options,
+    );
+  },
   getEmail: (id) => request('GET', `/emails/${id}`),
   downloadAttachment: (emailId, attachmentId, options = {}) =>
     request(

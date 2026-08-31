@@ -154,8 +154,16 @@ class ConversationSummary(BaseModel):
             "low_priority",
             "unclassified",
             "direct_or_fyi",
+            "user_rule_focused",
+            "user_rule_other",
         ]
     ] = None
+    inbox_placement_source: Optional[Literal["system", "rule"]] = None
+    inbox_placement_rule_id: Optional[UUID] = None
+    inbox_placement_rule_scope: Optional[
+        Literal["conversation", "sender", "domain"]
+    ] = None
+    inbox_placement_rule_revision: Optional[int] = None
 
 
 class ConversationListResponse(BaseModel):

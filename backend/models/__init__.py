@@ -7,6 +7,7 @@ from backend.models.dashboard import DashboardSnippet
 from backend.models.draft import DraftAttachment, DraftMutation, DraftSession
 from backend.models.email import Attachment, Email, EmailLabel
 from backend.models.follow_up import AccountFollowUpPolicy, OutboundFollowUpIntent
+from backend.models.inbox_placement_rule import InboxPlacementRule
 from backend.models.mail_action import MailAction
 from backend.models.outbound_message import OutboundMessage
 from backend.models.snooze import EmailSnooze
@@ -36,6 +37,7 @@ __all__ = [
     "EmailLabel",
     "AccountFollowUpPolicy",
     "OutboundFollowUpIntent",
+    "InboxPlacementRule",
     "MailAction",
     "OutboundMessage",
     "EmailSnooze",

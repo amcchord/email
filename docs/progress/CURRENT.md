@@ -190,17 +190,29 @@ live state.
 
 ### P1 — User-trainable Focused/Other rules
 
-- State: queued for bounded product/data-contract audit on the exact Share
-  Availability closeout baseline; no implementation or migration is allocated.
-- Scope: explicit user corrections that improve future Focused/Other placement
-  without provider label mutation, opaque AI-only behavior, cross-account
-  widening, or silently overriding deterministic safety rules.
-- Acceptance: every learned rule is inspectable, reversible, exact-account,
-  conflict-defined, and reflected coherently in split counts, paging, search,
-  commands, and generated desktop/mobile QA.
-- Next: audit the existing focused-ranking contract and production UX, freeze
-  the smallest useful rule model and rollback path, then implement once with
-  focused checks and one consolidated release gate.
+- State: release candidate frozen on the exact Share Availability closeout
+  baseline. Additive migration `c1d2e3f4a5b6` is the direct child of production
+  head `b1c2d3e4f5a6`. The P0/P1 review, disposable PostgreSQL migration/query
+  checks, generated-only self-test, 835-test backend suite, 538-test frontend
+  suite, 627-module production build, and desktop/table/mobile browser pass are
+  green; browser logs and the fixture mutation audit are clean.
+- Scope: one exact-account local rule ledger with explicit conversation,
+  sender, and exact-domain scopes. Precedence is conversation over sender over
+  domain over the existing deterministic system projection. Match identity is
+  server-derived from an owned synchronized Inbox anchor; no provider label,
+  Gmail state, AI analysis, mail action, calendar state, or worker queue is
+  mutated.
+- Acceptance: every correction names the exact account and future effect,
+  remains inspectable/editable/disableable/deletable, carries visible winning
+  provenance, uses revision-guarded immediate Undo, and participates before
+  exact split counts/windowing/paging. Generated two-account desktop/table/
+  mobile/keyboard QA must prove precedence, reload persistence, conflicts,
+  retry, session isolation, exact totals, and zero provider or mail/calendar
+  operations.
+- Next: commit and push the frozen release, deploy the additive empty-table
+  migration after a protected PostgreSQL backup, perform one read-only
+  production postflight, then close the release documentation without another
+  broad test cycle.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 

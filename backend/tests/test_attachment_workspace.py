@@ -473,7 +473,7 @@ def test_attachment_email_index_model_and_migration_upgrade_downgrade(monkeypatc
     config = Config()
     config.set_main_option("script_location", str(Path(__file__).parents[2] / "alembic"))
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["b1c2d3e4f5a6"]
+    assert script.get_heads() == ["c1d2e3f4a5b6"]
     assert script.get_revision("b1c2d3e4f5a6").down_revision == "a0b1c2d3e4f5"
 
     calls = []

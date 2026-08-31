@@ -117,7 +117,7 @@ def test_snooze_migration_is_single_head_directly_after_terminal_head():
     config = Config("alembic.ini")
     config.set_main_option("script_location", "alembic")
     scripts = ScriptDirectory.from_config(config)
-    assert scripts.get_heads() == ["b1c2d3e4f5a6"]
+    assert scripts.get_heads() == ["c1d2e3f4a5b6"]
     revision = scripts.get_revision("a4b5c6d7e8f9")
     assert revision.down_revision == "f3a4b5c6d7e8"
     assert scripts.get_revision("b5c6d7e8f9a0").down_revision == "a4b5c6d7e8f9"

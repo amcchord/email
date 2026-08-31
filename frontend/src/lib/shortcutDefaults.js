@@ -67,6 +67,8 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'inbox.focused',  key: 'Shift+f', label: 'Toggle Split Inbox',     context: 'inbox', category: 'Inbox' },
   { id: 'inbox.nextSection', key: 'Shift+j', label: 'Next inbox section', context: 'inbox', category: 'Inbox' },
   { id: 'inbox.prevSection', key: 'Shift+k', label: 'Previous inbox section', context: 'inbox', category: 'Inbox' },
+  { id: 'inbox.teachSplit', key: '', label: 'Teach Split Inbox', context: 'inbox', category: 'Inbox', keywords: ['focused', 'other', 'rule', 'train'] },
+  { id: 'inbox.manageSplitRules', key: '', label: 'Manage Split Inbox rules', context: 'inbox', category: 'Inbox', keywords: ['focused', 'other', 'rule', 'train'] },
   { id: 'inbox.undo',     key: 'z',       label: 'Undo last email action', context: 'inbox', category: 'Inbox' },
   { id: 'savedViews.saveCurrent', key: '', label: 'Save current search', context: 'inbox', category: 'Saved Views', keywords: ['custom split', 'filter'] },
 

@@ -391,7 +391,7 @@ def test_follow_up_models_and_migration_are_the_direct_d7_child():
     revision = scripts.get_revision("e8f9a0b1c2d3")
     assert revision.down_revision == "d7e8f9a0b1c2"
     assert scripts.get_revision("f9a0b1c2d3e4").down_revision == "e8f9a0b1c2d3"
-    assert scripts.get_heads() == ["b1c2d3e4f5a6"]
+    assert scripts.get_heads() == ["c1d2e3f4a5b6"]
 
     migration_source = Path(revision.path).read_text()
     assert '"follow_up_requested"' in migration_source

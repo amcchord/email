@@ -710,6 +710,10 @@ async def _serialize_conversation_rows(
             thread_digest_count=digest.message_count if digest else None,
             inbox_placement=row.inbox_placement,
             inbox_placement_reason=row.inbox_placement_reason,
+            inbox_placement_source=row.inbox_placement_source,
+            inbox_placement_rule_id=row.inbox_placement_rule_id,
+            inbox_placement_rule_scope=row.inbox_placement_rule_scope,
+            inbox_placement_rule_revision=row.inbox_placement_rule_revision,
         ))
     return conversations
 

@@ -761,6 +761,42 @@ uses only persisted priority, reply, trusted-contact, delegation, subscription,
 and low-priority signals; it never calls an AI provider or moves Gmail mail.
 Owned `account_id` narrowing remains supported.
 
+Authenticated users can add an explicit local correction without changing
+Gmail labels, provider state, AI analysis, or any mail action. Every endpoint
+below is session-authenticated and returns `Cache-Control: private, no-store`:
+
+```text
+GET    /api/inbox-placement-rules?account_id={optional_owned_account}
+GET    /api/inbox-placement-rules/candidate?account_id={owned_account}&anchor_email_id={current_inbox_anchor}
+POST   /api/inbox-placement-rules
+PUT    /api/inbox-placement-rules/{rule_uuid}
+DELETE /api/inbox-placement-rules/{rule_uuid}?revision={current_revision}
+```
+
+The candidate route accepts only the exact active owned account and current
+authoritative synchronized Inbox anchor. It returns safe account, conversation,
+sender, and exact-domain display values plus any matching rules; raw provider
+thread/message selectors never leave the server. `POST` accepts a client UUID
+`create_id`, that account and anchor, one `conversation|sender|domain` scope,
+one `focused|other` placement, `enabled`, and `expected_revision`. Revision
+zero means no rule currently exists. The server derives the selector, locks the
+owned account, enforces a 500-rule account limit, and treats an exact lost-response
+replay as success. `PUT` can change only placement/enabled with the exact
+current revision; selector/scope remain immutable. `DELETE` is also revision
+guarded. Foreign, missing, inactive, or stale candidates fail closed without
+widening account ownership; conflicting revisions return 409.
+
+Enabled rules resolve before the system reason in strict order: exact
+conversation, exact sender, then exact domain. Exact domains never imply their
+subdomains. The winning rule participates inside the same authoritative SQL
+projection before section totals, ranking, windowing, and paging. Rule-backed
+conversation rows carry `inbox_placement_source="rule"`, the safe public rule
+UUID/scope/revision, and `user_rule_focused|user_rule_other`; system rows keep
+their prior reason and `inbox_placement_source="system"`. Disabled rules remain
+visible in the private ledger but do not affect placement. Immediate UI Undo
+uses the returned revision to delete a newly created rule or restore the exact
+captured prior state, then reloads both sections authoritatively.
+
 The section-specific compatibility form remains available to API clients:
 
 ```text

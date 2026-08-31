@@ -9,10 +9,23 @@ const REASON_LABELS = Object.freeze({
   low_priority: 'Low priority',
   unclassified: 'New mail',
   direct_or_fyi: 'Direct or FYI',
+  user_rule_focused: 'Personal rule',
+  user_rule_other: 'Personal rule',
 });
 
 export function placementReasonLabel(reason) {
   return REASON_LABELS[reason] || '';
+}
+
+export function placementProvenanceLabel(email = {}) {
+  if (email?.inbox_placement_source === 'rule') {
+    const scope = email?.inbox_placement_rule_scope;
+    if (scope === 'conversation') return 'Personal conversation rule';
+    if (scope === 'sender') return 'Personal sender rule';
+    if (scope === 'domain') return 'Personal domain rule';
+    return 'Personal rule';
+  }
+  return placementReasonLabel(email?.inbox_placement_reason);
 }
 
 export function isSplitInboxActive(snapshot = {}) {
