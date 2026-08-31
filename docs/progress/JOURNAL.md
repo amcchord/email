@@ -3,6 +3,67 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-31 — User-trainable Focused/Other rules
+
+### Scope
+
+Add inspectable, reversible exact-account conversation/sender/exact-domain
+corrections to Split Inbox. Preserve authoritative totals/paging and keep every
+real-mail production action read-only except the new empty local rule table.
+
+### Completed
+
+- Added additive revision `c1d2e3f4a5b6`, a private revisioned/idempotent rule
+  ledger, server-derived current-Inbox selectors, exact-account ownership,
+  500-rule limit, and strict conversation > sender > exact-domain > system
+  precedence inside the authoritative conversation query.
+- Added private/no-store candidate/list/create/replace/delete APIs, safe row
+  provenance, a first-class Rules manager, Teach Split Inbox picker, visible
+  reasons in list/table modes, exact Undo, conflicts/retry, keyboard actions,
+  and a contained mobile bottom sheet.
+- Added focused backend/frontend coverage plus a loopback-only two-account
+  `.example.test` fixture, contract self-test, and generated desktop/table/mobile
+  browser acceptance with explicit provider/mail/calendar/AI/worker/terminal
+  rejection counters.
+
+### Verification
+
+- One post-freeze `make check` passed 835 backend tests with 75 expected skips,
+  538 frontend tests, and a 627-module build. Focused finishing checks passed 20
+  backend tests, two disposable-PostgreSQL query regressions, exact
+  `b1 -> c1 -> b1 -> c1`, and the 9-test frontend rule/surface/API set plus a
+  fresh build after the browser-found mobile density correction.
+- Generated self-test and desktop list/table/picker/provenance/manager plus
+  390x844 list/picker browser QA passed. Browser logs were empty and the final
+  audit recorded zero provider/Gmail/mail/calendar/AI/worker/terminal or
+  external-network operations.
+- One bounded P0/P1 review closed malformed-sender projection, stale-manager,
+  focus/hydration, target validation, and narrow-screen issues. Diff, compile,
+  migration, link/path, and secret-scope review passed.
+
+### Production Actions
+
+- Pushed and deployed exact runtime
+  `060d4bca9db4b18ac4926679d2bbafe3f7b16736`. Validated protected pre-c1 backup
+  `/var/backups/mailapp/maildb-pre-focused-rules-20260831T1921Z.dump`,
+  1,384,447,357 bytes, mode 0600, SHA-256
+  `f6dcf760986899bbd711a03e8f9b9b8e9b25f378daa02bd1b9f2399cab183dad`,
+  then upgraded exactly `b1c2d3e4f5a6 -> c1d2e3f4a5b6`.
+- Restarted only `mailapp`, then built 627 production modules. The old process
+  exceeded its graceful-stop window and was killed; replacement PID 2184456 is
+  active with zero restarts and no post-start warning-or-higher entries. All
+  seven services and public health are healthy.
+- Anonymous rules are 401 private/no-store. Aggregate-only checks found the new
+  table empty before and after signed-in read-only Inbox/picker/manager QA; no
+  rule, message, account, provider, calendar, worker, or terminal mutation was
+  performed.
+
+### Next
+
+Observe the explicit rule workflow and choose the next bounded mail-client gap
+from real use. Keep wildcard/cross-account/provider/AI training out of scope and
+continue terminal qualification independently.
+
 ## 2026-08-31 — Truthful Share Availability snapshots
 
 ### Scope

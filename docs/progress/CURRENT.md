@@ -4,11 +4,12 @@ Last updated: 2026-08-31
 
 ## Active Objective
 
-Prepare the next bounded mail-workflow milestone around user-trainable
-Focused/Other rules without weakening the deployed deterministic split, exact
-counts, or account ownership. Keep Share Availability as an explicit truthful
-synchronized snapshot rather than a hold, event, booking link, or claim of
-live availability. Keep the deployed Attachments, Saved Views, first-class
+Operate the newly deployed user-trainable Focused/Other rules without weakening
+the deterministic split, exact counts, or account ownership, and select the
+next bounded modern-client workflow gap from observed use rather than reopening
+the finished release for minor polish. Keep Share Availability as an explicit
+truthful synchronized snapshot rather than a hold, event, booking link, or
+claim of live availability. Keep the deployed Attachments, Saved Views, first-class
 Contacts, writing, Universal Send
 & Archive, Focused/Split Inbox, and terminal track operating as durable,
 truthful workflows. Continue
@@ -19,6 +20,13 @@ write gate.
 
 ## Baseline
 
+- The deployed user-trainable Focused/Other application/runtime is
+  `060d4bca9db4b18ac4926679d2bbafe3f7b16736`. Split Inbox now supports explicit
+  exact-account conversation, sender, and exact-domain corrections with visible
+  provenance, an editable private rule ledger, revisioned mutations, and
+  immediate Undo. Rules participate before authoritative totals, ranking,
+  windowing, and paging; they never change Gmail labels, mail state, Calendar,
+  AI analysis, or worker queues. Production began with zero rules.
 - The deployed Share Availability application/runtime is
   `cf812a451c43b1a63730eaa4989d67ba0af68ba5`. Compose, reader reply, and Flow
   share one explicit picker and `Cmd/Ctrl+Shift+A` action over exact active
@@ -158,15 +166,15 @@ write gate.
 - The deployed secure-enrollment application/runtime commit is
   `8ff01848a2be2818dfd9eb88b84be9aab4befb0a`; the following closeout is docs
   only. Production and GitHub were exact and clean at the runtime boundary.
-- Production Alembic is `b1c2d3e4f5a6 (head)`, the additive Attachments index
-  child of Saved Views revision `a0b1c2d3e4f5`. The migration added no table,
-  content, or backfill. Existing Saved View/signature/follow-up/OTA state is
-  unchanged.
+- Production Alembic is `c1d2e3f4a5b6 (head)`, the additive private Inbox-rule
+  table child of Attachments revision `b1c2d3e4f5a6`. It performed no email
+  backfill or provider mutation. Existing Saved View, signature, follow-up,
+  attachment, and OTA state is unchanged.
 - All seven checked production services are active, public health is `ok`, and
-  the replacement API process has zero automatic restarts and no post-start
-  warning-or-higher entries. Production has no secure-enrollment or OTA
-  enablement, online key, approved catalog, qualified release/model pair,
-  nonzero rollout, or device update offer.
+  replacement API PID 2184456 has zero automatic restarts and no warning-or-
+  higher entries after becoming active at 19:26:06 UTC. Production has no
+  secure-enrollment or OTA enablement, online key, approved catalog, qualified
+  release/model pair, nonzero rollout, or device update offer.
 - Private firmware `main` is exact at candidate.9
   `52ba6c58ca7f17741d0d74c225f8d942b6119241`. Exact-SHA run `33412815120`
   passed release tooling, keyed RET1 and OTA1 coordinator builds, every model,
@@ -187,32 +195,6 @@ This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
 
 ## Active Work Items
-
-### P1 — User-trainable Focused/Other rules
-
-- State: release candidate frozen on the exact Share Availability closeout
-  baseline. Additive migration `c1d2e3f4a5b6` is the direct child of production
-  head `b1c2d3e4f5a6`. The P0/P1 review, disposable PostgreSQL migration/query
-  checks, generated-only self-test, 835-test backend suite, 538-test frontend
-  suite, 627-module production build, and desktop/table/mobile browser pass are
-  green; browser logs and the fixture mutation audit are clean.
-- Scope: one exact-account local rule ledger with explicit conversation,
-  sender, and exact-domain scopes. Precedence is conversation over sender over
-  domain over the existing deterministic system projection. Match identity is
-  server-derived from an owned synchronized Inbox anchor; no provider label,
-  Gmail state, AI analysis, mail action, calendar state, or worker queue is
-  mutated.
-- Acceptance: every correction names the exact account and future effect,
-  remains inspectable/editable/disableable/deletable, carries visible winning
-  provenance, uses revision-guarded immediate Undo, and participates before
-  exact split counts/windowing/paging. Generated two-account desktop/table/
-  mobile/keyboard QA must prove precedence, reload persistence, conflicts,
-  retry, session isolation, exact totals, and zero provider or mail/calendar
-  operations.
-- Next: commit and push the frozen release, deploy the additive empty-table
-  migration after a protected PostgreSQL backup, perform one read-only
-  production postflight, then close the release documentation without another
-  broad test cycle.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 
