@@ -20,6 +20,7 @@ from backend.routers import (
     calendar,
     chat,
     compose,
+    contacts,
     emails,
     events,
     follow_up,
@@ -101,6 +102,7 @@ app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(emails.router)
 app.include_router(compose.router)
+app.include_router(contacts.router)
 app.include_router(accounts.router)
 app.include_router(ai.router)
 app.include_router(todos.router)
