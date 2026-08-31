@@ -34,6 +34,7 @@ ALLOWED_MODELS = ("E1001", "E1002")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 KEY_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 VERSION_RE = re.compile(r"[A-Za-z0-9._+-]{1,48}")
+BUILD_ID_RE = re.compile(r"[0-9a-f]{40}")
 HARDWARE_REVISION_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 DESCRIPTOR_FIELDS = frozenset(
     {
@@ -68,6 +69,7 @@ class ParentBundleLink:
     catalog_generation: int
     model: str
     firmware_version: str
+    source_build_id: str
     partition_layout: str
     application_size: int
     application_sha256: str
@@ -110,6 +112,7 @@ class VerifiedOtaRelease:
             "model": self.model,
             "layout": self.layout,
             "version": self.version,
+            "target_build_id": self.parent.source_build_id,
             "firmware_size": self.firmware_size,
             "firmware_sha256": self.firmware_sha256,
             "hardware_revisions": list(self.parent.hardware_revisions),
@@ -203,6 +206,11 @@ def validate_parent_bundle_link(parent: ParentBundleLink) -> ParentBundleLink:
         or VERSION_RE.fullmatch(parent.firmware_version) is None
     ):
         raise OtaPolicyError("OTA parent firmware version is invalid")
+    if (
+        type(parent.source_build_id) is not str
+        or BUILD_ID_RE.fullmatch(parent.source_build_id) is None
+    ):
+        raise OtaPolicyError("OTA parent source build id is invalid")
     if parent.partition_layout != OTA_LAYOUT:
         raise OtaPolicyError("OTA parent partition layout is invalid")
     if (

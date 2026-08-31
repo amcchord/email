@@ -93,7 +93,7 @@ async def test_ota_capabilities_are_authenticated_read_only_and_default_locked(
     assert capabilities["state"] == "locked"
     assert capabilities["enabled"] is False
     assert capabilities["effective_offer_enabled"] is False
-    assert capabilities["event_persistence_ready"] is False
+    assert capabilities["event_persistence_ready"] is True
     assert capabilities["qualified_releases"] == []
     assert "Server-side terminal OTA is disabled." in capabilities["blockers"]
     assert response.headers["cache-control"] == "private, no-store"

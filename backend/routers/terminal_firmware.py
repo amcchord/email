@@ -142,14 +142,15 @@ async def firmware_ota_capabilities(
 ) -> dict[str, Any]:
     """Expose the authenticated, read-only OTA lock state.
 
-    No release evidence or event ledger is wired in this milestone, so the
-    policy cannot become ready even if a single configuration flag is changed.
+    Durable event persistence is installed, but no release is assumed merely
+    because storage exists. Exact descriptor/parent/HIL evidence is evaluated
+    again when an owner creates an attempt and on every device delivery.
     """
 
     policy = evaluate_ota_policy(
         settings,
         releases=(),
-        event_persistence_ready=False,
+        event_persistence_ready=True,
     )
     response.headers.update(_PRIVATE_HEADERS)
     return policy.as_capabilities()

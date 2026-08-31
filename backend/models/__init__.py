@@ -15,6 +15,8 @@ from backend.models.terminal import (
     TerminalDevice,
     TerminalDeviceCredential,
     TerminalEnrollmentAttempt,
+    TerminalOtaAttempt,
+    TerminalOtaEvent,
     TerminalSettings,
     TerminalWebDisplay,
 )
@@ -43,6 +45,8 @@ __all__ = [
     "TerminalDevice",
     "TerminalDeviceCredential",
     "TerminalEnrollmentAttempt",
+    "TerminalOtaAttempt",
+    "TerminalOtaEvent",
     "TerminalBatterySample",
     "TerminalWebDisplay",
     "DashboardSnippet",

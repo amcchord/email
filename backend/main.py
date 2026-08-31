@@ -28,6 +28,7 @@ from backend.routers import (
     terminal_admin,
     terminal_enrollment,
     terminal_firmware,
+    terminal_ota,
     todos,
 )
 from backend.services.attachment_cache_maintenance import attachment_cache_maintenance_loop
@@ -108,6 +109,7 @@ app.include_router(snoozes.router)
 app.include_router(terminal_admin.router)
 app.include_router(terminal_enrollment.router)
 app.include_router(terminal_firmware.router)
+app.include_router(terminal_ota.router)
 app.include_router(terminal.router)
 
 

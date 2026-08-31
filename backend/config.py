@@ -28,6 +28,12 @@ class Settings(BaseSettings):
     # qualification, and durable server-side event persistence all agree.
     terminal_ota_enabled: bool = False
     terminal_ota_qualified_releases: str = "{}"
+    # Rollout is an independent gate: enablement + HIL never implies 100%.
+    terminal_ota_rollout_percentage: int = 0
+    terminal_ota_attempt_ttl_seconds: int = 3600
+    terminal_ota_telemetry_max_age_seconds: int = 300
+    terminal_ota_min_battery_pct: int = 80
+    terminal_ota_min_battery_mv: int = 4000
     # RET1 enrollment is an independent trust boundary from offline firmware
     # release signing. Production defaults remain locked until an operator
     # supplies an exact HTTPS base URL, an online P-256 key via a protected

@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -115,6 +116,25 @@ class TerminalDevice(Base):
     last_secure_checkin_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # OTA qualification is revision-specific. This value is supplied by the
+    # authenticated owner; it is never inferred from model, USB, or firmware.
+    hardware_revision: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    hardware_revision_confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # One coherent, active-credential OTA poll snapshot. Keeping these fields
+    # separate from ordinary rendering telemetry prevents stale/mixed headers
+    # from authorizing an update.
+    last_ota_fw_version: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    last_ota_build_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    last_ota_partition: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    last_ota_boot_count: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    last_ota_battery_mv: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_ota_battery_pct: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_ota_external_power: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    last_ota_telemetry_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
@@ -139,6 +159,26 @@ class TerminalDevice(Base):
             "AND enrollment_activated_at IS NOT NULL)",
             name="ck_terminal_devices_enrolled_shape",
         ),
+        CheckConstraint(
+            "(hardware_revision IS NULL AND hardware_revision_confirmed_at IS NULL) OR "
+            "(hardware_revision ~ '^[A-Za-z0-9._-]{1,64}$' "
+            "AND hardware_revision_confirmed_at IS NOT NULL)",
+            name="ck_terminal_devices_hardware_revision",
+        ),
+        CheckConstraint(
+            "(last_ota_telemetry_at IS NULL AND last_ota_fw_version IS NULL "
+            "AND last_ota_build_id IS NULL AND last_ota_partition IS NULL "
+            "AND last_ota_boot_count IS NULL AND last_ota_battery_mv IS NULL "
+            "AND last_ota_battery_pct IS NULL AND last_ota_external_power IS NULL) OR "
+            "(last_ota_telemetry_at IS NOT NULL "
+            "AND last_ota_fw_version ~ '^[A-Za-z0-9._+-]{1,48}$' "
+            "AND last_ota_build_id ~ '^[0-9a-f]{40}$' "
+            "AND last_ota_partition IN ('ota_0','ota_1') "
+            "AND last_ota_boot_count > 0 "
+            "AND last_ota_battery_mv BETWEEN 2500 AND 5000 "
+            "AND last_ota_battery_pct BETWEEN 0 AND 100)",
+            name="ck_terminal_devices_ota_telemetry",
+        ),
         Index("ix_terminal_devices_user_last_seen", "user_id", "last_seen_at"),
         Index("ix_terminal_devices_mac", "mac"),
         Index(
@@ -147,6 +187,213 @@ class TerminalDevice(Base):
             unique=True,
             postgresql_where=text("enrollment_state <> 'legacy'"),
         ),
+    )
+
+
+class TerminalOtaAttempt(Base):
+    """One immutable OTA offer decision and its latest durable state."""
+
+    __tablename__ = "terminal_ota_attempts"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    attempt_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, default=uuid4)
+    offer_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, default=uuid4)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    device_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("terminal_devices.id", ondelete="CASCADE"), nullable=False
+    )
+    credential_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("terminal_device_credentials.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    client_request_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="offered", server_default=text("'offered'")
+    )
+    last_sequence: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    has_event_gap: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+
+    descriptor_release_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    parent_release_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    signing_key_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    catalog_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    device_model: Mapped[str] = mapped_column(String(16), nullable=False)
+    hardware_revision: Mapped[str] = mapped_column(String(64), nullable=False)
+    partition_layout: Mapped[str] = mapped_column(String(16), nullable=False)
+    target_version: Mapped[str] = mapped_column(String(48), nullable=False)
+    target_build_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    firmware_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    firmware_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    descriptor_signature_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    source_version: Mapped[str] = mapped_column(String(48), nullable=False)
+    source_build_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_partition: Mapped[str] = mapped_column(String(8), nullable=False)
+    source_boot_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    offered_battery_mv: Mapped[int] = mapped_column(Integer, nullable=False)
+    offered_battery_pct: Mapped[int] = mapped_column(Integer, nullable=False)
+    offered_external_power: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    rollout_percentage: Mapped[int] = mapped_column(Integer, nullable=False)
+    cohort_bucket: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    terminal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    user = relationship("User", backref="terminal_ota_attempts")
+    device = relationship("TerminalDevice", backref="ota_attempts")
+    credential = relationship("TerminalDeviceCredential")
+
+    __table_args__ = (
+        UniqueConstraint("attempt_id", name="uq_terminal_ota_attempts_attempt_id"),
+        UniqueConstraint("offer_id", name="uq_terminal_ota_attempts_offer_id"),
+        UniqueConstraint(
+            "user_id", "client_request_id", name="uq_terminal_ota_attempts_user_request"
+        ),
+        CheckConstraint(
+            "state IN ('offered','downloading','staged','booted_pending_validation',"
+            "'succeeded','failed','rolled_back','recovery_required','expired','cancelled')",
+            name="ck_terminal_ota_attempts_state",
+        ),
+        CheckConstraint(
+            "last_sequence >= 0 AND last_sequence < 4294967296",
+            name="ck_terminal_ota_attempts_sequence",
+        ),
+        CheckConstraint(
+            "request_fingerprint ~ '^[0-9a-f]{64}$' AND "
+            "descriptor_release_id ~ '^[0-9a-f]{64}$' AND "
+            "parent_release_id ~ '^[0-9a-f]{64}$' AND "
+            "target_build_id ~ '^[0-9a-f]{40}$' AND "
+            "source_build_id ~ '^[0-9a-f]{40}$' AND "
+            "firmware_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "descriptor_signature_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_terminal_ota_attempts_hashes",
+        ),
+        CheckConstraint(
+            "device_model IN ('E1001','E1002') AND partition_layout = 'ab-v1' "
+            "AND hardware_revision ~ '^[A-Za-z0-9._-]{1,64}$'",
+            name="ck_terminal_ota_attempts_target",
+        ),
+        CheckConstraint(
+            "source_partition IN ('ota_0','ota_1') "
+            "AND source_boot_count > 0 AND source_boot_count < 4294967296",
+            name="ck_terminal_ota_attempts_source",
+        ),
+        CheckConstraint(
+            "firmware_size > 0 AND firmware_size <= 3145728 "
+            "AND catalog_generation > 0",
+            name="ck_terminal_ota_attempts_release",
+        ),
+        CheckConstraint(
+            "offered_battery_mv BETWEEN 2500 AND 5000 "
+            "AND offered_battery_pct BETWEEN 0 AND 100",
+            name="ck_terminal_ota_attempts_power",
+        ),
+        CheckConstraint(
+            "rollout_percentage BETWEEN 1 AND 100 "
+            "AND cohort_bucket BETWEEN 0 AND 9999 "
+            "AND cohort_bucket < rollout_percentage * 100",
+            name="ck_terminal_ota_attempts_cohort",
+        ),
+        CheckConstraint(
+            "(state IN ('succeeded','failed','rolled_back','recovery_required','expired','cancelled') "
+            "AND terminal_at IS NOT NULL) OR "
+            "(state IN ('offered','downloading','staged','booted_pending_validation') "
+            "AND terminal_at IS NULL)",
+            name="ck_terminal_ota_attempts_terminal_shape",
+        ),
+        Index("ix_terminal_ota_attempts_user_created", "user_id", "created_at"),
+        Index("ix_terminal_ota_attempts_device_created", "device_id", "created_at"),
+        Index(
+            "uq_terminal_ota_attempts_active_device",
+            "device_id",
+            unique=True,
+            postgresql_where=text(
+                "state IN ('offered','downloading','staged','booted_pending_validation')"
+            ),
+        ),
+    )
+
+
+class TerminalOtaEvent(Base):
+    """Append-only normalized device acknowledgement for one OTA attempt."""
+
+    __tablename__ = "terminal_ota_events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    event_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    attempt_row_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("terminal_ota_attempts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sequence: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    transition_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    running_version: Mapped[str] = mapped_column(String(48), nullable=False)
+    running_build_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    running_partition: Mapped[str] = mapped_column(String(8), nullable=False)
+    boot_count: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reset_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+
+    attempt = relationship("TerminalOtaAttempt", backref="events")
+
+    __table_args__ = (
+        UniqueConstraint("event_id", name="uq_terminal_ota_events_event_id"),
+        UniqueConstraint(
+            "attempt_row_id", "sequence", name="uq_terminal_ota_events_attempt_sequence"
+        ),
+        CheckConstraint(
+            "schema_version = 1 AND sequence > 0 AND sequence < 4294967296",
+            name="ck_terminal_ota_events_sequence",
+        ),
+        CheckConstraint(
+            "state IN ('downloading','staged','booted_pending_validation','succeeded',"
+            "'failed','rolled_back','recovery_required')",
+            name="ck_terminal_ota_events_state",
+        ),
+        CheckConstraint(
+            "payload_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "running_build_id ~ '^[0-9a-f]{40}$'",
+            name="ck_terminal_ota_events_hashes",
+        ),
+        CheckConstraint(
+            "transition_kind IN ('advance','advance_with_gap')",
+            name="ck_terminal_ota_events_transition",
+        ),
+        CheckConstraint(
+            "running_partition IN ('ota_0','ota_1') "
+            "AND boot_count > 0 AND boot_count < 4294967296",
+            name="ck_terminal_ota_events_runtime",
+        ),
+        CheckConstraint(
+            "(state IN ('failed','rolled_back','recovery_required') AND error_code IS NOT NULL) OR "
+            "(state NOT IN ('failed','rolled_back','recovery_required') AND error_code IS NULL)",
+            name="ck_terminal_ota_events_error_shape",
+        ),
+        Index("ix_terminal_ota_events_attempt_received", "attempt_row_id", "received_at"),
     )
 
 

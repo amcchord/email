@@ -167,6 +167,7 @@ class VerifiedModel:
     hardware_revisions: tuple[str, ...]
     browser_flash_qualified: bool
     panel_qualified: bool
+    ota_eligible: bool
     artifacts: dict[str, VerifiedArtifact]
     protected_ranges: tuple[dict[str, Any], ...]
 
@@ -200,6 +201,7 @@ class VerifiedBundle:
     source_date_epoch: int
     manifest_schema_version: int
     serial_enrollment: VerifiedSerialEnrollment
+    ota_eligible: bool
     manifest_bytes: bytes
     signature_bytes: bytes
     payload_root: Path
@@ -234,19 +236,19 @@ def _strict_json_equal(actual: Any, expected: Any) -> bool:
 def _validate_manifest_security(
     schema_version: int,
     security: Any,
-) -> VerifiedSerialEnrollment:
+) -> tuple[VerifiedSerialEnrollment, bool]:
     base_keys = {"signed", "ota_eligible", "reason"}
     expected_keys = base_keys if schema_version == 1 else base_keys | {"serial_enrollment"}
     if (
         not isinstance(security, dict)
         or set(security) != expected_keys
         or security.get("signed") is not True
-        or security.get("ota_eligible") is not False
+        or type(security.get("ota_eligible")) is not bool
         or not isinstance(security.get("reason"), str)
     ):
         raise FirmwareArtifactError("firmware security state is not browser-installable")
     if schema_version == 1:
-        return LEGACY_SERIAL_ENROLLMENT
+        return LEGACY_SERIAL_ENROLLMENT, security["ota_eligible"]
 
     claim = security["serial_enrollment"]
     expected_claim_keys = {
@@ -281,13 +283,16 @@ def _validate_manifest_security(
     elif key_id is not None or public_key_sha256 is not None:
         raise FirmwareArtifactError("disabled serial enrollment declares trust material")
 
-    return VerifiedSerialEnrollment(
-        protocol="RET1",
-        enabled=enabled,
-        trust_key_id=key_id,
-        public_key_sha256=public_key_sha256,
-        identity_strength="physical_cable_only",
-        attestation=False,
+    return (
+        VerifiedSerialEnrollment(
+            protocol="RET1",
+            enabled=enabled,
+            trust_key_id=key_id,
+            public_key_sha256=public_key_sha256,
+            identity_strength="physical_cable_only",
+            attestation=False,
+        ),
+        security["ota_eligible"],
     )
 
 
@@ -724,8 +729,8 @@ def _validate_model(
         raise FirmwareArtifactError("manifest panel qualification is invalid")
     if type(model["browser_flash_qualified"]) is not bool:
         raise FirmwareArtifactError("manifest browser qualification is invalid")
-    if model["ota_eligible"] is not False:
-        raise FirmwareArtifactError("firmware is not approved for OTA installation")
+    if type(model["ota_eligible"]) is not bool:
+        raise FirmwareArtifactError("firmware OTA eligibility is invalid")
     revisions = model["hardware_revisions"]
     if not isinstance(revisions, list) or any(
         not isinstance(value, str)
@@ -894,6 +899,14 @@ def _validate_model(
         or not revisions
     ):
         raise FirmwareArtifactError("browser qualification exceeds model evidence")
+    ota_eligible = model["ota_eligible"]
+    if ota_eligible and (
+        environment not in {"reterminal_e1001", "reterminal_e1002"}
+        or model["panel_qualified"] is not True
+        or not revisions
+        or constraint["partition_layout"] != "ab-v1"
+    ):
+        raise FirmwareArtifactError("OTA eligibility exceeds model evidence")
     return VerifiedModel(
         environment=environment,
         model=constraint["model"],
@@ -903,6 +916,7 @@ def _validate_model(
         hardware_revisions=tuple(revisions),
         browser_flash_qualified=qualified,
         panel_qualified=model["panel_qualified"],
+        ota_eligible=ota_eligible,
         artifacts=artifacts,
         protected_ranges=protected,
     )
@@ -985,7 +999,7 @@ def _validate_bundle(
         raise FirmwareArtifactError("firmware chip or flash contract is invalid")
     if not isinstance(manifest["toolchain"], dict):
         raise FirmwareArtifactError("firmware toolchain metadata is invalid")
-    serial_enrollment = _validate_manifest_security(
+    serial_enrollment, release_ota_eligible = _validate_manifest_security(
         manifest_schema_version,
         manifest["security"],
     )
@@ -1075,6 +1089,7 @@ def _validate_bundle(
         source_date_epoch=manifest["source_date_epoch"],
         manifest_schema_version=manifest_schema_version,
         serial_enrollment=serial_enrollment,
+        ota_eligible=release_ota_eligible,
         manifest_bytes=manifest_bytes,
         signature_bytes=signature,
         payload_root=payload_root,

@@ -1000,7 +1000,24 @@ async def scoped_terminal_schedule(
         device=device,
         settings=terminal_settings,
     )
-    schedule_etag = '"sched-' + image_etag.strip('"').removeprefix("img-") + '"'
+    # OTA is optional and active-credential-only. Import locally so the OTA
+    # router can reuse this module's established token format without a module
+    # initialization cycle.
+    from backend.routers.terminal_ota import schedule_offer
+
+    firmware_offer = await schedule_offer(
+        db,
+        public_id=public_id,
+        credential_token=credential_token,
+        request=request,
+    )
+    schedule_identity = image_etag.strip('"').removeprefix("img-")
+    if firmware_offer is not None:
+        offer_digest = hashlib.sha256(
+            json.dumps(firmware_offer, separators=(",", ":")).encode("ascii")
+        ).hexdigest()
+        schedule_identity += f"-ota-{offer_digest}"
+    schedule_etag = f'"sched-{schedule_identity}"'
     headers = {**DEVICE_HEADERS, "ETag": schedule_etag}
     if (request.headers.get("if-none-match") or "").strip() == schedule_etag:
         return Response(status_code=304, headers=headers)
@@ -1014,26 +1031,26 @@ async def scoped_terminal_schedule(
     image_url = f"/terminal/device/{public_id}/{credential_token}/image.bmp"
     if resolved_variant.query:
         image_url += f"?variant={resolved_variant.query}"
-    return Response(
-        content=json.dumps(
-            {
-                "schema_version": 1,
-                "server_time_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "next_checkin_sec": next_checkin_sec,
-                "next_checkin_utc": (now + timedelta(seconds=next_checkin_sec)).strftime(
-                    "%Y-%m-%dT%H:%M:%SZ"
-                ),
-                "variant": resolved_variant.query or "spectra6_800x480",
-                "image": {
-                    "url": image_url,
-                    "etag": image_etag,
-                    "format": resolved_variant.image_format,
-                    "bytes": len(body),
-                },
-                "message": f"Hello {device.name}" if device.name else "Terminal ready",
-            },
-            separators=(",", ":"),
+    payload = {
+        "schema_version": 1,
+        "server_time_utc": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "next_checkin_sec": next_checkin_sec,
+        "next_checkin_utc": (now + timedelta(seconds=next_checkin_sec)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
         ),
+        "variant": resolved_variant.query or "spectra6_800x480",
+        "image": {
+            "url": image_url,
+            "etag": image_etag,
+            "format": resolved_variant.image_format,
+            "bytes": len(body),
+        },
+        "message": f"Hello {device.name}" if device.name else "Terminal ready",
+    }
+    if firmware_offer is not None:
+        payload["firmware"] = firmware_offer
+    return Response(
+        content=json.dumps(payload, separators=(",", ":")),
         media_type="application/json",
         headers=headers,
     )

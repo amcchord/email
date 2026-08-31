@@ -14,7 +14,7 @@ from io import BytesIO
 from typing import Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from PIL import Image
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
@@ -25,11 +25,13 @@ from backend.database import get_db
 from backend.models.terminal import (
     TerminalBatterySample,
     TerminalDevice,
+    TerminalOtaAttempt,
     TerminalSettings,
     TerminalWebDisplay,
 )
 from backend.models.user import User
-from backend.routers.auth import get_current_user
+from backend.routers.auth import get_current_user, limiter
+from backend.routers.terminal_enrollment import _require_owner_mutation
 from backend.services.eink.ha_client import (
     HAClientError,
     fetch_ha_states,
@@ -159,6 +161,8 @@ class TerminalDeviceResponse(BaseModel):
     name: str
     variant: Optional[str]
     hardware_model: Optional[str] = None
+    hardware_revision: Optional[str] = None
+    hardware_revision_confirmed_at: Optional[datetime] = None
     enrollment_state: str
     enrollment_generation: int
     last_secure_checkin_at: Optional[datetime] = None
@@ -189,6 +193,9 @@ class TerminalDeviceUpdate(BaseModel):
     #   - integer in [30, 21600] -> set override
     refresh_interval_sec: Optional[int] = Field(default=None)
     refresh_interval_clear: bool = False
+    # Explicit owner confirmation. Empty/null clears the claim; no value is
+    # inferred from model, USB, or running firmware.
+    hardware_revision: Optional[str] = Field(default=None, max_length=64)
 
 
 class AtAGlanceExperienceResponse(BaseModel):
@@ -347,6 +354,8 @@ def _serialize_device(
         name=d.name or "",
         variant=d.variant,
         hardware_model=d.hardware_model,
+        hardware_revision=d.hardware_revision,
+        hardware_revision_confirmed_at=d.hardware_revision_confirmed_at,
         enrollment_state=d.enrollment_state or "legacy",
         enrollment_generation=d.enrollment_generation or 0,
         last_secure_checkin_at=d.last_secure_checkin_at,
@@ -606,24 +615,55 @@ async def list_devices(
 
 
 @router.patch("/devices/{device_id}", response_model=TerminalDeviceResponse)
+@limiter.limit("30/minute")
 async def update_device(
+    request: Request,
     device_id: int,
     payload: TerminalDeviceUpdate,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(TerminalDevice).where(
+    device = await db.scalar(
+        select(TerminalDevice)
+        .where(
             TerminalDevice.id == device_id,
             TerminalDevice.user_id == user.id,
         )
+        .with_for_update()
     )
-    device = result.scalar_one_or_none()
     if device is None:
         raise HTTPException(status_code=404, detail="Device not found")
 
     if payload.name is not None:
         device.name = payload.name.strip()[:200]
+    if "hardware_revision" in payload.model_fields_set:
+        _require_owner_mutation(request)
+        active_attempt = await db.scalar(
+            select(TerminalOtaAttempt).where(
+                TerminalOtaAttempt.device_id == device.id,
+                TerminalOtaAttempt.state.in_(
+                    ("offered", "downloading", "staged", "booted_pending_validation")
+                ),
+            )
+        )
+        if active_attempt is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Hardware revision cannot change during an active OTA attempt",
+            )
+        revision = (payload.hardware_revision or "").strip()
+        if revision and (
+            len(revision) > 64
+            or any(
+                not (character.isascii() and (character.isalnum() or character in "._-"))
+                for character in revision
+            )
+        ):
+            raise HTTPException(status_code=400, detail="Hardware revision is invalid")
+        device.hardware_revision = revision or None
+        device.hardware_revision_confirmed_at = (
+            datetime.now(timezone.utc) if revision else None
+        )
     if payload.content_type is not None:
         ct = payload.content_type.strip().lower()
         if ct not in _VALID_CONTENT_KEYS:

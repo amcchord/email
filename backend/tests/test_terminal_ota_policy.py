@@ -31,6 +31,7 @@ def _parent(**overrides) -> ParentBundleLink:
         "catalog_generation": 7,
         "model": "E1002",
         "firmware_version": "0.3.0",
+        "source_build_id": "7" * 40,
         "partition_layout": "ab-v1",
         "application_size": len(FIRMWARE),
         "application_sha256": FIRMWARE_HASH,
