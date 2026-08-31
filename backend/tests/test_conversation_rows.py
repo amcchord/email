@@ -10,6 +10,7 @@ from backend.routers.emails import _conversation_filter_statement, list_conversa
 from backend.services.conversation_rows import (
     conversation_count_statement,
     conversation_page_statement,
+    conversation_split_page_statement,
 )
 
 
@@ -100,6 +101,22 @@ def test_inbox_placement_is_chosen_after_one_authoritative_thread_anchor():
         assert "placed_conversation_anchors.inbox_placement =" in sql
         assert "emails_1.account_id = emails.account_id" in sql
         assert "emails_1.gmail_thread_id = emails.gmail_thread_id" in sql
+
+
+def test_split_inbox_pages_both_sections_and_totals_in_one_statement():
+    sql = str(conversation_split_page_statement(
+        select(Email).where(Email.account_id == 7),
+        page=2,
+        page_size=20,
+        sort_by="date",
+        sort_order="desc",
+    ).compile(dialect=postgresql.dialect()))
+
+    assert "sectioned_conversation_rows" in sql
+    assert "PARTITION BY placed_conversation_anchors.inbox_placement" in sql
+    assert "sectioned_conversation_rows.section_rank BETWEEN" in sql
+    assert "focused_total" in sql
+    assert "other_total" in sql
 
 
 @pytest.mark.asyncio

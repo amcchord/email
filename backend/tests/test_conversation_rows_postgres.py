@@ -11,7 +11,7 @@ from backend.models.account import GoogleAccount
 from backend.models.ai import AIAnalysis, ThreadDigest
 from backend.models.email import Email
 from backend.models.user import User
-from backend.routers.emails import list_conversations
+from backend.routers.emails import list_conversations, list_split_conversations
 
 
 DATABASE_URL = os.getenv("CONVERSATION_POSTGRES_TEST_URL") or os.getenv(
@@ -332,6 +332,7 @@ async def test_split_inbox_places_each_conversation_once_from_its_newest_anchor(
                     category="fyi",
                     priority=1,
                     conversation_type="scheduling",
+                    needs_reply=True,
                 ),
                 AIAnalysis(
                     email_id=replied.id,
@@ -350,22 +351,20 @@ async def test_split_inbox_places_each_conversation_once_from_its_newest_anchor(
             user_id = user.id
 
         async with sessions() as db:
-            focused = await list_conversations(
-                mailbox="INBOX",
+            split = await list_split_conversations(
                 page=1,
                 page_size=50,
-                inbox_placement="focused",
                 db=db,
                 user=type("OwnedUser", (), {"id": user_id})(),
             )
-            other = await list_conversations(
-                mailbox="INBOX",
-                page=1,
-                page_size=50,
-                inbox_placement="other",
+            empty_page = await list_split_conversations(
+                page=99,
+                page_size=2,
                 db=db,
                 user=type("OwnedUser", (), {"id": user_id})(),
             )
+            focused = split.focused
+            other = split.other
 
         focused_by_subject = {row.subject: row for row in focused.conversations}
         other_by_subject = {row.subject: row for row in other.conversations}
@@ -387,6 +386,13 @@ async def test_split_inbox_places_each_conversation_once_from_its_newest_anchor(
         assert focused_by_subject["Generated trusted sender"].inbox_placement_reason == "trusted_contact"
         assert other_by_subject["Generated subscription"].inbox_placement_reason == "subscription"
         assert other_by_subject["Generated delegated scheduling"].inbox_placement_reason == "delegated_scheduling"
+        assert other_by_subject["Generated delegated scheduling"].needs_reply is False
+        assert split.total == focused.total + other.total == 6
+        assert empty_page.total == 6
+        assert empty_page.focused.total == 4
+        assert empty_page.other.total == 2
+        assert empty_page.focused.conversations == []
+        assert empty_page.other.conversations == []
         assert {row.conversation_key for row in focused.conversations}.isdisjoint(
             {row.conversation_key for row in other.conversations}
         )

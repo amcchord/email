@@ -164,6 +164,12 @@ class ConversationListResponse(BaseModel):
     total_pages: int
 
 
+class ConversationSplitResponse(BaseModel):
+    focused: ConversationListResponse
+    other: ConversationListResponse
+    total: int
+
+
 class ThreadResponse(BaseModel):
     thread_id: str
     subject: Optional[str] = None

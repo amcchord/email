@@ -4,12 +4,13 @@ import test from 'node:test';
 
 const source = relative => fs.readFileSync(new URL(relative, import.meta.url), 'utf8');
 
-test('Split Inbox loads two authoritative sections without the legacy exclusion filter', () => {
+test('Split Inbox loads one coherent two-section response without the legacy exclusion filter', () => {
   const inbox = source('../pages/Inbox.svelte');
-  assert.match(inbox, /inbox_placement: 'focused'/);
-  assert.match(inbox, /inbox_placement: 'other'/);
-  assert.match(inbox, /Promise\.all/);
+  const api = source('./api.js');
+  assert.match(inbox, /api\.listConversationSplit/);
+  assert.match(api, /emails\/conversations\/split/);
   assert.match(inbox, /combineInboxSections/);
+  assert.match(inbox, /totals did not match the coherent response/);
   assert.doesNotMatch(inbox, /params\.exclude_ai_category/);
 });
 

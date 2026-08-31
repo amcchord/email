@@ -703,6 +703,33 @@ async function handleRequest(request, response) {
       total_pages: visible.length ? Math.ceil(visible.length / pageSize) : 0,
     });
   }
+  if (request.method === 'GET' && pathname === '/api/emails/conversations/split') {
+    const accountId = Number(url.searchParams.get('account_id'));
+    const page = Math.max(1, Number(url.searchParams.get('page') || 1));
+    const pageSize = Math.max(1, Math.min(100, Number(url.searchParams.get('page_size') || 25)));
+    const visible = visibleConversations(
+      'INBOX',
+      Number.isInteger(accountId) && accountId > 0 ? accountId : null,
+    );
+    const responseSection = placement => {
+      const section = visible.filter(conversation => conversation.inbox_placement === placement);
+      const offset = (page - 1) * pageSize;
+      return {
+        conversations: section.slice(offset, offset + pageSize),
+        total: section.length,
+        page,
+        page_size: pageSize,
+        total_pages: section.length ? Math.ceil(section.length / pageSize) : 0,
+      };
+    };
+    const focused = responseSection('focused');
+    const other = responseSection('other');
+    return writeJson(response, {
+      focused,
+      other,
+      total: focused.total + other.total,
+    });
+  }
   if (request.method === 'GET' && pathname === '/api/emails/actions/recent') {
     return writeJson(response, [...operations.values()].slice(-20).reverse());
   }

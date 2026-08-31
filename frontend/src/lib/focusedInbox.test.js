@@ -6,6 +6,7 @@ import {
   combineInboxSections,
   isSplitInboxActive,
   mergeInboxSectionPages,
+  nextInboxRowFocus,
   nextInboxSectionFocus,
   normalizeInboxSectionResult,
   placementReasonLabel,
@@ -55,12 +56,30 @@ test('appended section pages preserve Focused then Other and deduplicate', () =>
   assert.deepEqual(merged.map(item => item.id), [1, 2, 3, 10, 11]);
 });
 
+test('appended pages replace a reclassified conversation instead of duplicating it', () => {
+  const merged = mergeInboxSectionPages(
+    [{ ...focused(1), conversation_key: '7:thread:shared' }, other(10)],
+    [{ ...other(2), conversation_key: '7:thread:shared' }, other(11)],
+  );
+  assert.deepEqual(merged.map(item => item.id), [10, 2, 11]);
+  assert.equal(merged.filter(item => item.conversation_key === '7:thread:shared').length, 1);
+  assert.equal(merged.find(item => item.conversation_key === '7:thread:shared').inbox_placement, 'other');
+});
+
 test('section navigation wraps between populated sections', () => {
   const emails = [focused(1), focused(2), other(10), other(11)];
   assert.equal(nextInboxSectionFocus(emails, 2, 1), 10);
   assert.equal(nextInboxSectionFocus(emails, 10, -1), 1);
   assert.equal(nextInboxSectionFocus(emails, 11, 1), 1);
   assert.equal(nextInboxSectionFocus([other(10)], null, -1), 10);
+});
+
+test('row removal stays in its section before crossing the split', () => {
+  const emails = [focused(1), focused(2), other(10), other(11)];
+  assert.equal(nextInboxRowFocus(emails, 1, [1]), 2);
+  assert.equal(nextInboxRowFocus(emails, 2, [2]), 1);
+  assert.equal(nextInboxRowFocus(emails, 2, [1, 2]), 10);
+  assert.equal(nextInboxRowFocus(emails, 10, [10]), 11);
 });
 
 test('optimistic totals follow removed and restored placements', () => {

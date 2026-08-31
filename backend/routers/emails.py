@@ -12,7 +12,7 @@ from backend.models.ai import AIAnalysis
 from backend.models.snooze import EmailSnooze, SNOOZE_ACTIVE_STATES
 from backend.schemas.email import (
     EmailSummary, EmailDetail, EmailListResponse,
-    ConversationSummary, ConversationListResponse,
+    ConversationSummary, ConversationListResponse, ConversationSplitResponse,
     ThreadResponse, EmailActionRequest, LabelResponse, AttachmentResponse,
     EmailAddress, MailActionItemResponse, MailActionOperationResponse,
 )
@@ -49,7 +49,10 @@ from backend.services.email_search_query import (
     build_email_search_clause,
     parse_email_search,
 )
-from backend.services.conversation_rows import load_conversation_page
+from backend.services.conversation_rows import (
+    load_conversation_page,
+    load_split_conversation_page,
+)
 
 
 def jsonb_contains(column, value: str):
@@ -595,94 +598,14 @@ async def list_emails(
     )
 
 
-@router.get("/conversations", response_model=ConversationListResponse)
-async def list_conversations(
-    account_id: Optional[int] = None,
-    mailbox: str = "INBOX",
-    label: Optional[str] = None,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=200),
-    sort_by: str = "date",
-    sort_order: str = "desc",
-    search: Optional[str] = None,
-    tz: Optional[str] = None,
-    is_read: Optional[bool] = None,
-    is_starred: Optional[bool] = None,
-    ai_category: Optional[str] = None,
-    exclude_ai_category: Optional[str] = None,
-    ai_email_type: Optional[str] = None,
-    needs_reply: Optional[bool] = None,
-    inbox_placement: Annotated[
-        Optional[str], Query(pattern="^(focused|other)$")
-    ] = None,
-    db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
-):
-    """List one authoritative row per exact owned account/conversation."""
-    placement_conflicts = any(
-        value is not None
-        for value in (
-            label,
-            search,
-            is_read,
-            is_starred,
-            ai_category,
-            exclude_ai_category,
-            ai_email_type,
-            needs_reply,
-        )
-    )
-    if inbox_placement is not None and (
-        mailbox != "INBOX" or placement_conflicts
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="Inbox placement is only available for the standard Inbox",
-        )
-    account_result = await db.execute(
-        select(
-            GoogleAccount.id,
-            GoogleAccount.email,
-            GoogleAccount.display_name,
-            GoogleAccount.description,
-            GoogleAccount.short_label,
-        ).where(GoogleAccount.user_id == user.id)
-    )
-    account_rows = account_result.all()
-    user_accounts = {row.id: row.email for row in account_rows}
-    if not user_accounts:
-        return ConversationListResponse(
-            conversations=[], total=0, page=page, page_size=page_size, total_pages=0
-        )
-
-    filtered = await _conversation_filter_statement(
-        db,
-        account_rows=account_rows,
-        user_accounts=user_accounts,
-        user_id=user.id,
-        account_id=account_id,
-        mailbox=mailbox,
-        label=label,
-        search=search,
-        tz=tz,
-        is_read=is_read,
-        is_starred=is_starred,
-        ai_category=ai_category,
-        exclude_ai_category=exclude_ai_category,
-        ai_email_type=ai_email_type,
-        needs_reply=needs_reply,
-    )
-    rows, total = await load_conversation_page(
-        db,
-        filtered,
-        page=page,
-        page_size=page_size,
-        sort_by=sort_by,
-        sort_order=sort_order,
-        inbox_placement=inbox_placement,
-    )
-
+async def _serialize_conversation_rows(
+    db: AsyncSession,
+    rows,
+    user_accounts: dict[int, str],
+) -> list[ConversationSummary]:
+    """Serialize one already-authoritative conversation row set."""
     from backend.models.ai import ThreadDigest
+
     threaded_identities = [
         (row.anchor.account_id, row.anchor.gmail_thread_id)
         for row in rows
@@ -787,6 +710,171 @@ async def list_conversations(
             inbox_placement=row.inbox_placement,
             inbox_placement_reason=row.inbox_placement_reason,
         ))
+    return conversations
+
+
+@router.get("/conversations/split", response_model=ConversationSplitResponse)
+async def list_split_conversations(
+    account_id: Optional[int] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    sort_by: str = "date",
+    sort_order: str = "desc",
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return both Split Inbox sections from one coherent SQL statement."""
+    account_result = await db.execute(
+        select(
+            GoogleAccount.id,
+            GoogleAccount.email,
+            GoogleAccount.display_name,
+            GoogleAccount.description,
+            GoogleAccount.short_label,
+        ).where(GoogleAccount.user_id == user.id)
+    )
+    account_rows = account_result.all()
+    user_accounts = {row.id: row.email for row in account_rows}
+    if not user_accounts:
+        empty = ConversationListResponse(
+            conversations=[], total=0, page=page, page_size=page_size, total_pages=0
+        )
+        return ConversationSplitResponse(focused=empty, other=empty, total=0)
+
+    filtered = await _conversation_filter_statement(
+        db,
+        account_rows=account_rows,
+        user_accounts=user_accounts,
+        user_id=user.id,
+        account_id=account_id,
+        mailbox="INBOX",
+        label=None,
+        search=None,
+        tz=None,
+        is_read=None,
+        is_starred=None,
+        ai_category=None,
+        exclude_ai_category=None,
+        ai_email_type=None,
+        needs_reply=None,
+    )
+    rows, totals = await load_split_conversation_page(
+        db,
+        filtered,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+    conversations = await _serialize_conversation_rows(db, rows, user_accounts)
+
+    def section(placement: str):
+        total = totals[placement]
+        return ConversationListResponse(
+            conversations=[
+                row for row in conversations if row.inbox_placement == placement
+            ],
+            total=total,
+            page=page,
+            page_size=page_size,
+            total_pages=(total + page_size - 1) // page_size if total else 0,
+        )
+
+    return ConversationSplitResponse(
+        focused=section("focused"),
+        other=section("other"),
+        total=totals["focused"] + totals["other"],
+    )
+
+
+@router.get("/conversations", response_model=ConversationListResponse)
+async def list_conversations(
+    account_id: Optional[int] = None,
+    mailbox: str = "INBOX",
+    label: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    sort_by: str = "date",
+    sort_order: str = "desc",
+    search: Optional[str] = None,
+    tz: Optional[str] = None,
+    is_read: Optional[bool] = None,
+    is_starred: Optional[bool] = None,
+    ai_category: Optional[str] = None,
+    exclude_ai_category: Optional[str] = None,
+    ai_email_type: Optional[str] = None,
+    needs_reply: Optional[bool] = None,
+    inbox_placement: Annotated[
+        Optional[str], Query(pattern="^(focused|other)$")
+    ] = None,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """List one authoritative row per exact owned account/conversation."""
+    placement_conflicts = any(
+        value is not None
+        for value in (
+            label,
+            search,
+            is_read,
+            is_starred,
+            ai_category,
+            exclude_ai_category,
+            ai_email_type,
+            needs_reply,
+        )
+    )
+    if inbox_placement is not None and (
+        mailbox != "INBOX" or placement_conflicts
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Inbox placement is only available for the standard Inbox",
+        )
+    account_result = await db.execute(
+        select(
+            GoogleAccount.id,
+            GoogleAccount.email,
+            GoogleAccount.display_name,
+            GoogleAccount.description,
+            GoogleAccount.short_label,
+        ).where(GoogleAccount.user_id == user.id)
+    )
+    account_rows = account_result.all()
+    user_accounts = {row.id: row.email for row in account_rows}
+    if not user_accounts:
+        return ConversationListResponse(
+            conversations=[], total=0, page=page, page_size=page_size, total_pages=0
+        )
+
+    filtered = await _conversation_filter_statement(
+        db,
+        account_rows=account_rows,
+        user_accounts=user_accounts,
+        user_id=user.id,
+        account_id=account_id,
+        mailbox=mailbox,
+        label=label,
+        search=search,
+        tz=tz,
+        is_read=is_read,
+        is_starred=is_starred,
+        ai_category=ai_category,
+        exclude_ai_category=exclude_ai_category,
+        ai_email_type=ai_email_type,
+        needs_reply=needs_reply,
+    )
+    rows, total = await load_conversation_page(
+        db,
+        filtered,
+        page=page,
+        page_size=page_size,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        inbox_placement=inbox_placement,
+    )
+
+    conversations = await _serialize_conversation_rows(db, rows, user_accounts)
 
     total_pages = (total + page_size - 1) // page_size if total else 0
     return ConversationListResponse(

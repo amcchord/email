@@ -52,10 +52,11 @@ try {
   assert.equal(inbox.total_pages, 3);
   assert.equal(new Set(inbox.conversations.map(item => item.conversation_key)).size, 3);
 
-  const focused = await request('GET', '/api/emails/conversations?mailbox=INBOX&inbox_placement=focused&page=1&page_size=50');
-  const other = await request('GET', '/api/emails/conversations?mailbox=INBOX&inbox_placement=other&page=1&page_size=50');
+  const split = await request('GET', '/api/emails/conversations/split?page=1&page_size=50');
+  const { focused, other } = split;
   assert.equal(focused.total, 4);
   assert.equal(other.total, 3);
+  assert.equal(split.total, inbox.total);
   assert.equal(focused.total + other.total, inbox.total);
   assert.ok(focused.conversations.every(item => item.inbox_placement === 'focused'));
   assert.ok(other.conversations.every(item => item.inbox_placement === 'other'));

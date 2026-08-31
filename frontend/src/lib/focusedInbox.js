@@ -71,15 +71,37 @@ export function combineInboxSections(focused, other) {
 }
 
 export function mergeInboxSectionPages(existing = [], incoming = []) {
-  const byPlacement = placement => {
-    const seen = new Set();
-    return [...existing, ...incoming].filter(email => {
-      if (email?.inbox_placement !== placement || seen.has(email.id)) return false;
-      seen.add(email.id);
-      return true;
-    });
-  };
-  return [...byPlacement('focused'), ...byPlacement('other')];
+  const identity = email => String(
+    email?.conversation_key || `message:${email?.id ?? ''}`,
+  );
+  const incomingIdentities = new Set(incoming.map(identity));
+  const merged = new Map();
+  for (const email of existing) {
+    if (!incomingIdentities.has(identity(email))) merged.set(identity(email), email);
+  }
+  for (const email of incoming) merged.set(identity(email), email);
+  const values = [...merged.values()];
+  return [
+    ...values.filter(email => email?.inbox_placement === 'focused'),
+    ...values.filter(email => email?.inbox_placement === 'other'),
+  ];
+}
+
+export function nextInboxRowFocus(emails = [], focusedId = null, removedIds = []) {
+  const removed = new Set((removedIds || []).map(Number));
+  const index = emails.findIndex(email => Number(email?.id) === Number(focusedId));
+  if (index < 0 || !removed.has(Number(focusedId))) return focusedId ?? null;
+
+  const placement = emails[index]?.inbox_placement;
+  const available = email => email && !removed.has(Number(email.id));
+  const forward = emails.slice(index + 1);
+  const backward = emails.slice(0, index).reverse();
+  return (
+    forward.find(email => available(email) && email.inbox_placement === placement)
+    || backward.find(email => available(email) && email.inbox_placement === placement)
+    || forward.find(available)
+    || backward.find(available)
+  )?.id ?? null;
 }
 
 export function nextInboxSectionFocus(emails = [], focusedId = null, direction = 1) {

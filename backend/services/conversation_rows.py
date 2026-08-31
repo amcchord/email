@@ -14,7 +14,7 @@ from typing import Any
 
 from sqlalchemy import Select, and_, asc, case, desc, exists, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased, selectinload
+from sqlalchemy.orm import aliased, joinedload, selectinload
 
 from backend.models.ai import AIAnalysis
 from backend.models.email import Email
@@ -133,6 +133,7 @@ def _inbox_placement_reason(email, analysis):
     active_needs_reply = and_(
         analysis.needs_reply.is_(True),
         analysis.needs_reply_ignored.is_not(True),
+        ~delegated_scheduling,
         ~later_sent_reply,
     )
     return case(
@@ -215,8 +216,50 @@ def conversation_page_statement(
         if inbox_placement is not None
         else _conversation_anchors(filtered_messages)
     )
+    aggregates = _conversation_aggregates(anchors)
+
+    selected_columns = [
+        Email,
+        anchors.c.conversation_identity,
+        anchors.c.matched_count,
+        aggregates.c.member_count,
+        aggregates.c.unread_count,
+        aggregates.c.starred_count,
+        aggregates.c.attachment_count,
+        aggregates.c.member_labels,
+    ]
+    if inbox_placement is not None:
+        selected_columns.extend(
+            [anchors.c.inbox_placement, anchors.c.inbox_placement_reason]
+        )
+    statement = (
+        select(*selected_columns)
+        .options(selectinload(Email.ai_analysis))
+        .join(anchors, anchors.c.anchor_email_id == Email.id)
+        .join(
+            aggregates,
+            and_(
+                aggregates.c.account_id == anchors.c.account_id,
+                aggregates.c.conversation_identity == anchors.c.conversation_identity,
+            ),
+        )
+    )
+    if inbox_placement is not None:
+        statement = statement.where(anchors.c.inbox_placement == inbox_placement)
+
+    primary_sort = _conversation_sort_expression(sort_by, Email, aggregates)
+    direction = asc if sort_order == "asc" else desc
+    statement = statement.order_by(
+        direction(primary_sort).nulls_last(),
+        direction(anchors.c.matched_date).nulls_last(),
+        direction(anchors.c.anchor_email_id),
+    )
+    return statement.offset((page - 1) * page_size).limit(page_size)
+
+
+def _conversation_aggregates(anchors):
     member_identity = _conversation_identity(Email.id, Email.gmail_thread_id)
-    aggregates = (
+    return (
         select(
             Email.account_id.label("account_id"),
             member_identity.label("conversation_identity"),
@@ -248,24 +291,57 @@ def conversation_page_statement(
         .cte("conversation_aggregates")
     )
 
-    selected_columns = [
-        Email,
-        anchors.c.conversation_identity,
-        anchors.c.matched_count,
-        aggregates.c.member_count,
-        aggregates.c.unread_count,
-        aggregates.c.starred_count,
-        aggregates.c.attachment_count,
-        aggregates.c.member_labels,
-    ]
-    if inbox_placement is not None:
-        selected_columns.extend(
-            [anchors.c.inbox_placement, anchors.c.inbox_placement_reason]
+
+def _conversation_sort_expression(sort_by: str, email, aggregates):
+    allowed = {"date", "subject", "sender", "is_read", "has_attachments"}
+    selected_sort = sort_by if sort_by in allowed else "date"
+    if selected_sort == "sender":
+        return email.from_address
+    if selected_sort == "is_read":
+        # A conversation is read only when every synchronized member is read.
+        return aggregates.c.unread_count
+    if selected_sort == "has_attachments":
+        return aggregates.c.attachment_count
+    return getattr(email, selected_sort)
+
+
+def conversation_split_page_statement(
+    filtered_messages: Select[Any],
+    *,
+    page: int,
+    page_size: int,
+    sort_by: str,
+    sort_order: str,
+):
+    """Return both section pages and totals from one PostgreSQL statement."""
+    anchors = _placed_conversation_anchors(filtered_messages)
+    aggregates = _conversation_aggregates(anchors)
+    direction = asc if sort_order == "asc" else desc
+    primary_sort = _conversation_sort_expression(sort_by, Email, aggregates)
+    ordering = (
+        direction(primary_sort).nulls_last(),
+        direction(anchors.c.matched_date).nulls_last(),
+        direction(anchors.c.anchor_email_id),
+    )
+    sectioned = (
+        select(
+            anchors.c.anchor_email_id,
+            anchors.c.account_id,
+            anchors.c.conversation_identity,
+            anchors.c.matched_count,
+            anchors.c.inbox_placement,
+            anchors.c.inbox_placement_reason,
+            aggregates.c.member_count,
+            aggregates.c.unread_count,
+            aggregates.c.starred_count,
+            aggregates.c.attachment_count,
+            aggregates.c.member_labels,
+            func.row_number().over(
+                partition_by=anchors.c.inbox_placement,
+                order_by=ordering,
+            ).label("section_rank"),
         )
-    statement = (
-        select(*selected_columns)
-        .options(selectinload(Email.ai_analysis))
-        .join(anchors, anchors.c.anchor_email_id == Email.id)
+        .join(Email, Email.id == anchors.c.anchor_email_id)
         .join(
             aggregates,
             and_(
@@ -273,29 +349,107 @@ def conversation_page_statement(
                 aggregates.c.conversation_identity == anchors.c.conversation_identity,
             ),
         )
+        .cte("sectioned_conversation_rows")
     )
-    if inbox_placement is not None:
-        statement = statement.where(anchors.c.inbox_placement == inbox_placement)
-
-    allowed = {"date", "subject", "sender", "is_read", "has_attachments"}
-    selected_sort = sort_by if sort_by in allowed else "date"
-    if selected_sort == "sender":
-        primary_sort = Email.from_address
-    elif selected_sort == "is_read":
-        # A conversation is read only when every synchronized member is read.
-        primary_sort = aggregates.c.unread_count
-    elif selected_sort == "has_attachments":
-        primary_sort = aggregates.c.attachment_count
-    else:
-        primary_sort = getattr(Email, selected_sort)
-
-    direction = asc if sort_order == "asc" else desc
-    statement = statement.order_by(
-        direction(primary_sort).nulls_last(),
-        direction(anchors.c.matched_date).nulls_last(),
-        direction(anchors.c.anchor_email_id),
+    focused_total = (
+        select(func.count())
+        .select_from(anchors)
+        .where(anchors.c.inbox_placement == "focused")
+        .scalar_subquery()
     )
-    return statement.offset((page - 1) * page_size).limit(page_size)
+    other_total = (
+        select(func.count())
+        .select_from(anchors)
+        .where(anchors.c.inbox_placement == "other")
+        .scalar_subquery()
+    )
+    first_rank = ((page - 1) * page_size) + 1
+    last_rank = page * page_size
+    page_rows = (
+        select(sectioned)
+        .where(sectioned.c.section_rank.between(first_rank, last_rank))
+        .cte("paged_split_conversations")
+    )
+    totals = select(
+        focused_total.label("focused_total"),
+        other_total.label("other_total"),
+    ).cte("split_conversation_totals")
+    return (
+        select(
+            Email,
+            page_rows.c.conversation_identity,
+            page_rows.c.matched_count,
+            page_rows.c.member_count,
+            page_rows.c.unread_count,
+            page_rows.c.starred_count,
+            page_rows.c.attachment_count,
+            page_rows.c.member_labels,
+            page_rows.c.inbox_placement,
+            page_rows.c.inbox_placement_reason,
+            totals.c.focused_total,
+            totals.c.other_total,
+        )
+        .options(joinedload(Email.ai_analysis))
+        .select_from(
+            totals
+            .outerjoin(page_rows, literal(True))
+            .outerjoin(Email, Email.id == page_rows.c.anchor_email_id)
+        )
+        .order_by(
+            case((page_rows.c.inbox_placement == "focused", 0), else_=1),
+            page_rows.c.section_rank,
+        )
+    )
+
+
+def _conversation_row_from_result(row, *, with_placement: bool):
+    return ConversationRow(
+        anchor=row[0],
+        conversation_identity=str(row.conversation_identity),
+        matched_count=int(row.matched_count),
+        member_count=int(row.member_count),
+        unread_count=int(row.unread_count),
+        starred_count=int(row.starred_count),
+        attachment_count=int(row.attachment_count),
+        member_labels=[list(labels or []) for labels in (row.member_labels or [])],
+        inbox_placement=(str(row.inbox_placement) if with_placement else None),
+        inbox_placement_reason=(
+            str(row.inbox_placement_reason) if with_placement else None
+        ),
+    )
+
+
+async def load_split_conversation_page(
+    db: AsyncSession,
+    filtered_messages: Select[Any],
+    *,
+    page: int,
+    page_size: int,
+    sort_by: str,
+    sort_order: str,
+) -> tuple[list[ConversationRow], dict[str, int]]:
+    """Load both Split Inbox sections from one coherent database statement."""
+    result = await db.execute(
+        conversation_split_page_statement(
+            filtered_messages,
+            page=page,
+            page_size=page_size,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+    )
+    records = result.all()
+    totals = {"focused": 0, "other": 0}
+    if records:
+        totals = {
+            "focused": int(records[0].focused_total or 0),
+            "other": int(records[0].other_total or 0),
+        }
+    return [
+        _conversation_row_from_result(row, with_placement=True)
+        for row in records
+        if row[0] is not None
+    ], totals
 
 
 async def load_conversation_page(
@@ -333,21 +487,9 @@ async def load_conversation_page(
         )
     )
     rows = [
-        ConversationRow(
-            anchor=row[0],
-            conversation_identity=str(row.conversation_identity),
-            matched_count=int(row.matched_count),
-            member_count=int(row.member_count),
-            unread_count=int(row.unread_count),
-            starred_count=int(row.starred_count),
-            attachment_count=int(row.attachment_count),
-            member_labels=[list(labels or []) for labels in (row.member_labels or [])],
-            inbox_placement=(
-                str(row.inbox_placement) if inbox_placement is not None else None
-            ),
-            inbox_placement_reason=(
-                str(row.inbox_placement_reason) if inbox_placement is not None else None
-            ),
+        _conversation_row_from_result(
+            row,
+            with_placement=inbox_placement is not None,
         )
         for row in result.all()
     ]

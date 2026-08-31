@@ -286,6 +286,15 @@ export const api = {
     }
     return request('GET', `/emails/conversations?${searchParams.toString()}`);
   },
+  listConversationSplit: (params = {}) => {
+    const searchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value !== null && value !== undefined && value !== '') {
+        searchParams.set(key, value);
+      }
+    }
+    return request('GET', `/emails/conversations/split?${searchParams.toString()}`);
+  },
   getEmail: (id) => request('GET', `/emails/${id}`),
   downloadAttachment: (emailId, attachmentId, options = {}) =>
     request(

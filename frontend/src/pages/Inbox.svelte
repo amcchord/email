@@ -1,5 +1,5 @@
 <script>
-  import { onDestroy, onMount, untrack } from 'svelte';
+  import { onDestroy, onMount, tick, untrack } from 'svelte';
   import { get } from 'svelte/store';
   import { api } from '../lib/api.js';
   import {
@@ -48,6 +48,7 @@
     combineInboxSections,
     isSplitInboxActive,
     mergeInboxSectionPages,
+    nextInboxRowFocus,
     nextInboxSectionFocus,
     normalizeInboxSectionResult,
   } from '../lib/focusedInbox.js';
@@ -125,6 +126,7 @@
   let snoozeBusyIds = $state(new Set());
   let labelPicker = $state(null);
   let focusSectionTotals = $state(null);
+  let pendingActionRestoreFocus = null;
 
   function registerEmailViewTransitionGuard(guard) {
     emailViewTransitionGuard = typeof guard === 'function' ? guard : null;
@@ -320,6 +322,7 @@
     selectedEmail = null;
     selectedThread = null;
     focusedEmailId = null;
+    pendingActionRestoreFocus = null;
     emailLoading = false;
     loadingMore = false;
     focusSectionTotals = null;
@@ -523,19 +526,19 @@
         if (isSplitInboxActive(snapshot)) {
           const sectionPageSize = Math.max(1, Math.ceil(snapshot.pageSize / 2));
           const sectionParams = { ...params, page_size: sectionPageSize };
-          const [focusedPayload, otherPayload] = await Promise.all([
-            api.listConversations({ ...sectionParams, inbox_placement: 'focused' }),
-            api.listConversations({ ...sectionParams, inbox_placement: 'other' }),
-          ]);
+          const splitPayload = await api.listConversationSplit(sectionParams);
           const focused = normalizeInboxSectionResult(
-            normalizeConversationList(focusedPayload),
+            normalizeConversationList(splitPayload?.focused),
             'focused',
           );
           const other = normalizeInboxSectionResult(
-            normalizeConversationList(otherPayload),
+            normalizeConversationList(splitPayload?.other),
             'other',
           );
           result = combineInboxSections(focused, other);
+          if (Number(splitPayload?.total) !== result.total) {
+            throw new Error('Split Inbox totals did not match the coherent response');
+          }
           resultUsesConversations = true;
         } else {
           result = useConversations
@@ -587,6 +590,31 @@
         if (directOpenEmailId !== null) {
           focusedEmailId = directOpenEmailId;
           selectedEmailId.set(directOpenEmailId);
+        }
+        if (pendingActionRestoreFocus) {
+          const pending = pendingActionRestoreFocus;
+          pendingActionRestoreFocus = null;
+          if (pending.datasetKey === snapshot.key) {
+            const restored = result.emails.find(email =>
+              (pending.conversationKey
+                && email.conversation_key === pending.conversationKey)
+              || Number(email.id) === Number(pending.emailId));
+            const focusStillOwned = [
+              pending.expectedFocusedId,
+              pending.emailId,
+              null,
+            ].some(value => Number(value) === Number(focusedEmailId)
+              || (value === null && focusedEmailId === null));
+            if (restored && focusStillOwned) {
+              focusedEmailId = restored.id;
+              if (pending.restoreSelection) selectedEmailId.set(restored.id);
+              await tick();
+              if (listRequestIsCurrent(requestId)
+                && focusedEmailId === restored.id) {
+                focusInboxSelection();
+              }
+            }
+          }
         }
       }
       focusSectionTotals = result.sectionTotals || null;
@@ -808,6 +836,11 @@
       );
     }
     focusedEmailId = focusedBefore;
+    void tick().then(() => {
+      if (inboxSessionIsCurrent() && focusedEmailId === focusedBefore) {
+        focusInboxSelection();
+      }
+    });
   }
 
   async function submitMailAction(emailIds, action, requestKey, labelId = null, scope = null) {
@@ -940,6 +973,22 @@
     try {
       const operation = await api.undoMailAction(context.operation.request_id);
       if (!inboxSessionIsCurrent()) return operation;
+      if (context.optimistic.removed) {
+        const restoredItem = context.snapshot.items.find(item =>
+          Number(item.email.id) === Number(context.focusedBefore))
+          || context.snapshot.items.find(item =>
+            Number(item.email.id) === Number(context.snapshot.selectedId));
+        if (restoredItem) {
+          pendingActionRestoreFocus = {
+            datasetKey: context.datasetKey,
+            conversationKey: restoredItem.email.conversation_key || null,
+            emailId: restoredItem.email.id,
+            expectedFocusedId: focusedEmailId,
+            restoreSelection: context.snapshot.selectedId != null
+              && context.emailIds.includes(context.snapshot.selectedId),
+          };
+        }
+      }
       if (actionContextIsCurrent(context.actionEpoch, context.datasetKey)) {
         restoreOptimisticAction(context);
       }
@@ -1023,10 +1072,22 @@
       currentPageNum.set(1);
       hasMore = get(emails).length < get(emailsTotal);
     }
-    selectedEmailId.set(optimistic.selectedId);
+    const splitNextFocus = optimistic.removed && focusSectionTotals
+      ? nextInboxRowFocus(emailsBefore, focusedBefore, uniqueIds)
+      : null;
+    const selectedWasRemoved = optimistic.removed
+      && snapshot.selectedId != null
+      && uniqueIds.includes(snapshot.selectedId);
+    selectedEmailId.set(selectedWasRemoved && focusSectionTotals
+      ? splitNextFocus
+      : optimistic.selectedId);
     if (optimistic.removed) {
-      focusedEmailId = nextConversationFocus(emailsBefore, focusedBefore, uniqueIds);
-      if (optimistic.selectedId != null) focusedEmailId = optimistic.selectedId;
+      focusedEmailId = focusSectionTotals
+        ? splitNextFocus
+        : nextConversationFocus(emailsBefore, focusedBefore, uniqueIds);
+      if (!focusSectionTotals && optimistic.selectedId != null) {
+        focusedEmailId = optimistic.selectedId;
+      }
     }
     if (optimistic.removed && (
       (snapshot.selectedId != null && uniqueIds.includes(snapshot.selectedId))

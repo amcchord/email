@@ -700,6 +700,35 @@ currently synchronized members of that owned conversation:
 - `star_state` (`none`, `some`, or `all`) and attachment-any state; and
 - the label union plus per-label `some`/`all` coverage.
 
+The literal, otherwise-unfiltered Inbox exposes one coherent Split projection:
+
+```text
+GET /api/emails/conversations/split?page=1&page_size=25&account_id={optional_owned_account}
+```
+
+Placement is derived once from the authoritative newest Inbox anchor after
+conversation identity is established and before count/pagination. One
+PostgreSQL statement ranks and pages both sections and returns
+`{ "focused": ConversationListResponse, "other": ConversationListResponse,
+"total": n }`, so a concurrent classifier update cannot create a cross-request
+gap or duplicate. Each row carries `inbox_placement` and the stable
+`inbox_placement_reason` enum. The two result sets are disjoint and their exact
+totals sum to `total`. Missing analysis fails visibly into Focused rather than
+hiding new mail while background classification catches up. The projection
+uses only persisted priority, reply, trusted-contact, delegation, subscription,
+and low-priority signals; it never calls an AI provider or moves Gmail mail.
+Owned `account_id` narrowing remains supported.
+
+The section-specific compatibility form remains available to API clients:
+
+```text
+GET /api/emails/conversations?mailbox=INBOX&inbox_placement=focused|other
+```
+
+Combining that compatibility parameter with search, labels, non-Inbox
+mailboxes, state/category/needs-reply filters, or the legacy ignored-category
+exclusion returns 422 rather than presenting a partial split as authoritative.
+
 The response envelope is `{ "conversations": [...], "total": n, "page": n,
 "page_size": n, "total_pages": n }`, where totals and page boundaries count
 conversations rather than messages. The ordinary Inbox projection excludes

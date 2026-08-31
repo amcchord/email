@@ -448,16 +448,15 @@
         <tbody>
           {#if sectionTotals}
             <tr data-inbox-section="focused">
-              <th
+              <td
                 colspan={showAccountCol ? 8 : 7}
                 class="sticky z-10 border-b px-4 py-2.5 text-left"
                 style="top: 37px; background: color-mix(in srgb, var(--bg-secondary) 94%, var(--color-accent-500) 6%); border-color: var(--border-color)"
-                scope="rowgroup"
               >
-                <span class="text-sm font-semibold" style="color: var(--text-primary)">Focused</span>
+                <span role="heading" aria-level="2" class="text-sm font-semibold" style="color: var(--text-primary)">Focused</span>
                 <span class="ml-2 text-xs tabular-nums font-normal" style="color: var(--text-tertiary)">{sectionTotals.focused.toLocaleString()}</span>
                 <span class="ml-3 text-[11px] font-normal" style="color: var(--text-secondary)">Priority, reply, trusted, and direct conversations</span>
-              </th>
+              </td>
             </tr>
             {#if sectionTotals.focused === 0}
               <tr>
@@ -468,16 +467,15 @@
           {#each emails as email, emailIndex (email.id)}
             {#if sectionTotals && email.inbox_placement === 'other' && (emailIndex === 0 || emails[emailIndex - 1]?.inbox_placement !== 'other')}
               <tr data-inbox-section="other">
-                <th
+                <td
                   colspan={showAccountCol ? 8 : 7}
                   class="sticky z-10 border-y px-4 py-2.5 text-left"
                   style="top: 37px; background: var(--bg-tertiary); border-color: var(--border-color)"
-                  scope="rowgroup"
                 >
-                  <span class="text-sm font-semibold" style="color: var(--text-primary)">Other</span>
+                  <span role="heading" aria-level="2" class="text-sm font-semibold" style="color: var(--text-primary)">Other</span>
                   <span class="ml-2 text-xs tabular-nums font-normal" style="color: var(--text-tertiary)">{sectionTotals.other.toLocaleString()}</span>
                   <span class="ml-3 text-[11px] font-normal" style="color: var(--text-secondary)">Lower-priority conversations · still in Inbox</span>
-                </th>
+                </td>
               </tr>
             {/if}
             {#if hiddenDigestEmails.has(email.id)}
@@ -731,16 +729,15 @@
           {/each}
           {#if sectionTotals && sectionTotals.other === 0}
             <tr data-inbox-section="other">
-              <th
+              <td
                 colspan={showAccountCol ? 8 : 7}
                 class="border-y px-4 py-2.5 text-left"
                 style="background: var(--bg-tertiary); border-color: var(--border-color)"
-                scope="rowgroup"
               >
-                <span class="text-sm font-semibold" style="color: var(--text-primary)">Other</span>
+                <span role="heading" aria-level="2" class="text-sm font-semibold" style="color: var(--text-primary)">Other</span>
                 <span class="ml-2 text-xs tabular-nums font-normal" style="color: var(--text-tertiary)">0</span>
                 <span class="ml-3 text-[11px] font-normal" style="color: var(--text-secondary)">No lower-priority conversations · everything remains in Inbox</span>
-              </th>
+              </td>
             </tr>
           {/if}
         </tbody>
