@@ -97,6 +97,21 @@ async def test_compose_limit_counts_streamed_bytes_without_content_length():
 
 
 @pytest.mark.asyncio
+async def test_snippet_limit_uses_snippet_error_even_with_a_small_test_cap():
+    sent, received, app_called = await _run_middleware(
+        max_bytes=5,
+        chunks=[b"ignored"],
+        headers=[(b"content-length", b"6")],
+        path="/api/compose/snippets",
+    )
+    status, payload = _response(sent)
+    assert status == 413
+    assert payload["detail"]["code"] == "snippet_payload_too_large"
+    assert received == 0
+    assert app_called is False
+
+
+@pytest.mark.asyncio
 async def test_compose_limit_allows_exact_bound_caps_drafts_and_ignores_other_routes():
     sent, _received, app_called = await _run_middleware(
         max_bytes=5,

@@ -118,7 +118,10 @@ class ComposeSendBodyLimitMiddleware:
         *,
         request_limit: int,
     ) -> None:
-        is_snippet = request_limit <= MAX_SNIPPET_BODY_BYTES
+        path = scope.get("path") or ""
+        is_snippet = path == "/api/compose/snippets" or path.startswith(
+            "/api/compose/snippets/"
+        )
         await self._send_error(
             scope,
             receive,
