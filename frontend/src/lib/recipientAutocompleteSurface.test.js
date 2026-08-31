@@ -32,7 +32,7 @@ test('all three recipient fields share account-scoped suggestions and cross-fiel
   assert.match(compose, /!sessionGuard\?\.isCurrent\(\)[\s\S]*accountId !== Number\(selectedAccountId\)/);
   assert.match(compose, /function recipientPendingMessage\(\) \{[\s\S]*Finish or remove the incomplete recipient/);
   assert.match(compose, /if \(recipientEntryPending\) \{[\s\S]*showToast\(recipientPendingMessage\(\), 'error'\)/);
-  assert.match(compose, /disabled=\{!writingSurfaceReady \|\| !draftState\.canSend \|\| recipientEntryPending\}/);
+  assert.match(compose, /disabled=\{!writingSurfaceReady \|\| !draftState\.canSend \|\| recipientEntryPending \|\| !signatureReady\}/);
 });
 
 
