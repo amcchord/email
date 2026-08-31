@@ -815,3 +815,23 @@ add a new entry that explicitly supersedes the old one.
   one consolidated rerun after correction. Production preflight, validated
   backups, migration checks, health, logs, and rollback boundaries remain
   mandatory. The repository-wide operating rule is recorded in `AGENTS.md`.
+
+## D-042 — Recipient suggestions are account-scoped projections; pending text is not a recipient
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Derive Compose suggestions from one index-bounded recent metadata
+  corpus for the selected owned account, exclude every address owned by the
+  signed-in user, and return only normalized mailbox metadata. Persist and send
+  only canonical committed chips. Keep unfinished input local and visibly block
+  sender changes, draft save, navigation, and every Send path until it is
+  committed or removed.
+- Reason: A naive address-book lookup can disclose another account's contacts
+  or turn every keystroke into an unbounded mailbox scan. Treating partial text
+  as durable can corrupt quoted display names; omitting it from a send while it
+  remains visible can silently deliver to the wrong set of people.
+- Consequence: Autocomplete needs no Contacts scope, provider call, schema
+  change, or message-content response. Quoted commas, paste, keyboard
+  selection, duplicates across To/Cc/Bcc, account switches, stale responses,
+  and manual entry share one parser and fail closed. Inline snippet expansion
+  and a first-class contacts directory remain separate milestones.

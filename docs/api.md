@@ -1032,6 +1032,45 @@ Redis is wake-up acceleration and the minutely cron drain recovers lost wakes
 and expired leases. Snooze return actions enter the same ordered mail-action
 sequence as direct user actions, so later manual placement wins.
 
+## Web session-only recipient suggestions
+
+Compose recipient suggestions are private projections of already-synchronized
+message metadata. Public API tokens cannot access them.
+
+```text
+GET /api/compose/recipients?account_id=3&q=ada&limit=8
+```
+
+The account must be active and owned by the current user; missing, inactive,
+and foreign account identifiers share the same non-disclosing 404 response.
+`q` is optional and limited to 254 characters. `limit` defaults to 8 and is
+bounded from 1 through 20.
+
+```json
+{
+  "suggestions": [
+    {
+      "name": "Lovelace, Ada",
+      "address": "ada.correspondent@example.test",
+      "formatted": "\"Lovelace, Ada\" <ada.correspondent@example.test>"
+    }
+  ]
+}
+```
+
+The service reads one recent, date-ordered corpus capped at 4,000 rows for the
+selected account. It excludes drafts, Spam, Trash, every address owned by the
+signed-in user, and correspondents visible only in another account. Results are
+normalized and deduplicated case-insensitively, then rank exact/prefix matches,
+prior outgoing correspondence, recency, and frequency. The response contains
+only display-name and mailbox metadata; it never returns subject or body
+content and does not call Google Contacts or another provider.
+
+The browser commits only canonical recipient chips to durable drafts and send
+requests. Unfinished input remains local, is not autosaved, and blocks sender
+changes, draft save, navigation, and every Send path until the user commits or
+removes it.
+
 ## Web session-only Personal Snippets
 
 Personal Snippets are private reusable writing blocks owned by the authenticated

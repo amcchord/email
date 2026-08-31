@@ -133,6 +133,146 @@ async function waitFor(predicate, message, timeoutMs = 1_000) {
 const results = {};
 
 try {
+  // Recipient suggestions are account-scoped, de-duplicated across current
+  // and legacy history shapes, exclude every owned address, and never cross
+  // the generated authenticated-user boundary.
+  await reset('clean');
+  const primaryRecipients = await get(
+    '/api/compose/recipients?account_id=1101&q=&limit=20',
+  );
+  assert.deepEqual(primaryRecipients.suggestions.map(item => item.address), [
+    'ada.correspondent@example.test',
+    'casey.duplicate@example.test',
+    'legacy-string@example.test',
+  ]);
+  assert.deepEqual(primaryRecipients.suggestions[0], {
+    name: 'Lovelace, Ada',
+    address: 'ada.correspondent@example.test',
+    formatted: '"Lovelace, Ada" <ada.correspondent@example.test>',
+  });
+  assert.equal(
+    primaryRecipients.suggestions.filter(item => item.address === 'casey.duplicate@example.test').length,
+    1,
+  );
+  assert.equal(
+    primaryRecipients.suggestions.find(item => item.address === 'casey.duplicate@example.test').name,
+    'Casey Current',
+  );
+
+  const legacyRecipient = await get(
+    '/api/compose/recipients?account_id=1101&query=legacy&limit=8',
+  );
+  assert.deepEqual(legacyRecipient.suggestions, [{
+    name: 'Legacy String Recipient',
+    address: 'legacy-string@example.test',
+    formatted: 'Legacy String Recipient <legacy-string@example.test>',
+  }]);
+  const ownedRecipientDecoys = await get(
+    '/api/compose/recipients?account_id=1101&q=sender&limit=20',
+  );
+  assert.deepEqual(ownedRecipientDecoys.suggestions, []);
+  const alternateAccountRecipients = await get(
+    '/api/compose/recipients?account_id=1102&q=&limit=20',
+  );
+  assert.deepEqual(alternateAccountRecipients.suggestions, [{
+    name: 'Alternate Account Only',
+    address: 'alternate-only@example.test',
+    formatted: 'Alternate Account Only <alternate-only@example.test>',
+  }]);
+  await request(
+    'GET',
+    '/api/compose/recipients?account_id=1201&q=',
+    undefined,
+    { expectedStatus: 404 },
+  );
+  await post('/api/auth/login', {
+    username: 'generated-b',
+    password: 'generated-only',
+  });
+  const userBRecipients = await get(
+    '/api/compose/recipients?account_id=1201&q=&limit=20',
+  );
+  assert.deepEqual(userBRecipients.suggestions, [{
+    name: 'User B Private Decoy',
+    address: 'user-b-only@example.test',
+    formatted: 'User B Private Decoy <user-b-only@example.test>',
+  }]);
+  assert.ok(!primaryRecipients.suggestions.some(item => item.address === 'user-b-only@example.test'));
+  let recipientSnapshot = await audit();
+  assert.equal(recipientSnapshot.counters.recipient_lookup_requests, 6);
+  assert.equal(recipientSnapshot.counters.recipient_lookup_successes, 5);
+  assert.equal(recipientSnapshot.counters.recipient_lookup_account_rejections, 1);
+  assert.equal(recipientSnapshot.counters.recipient_lookup_failures, 0);
+  assertExpectedFlowSafety(recipientSnapshot);
+  const serializedRecipientAudit = JSON.stringify(recipientSnapshot);
+  assert.doesNotMatch(serializedRecipientAudit, /ada\.correspondent|legacy-string|user-b-only/i);
+  assert.doesNotMatch(serializedRecipientAudit, /Lovelace|Casey Current|Private Decoy/);
+  results.recipient_directory = recipientSnapshot.counters;
+
+  await reset('recipient-delay');
+  const delayedRecipients = await get(
+    '/api/compose/recipients?account_id=1101&q=ada&limit=8',
+  );
+  assert.equal(delayedRecipients.suggestions[0].address, 'ada.correspondent@example.test');
+  recipientSnapshot = await audit();
+  assert.equal(recipientSnapshot.counters.recipient_lookup_requests, 1);
+  assert.equal(recipientSnapshot.counters.recipient_lookup_successes, 1);
+  assert.equal(recipientSnapshot.counters.recipient_lookup_delays, 1);
+  assertExpectedFlowSafety(recipientSnapshot);
+  results.recipient_delay = recipientSnapshot.counters;
+
+  await reset('recipient-fails');
+  const failedRecipients = await request(
+    'GET',
+    '/api/compose/recipients?account_id=1101&q=ada&limit=8',
+    undefined,
+    { expectedStatus: 503 },
+  );
+  assert.equal(failedRecipients.detail.code, 'recipient_lookup_unavailable');
+  recipientSnapshot = await audit();
+  assert.equal(recipientSnapshot.counters.recipient_lookup_requests, 1);
+  assert.equal(recipientSnapshot.counters.recipient_lookup_successes, 0);
+  assert.equal(recipientSnapshot.counters.recipient_lookup_failures, 1);
+  assertExpectedFlowSafety(recipientSnapshot);
+  results.recipient_failure = recipientSnapshot.counters;
+
+  // Hold a User A lookup across an auth transition. Its generated response is
+  // still the captured A response, while the active B session can retrieve
+  // only its own account; the application must ignore the stale A result.
+  await reset('recipient-held-session');
+  const heldRecipientPromise = fetch(
+    `${baseUrl}/api/compose/recipients?account_id=1101&q=ada&limit=8`,
+  ).then(async response => ({ status: response.status, body: await response.json() }));
+  await waitFor(async () => {
+    const current = await audit();
+    return current.counters.recipient_lookup_held === 1;
+  }, 'User A recipient response was not held');
+  await post('/api/auth/login', {
+    username: 'generated-b',
+    password: 'generated-only',
+  });
+  await post('/api/qa/release-held');
+  const heldRecipientResult = await heldRecipientPromise;
+  assert.equal(heldRecipientResult.status, 200);
+  assert.equal(
+    heldRecipientResult.body.suggestions[0].address,
+    'ada.correspondent@example.test',
+  );
+  const activeUserBRecipients = await get(
+    '/api/compose/recipients?account_id=1201&q=private&limit=8',
+  );
+  assert.equal(activeUserBRecipients.suggestions[0].address, 'user-b-only@example.test');
+  recipientSnapshot = await audit();
+  assert.equal(recipientSnapshot.current_user_id, 9102);
+  assert.equal(recipientSnapshot.counters.recipient_lookup_requests, 2);
+  assert.equal(recipientSnapshot.counters.recipient_lookup_successes, 2);
+  assert.equal(recipientSnapshot.counters.recipient_lookup_delays, 1);
+  assert.equal(recipientSnapshot.counters.recipient_lookup_held, 1);
+  assert.equal(recipientSnapshot.counters.recipient_lookup_stale_session_responses, 1);
+  assert.equal(recipientSnapshot.counters.stale_session_responses_released, 1);
+  assertExpectedFlowSafety(recipientSnapshot);
+  results.recipient_stale_session = recipientSnapshot.counters;
+
   // Personal Snippets are seeded per generated user, owner-scoped, revisioned,
   // replay-safe, and delete-idempotent. Their audit surface contains only
   // identifiers and revision metadata, never snippet content.

@@ -18,6 +18,9 @@ export const GENERATED_PROVIDER_DRAFT_SCENARIOS = Object.freeze([
   'held-session',
   'delete-fails',
   'offline',
+  'recipient-delay',
+  'recipient-held-session',
+  'recipient-fails',
 ]);
 
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
@@ -145,6 +148,116 @@ const SOURCE_MESSAGES = Object.freeze({
   }),
 });
 
+// Generated correspondence history for recipient-autocomplete QA. The rows
+// deliberately mix current address objects with legacy formatted strings,
+// repeat correspondents under older names/casing, and contain owned-address
+// decoys. The endpoint below derives and de-duplicates suggestions instead of
+// exposing these raw rows.
+const RECIPIENT_HISTORY_BY_USER = Object.freeze({
+  9101: Object.freeze([
+    Object.freeze({
+      account_id: 1101,
+      occurred_at: '2026-08-30T15:58:00.000Z',
+      is_sent: false,
+      from_name: 'Lovelace, Ada',
+      from_address: 'ADA.CORRESPONDENT@example.test',
+      to_addresses: Object.freeze([
+        Object.freeze({ name: 'Generated Sender A', address: 'sender-a@example.test' }),
+      ]),
+      cc_addresses: Object.freeze([]),
+    }),
+    Object.freeze({
+      account_id: 1101,
+      occurred_at: '2026-08-29T14:00:00.000Z',
+      is_sent: true,
+      from_name: 'Generated Sender A',
+      from_address: 'sender-a@example.test',
+      // Legacy synchronized rows stored mailbox values as strings.
+      to_addresses: Object.freeze([
+        'Ada Lovelace <ada.correspondent@example.test>',
+        'Legacy String Recipient <legacy-string@example.test>',
+      ]),
+      cc_addresses: Object.freeze([
+        'Generated Alternate A <alternate-a@example.test>',
+      ]),
+    }),
+    Object.freeze({
+      account_id: 1101,
+      occurred_at: '2026-08-28T18:00:00.000Z',
+      is_sent: true,
+      from_name: 'Generated Sender A',
+      from_address: 'sender-a@example.test',
+      to_addresses: Object.freeze([
+        Object.freeze({ name: 'Casey Current', address: 'casey.duplicate@example.test' }),
+      ]),
+      cc_addresses: Object.freeze([]),
+    }),
+    Object.freeze({
+      account_id: 1101,
+      occurred_at: '2026-08-21T09:00:00.000Z',
+      is_sent: false,
+      from_name: 'Casey Older',
+      from_address: 'CASEY.DUPLICATE@example.test',
+      to_addresses: Object.freeze(['sender-a@example.test']),
+      cc_addresses: Object.freeze([]),
+    }),
+    Object.freeze({
+      account_id: 1101,
+      occurred_at: '2026-08-20T09:00:00.000Z',
+      is_sent: true,
+      from_name: 'Generated Sender A',
+      from_address: 'sender-a@example.test',
+      to_addresses: Object.freeze([
+        Object.freeze({ name: 'Primary Owned Decoy', address: 'sender-a@example.test' }),
+      ]),
+      cc_addresses: Object.freeze([]),
+    }),
+    Object.freeze({
+      account_id: 1102,
+      occurred_at: '2026-08-30T12:00:00.000Z',
+      is_sent: false,
+      from_name: 'Alternate Account Only',
+      from_address: 'alternate-only@example.test',
+      to_addresses: Object.freeze(['alternate-a@example.test']),
+      cc_addresses: Object.freeze([]),
+    }),
+    Object.freeze({
+      account_id: 1102,
+      occurred_at: '2026-08-19T12:00:00.000Z',
+      is_sent: true,
+      from_name: 'Generated Alternate A',
+      from_address: 'alternate-a@example.test',
+      to_addresses: Object.freeze(['sender-a@example.test']),
+      cc_addresses: Object.freeze([]),
+    }),
+  ]),
+  9102: Object.freeze([
+    Object.freeze({
+      account_id: 1201,
+      occurred_at: '2026-08-30T15:59:00.000Z',
+      is_sent: false,
+      from_name: 'User B Private Decoy',
+      from_address: 'user-b-only@example.test',
+      to_addresses: Object.freeze([
+        Object.freeze({ name: 'Generated Sender B', address: 'sender-b@example.test' }),
+      ]),
+      cc_addresses: Object.freeze([]),
+    }),
+    Object.freeze({
+      account_id: 1201,
+      occurred_at: '2026-08-25T10:00:00.000Z',
+      is_sent: true,
+      from_name: 'Generated Sender B',
+      from_address: 'sender-b@example.test',
+      to_addresses: Object.freeze([
+        'User B Private Decoy <USER-B-ONLY@example.test>',
+        'sender-b@example.test',
+      ]),
+      cc_addresses: Object.freeze([]),
+    }),
+  ]),
+});
+
 const SEEDED_SNIPPETS_BY_USER = Object.freeze({
   9101: Object.freeze([
     Object.freeze({
@@ -221,6 +334,101 @@ function isGeneratedAddress(value) {
     && /^[^@\s]+@(?:[^@\s.]+\.)*example\.test$/i.test(address);
 }
 
+function generatedMailbox(value) {
+  let address = '';
+  let name = '';
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    address = String(value.address || '').trim().toLowerCase();
+    name = String(value.name || '').trim().replace(/\s+/g, ' ');
+  } else if (typeof value === 'string') {
+    address = mailboxAddress(value);
+    const open = value.lastIndexOf('<');
+    if (open >= 0) {
+      name = value.slice(0, open).trim();
+      if (name.startsWith('"') && name.endsWith('"')) {
+        name = name.slice(1, -1).replace(/\\(["\\])/g, '$1');
+      }
+      name = name.trim().replace(/\s+/g, ' ');
+    }
+  }
+  if (
+    !/^[^@\s]+@(?:[^@\s.]+\.)*example\.test$/i.test(address)
+    || /[\r\n\x00-\x1f\x7f]/.test(name)
+  ) return null;
+  return { name, address };
+}
+
+function formattedGeneratedMailbox({ name, address }) {
+  if (!name) return address;
+  const escaped = name.replace(/(["\\])/g, '\\$1');
+  const display = /[",<>@;:]/.test(name) ? `"${escaped}"` : escaped;
+  return `${display} <${address}>`;
+}
+
+function generatedRecipientSuggestions(userId, accountId, query, limit) {
+  const ownedAddresses = new Set(
+    (ACCOUNTS_BY_USER[userId] || []).map(account => account.email.toLowerCase()),
+  );
+  const correspondents = new Map();
+  for (const row of RECIPIENT_HISTORY_BY_USER[userId] || []) {
+    if (row.account_id !== accountId) continue;
+    const candidates = row.is_sent
+      ? [
+          ...(Array.isArray(row.to_addresses) ? row.to_addresses : []),
+          ...(Array.isArray(row.cc_addresses) ? row.cc_addresses : []),
+          ...(Array.isArray(row.bcc_addresses) ? row.bcc_addresses : []),
+        ]
+      : [{ name: row.from_name, address: row.from_address }];
+    const occurredAt = Date.parse(row.occurred_at);
+    for (const candidate of candidates) {
+      const mailbox = generatedMailbox(candidate);
+      if (!mailbox || ownedAddresses.has(mailbox.address)) continue;
+      const existing = correspondents.get(mailbox.address);
+      if (!existing) {
+        correspondents.set(mailbox.address, {
+          ...mailbox,
+          interaction_count: 1,
+          last_contacted_at: occurredAt,
+        });
+        continue;
+      }
+      existing.interaction_count += 1;
+      if (occurredAt > existing.last_contacted_at) {
+        existing.last_contacted_at = occurredAt;
+        if (mailbox.name) existing.name = mailbox.name;
+      }
+    }
+  }
+
+  const needle = query.trim().toLocaleLowerCase();
+  return [...correspondents.values()]
+    .map(item => {
+      const name = item.name.toLocaleLowerCase();
+      const address = item.address.toLocaleLowerCase();
+      let rank = 4;
+      if (needle) {
+        if (name === needle || address === needle) rank = 0;
+        else if (name.startsWith(needle) || address.startsWith(needle)) rank = 1;
+        else if (name.includes(needle) || address.includes(needle)) rank = 2;
+        else rank = Number.POSITIVE_INFINITY;
+      }
+      return { ...item, rank };
+    })
+    .filter(item => Number.isFinite(item.rank))
+    .sort((left, right) => (
+      left.rank - right.rank
+      || right.interaction_count - left.interaction_count
+      || right.last_contacted_at - left.last_contacted_at
+      || left.address.localeCompare(right.address)
+    ))
+    .slice(0, limit)
+    .map(({ name, address }) => ({
+      name,
+      address,
+      formatted: formattedGeneratedMailbox({ name, address }),
+    }));
+}
+
 function clone(value) {
   return structuredClone(value);
 }
@@ -275,6 +483,13 @@ function newCounters() {
     snippet_update_replays: 0,
     snippet_conflicts: 0,
     snippet_not_found: 0,
+    recipient_lookup_requests: 0,
+    recipient_lookup_successes: 0,
+    recipient_lookup_failures: 0,
+    recipient_lookup_delays: 0,
+    recipient_lookup_held: 0,
+    recipient_lookup_stale_session_responses: 0,
+    recipient_lookup_account_rejections: 0,
     expected_mutations: 0,
     unexpected_mutations: 0,
     unknown_routes: 0,
@@ -319,6 +534,7 @@ export function createGeneratedProviderDraftFixture({
   let providerSequence = 0;
   let firstLostResponseUsed = false;
   let firstHeldResponseUsed = false;
+  let firstRecipientHeldResponseUsed = false;
   const drafts = new Map();
   const outbounds = new Map();
   const outboundIdempotency = new Map();
@@ -906,6 +1122,95 @@ export function createGeneratedProviderDraftFixture({
     return writeEmpty(response);
   }
 
+  async function handleRecipientSuggestions(request, response, pathname, url) {
+    const requestUserId = currentUser.id;
+    counters.recipient_lookup_requests += 1;
+    const accountId = Number(url.searchParams.get('account_id'));
+    if (!Number.isSafeInteger(accountId) || !accountForUser(requestUserId, accountId)) {
+      counters.recipient_lookup_account_rejections += 1;
+      recordEvent('recipient_lookup_account_rejected', request, pathname, {
+        account_id: Number.isSafeInteger(accountId) ? accountId : null,
+        request_user_id: requestUserId,
+      });
+      return writeError(response, 404, 'account_not_found', 'Generated account not found');
+    }
+
+    const query = String(
+      url.searchParams.has('q')
+        ? url.searchParams.get('q')
+        : url.searchParams.get('query') || '',
+    ).trim();
+    if (query.length > 200 || /[\r\n\x00-\x1f\x7f]/.test(query)) {
+      counters.rejected_payloads += 1;
+      counters.recipient_lookup_failures += 1;
+      recordEvent('recipient_lookup_rejected', request, pathname, {
+        account_id: accountId,
+        query_length: query.length,
+        request_user_id: requestUserId,
+      });
+      return writeError(response, 422, 'recipient_query_invalid', 'Recipient query is invalid');
+    }
+    const limit = integerInRange(url.searchParams.get('limit'), 8, 1, 20);
+
+    if (scenario === 'recipient-fails') {
+      counters.recipient_lookup_failures += 1;
+      recordEvent('recipient_lookup_failed', request, pathname, {
+        account_id: accountId,
+        query_length: query.length,
+        request_user_id: requestUserId,
+      });
+      return writeError(
+        response,
+        503,
+        'recipient_lookup_unavailable',
+        'Generated recipient suggestions are temporarily unavailable',
+      );
+    }
+
+    const payload = {
+      suggestions: generatedRecipientSuggestions(requestUserId, accountId, query, limit),
+    };
+    const eventMetadata = {
+      account_id: accountId,
+      query_length: query.length,
+      request_user_id: requestUserId,
+      result_count: payload.suggestions.length,
+    };
+
+    if (scenario === 'recipient-held-session' && !firstRecipientHeldResponseUsed) {
+      firstRecipientHeldResponseUsed = true;
+      counters.recipient_lookup_delays += 1;
+      counters.recipient_lookup_held += 1;
+      const held = {
+        kind: 'recipient',
+        response,
+        request_user_id: requestUserId,
+        payload,
+        event_metadata: eventMetadata,
+      };
+      heldResponses.push(held);
+      request.on('close', () => {
+        const index = heldResponses.indexOf(held);
+        if (index >= 0) heldResponses.splice(index, 1);
+      });
+      recordEvent('recipient_lookup_held', request, pathname, eventMetadata);
+      return;
+    }
+
+    if (scenario === 'recipient-delay') {
+      counters.recipient_lookup_delays += 1;
+      recordEvent('recipient_lookup_delayed', request, pathname, eventMetadata);
+      await new Promise(resolve => setTimeout(resolve, 60));
+      if (currentUser?.id !== requestUserId) {
+        counters.recipient_lookup_stale_session_responses += 1;
+      }
+    }
+
+    counters.recipient_lookup_successes += 1;
+    recordEvent('recipient_lookup_succeeded', request, pathname, eventMetadata);
+    return writeJson(response, payload);
+  }
+
   seedSnippets();
 
   function dropResponseAfterPersistence(request, response, record) {
@@ -927,6 +1232,7 @@ export function createGeneratedProviderDraftFixture({
     record.updated_at = new Date().toISOString();
     counters.held_responses += 1;
     const held = {
+      kind: 'draft',
       response,
       request_user_id: currentUser.id,
       client_draft_id: record.client_draft_id,
@@ -1810,6 +2116,21 @@ export function createGeneratedProviderDraftFixture({
     counters.qa_control_mutations += 1;
     const pending = heldResponses.splice(0);
     for (const held of pending) {
+      if (held.kind === 'recipient') {
+        if (currentUser?.id !== held.request_user_id) {
+          counters.stale_session_responses_released += 1;
+          counters.recipient_lookup_stale_session_responses += 1;
+        }
+        counters.recipient_lookup_successes += 1;
+        recordEvent(
+          'recipient_lookup_released',
+          request,
+          '/api/compose/recipients',
+          held.event_metadata,
+        );
+        writeJson(held.response, held.payload);
+        continue;
+      }
       const record = drafts.get(logicalKey(held.request_user_id, held.client_draft_id));
       if (record) {
         record.state = 'synced';
@@ -1856,6 +2177,7 @@ export function createGeneratedProviderDraftFixture({
     providerSequence = 0;
     firstLostResponseUsed = false;
     firstHeldResponseUsed = false;
+    firstRecipientHeldResponseUsed = false;
     drafts.clear();
     outbounds.clear();
     outboundIdempotency.clear();
@@ -1900,6 +2222,12 @@ export function createGeneratedProviderDraftFixture({
           Object.entries(SEEDED_SNIPPETS_BY_USER).map(([userId, records]) => [
             userId,
             records.map(record => record.snippet_id),
+          ]),
+        ),
+        recipient_history_counts_by_user: Object.fromEntries(
+          Object.entries(RECIPIENT_HISTORY_BY_USER).map(([userId, records]) => [
+            userId,
+            records.length,
           ]),
         ),
         scenarios: GENERATED_PROVIDER_DRAFT_SCENARIOS,
@@ -2143,6 +2471,9 @@ export function createGeneratedProviderDraftFixture({
 
     if (request.method === 'POST' && pathname === '/api/compose/draft') {
       return handleDraftUpsert(request, response, pathname);
+    }
+    if (request.method === 'GET' && pathname === '/api/compose/recipients') {
+      return handleRecipientSuggestions(request, response, pathname, url);
     }
     if (request.method === 'GET' && pathname === '/api/compose/snippets') {
       return handleSnippetList(request, response, pathname);

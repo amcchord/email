@@ -198,9 +198,9 @@ test('Compose owns one durable, attachment-complete draft through send handoff',
   assert.match(text, /if \(replyContext\.source_email_id\) data\.source_email_id = replyContext\.source_email_id;/);
   assert.match(text, /attachments = Array\.isArray\(draft\.attachments\)/);
   assert.match(text, /attachments: attachments\.map\(item => \(\{ \.\.\.item \}\)\)/);
-  assert.match(text, /recipientFieldValue\(draft\.to\)/);
-  assert.match(text, /recipientFieldValue\(draft\.cc\)/);
-  assert.match(text, /recipientFieldValue\(draft\.bcc\)/);
+  assert.match(text, /toRecipients = recipientValues\(draft\.to\)/);
+  assert.match(text, /ccRecipients = recipientValues\(draft\.cc\)/);
+  assert.match(text, /bccRecipients = recipientValues\(draft\.bcc\)/);
   assert.match(text, /client_draft_id: capturedDraftKey,/);
   assert.match(text, /draft_revision: capturedDraftRevision,/);
   assert.match(text, /draftController\?\.revision !== capturedDraftRevision/);
@@ -215,8 +215,8 @@ test('Compose owns one durable, attachment-complete draft through send handoff',
   assert.match(text, /bind:element=\{conflictCancelButton\}/);
   assert.match(text, /event\.key === 'Escape'/);
   assert.match(text, /event\.key !== 'Tab'/);
-  assert.match(text, /conflictTrigger\?\.isConnected \? conflictTrigger : conflictFallbackFocus/);
-  assert.match(text, /restoreTarget\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(text, /conflictTrigger\.focus\(\{ preventScroll: true \}\)/);
+  assert.match(text, /conflictFallbackFocus\?\.focus\?\.\(\{ force: true \}\)/);
   assert.match(text, /bind:this=\{conflictFallbackFocus\}/);
   assert.match(text, />Keep this version</);
   assert.match(text, />Use server version</);

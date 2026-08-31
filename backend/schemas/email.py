@@ -403,6 +403,18 @@ class ComposeDraftRequest(ComposeMessageBase):
     mutation_id: UUID
 
 
+class RecipientSuggestionResponse(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=255)
+    address: str = Field(max_length=254)
+    formatted: str = Field(max_length=998)
+
+    model_config = {"from_attributes": True}
+
+
+class RecipientSuggestionListResponse(BaseModel):
+    suggestions: list[RecipientSuggestionResponse]
+
+
 DraftSessionState = Literal[
     "pending",
     "syncing",

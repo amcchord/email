@@ -417,6 +417,16 @@ export const api = {
       mutation_id: mutationId,
     }),
 
+  // Private, account-scoped correspondent suggestions for Compose addressing.
+  listComposeRecipients: ({ accountId, query, limit = 8, signal } = {}) => {
+    const params = new URLSearchParams({
+      account_id: String(accountId),
+      q: String(query || ''),
+      limit: String(limit),
+    });
+    return request('GET', `/compose/recipients?${params.toString()}`, null, { signal });
+  },
+
   // Private reusable writing snippets
   listPersonalSnippets: () => request('GET', '/compose/snippets'),
   createPersonalSnippet: (payload) => request('POST', '/compose/snippets', payload),

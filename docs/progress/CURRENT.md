@@ -4,12 +4,13 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Operate Personal Snippets, Universal Send & Archive, Focused/Split Inbox, and
-the terminal track as durable, truthful workflows. Continue physical
-qualification of the independently gated Web Serial installer and OTA control
-plane on exact E1001/E1002 hardware. Keep real mail/calendar QA read-only except
-for generated `.example.test` fixtures and preserve every independent terminal
-write gate.
+Ship safe account-scoped recipient autocomplete as the next bounded writing
+acceleration milestone, then continue with inline snippet expansion. Operate
+Personal Snippets, Universal Send & Archive, Focused/Split Inbox, and the
+terminal track as durable, truthful workflows. Continue physical qualification
+of the independently gated Web Serial installer and OTA control plane on exact
+E1001/E1002 hardware. Keep real mail/calendar QA read-only except for generated
+`.example.test` fixtures and preserve every independent terminal write gate.
 
 ## Baseline
 
@@ -156,6 +157,27 @@ live state.
 - Next: attach dedicated hardware and complete physical A/B migration,
   interrupted-write, rollback, recovery, and USB-rescue evidence before
   installing any eligible descriptor or changing rollout from zero.
+
+## Recipient Autocomplete Release Candidate
+
+- One reusable accessible recipient field replaces delimiter-fragile Compose
+  text boxes with canonical To/Cc/Bcc chips, quoted-comma-safe paste/manual
+  parsing, cross-field duplicate protection, keyboard-first suggestions,
+  removable 44-pixel targets, and responsive overflow containment.
+- Suggestions use only a single 4,000-row recent metadata corpus from the
+  selected active owned account, exclude all of the user's own addresses, and
+  return no subject/body content. There is no Contacts scope, provider request,
+  migration, or new dependency.
+- Unfinished text remains local and blocks sender changes, draft save,
+  navigation, and button/shortcut Send. Only committed chips enter durable
+  autosave and outbound admission.
+- Focused backend/frontend checks, generated `.example.test` audit, desktop and
+  390×844 browser QA, one independent P0/P1 review, and independent user
+  acceptance passed. The review's two P1 findings were fixed. The single
+  consolidated post-freeze gate passed 734 backend tests with 66 expected
+  skips, all 462 frontend tests, and a 598-module production build.
+- Full behavior, validation, production, and rollback evidence is being
+  recorded in `RECIPIENT_AUTOCOMPLETE_RELEASE_2026-08-30.md`.
 
 ## Recent Personal Snippets Release
 

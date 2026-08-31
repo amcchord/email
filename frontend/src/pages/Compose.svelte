@@ -36,17 +36,22 @@
   import Icon from '../components/common/Icon.svelte';
   import DeferredRichEditor from '../components/email/DeferredRichEditor.svelte';
   import DraftStatus from '../components/email/DraftStatus.svelte';
+  import RecipientField from '../components/email/RecipientField.svelte';
   import SendSplitButton from '../components/common/SendSplitButton.svelte';
   import SnippetPicker from '../components/email/SnippetPicker.svelte';
+  import { parseMailboxList } from '../lib/recipientField.js';
   import {
     exactSourceEmailId,
     sendArchiveAcceptedMessage,
     withArchiveAfterSend,
   } from '../lib/sendArchive.js';
 
-  let to = $state('');
-  let cc = $state('');
-  let bcc = $state('');
+  let toRecipients = $state([]);
+  let ccRecipients = $state([]);
+  let bccRecipients = $state([]);
+  let toRecipientPending = $state(false);
+  let ccRecipientPending = $state(false);
+  let bccRecipientPending = $state(false);
   let subject = $state('');
   let bodyHtml = $state('');
   let showCcBcc = $state(false);
@@ -82,7 +87,9 @@
 
   let senderAccount = $derived(accountList.find(account => account.id === Number(selectedAccountId)) || null);
   let archiveSourceEmailId = $derived(exactSourceEmailId(replyContext.source_email_id));
-  let recipientChips = $derived(parseRecipients(to));
+  let recipientEntryPending = $derived(
+    toRecipientPending || ccRecipientPending || bccRecipientPending,
+  );
   let totalAttachmentBytes = $derived(attachments.reduce((sum, item) => sum + item.size, 0));
   let draftLocked = $derived(
     sending
@@ -94,12 +101,8 @@
     || draftState.sendInProgress,
   );
 
-  function parseRecipients(value) {
-    return (value || '').split(/[;,]/).map(item => item.trim()).filter(Boolean);
-  }
-
-  function recipientFieldValue(value) {
-    return Array.isArray(value) ? value.join(', ') : String(value || '');
+  function recipientValues(value) {
+    return parseMailboxList(value).mailboxes;
   }
 
   function chooseSender(list, contextAccountId = null) {
@@ -113,12 +116,24 @@
       || list[0].id;
   }
 
+  function recipientPendingMessage() {
+    return 'Finish or remove the incomplete recipient before continuing.';
+  }
+
+  function toggleCcBcc() {
+    if (showCcBcc && (ccRecipientPending || bccRecipientPending)) {
+      showToast(recipientPendingMessage(), 'error');
+      return;
+    }
+    showCcBcc = !showCcBcc;
+  }
+
   function draftSnapshot() {
     return {
       account_id: Number(selectedAccountId) || null,
-      to: parseRecipients(to),
-      cc: parseRecipients(cc),
-      bcc: parseRecipients(bcc),
+      to: [...toRecipients],
+      cc: [...ccRecipients],
+      bcc: [...bccRecipients],
       subject,
       body_html: bodyHtml,
       body_text: bodyHtml.replace(/<[^>]*>/g, ''),
@@ -166,9 +181,9 @@
 
   function hydrateDraftSnapshot(draft = {}) {
     suppressLocalPersistence = true;
-    to = recipientFieldValue(draft.to);
-    cc = recipientFieldValue(draft.cc);
-    bcc = recipientFieldValue(draft.bcc);
+    toRecipients = recipientValues(draft.to);
+    ccRecipients = recipientValues(draft.cc);
+    bccRecipients = recipientValues(draft.bcc);
     subject = draft.subject || '';
     bodyHtml = draft.body_html || '';
     initialContent = bodyHtml;
@@ -179,7 +194,7 @@
       selectedAccountId = Number(draft.account_id);
     }
     replyContext = composeReplyContext(draft);
-    showCcBcc = Boolean(cc || bcc);
+    showCcBcc = ccRecipients.length > 0 || bccRecipients.length > 0;
     lastPersistedFingerprint = draftFingerprint(draftSnapshot());
     editorRevision += 1;
     queueMicrotask(() => { suppressLocalPersistence = false; });
@@ -194,9 +209,9 @@
     const snapshot = {
       ...draftSnapshot(),
       account_id: Number(data.account_id),
-      to: Array.isArray(data.to) ? data.to : parseRecipients(data.to),
-      cc: Array.isArray(data.cc) ? data.cc : parseRecipients(data.cc),
-      bcc: Array.isArray(data.bcc) ? data.bcc : parseRecipients(data.bcc),
+      to: recipientValues(data.to),
+      cc: recipientValues(data.cc),
+      bcc: recipientValues(data.bcc),
       subject: data.subject || '',
       body_html: data.body_html || '',
       body_text: data.body_text || '',
@@ -329,9 +344,11 @@
     const cleanupShortcuts = registerActions({
       'compose.send': {
         run: () => handleSend(),
-        isEnabled: () => !sending && writingSurfaceReady && draftState.canSend,
+        isEnabled: () => !sending && !recipientEntryPending && writingSurfaceReady && draftState.canSend,
         disabledReason: () => sending
           ? 'Email is already sending'
+          : recipientEntryPending
+            ? recipientPendingMessage()
           : draftState.status === 'offline'
             ? 'Reconnect to send'
           : !draftState.canSend
@@ -342,6 +359,7 @@
         run: () => handleSend(null, { archiveAfterSend: true }),
         isEnabled: () => (
           !sending
+          && !recipientEntryPending
           && writingSurfaceReady
           && draftState.canSend
           && archiveSourceEmailId !== null
@@ -349,6 +367,7 @@
         disabledReason: () => {
           if (archiveSourceEmailId === null) return 'Open a verified reply first';
           if (sending) return 'Email is already sending';
+          if (recipientEntryPending) return recipientPendingMessage();
           if (draftState.status === 'offline') return 'Reconnect to send';
           if (!draftState.canSend) return 'Draft is not ready to send';
           return 'Message editor is still opening';
@@ -361,11 +380,13 @@
           && writingSurfaceReady
           && Boolean(draftController)
           && !draftLocked
+          && !recipientEntryPending
           && !autosaveStatus
         ),
         disabledReason: () => {
           if (draftState.status === 'conflict') return 'Review the conflicting draft versions first';
           if (draftLocked) return 'Draft editing is locked while its state is being confirmed';
+          if (recipientEntryPending) return recipientPendingMessage();
           if (autosaveStatus || !draftController) return 'Durable draft storage is unavailable';
           return savingDraft ? 'Draft is already saving' : 'Message editor is still opening';
         },
@@ -388,8 +409,8 @@
           ? 'Draft editing is locked while its state is being confirmed'
           : 'Wait for attachments to finish importing',
       },
-      'compose.cc': () => { showCcBcc = !showCcBcc; },
-      'compose.bcc': () => { showCcBcc = !showCcBcc; },
+      'compose.cc': () => toggleCcBcc(),
+      'compose.bcc': () => toggleCcBcc(),
     });
 
     const onlineHandler = () => draftController?.handleOnlineChange();
@@ -463,16 +484,22 @@
     return true;
   }
 
-  function focusInitialRecipient(node) {
-    const frame = requestAnimationFrame(() => {
-      const active = document.activeElement;
-      const focusIsLost = !active
-        || active === document.body
-        || active.matches?.('main')
-        || !active.isConnected;
-      if (!to.trim() && focusIsLost) node.focus({ preventScroll: true });
+  async function loadRecipientSuggestions({ query, accountKey, signal }) {
+    const accountId = Number(accountKey);
+    if (
+      !sessionGuard?.isCurrent()
+      || !Number.isSafeInteger(accountId)
+      || accountId <= 0
+      || accountId !== Number(selectedAccountId)
+    ) return [];
+    const response = await api.listComposeRecipients({
+      accountId,
+      query,
+      limit: 8,
+      signal,
     });
-    return { destroy: () => cancelAnimationFrame(frame) };
+    if (!sessionGuard?.isCurrent() || accountId !== Number(selectedAccountId)) return [];
+    return response?.suggestions || [];
   }
 
   $effect(() => {
@@ -488,10 +515,6 @@
       localStorage.setItem(lastAccountKey, String(selectedAccountId));
     }
   });
-
-  function removeRecipient(address) {
-    to = parseRecipients(to).filter(item => item !== address).join(', ');
-  }
 
   async function addAttachments(event) {
     const input = event.currentTarget;
@@ -577,6 +600,10 @@
 
   async function returnToInbox() {
     if (!sessionGuard?.isCurrent()) return;
+    if (recipientEntryPending) {
+      showToast(recipientPendingMessage(), 'error');
+      return;
+    }
     persistLocalDraft();
     await draftController?.flush();
     if (!sessionGuard.isCurrent()) return;
@@ -603,8 +630,11 @@
   async function closeConflictDialog() {
     conflictDialogOpen = false;
     await tick();
-    const restoreTarget = conflictTrigger?.isConnected ? conflictTrigger : conflictFallbackFocus;
-    if (restoreTarget?.isConnected) restoreTarget.focus({ preventScroll: true });
+    if (conflictTrigger?.isConnected) {
+      conflictTrigger.focus({ preventScroll: true });
+    } else {
+      conflictFallbackFocus?.focus?.({ force: true });
+    }
     conflictTrigger = null;
   }
 
@@ -645,11 +675,15 @@
 
   async function handleSend(schedule = null, { archiveAfterSend = false } = {}) {
     if (sending || !writingSurfaceReady || !draftState.canSend || !sessionGuard?.isCurrent()) return false;
+    if (recipientEntryPending) {
+      showToast(recipientPendingMessage(), 'error');
+      return false;
+    }
     if (archiveAfterSend && archiveSourceEmailId === null) {
       showToast('Open a verified reply before using Send & archive.', 'error');
       return false;
     }
-    if (!to.trim()) {
+    if (toRecipients.length === 0) {
       showToast('Please add recipients', 'error');
       return false;
     }
@@ -697,9 +731,9 @@
     try {
       let data = {
         account_id: selectedAccountId,
-        to: parseRecipients(to),
-        cc: parseRecipients(cc),
-        bcc: parseRecipients(bcc),
+        to: [...toRecipients],
+        cc: [...ccRecipients],
+        bcc: [...bccRecipients],
         subject: subject,
         body_html: bodyHtml,
         body_text: bodyHtml.replace(/<[^>]*>/g, ''),
@@ -769,6 +803,10 @@
   }
 
   async function handleSaveDraft() {
+    if (recipientEntryPending) {
+      showToast(recipientPendingMessage(), 'error');
+      return false;
+    }
     if (
       !selectedAccountId
       || !draftController
@@ -830,7 +868,7 @@
       <Button
         size="sm"
         onclick={handleSaveDraft}
-        disabled={savingDraft || !writingSurfaceReady || draftLocked || !draftController || Boolean(autosaveStatus)}
+        disabled={savingDraft || !writingSurfaceReady || draftLocked || recipientEntryPending || !draftController || Boolean(autosaveStatus)}
       >
         {savingDraft ? 'Saving…' : 'Save Draft'}
       </Button>
@@ -843,7 +881,7 @@
       />
       <SendSplitButton
         compact={true}
-        disabled={!writingSurfaceReady || !draftState.canSend}
+        disabled={!writingSurfaceReady || !draftState.canSend || recipientEntryPending}
         busy={sending}
         busyLabel={sendMode === 'schedule' ? 'Scheduling…' : 'Sending…'}
         onsend={() => handleSend()}
@@ -864,7 +902,7 @@
           <select
             id="compose-from"
             bind:value={selectedAccountId}
-            disabled={Boolean(replyContext.source_email_id) || draftLocked}
+            disabled={Boolean(replyContext.source_email_id) || draftLocked || recipientEntryPending}
             class="w-0 min-w-0 flex-1 h-full text-sm outline-none border-0"
             style="background: transparent; color: var(--text-primary)"
           >
@@ -881,37 +919,29 @@
       {/if}
 
       <!-- To -->
-      <div class="compose-field flex items-start px-6 min-h-10 py-1 border-b" style="border-color: var(--border-subtle)">
-        <label for="compose-to" class="text-sm w-16 shrink-0" style="color: var(--text-secondary)">To</label>
-        <div class="flex-1 min-w-0">
-          <input
-            type="text"
-            id="compose-to"
+      <div class="compose-field flex min-w-0 items-start gap-2 px-6 py-2 border-b" style="border-color: var(--border-subtle)">
+        <div class="min-w-0 flex-1">
+          <RecipientField
             bind:this={conflictFallbackFocus}
-            bind:value={to}
-            readonly={draftLocked}
-            use:focusInitialRecipient
-            placeholder="recipient@example.com"
-            class="w-full h-8 text-sm outline-none"
-            style="background: transparent; color: var(--text-primary)"
-            aria-describedby="recipient-help"
+            id="compose-to"
+            field="to"
+            label="To"
+            bind:recipients={toRecipients}
+            bind:pending={toRecipientPending}
+            recipientCollections={[ccRecipients, bccRecipients]}
+            accountKey={selectedAccountId}
+            loadSuggestions={loadRecipientSuggestions}
+            placeholder="Add recipients"
+            disabled={draftLocked}
+            required={true}
+            autofocus={true}
           />
-          {#if recipientChips.length > 0}
-            <div class="flex flex-wrap gap-1 pb-1" id="recipient-help">
-              {#each recipientChips as address}
-                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px]" style="background: var(--bg-tertiary); color: var(--text-secondary)">
-                  {address}
-                  <button disabled={draftLocked} onclick={() => removeRecipient(address)} aria-label="Remove recipient {address}"><Icon name="x" size={11} /></button>
-                </span>
-              {/each}
-            </div>
-          {/if}
         </div>
         {#if !showCcBcc}
           <button
             onclick={() => showCcBcc = true}
             disabled={draftLocked}
-            class="text-xs"
+            class="inline-flex min-h-11 shrink-0 items-center rounded-lg px-2 text-xs"
             style="color: var(--text-tertiary)"
           >Cc/Bcc</button>
         {/if}
@@ -919,26 +949,32 @@
 
       <!-- Cc/Bcc -->
       {#if showCcBcc}
-        <div class="compose-field flex items-center px-6 h-10 border-b" style="border-color: var(--border-subtle)">
-          <label for="compose-cc" class="text-sm w-16 shrink-0" style="color: var(--text-secondary)">Cc</label>
-          <input
-            type="text"
+        <div class="compose-field min-w-0 px-6 py-2 border-b" style="border-color: var(--border-subtle)">
+          <RecipientField
             id="compose-cc"
-            bind:value={cc}
-            readonly={draftLocked}
-            class="flex-1 h-full text-sm outline-none"
-            style="background: transparent; color: var(--text-primary)"
+            field="cc"
+            label="Cc"
+            bind:recipients={ccRecipients}
+            bind:pending={ccRecipientPending}
+            recipientCollections={[toRecipients, bccRecipients]}
+            accountKey={selectedAccountId}
+            loadSuggestions={loadRecipientSuggestions}
+            placeholder="Add Cc recipients"
+            disabled={draftLocked}
           />
         </div>
-        <div class="compose-field flex items-center px-6 h-10 border-b" style="border-color: var(--border-subtle)">
-          <label for="compose-bcc" class="text-sm w-16 shrink-0" style="color: var(--text-secondary)">Bcc</label>
-          <input
-            type="text"
+        <div class="compose-field min-w-0 px-6 py-2 border-b" style="border-color: var(--border-subtle)">
+          <RecipientField
             id="compose-bcc"
-            bind:value={bcc}
-            readonly={draftLocked}
-            class="flex-1 h-full text-sm outline-none"
-            style="background: transparent; color: var(--text-primary)"
+            field="bcc"
+            label="Bcc"
+            bind:recipients={bccRecipients}
+            bind:pending={bccRecipientPending}
+            recipientCollections={[toRecipients, ccRecipients]}
+            accountKey={selectedAccountId}
+            loadSuggestions={loadRecipientSuggestions}
+            placeholder="Add Bcc recipients"
+            disabled={draftLocked}
           />
         </div>
       {/if}
@@ -996,7 +1032,7 @@
           onUpdate={handleEditorUpdate}
           onReady={handleEditorReady}
           placeholder="Write your message..."
-          autofocus={true}
+          autofocus={toRecipients.length > 0}
           ariaLabel="Message body"
           surface="compose"
         />

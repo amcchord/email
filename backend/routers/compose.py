@@ -17,6 +17,7 @@ from backend.schemas.email import (
     DraftSessionDetailResponse,
     DraftSessionResponse,
     OutboundSendResponse,
+    RecipientSuggestionListResponse,
 )
 from backend.services.drafts import (
     DraftConflict,
@@ -57,6 +58,10 @@ from backend.services.outbound_messages import (
     stage_outbound_message,
     try_enqueue_outbound_drain,
     undo_outbound_message,
+)
+from backend.services.recipient_suggestions import (
+    RecipientAccountNotFound,
+    suggest_recipients,
 )
 
 
@@ -407,6 +412,27 @@ async def recent_drafts(
 ):
     drafts = await recent_draft_sessions(db, user_id=user.id, limit=limit)
     return [_draft_response(draft) for draft in drafts]
+
+
+@router.get("/recipients", response_model=RecipientSuggestionListResponse)
+async def recipient_suggestions(
+    account_id: int = Query(..., gt=0),
+    q: str = Query("", max_length=254),
+    limit: int = Query(8, ge=1, le=20),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    try:
+        suggestions = await suggest_recipients(
+            db,
+            user_id=user.id,
+            account_id=account_id,
+            query=q,
+            limit=limit,
+        )
+        return RecipientSuggestionListResponse(suggestions=suggestions)
+    except RecipientAccountNotFound as error:
+        raise HTTPException(status_code=404, detail="Account not found") from error
 
 
 @router.get(

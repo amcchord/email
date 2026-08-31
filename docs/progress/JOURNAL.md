@@ -3,6 +3,53 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Safe recipient autocomplete candidate
+
+### Scope
+
+Replace Compose's delimiter-fragile recipient text inputs with account-scoped,
+keyboard-first suggestions and canonical chips. Preserve durable drafts and
+send admission, keep real mail/calendar QA read-only, avoid Contacts/provider
+calls and migrations, and use the bounded D-041 release cadence.
+
+### Completed
+
+- Added one session-only owned-account suggestion endpoint over a single
+  index-bounded recent metadata corpus, excluding drafts, Spam, Trash, and all
+  of the user's own addresses.
+- Added reusable accessible To/Cc/Bcc fields with quoted-name parsing, paste,
+  keyboard selection, removable chips, cross-field deduplication, manual-entry
+  fallback, account-switch cancellation, and narrow-screen containment.
+- Made unfinished text local-only and visibly block account changes, draft
+  save, navigation, and every button/shortcut Send path until resolved.
+- Extended the generated `.example.test` provider with isolated-account
+  correspondents, ranking/normalization cases, delay/failure/held-session
+  scenarios, and content-free audit counters.
+
+### Verification
+
+- Focused checks passed before freeze. Independent P0/P1 review found no P0;
+  its two P1 findings—silent pending-recipient omission and a potentially
+  unbounded history scan—were fixed.
+- Generated browser QA passed chip/draft/reload continuity, account isolation,
+  stale-session rejection, failure fallback, shortcut containment, desktop and
+  390×844 layouts, and zero browser warnings/errors or unexpected mutations.
+- Independent user acceptance found no P0/P1 blocker and passed quoted-comma
+  keyboard selection, paste/manual entry, cross-field duplicate rejection,
+  pending-input action gates, shortcut containment, and narrow layout. The
+  single consolidated final gate passed 734 backend tests with 66 expected
+  skips, all 462 frontend tests, and a 598-module production build.
+
+### Production Actions
+
+- Pending. No production file, process, database, provider, mail, or calendar
+  state changed during candidate development.
+
+### Next
+
+Complete the bounded acceptance and final gate, deploy the exact candidate,
+then continue writing acceleration with inline semicolon snippet expansion.
+
 ## 2026-08-30 — Personal Snippets
 
 ### Scope
