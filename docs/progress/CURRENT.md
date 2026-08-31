@@ -4,13 +4,12 @@ Last updated: 2026-08-31
 
 ## Active Objective
 
-Build a truthful, migration-free Share Availability snapshot over synchronized
-primary-calendar metadata. Let the user explicitly choose account coverage,
-working hours, duration, date range, timezone, and individual proposed slots,
-then insert only that selected snapshot into Compose, reader reply, or Flow.
-Never claim live availability, create a hold or event, call Google during the
-request, widen incomplete account coverage, or expose event content. Keep the
-deployed Attachments, Saved Views, first-class Contacts, writing, Universal Send
+Prepare the next bounded mail-workflow milestone around user-trainable
+Focused/Other rules without weakening the deployed deterministic split, exact
+counts, or account ownership. Keep Share Availability as an explicit truthful
+synchronized snapshot rather than a hold, event, booking link, or claim of
+live availability. Keep the deployed Attachments, Saved Views, first-class
+Contacts, writing, Universal Send
 & Archive, Focused/Split Inbox, and terminal track operating as durable,
 truthful workflows. Continue
 physical qualification of the independently gated Web Serial installer and OTA control
@@ -20,6 +19,14 @@ write gate.
 
 ## Baseline
 
+- The deployed Share Availability application/runtime is
+  `cf812a451c43b1a63730eaa4989d67ba0af68ba5`. Compose, reader reply, and Flow
+  share one explicit picker and `Cmd/Ctrl+Shift+A` action over exact active
+  owned primary-calendar snapshots. Incomplete, stale, reauthorization,
+  sync-error, syncing, or changed coverage fails closed; recipient copy contains
+  only the selected timezone, duration, dates, and times. The release added no
+  provider request, Calendar permission/write, hold, event, policy row, job, or
+  migration.
 - The deployed first-class Attachments application/runtime is
   `fcbea4afccfa2226b5519c6c2f278960bee8b29c`. More → Attachments provides an
   exact-account metadata library with literal search, type/direction filters,
@@ -181,23 +188,19 @@ live state.
 
 ## Active Work Items
 
-### P1 — Truthful Share Availability snapshots
+### P1 — User-trainable Focused/Other rules
 
-- State: active; product/repository/production audits are complete and the
-  migration-free contract is frozen on exact docs-closeout baseline `730a13f`.
-- Scope: one read-only calendar availability endpoint over exact owned active
-  accounts and synchronized `CalendarEvent`/`CalendarSyncStatus` rows; a shared
-  accessible picker and formatter for Compose, reader reply, and Flow; one
-  explicit shortcut; generated `.example.test` acceptance fixtures for desktop
-  and narrow screens.
-- Acceptance: incomplete, stale, or reauthorization-required coverage fails
-  closed with exact account/freshness truth; cancelled, transparent, and
-  self-declined events do not block; tentative and all-day events do; timezone
-  and DST behavior is deterministic; selected slots insert at the current
-  caret only after explicit confirmation; no provider call, event hold,
-  calendar/mail send, persistence, or schema change occurs.
-- Next: implement the frozen backend, frontend, and generated QA slices in
-  parallel, then run one P0/P1 review and one consolidated post-freeze gate.
+- State: queued for bounded product/data-contract audit on the exact Share
+  Availability closeout baseline; no implementation or migration is allocated.
+- Scope: explicit user corrections that improve future Focused/Other placement
+  without provider label mutation, opaque AI-only behavior, cross-account
+  widening, or silently overriding deterministic safety rules.
+- Acceptance: every learned rule is inspectable, reversible, exact-account,
+  conflict-defined, and reflected coherently in split counts, paging, search,
+  commands, and generated desktop/mobile QA.
+- Next: audit the existing focused-ranking contract and production UX, freeze
+  the smallest useful rule model and rollback path, then implement once with
+  focused checks and one consolidated release gate.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 
@@ -236,6 +239,27 @@ live state.
 - Next: attach dedicated hardware and complete physical A/B migration,
   interrupted-write, rollback, recovery, and USB-rescue evidence before
   installing any eligible descriptor or changing rollout from zero.
+
+## Recent Share Availability Release
+
+- Compose, reader reply, and Flow now share one explicit availability picker,
+  visible action, and `Cmd/Ctrl+Shift+A`. The user chooses exact account
+  coverage, dates, duration, working hours, timezone, weekends, and up to eight
+  proposed times; recipient copy never contains connected identities or sync
+  timestamps.
+- The private/no-store endpoint reads synchronized local primary-calendar
+  metadata only and fails closed on missing scope, reauthorization, incomplete,
+  stale, error, syncing, or changed coverage. It performs no Google request,
+  provider/calendar write, hold, event, persistence, job, or migration.
+- Generated desktop and 390x844 QA recorded zero provider operations, sends,
+  mail/calendar mutations, event creates/holds, unexpected writes, or external
+  requests. The bounded review fixed three P1 issues before the single final
+  gate passed 817 backend, 532 frontend, and the 622-module build.
+- GitHub and production application/runtime are exact at
+  `cf812a451c43b1a63730eaa4989d67ba0af68ba5`; all seven services and stable
+  public health are healthy, replacement API/workers have zero restarts, and
+  Alembic remains `b1c2d3e4f5a6`. Full evidence is in
+  `SHARE_AVAILABILITY_RELEASE_2026-08-31.md`.
 
 ## Recent First-class Attachments Release
 

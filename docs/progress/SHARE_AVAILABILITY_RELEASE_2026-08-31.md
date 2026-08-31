@@ -108,11 +108,25 @@ Privacy-safe evidence is outside the repository:
 
 ## Production and rollback
 
-Deployment status is recorded in the closeout journal entry and exact Git
-history. This release is migration-free. Rollback is an application Git revert,
-frontend rebuild, and selective `mailapp` restart for the backend route/sync
-behavior; there is no database downgrade, provider cleanup, event cancellation,
-or mailbox mutation.
+GitHub `main` and production received exact application/runtime commit
+`cf812a451c43b1a63730eaa4989d67ba0af68ba5`. Production installed the pinned
+frontend dependencies, built 622 modules, and restarted `mailapp`, `mailworker`,
+and `mailworker-cron` so both the API and Calendar sync-readiness boundary use
+the same code. Alembic remained exactly `b1c2d3e4f5a6 (head)`.
+
+The previous API process exceeded its graceful stop timeout and systemd killed
+that old process; the first immediate public health probe therefore observed a
+transient 502. The replacement API and both workers then became active at
+17:57:27 UTC with `NRestarts=0`; all seven checked services are active and the
+public health endpoint is stable. Anonymous availability is 401 with
+`Cache-Control: private, no-store`. Signed-in read-only production QA opened
+Compose and the Share Availability picker, then closed it without checking
+calendars, editing/saving a draft, sending mail, or causing a calendar write.
+
+This release is migration-free. Rollback is an application Git revert,
+frontend rebuild, and selective restart of `mailapp`, `mailworker`, and
+`mailworker-cron`; there is no database downgrade, provider cleanup, event
+cancellation, or mailbox mutation.
 
 ## Follow-ons
 

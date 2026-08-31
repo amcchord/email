@@ -3,6 +3,67 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-31 — Truthful Share Availability snapshots
+
+### Scope
+
+Add one explicit availability-sharing action to Compose, reader reply, and
+Flow over synchronized local primary-calendar metadata. Fail closed on partial
+or changing coverage, keep account/freshness details private to the picker,
+perform no provider or calendar write, and use generated `.example.test`
+acceptance for draft insertion.
+
+### Completed
+
+- Added private/no-store `POST /api/calendar/availability` with exact active
+  account ownership, strict bounded inputs, recent complete sync requirements,
+  primary-calendar conflict semantics, exact timezone/DST duration, stable
+  pre/post-read sync versions, and an allowlisted response without event
+  content or provider identifiers.
+- Made incremental Calendar synchronization publish `syncing` before event
+  mutations and retain a non-ready error after partial failure, closing the
+  window in which availability could advertise a partial result.
+- Added one shared accessible modal/390px bottom sheet, natural recipient-safe
+  formatter, up-to-eight slot selection, caret-preserving insertion, late
+  response guards, visible actions, and `Cmd/Ctrl+Shift+A` across all three
+  writing surfaces.
+- Added deterministic generated fixtures and acceptance that reject/audit
+  sends, provider operations, calendar event/hold creation, unexpected writes,
+  non-generated recipients, and external requests.
+
+### Verification
+
+- The single post-freeze gate passed 817 backend tests with 75 expected skips,
+  all 532 frontend tests, and a 622-module production build. Focused post-review
+  checks passed 28 Calendar and 10 frontend tests.
+- Generated self-test and desktop/390x844 Compose, reader, and Flow browser QA
+  passed with zero provider reads/calls/writes, sends, mail/calendar mutations,
+  event creates/holds, unexpected writes, unknown routes, or external requests.
+- One bounded P0/P1 review found no P0 and three P1 issues; the partial-sync
+  publication window, DST-fold elapsed-duration error, and stale/privacy-unsafe
+  generated assertions were fixed with focused regressions before release.
+
+### Production Actions
+
+- Fast-forwarded GitHub and production to exact application/runtime
+  `cf812a451c43b1a63730eaa4989d67ba0af68ba5`, installed pinned frontend
+  dependencies, built 622 modules, and restarted `mailapp`, `mailworker`, and
+  `mailworker-cron`. Alembic remained `b1c2d3e4f5a6 (head)`.
+- The previous API process exceeded its graceful stop timeout, so systemd
+  killed that old process and the first immediate public probe observed a
+  transient 502. The replacement API and both workers then settled active at
+  17:57:27 UTC with zero restarts; all seven services and stable public health
+  are healthy. Anonymous availability is 401 private/no-store.
+- Signed-in read-only QA opened Compose and the picker, then closed it without
+  checking calendars, editing or saving a draft, sending mail, or causing a
+  calendar mutation.
+
+### Next
+
+Observe the explicit snapshot workflow without widening it into holds or live
+claims. Audit the smallest inspectable/reversible exact-account model for
+user-trainable Focused/Other corrections, then freeze one bounded follow-on.
+
 ## 2026-08-31 — Physical E1002 candidate.9 DIO milestone
 
 ### Scope
