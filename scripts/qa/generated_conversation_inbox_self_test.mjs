@@ -52,6 +52,18 @@ try {
   assert.equal(inbox.total_pages, 3);
   assert.equal(new Set(inbox.conversations.map(item => item.conversation_key)).size, 3);
 
+  const focused = await request('GET', '/api/emails/conversations?mailbox=INBOX&inbox_placement=focused&page=1&page_size=50');
+  const other = await request('GET', '/api/emails/conversations?mailbox=INBOX&inbox_placement=other&page=1&page_size=50');
+  assert.equal(focused.total, 4);
+  assert.equal(other.total, 3);
+  assert.equal(focused.total + other.total, inbox.total);
+  assert.ok(focused.conversations.every(item => item.inbox_placement === 'focused'));
+  assert.ok(other.conversations.every(item => item.inbox_placement === 'other'));
+  assert.equal(
+    focused.conversations.filter(item => other.conversations.some(candidate => candidate.conversation_key === item.conversation_key)).length,
+    0,
+  );
+
   const design = inbox.conversations.find(item => item.gmail_thread_id === 'generated-thread-1');
   assert.ok(design, 'newest generated conversation is present');
   assert.equal(design.member_count, 2);
@@ -94,6 +106,7 @@ try {
     page_size: inbox.page_size,
     expanded_messages: markedRead.accepted_count,
     full_thread_messages: thread.emails.length,
+    split_totals: { focused: focused.total, other: other.total },
     undo_verified: true,
   }, null, 2)}\n`);
 } finally {

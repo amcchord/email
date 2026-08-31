@@ -245,8 +245,10 @@
       'inbox.sidebar': () => {
         sidebarCollapsed.update(v => !v);
       },
-      'inbox.focused': () => {
-        hideIgnored.update(v => !v);
+      'inbox.focused': {
+        run: () => hideIgnored.update(value => !value),
+        isEnabled: () => moveAvailable,
+        disabledReason: 'Split Inbox is available in the standard Inbox',
       },
       'inbox.nextSection': {
         run: () => navigateInboxSection(1),

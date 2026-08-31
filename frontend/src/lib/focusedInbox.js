@@ -51,8 +51,17 @@ export function combineInboxSections(focused, other) {
     const pageSize = Math.max(1, Number(result?.page_size) || 1);
     return (page * pageSize) < Math.max(0, Number(result?.total) || 0);
   });
+  const emails = [...(focused?.emails || []), ...(other?.emails || [])];
+  const identities = new Set();
+  for (const email of emails) {
+    const identity = String(email?.conversation_key || `message:${email?.id ?? ''}`);
+    if (identities.has(identity)) {
+      throw new Error('Split Inbox returned the same conversation in both sections');
+    }
+    identities.add(identity);
+  }
   return {
-    emails: [...(focused?.emails || []), ...(other?.emails || [])],
+    emails,
     total: sectionTotals.focused + sectionTotals.other,
     page,
     page_size: Math.max(1, Number(focused?.page_size || other?.page_size) || 1),

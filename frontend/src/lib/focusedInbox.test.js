@@ -38,6 +38,13 @@ test('section responses are fail-closed and combine with exact totals', () => {
     () => normalizeInboxSectionResult({ emails: [other(9)] }, 'focused'),
     /did not match/,
   );
+  assert.throws(
+    () => combineInboxSections(
+      { emails: [{ ...focused(9), conversation_key: '7:thread:shared' }], total: 1 },
+      { emails: [{ ...other(10), conversation_key: '7:thread:shared' }], total: 1 },
+    ),
+    /same conversation/,
+  );
 });
 
 test('appended section pages preserve Focused then Other and deduplicate', () => {

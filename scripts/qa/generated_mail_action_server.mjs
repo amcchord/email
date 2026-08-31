@@ -210,6 +210,18 @@ function conversationSummary(matches) {
   const allLabels = [...labelCounts].filter(([, count]) => count === members.length).map(([label]) => label);
   const starredCount = members.filter(member => member.is_starred).length;
   const unreadCount = members.filter(member => !member.is_read).length;
+  const otherPlacement = ['generated-thread-5', 'generated-thread-6', 'generated-thread-9'].includes(
+    String(anchor.gmail_thread_id || '').trim(),
+  );
+  const placementReason = {
+    'generated-thread-1': 'high_priority',
+    'generated-thread-2': 'needs_reply',
+    'generated-thread-3': 'direct_or_fyi',
+    'generated-thread-4': 'trusted_contact',
+    'generated-thread-5': 'subscription',
+    'generated-thread-6': 'low_priority',
+    'generated-thread-9': 'delegated_scheduling',
+  }[String(anchor.gmail_thread_id || '').trim()] || 'unclassified';
   return {
     ...structuredClone(anchor),
     id: anchor.id,
@@ -224,6 +236,8 @@ function conversationSummary(matches) {
     has_attachments: members.some(member => member.has_attachments),
     labels: allLabels,
     label_coverage: labelCoverage,
+    inbox_placement: otherPlacement ? 'other' : 'focused',
+    inbox_placement_reason: placementReason,
   };
 }
 
@@ -672,10 +686,14 @@ async function handleRequest(request, response) {
     const accountId = Number(url.searchParams.get('account_id'));
     const page = Math.max(1, Number(url.searchParams.get('page') || 1));
     const pageSize = Math.max(1, Math.min(200, Number(url.searchParams.get('page_size') || 50)));
-    const visible = visibleConversations(
+    let visible = visibleConversations(
       url.searchParams.get('mailbox') || 'INBOX',
       Number.isInteger(accountId) && accountId > 0 ? accountId : null,
     );
+    const inboxPlacement = url.searchParams.get('inbox_placement');
+    if (inboxPlacement === 'focused' || inboxPlacement === 'other') {
+      visible = visible.filter(conversation => conversation.inbox_placement === inboxPlacement);
+    }
     const offset = (page - 1) * pageSize;
     return writeJson(response, {
       conversations: visible.slice(offset, offset + pageSize),
