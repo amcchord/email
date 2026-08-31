@@ -3,6 +3,60 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-31 — First-class per-account signatures
+
+### Scope
+
+Add default-off revisioned rich/plain signatures per exact connected account,
+then carry one immutable sanitized snapshot through Compose, reader, Flow,
+durable drafts, scheduled/retried outbound delivery, and structured forwarding.
+Keep real mail/calendar QA read-only and preserve the bounded release cadence.
+
+### Completed
+
+- Added owner-scoped policy APIs, the additive `f9a0b1c2d3e4` table, pinned
+  server sanitization, revision replay/conflict semantics, and one content-hash
+  snapshot frozen at durable intent creation.
+- Added Settings → Writing cards/editor and shared writing-surface preview,
+  Remove/Restore, policy-error Retry/Continue unsigned, exact sender behavior,
+  authoritative save-ack adoption, and body → signature → quote rendering.
+- Kept authored body unchanged, legacy drafts unsigned, recent draft metadata
+  content-free, rendered messages size-bounded before Gmail, and retries or
+  settings edits unable to rewrite an accepted message.
+
+### Verification
+
+- Focused backend/frontend checks, generated-provider self-test, and exact
+  disposable `e8 → f9 → e8 → f9` migration passed.
+- Generated browser acceptance passed saved-policy settings, default preview,
+  Remove/Restore, desktop and 390×844 containment, zero browser diagnostics,
+  zero unexpected mutations, and zero external calls. Browser QA found and
+  drove the shared editor-hitbox stacking fix.
+- Independent reviews fixed mounted authoritative-snapshot propagation and
+  frozen unsigned recovery, then returned SHIP with no remaining P0/P1. The
+  final release gate passed 762 backend tests with 75 expected skips, all 500
+  frontend tests, and a 609-module production build.
+
+### Production Actions
+
+- Deployed exact runtime `22320744f037bbdf18ed9893cb188ffe36f9b981`
+  after validating protected pre-f9 backup
+  `/var/backups/mailapp/maildb-pre-account-signatures-20260831T1303Z.dump`
+  (SHA-256
+  `0465f637163571343a5f55f84b2c12c0388120e62d0aab6dc64bb268e6223c2d`).
+- Upgraded exactly `e8f9a0b1c2d3 → f9a0b1c2d3e4`, installed the pinned
+  sanitizer, replaced API and both workers, and published the 609-module
+  frontend. All seven services and public health are healthy; replacement
+  processes have zero restarts and no post-start warning-or-higher entries.
+- Anonymous signature access is 401 and the aggregate signature row count is
+  zero. Signed-in production Settings → Writing QA was read-only, showed four
+  default-off account cards with no UI/browser errors, and saved nothing.
+
+### Next
+
+Begin a bounded first-class contact-profile audit using existing synchronized
+metadata before considering any new provider scope or post-f9 migration.
+
 ## 2026-08-31 — Automatic follow-up reminders
 
 ### Scope

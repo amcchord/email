@@ -4,11 +4,11 @@ Last updated: 2026-08-31
 
 ## Active Objective
 
-Operate delivery-confirmed automatic follow-up reminders, safe inline snippet
-expansion, account-scoped recipient autocomplete, and Personal Snippets as
-durable writing workflows. Continue writing acceleration with first-class
-per-account signatures, keeping signature identity separate from reusable
-snippets.
+Operate first-class per-account signatures, delivery-confirmed automatic
+follow-up reminders, safe inline snippet expansion, account-scoped recipient
+autocomplete, and Personal Snippets as durable writing workflows. Continue
+writing acceleration with first-class contact profiles and relationship
+context without widening account or provider-data boundaries.
 Operate Universal Send & Archive, Focused/Split Inbox, and the terminal track
 as durable, truthful workflows. Continue physical
 qualification of the independently gated Web Serial installer and OTA control
@@ -18,6 +18,13 @@ write gate.
 
 ## Baseline
 
+- The deployed per-account Signatures application/runtime is
+  `22320744f037bbdf18ed9893cb188ffe36f9b981`. Settings → Writing owns one
+  default-off revisioned rich/plain policy per exact account. Compose, reader,
+  and Flow freeze one sanitized content-hashed sidecar per durable intent,
+  support per-message Remove/Restore, preserve authored body and structured
+  quote boundaries, and fail closed when policy loading is unavailable.
+  Production began with zero signature rows.
 - The deployed Automatic Follow-up Reminders application/runtime is
   `bf5f7bb67440f294873c0e18cdd982554343859c`. Per-account defaults remain off
   until explicitly saved; Compose, reader, and Flow share exact durable
@@ -120,10 +127,10 @@ write gate.
 - The deployed secure-enrollment application/runtime commit is
   `8ff01848a2be2818dfd9eb88b84be9aab4befb0a`; the following closeout is docs
   only. Production and GitHub were exact and clean at the runtime boundary.
-- Production Alembic is `e8f9a0b1c2d3 (head)`, the additive Automatic
-  Follow-up child of Personal Snippets revision `d7e8f9a0b1c2`. The two new
-  owner-scoped tables require no backfill and began empty. Both OTA tables also
-  remained empty at their release; all four existing terminals remain legacy.
+- Production Alembic is `f9a0b1c2d3e4 (head)`, the additive Signatures child of
+  Automatic Follow-up revision `e8f9a0b1c2d3`. The signature table required no
+  backfill and began empty. Existing follow-up/OTA tables retain their prior
+  state; all four existing terminals remain legacy.
 - All seven checked production services are active, public health is `ok`, and
   the replacement API process has zero automatic restarts and no post-start
   warning-or-higher entries. Production has no secure-enrollment or OTA
@@ -148,20 +155,19 @@ live state.
 
 ## Active Work Items
 
-### P1 — First-class per-account signatures
+### P1 — First-class contact profiles and relationship context
 
-- State: not started; Automatic Follow-up Reminders now provides the shared
-  account-policy and writing-surface baseline without conflating signatures
-  with Personal Snippets.
-- Scope: revisioned account-specific rich/plain signatures, exact sender switch
-  behavior, new/reply/forward policy, durable draft materialization, explicit
-  suppression, mobile editing, and generated-only browser acceptance.
-- Acceptance: a signature never duplicates on reload or sender change, never
-  rewrites authored content, round-trips through durable drafts, sanitizes at
-  insertion/render boundaries, and remains recoverable across ambiguous save
-  or concurrent settings edits.
-- Next: audit current compose/reply identity and editing hooks, coordinate the
-  direct e8 child migration, then implement one bounded end-to-end milestone.
+- State: ready; recipient autocomplete already provides an account-scoped,
+  metadata-only foundation without a Google Contacts scope or provider call.
+- Scope: one private contact surface with normalized identities, owned-account
+  boundaries, recent conversation context, keyboard-first Compose access, and
+  safe empty/error/mobile states. Do not infer a schema or new provider scope
+  until the existing synchronized metadata path is audited.
+- Acceptance: contacts never cross accounts or users, expose no message body,
+  remain useful without a Google Contacts permission, and open the exact
+  conversation/Compose intent without recipient duplication.
+- Next: run one bounded read-only UX/data audit, coordinate any post-f9 schema
+  allocation, then freeze the smallest coherent contact-profile milestone.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 
@@ -198,6 +204,30 @@ live state.
 - Next: attach dedicated hardware and complete physical A/B migration,
   interrupted-write, rollback, recovery, and USB-rescue evidence before
   installing any eligible descriptor or changing rollout from zero.
+
+## Recent First-class Per-account Signatures Release
+
+- Settings → Writing now shows one explicit default-off signature card per
+  connected account, with a rich editor, New/Replies/Forwards policy, revision
+  conflict handling, loading/error/empty states, focus containment, and
+  narrow-screen controls.
+- Compose, reader reply, and Flow resolve the exact sender policy, freeze one
+  immutable sanitized snapshot in durable draft authority, and keep authored
+  content, signature, and quoted forward history separate. Remove/Restore
+  changes the frozen applied state without re-reading live settings.
+- Server rendering is body → signature → quote exactly once, bounded before any
+  Gmail call. Legacy drafts stay unsigned, policy failure blocks Send until
+  Retry or explicit Continue unsigned, and recent-draft lists omit signature
+  content.
+- Generated `.example.test` browser QA proved saved policy, Compose preview,
+  working Remove/Restore, sender isolation, desktop and 390×844 containment,
+  zero diagnostics, zero unexpected mutations, and zero external calls. The
+  shared stacking fix keeps editor hitboxes from covering signature actions.
+- The release gate passed 762 backend tests with 75 expected skips, all 500
+  frontend tests, a 609-module build, exact e8/f9 migration round trip, and
+  independent SHIP reviews. Production is healthy at f9 with zero signature
+  rows. Full evidence is in
+  `ACCOUNT_SIGNATURES_RELEASE_2026-08-31.md`.
 
 ## Recent Inline Snippet Expansion Release
 
