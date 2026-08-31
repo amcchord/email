@@ -624,6 +624,7 @@ export function createGeneratedProviderDraftFixture({
       body_html: '',
       body_text: '',
       revision: 0,
+      sanitizer_version: 1,
     };
   }
 
@@ -2773,6 +2774,7 @@ export function createGeneratedProviderDraftFixture({
         account_email: account.email,
         ...comparable,
         revision: currentRevision + 1,
+        sanitizer_version: 1,
       };
       signaturePolicies.set(key, saved);
       counters.signature_policy_writes += 1;
