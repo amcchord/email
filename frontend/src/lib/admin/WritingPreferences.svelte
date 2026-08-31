@@ -18,6 +18,7 @@
   import Icon from '../../components/common/Icon.svelte';
   import DeferredRichEditor from '../../components/email/DeferredRichEditor.svelte';
   import FollowUpPreferences from './FollowUpPreferences.svelte';
+  import SignaturePreferences from './SignaturePreferences.svelte';
 
   let snippets = $state([]);
   let loading = $state(true);
@@ -211,6 +212,10 @@
 </script>
 
 <FollowUpPreferences />
+
+<div class="mt-10 border-t pt-10" style="border-color: var(--border-color)">
+  <SignaturePreferences />
+</div>
 
 <section class="mt-10 space-y-5 border-t pt-10" style="border-color: var(--border-color)" aria-labelledby="writing-snippets-title">
   <div class="flex flex-wrap items-start justify-between gap-3">

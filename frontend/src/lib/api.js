@@ -440,6 +440,11 @@ export const api = {
     );
   },
 
+  // Revisioned rich/plain signatures scoped to one connected account.
+  listAccountSignatures: () => request('GET', '/compose/signatures'),
+  replaceAccountSignature: (accountId, payload) =>
+    request('PUT', `/compose/signatures/${encodeURIComponent(accountId)}`, payload),
+
   // Per-account, opt-in automatic follow-up reminder policies.
   listFollowUpPolicies: () => request('GET', '/follow-up/policies'),
   replaceFollowUpPolicy: (accountId, payload) =>
