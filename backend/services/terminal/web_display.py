@@ -11,10 +11,10 @@ from PIL import Image, ImageOps
 
 from backend.models.terminal import TerminalSettings
 from backend.services.terminal.catalog import (
-    VIEWS,
     DesignDefinition,
     DisplayProfile,
     ViewDefinition,
+    validate_catalog_content_implementations,
 )
 from backend.services.terminal.renderer import (
     render_clock_image,
@@ -97,11 +97,7 @@ WEB_RENDERERS: dict[str, WebRenderer] = {
     "clock": _render_clock,
 }
 
-_MISSING_RENDERERS = {view.content_type for view in VIEWS.values()} - WEB_RENDERERS.keys()
-if _MISSING_RENDERERS:
-    raise RuntimeError(
-        f"At a Glance catalog has no web renderer for {sorted(_MISSING_RENDERERS)}"
-    )
+validate_catalog_content_implementations(WEB_RENDERERS, surface="web")
 
 
 async def render_web_frame(
