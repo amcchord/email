@@ -20,7 +20,7 @@ A self-hosted, AI-augmented email client built on Svelte 5, FastAPI, and Postgre
 - 6 color themes (Amber, Blue, Rose, Emerald, Purple, Monochrome) with light/dark/system mode
 - Customizable keyboard shortcuts with visual overlay (hold Alt/Option to see shortcuts)
 - Pop-out email viewer for side-by-side work
-- Real-time updates via Server-Sent Events (SSE) -- new emails and AI analysis results push to the browser instantly via Redis Pub/Sub, no polling required
+- Best-effort live updates via Server-Sent Events (SSE) -- Redis Pub/Sub pushes new-email and AI-analysis events to connected browsers, while Gmail and Calendar ingestion still run on background sync schedules; the SSE stream is not a durable replay log
 - Cross-thread reply detection -- replies that Gmail places in a different thread (e.g. after a subject change) are still recognized via In-Reply-To / References headers
 - Background sync via Redis + ARQ workers
 - Self-hosted and private -- all data stored locally, no third-party analytics

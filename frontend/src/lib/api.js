@@ -687,6 +687,8 @@ export const api = {
   },
   getCalendarSyncStatus: (options = {}) => request('GET', '/calendar/sync-status', null, options),
   getUpcomingEvents: (days = 7) => request('GET', `/calendar/upcoming?days=${days}`),
+  getCalendarAvailability: (payload, { signal } = {}) =>
+    request('POST', '/calendar/availability', payload, { signal }),
 
   // AI Preferences
   getAIPreferences: () => request('GET', '/auth/ai-preferences'),

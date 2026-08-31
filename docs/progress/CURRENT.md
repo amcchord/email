@@ -4,13 +4,15 @@ Last updated: 2026-08-31
 
 ## Active Objective
 
-Operate the deployed first-class read-only Attachments workspace and select the
-next bounded modern-client gap. Keep every file query bound to one exact active
-owned account, make bytes available only after an explicit Preview or Download
-action, and never prefetch Gmail, cache content, expose provider/storage
-identifiers, or include Draft, Spam, Trash, or inline parts. Keep Saved Views, first-class Contacts,
-writing, Universal Send & Archive, Focused/Split Inbox, and the terminal track
-operating as durable, truthful workflows. Continue
+Build a truthful, migration-free Share Availability snapshot over synchronized
+primary-calendar metadata. Let the user explicitly choose account coverage,
+working hours, duration, date range, timezone, and individual proposed slots,
+then insert only that selected snapshot into Compose, reader reply, or Flow.
+Never claim live availability, create a hold or event, call Google during the
+request, widen incomplete account coverage, or expose event content. Keep the
+deployed Attachments, Saved Views, first-class Contacts, writing, Universal Send
+& Archive, Focused/Split Inbox, and terminal track operating as durable,
+truthful workflows. Continue
 physical qualification of the independently gated Web Serial installer and OTA control
 plane on exact E1001/E1002 hardware. Keep real mail/calendar QA read-only except
 for generated `.example.test` fixtures and preserve every independent terminal
@@ -178,6 +180,24 @@ This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
 
 ## Active Work Items
+
+### P1 — Truthful Share Availability snapshots
+
+- State: active; product/repository/production audits are complete and the
+  migration-free contract is frozen on exact docs-closeout baseline `730a13f`.
+- Scope: one read-only calendar availability endpoint over exact owned active
+  accounts and synchronized `CalendarEvent`/`CalendarSyncStatus` rows; a shared
+  accessible picker and formatter for Compose, reader reply, and Flow; one
+  explicit shortcut; generated `.example.test` acceptance fixtures for desktop
+  and narrow screens.
+- Acceptance: incomplete, stale, or reauthorization-required coverage fails
+  closed with exact account/freshness truth; cancelled, transparent, and
+  self-declined events do not block; tentative and all-day events do; timezone
+  and DST behavior is deterministic; selected slots insert at the current
+  caret only after explicit confirmation; no provider call, event hold,
+  calendar/mail send, persistence, or schema change occurs.
+- Next: implement the frozen backend, frontend, and generated QA slices in
+  parallel, then run one P0/P1 review and one consolidated post-freeze gate.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 

@@ -19,6 +19,7 @@ from backend.routers import (
     attachments,
     auth,
     calendar,
+    calendar_availability,
     chat,
     compose,
     contacts,
@@ -111,6 +112,7 @@ app.include_router(ai.router)
 app.include_router(todos.router)
 app.include_router(chat.router)
 app.include_router(calendar.router)
+app.include_router(calendar_availability.router)
 app.include_router(events.router)
 app.include_router(follow_up.router)
 app.include_router(public_api.router)

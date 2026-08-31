@@ -2,7 +2,7 @@
   import { onMount, tick } from 'svelte';
   import { marked } from 'marked';
   import { api } from '../lib/api.js';
-  import { sanitizeMarkdown } from '../lib/sanitize.js';
+  import { sanitizeComposeHtml, sanitizeMarkdown } from '../lib/sanitize.js';
   import { chatConversations, createAuthenticatedSessionGuard, captureAuthenticatedSession, isAuthenticatedSessionCurrent, currentConversationId, showToast, currentPage, currentMailbox, selectedEmailId, pendingReplyDraft, accounts, composeData, threadOrder, accountColorMap } from '../lib/stores.js';
   import { get } from 'svelte/store';
   import { registerActions } from '../lib/shortcutStore.js';
@@ -26,6 +26,7 @@
   import { createDurableReplyController } from '../lib/durableReply.js';
   import DraftStatus from '../components/email/DraftStatus.svelte';
   import SendSplitButton from '../components/common/SendSplitButton.svelte';
+  import AvailabilityPicker from '../components/email/AvailabilityPicker.svelte';
   import SnippetPicker from '../components/email/SnippetPicker.svelte';
   import SignatureControl from '../components/email/SignatureControl.svelte';
   import SnoozePicker from '../components/common/SnoozePicker.svelte';
@@ -37,6 +38,7 @@
     snoozeThreadKey,
   } from '../lib/snooze.js';
   import { formatSnoozeWake } from '../lib/remindLater.js';
+  import { senderCanShareAvailability } from '../lib/shareAvailability.js';
   import {
     browserFollowUpTimeZone,
     followUpPolicyForAccount,
@@ -136,6 +138,7 @@
   let editorKey = $state(0);
   let writingSurfaceReady = $state(false);
   let replyEditorHandle = $state.raw(null);
+  let availabilityPickerOpen = $state(false);
   let snippetPickerOpen = $state(false);
   let threadLoadGeneration = 0;
   let durableReplyStorage = null;
@@ -496,7 +499,31 @@
           ? 'Open a reply first'
           : durableReplyError
             ? 'Retry the saved reply before inserting a snippet'
-            : 'Reply editor is still opening',
+          : 'Reply editor is still opening',
+      },
+      'flow.availability': {
+        run: () => {
+          captureAvailabilitySelection();
+          availabilityPickerOpen = true;
+        },
+        isEnabled: () => (
+          replyViewOpen
+          && writingSurfaceReady
+          && Boolean(replyEditorHandle)
+          && Boolean(replyContext?.available)
+          && senderCanShareAvailability($accounts, replyContext?.envelope?.account_id)
+          && !durableReplyOpening
+          && !durableReplyError
+        ),
+        disabledReason: () => !replyViewOpen
+          ? 'Open a reply first'
+          : !replyContext?.available
+            ? replyUnavailableMessage(replyContext?.reason)
+            : !senderCanShareAvailability($accounts, replyContext?.envelope?.account_id)
+              ? 'Calendar access is not enabled for the sending account'
+              : durableReplyError
+                ? 'Retry the saved reply before sharing availability'
+                : 'Reply editor is still opening',
       },
       'flow.back': () => {
         if (replyViewOpen) {
@@ -1233,6 +1260,7 @@
   function remountReplyEditor() {
     writingSurfaceReady = false;
     replyEditorHandle = null;
+    availabilityPickerOpen = false;
     editorKey += 1;
   }
 
@@ -1582,6 +1610,21 @@
 
   function capturePersonalSnippetSelection() {
     return replyEditorHandle?.rememberSelection?.() ?? false;
+  }
+
+  function captureAvailabilitySelection() {
+    return replyEditorHandle?.rememberSelection?.() ?? false;
+  }
+
+  function insertAvailabilitySnapshot(snapshot) {
+    const safeHtml = sanitizeComposeHtml(String(snapshot?.html || ''));
+    const inserted = safeHtml && replyEditorHandle?.insertHtml?.(safeHtml);
+    if (!inserted) {
+      showToast('Place the cursor in the reply before inserting availability.', 'error');
+      return false;
+    }
+    showToast('Availability snapshot inserted', 'success');
+    return true;
   }
 
   function insertPersonalSnippet(snippet) {
@@ -3028,6 +3071,16 @@
                 disabled={!writingSurfaceReady || !replyContext?.available || durableReplyOpening || Boolean(durableReplyError)}
                 oncapture={capturePersonalSnippetSelection}
                 oninsert={insertPersonalSnippet}
+              />
+              <AvailabilityPicker
+                bind:open={availabilityPickerOpen}
+                accounts={$accounts}
+                senderAccountId={replyContext?.envelope?.account_id}
+                compact={true}
+                shortcutId="flow.availability"
+                disabled={!writingSurfaceReady || !replyContext?.available || durableReplyOpening || Boolean(durableReplyError)}
+                oncapture={captureAvailabilitySelection}
+                oninsert={insertAvailabilitySnapshot}
               />
               <SendSplitButton
                 label={replyActionLabel}

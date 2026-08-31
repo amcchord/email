@@ -38,10 +38,13 @@
   import DraftStatus from '../components/email/DraftStatus.svelte';
   import RecipientField from '../components/email/RecipientField.svelte';
   import SendSplitButton from '../components/common/SendSplitButton.svelte';
+  import AvailabilityPicker from '../components/email/AvailabilityPicker.svelte';
   import SnippetPicker from '../components/email/SnippetPicker.svelte';
   import SignatureControl from '../components/email/SignatureControl.svelte';
   import QuotedContentPreview from '../components/email/QuotedContentPreview.svelte';
   import { parseMailboxList } from '../lib/recipientField.js';
+  import { sanitizeComposeHtml } from '../lib/sanitize.js';
+  import { senderCanShareAvailability } from '../lib/shareAvailability.js';
   import {
     exactSourceEmailId,
     sendArchiveAcceptedMessage,
@@ -87,6 +90,7 @@
   let fileInput = $state(null);
   let writingSurfaceReady = $state(false);
   let editorHandle = $state.raw(null);
+  let availabilityPickerOpen = $state(false);
   let snippetPickerOpen = $state(false);
   let savingDraft = $state(false);
   let conflictDialogOpen = $state(false);
@@ -523,6 +527,23 @@
           ? 'Draft editing is locked while its state is being confirmed'
           : 'Message editor is still opening',
       },
+      'compose.availability': {
+        run: () => {
+          captureAvailabilitySelection();
+          availabilityPickerOpen = true;
+        },
+        isEnabled: () => (
+          writingSurfaceReady
+          && Boolean(editorHandle)
+          && !draftLocked
+          && senderCanShareAvailability(accountList, selectedAccountId)
+        ),
+        disabledReason: () => draftLocked
+          ? 'Draft editing is locked while its state is being confirmed'
+          : !senderCanShareAvailability(accountList, selectedAccountId)
+            ? 'Calendar access is not enabled for the sending account'
+            : 'Message editor is still opening',
+      },
       'compose.discard': () => returnToInbox(),
       'compose.deleteDraft': {
         run: () => discardDraft(),
@@ -599,6 +620,7 @@
       event.currentTarget.value = String(selectedAccountId || '');
       return;
     }
+    availabilityPickerOpen = false;
     selectedAccountId = nextAccountId;
     if (signatureInitialized && signatureMode !== 'disabled') {
       signatureSnapshot = signatureSnapshotFromPolicy(
@@ -632,6 +654,21 @@
 
   function capturePersonalSnippetSelection() {
     return editorHandle?.rememberSelection?.() ?? false;
+  }
+
+  function captureAvailabilitySelection() {
+    return editorHandle?.rememberSelection?.() ?? false;
+  }
+
+  function insertAvailabilitySnapshot(snapshot) {
+    const safeHtml = sanitizeComposeHtml(String(snapshot?.html || ''));
+    const inserted = safeHtml && editorHandle?.insertHtml?.(safeHtml);
+    if (!inserted) {
+      showToast('Place the cursor in the message before inserting availability.', 'error');
+      return false;
+    }
+    showToast('Availability snapshot inserted', 'success');
+    return true;
   }
 
   function insertPersonalSnippet(snippet) {
@@ -1062,6 +1099,15 @@
         shortcutId="compose.snippets"
         oncapture={capturePersonalSnippetSelection}
         oninsert={insertPersonalSnippet}
+      />
+      <AvailabilityPicker
+        bind:open={availabilityPickerOpen}
+        accounts={accountList}
+        senderAccountId={selectedAccountId}
+        disabled={draftLocked || !writingSurfaceReady}
+        shortcutId="compose.availability"
+        oncapture={captureAvailabilitySelection}
+        oninsert={insertAvailabilitySnapshot}
       />
       <SendSplitButton
         compact={true}

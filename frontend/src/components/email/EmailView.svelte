@@ -43,6 +43,7 @@
   import EmailHtmlFrame from './EmailHtmlFrame.svelte';
   import SendSplitButton from '../common/SendSplitButton.svelte';
   import InlineSnippetMenu from './InlineSnippetMenu.svelte';
+  import AvailabilityPicker from './AvailabilityPicker.svelte';
   import SnippetPicker from './SnippetPicker.svelte';
   import SignatureControl from './SignatureControl.svelte';
   import { safeLabelColor, visibleUserLabels } from '../../lib/labelWorkflows.js';
@@ -52,6 +53,10 @@
     withArchiveAfterSend,
   } from '../../lib/sendArchive.js';
   import { insertSnippetText } from '../../lib/personalSnippets.js';
+  import {
+    availabilityPlainInsertion,
+    senderCanShareAvailability,
+  } from '../../lib/shareAvailability.js';
   import {
     findInlineSnippetTrigger,
     replaceInlineSnippetText,
@@ -100,6 +105,8 @@
   let attachmentPreviewReturnFocus = $state(null);
   let inlineReplyMode = $state(REPLY_ENVELOPE_MODES.REPLY);
   let inlineReplyTextarea = $state(null);
+  let availabilityPickerOpen = $state(false);
+  let availabilitySelection = null;
   let snippetPickerOpen = $state(false);
   let snippetSelection = null;
   let inlineSnippetMenuHandle = $state(null);
@@ -284,6 +291,31 @@
         : durableReplyError
           ? 'Retry the saved reply before inserting a snippet'
           : 'Reply editor is still opening',
+    },
+    'inbox.availability': {
+      run: () => {
+        captureAvailabilitySelection();
+        availabilityPickerOpen = true;
+      },
+      isEnabled: () => (
+        inlineReplyOpen
+        && Boolean(inlineReplyTextarea)
+        && activeReplyEnvelopeResult.available
+        && senderCanShareAvailability($accounts, activeReplyEnvelopeResult.envelope.account_id)
+        && !durableReplyOpening
+        && !durableReplyError
+        && !durableReplyState.discardInProgress
+        && !durableReplyState.sendInProgress
+      ),
+      disabledReason: () => !inlineReplyOpen
+        ? 'Open a reply first'
+        : !activeReplyEnvelopeResult.available
+          ? replyUnavailableMessage(activeReplyEnvelopeResult.reason)
+          : !senderCanShareAvailability($accounts, activeReplyEnvelopeResult.envelope.account_id)
+            ? 'Calendar access is not enabled for the sending account'
+            : durableReplyError
+              ? 'Retry the saved reply before sharing availability'
+              : 'Reply editor is still opening',
     },
   }));
 
@@ -906,6 +938,8 @@
     if (emailId === observedInlineReplyEmailId) return;
     observedInlineReplyEmailId = emailId;
     advanceInlineReplyGeneration();
+    availabilityPickerOpen = false;
+    availabilitySelection = null;
     if (!email) {
       releaseDurableReply({ flush: true });
       inlineReplyOpen = false;
@@ -1409,6 +1443,42 @@
       start: editor.selectionStart,
       end: editor.selectionEnd,
     };
+    return true;
+  }
+
+  function captureAvailabilitySelection() {
+    const editor = inlineReplyTextarea;
+    if (!editor || !inlineReplyOpen) return false;
+    availabilitySelection = { caret: editor.selectionEnd };
+    return true;
+  }
+
+  async function insertAvailabilitySnapshot(snapshot) {
+    const editor = inlineReplyTextarea;
+    if (!editor || !inlineReplyOpen || !sessionIsCurrent()) return false;
+    const caret = availabilitySelection?.caret ?? editor.selectionEnd;
+    availabilitySelection = null;
+    const insertion = availabilityPlainInsertion(inlineReplyBody, snapshot?.text, caret);
+    editor.focus({ preventScroll: true });
+    editor.setSelectionRange(caret, caret);
+    const insertedWithNativeUndo = document.execCommand?.(
+      'insertText',
+      false,
+      insertion.inserted,
+    ) === true;
+    if (!insertedWithNativeUndo) {
+      showToast('This browser could not insert availability with Undo support.', 'error');
+      return false;
+    }
+    inlineReplyBody = editor.value;
+    advanceInlineReplyGeneration();
+    if (!persistInlineReply()) return false;
+    await tick();
+    if (editor.isConnected) {
+      editor.focus({ preventScroll: true });
+      editor.setSelectionRange(insertion.caret, insertion.caret);
+    }
+    showToast('Availability snapshot inserted', 'success');
     return true;
   }
 
@@ -2161,6 +2231,16 @@
           onContinueUnsigned={handleContinueWithoutSignature}
         />
         <div class="reply-actions flex items-center gap-2 mt-2">
+          <AvailabilityPicker
+            bind:open={availabilityPickerOpen}
+            accounts={$accounts}
+            senderAccountId={activeReplyEnvelopeResult?.envelope?.account_id}
+            compact={true}
+            shortcutId="inbox.availability"
+            disabled={!activeReplyEnvelopeResult.available || durableReplyOpening || Boolean(durableReplyError) || durableReplyState.discardInProgress || durableReplyState.sendInProgress}
+            oncapture={captureAvailabilitySelection}
+            oninsert={insertAvailabilitySnapshot}
+          />
           <SnippetPicker
             bind:open={snippetPickerOpen}
             compact={true}

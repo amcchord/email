@@ -992,3 +992,27 @@ add a new entry that explicitly supersedes the old one.
   not the physical promotion candidate. The one E1002 run is bounded evidence,
   not completion of the 31-case E1001/E1002 HIL matrix; enrollment and OTA stay
   locked until all independent model/revision/interruption/recovery gates pass.
+
+## D-050 — Shared availability is an explicit synchronized snapshot, never a hold
+
+- Date: 2026-08-31
+- Status: accepted
+- Decision: Calculate proposed times only from the local synchronized primary
+  calendars for an exact user-selected account set. Require complete, recent,
+  stable sync coverage before and after the event read; expose coverage and
+  freshness inside the authenticated picker; and insert only explicitly
+  selected slots at the current draft caret. Never call Google, create an event
+  or hold, persist an availability policy, or imply that the result is live.
+- Reason: A convenient scheduling action can otherwise widen across accounts,
+  leak event content or connected identities, advertise free time from a
+  partial sync, or turn a read-only calendar grant into an unexpected provider
+  mutation. Calendar state can also change between calculation and delivery,
+  so recipient copy must remain a proposal rather than a reservation claim.
+- Consequence: Missing scope, reauthorization, incomplete/stale/error/syncing
+  coverage, or a changed sync generation returns no slots. Cancelled,
+  transparent, and self-declined events do not block; tentative, needs-action,
+  timed opaque, and all-day events do. Timezone/DST handling is exact. Connected
+  account addresses and sync timestamps stay in the picker and never enter the
+  outgoing message. Persistent policies, delegated/subscribed calendars,
+  scheduling links, holds, event creation, and booking workflows require a
+  separately reviewed contract.

@@ -634,6 +634,44 @@ return 400. The response remains `{ "events": [...], "total": n }` and contains
 cached data only; `/sync-status` is the separate freshness and connection-health
 authority used by the UI. Public API tokens cannot call these routes.
 
+### Private Share Availability snapshots
+
+Compose, reader reply, and Flow can calculate proposed meeting times from the
+same synchronized primary-calendar cache:
+
+```text
+POST /api/calendar/availability
+```
+
+This route is available only to the authenticated web session and every
+response is `Cache-Control: private, no-store`. A request names the exact
+active owned `account_ids`, inclusive local `start_date` and `end_date` within
+the next 21 days, an IANA `timezone`, a supported `duration_minutes` and
+`step_minutes`, local `day_start`/`day_end`, `include_weekends`, and bounded
+`minimum_notice_minutes`. Unknown, foreign, inactive, duplicated, or malformed
+account scope fails closed; there is no fallback to all accounts.
+
+The response contains only `ready`, `generated_at`, timezone and duration,
+per-account `{ account_id, account_email, state, last_success_at }` coverage,
+and bounded `{ start, end }` slots. It never returns event subjects, attendees,
+locations, descriptions, provider identifiers, or calendar identifiers. The
+calculation reads PostgreSQL only and performs no Google call, event hold,
+event creation, cache write, or mail action.
+
+Every selected account must retain the recorded Calendar read scope, have a
+successful full synchronization, have no reauthorization or sync error, and
+have a full/incremental success within 30 minutes. Active synchronization also
+makes the snapshot non-ready. Availability rechecks that status after reading
+events and discards every slot if the sync generation changed, preventing a
+partially applied incremental sync from being presented as free time.
+Cancelled, transparent, and self-declined events do not block; tentative,
+needs-action, opaque timed events and all-day events do. DST gaps are skipped,
+folds resolve deterministically, and emitted slots must have the exact requested
+elapsed duration. The client shows source/freshness truth inside the picker but
+does not insert connected account addresses or sync timestamps into recipient
+copy. This is a synchronized availability snapshot, not live availability, a
+hold, a booking link, or an invitation.
+
 ## Web session-only structured email search
 
 The authenticated web application, not the `/api/v1` token surface, exposes

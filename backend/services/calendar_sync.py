@@ -165,11 +165,11 @@ class CalendarSyncService:
 
         Auth errors (scope loss / RefreshError / 401) flip ``needs_reauth=True``
         so the UI shows the Reauthorize banner.  Other errors are treated as
-        transient: if the account synced successfully within
-        :data:`RECENT_SUCCESS_WINDOW`, we log only and leave the existing
-        (likely "completed") status untouched so the UI stays clean.  If the
-        last successful sync is older than the window, we surface a generic
-        "temporarily failing" message without claiming reauth is needed.
+        transient: before a sync publishes ``syncing``, a recent successful
+        snapshot can suppress a UI error. Once ``syncing`` is published, a
+        failure is always persisted because event pages may already have been
+        committed. Older failures also surface a generic "temporarily failing"
+        message without claiming reauth is needed.
         """
         if _is_auth_error(error):
             logger.warning(
@@ -208,7 +208,16 @@ class CalendarSyncService:
         except Exception:
             sync_status = None
 
-        if _recently_succeeded(sync_status):
+        # A full or incremental sync publishes ``syncing`` before it can commit
+        # event pages. Once that happens, a transient failure may have left a
+        # partially updated corpus, so recent-success suppression must not make
+        # that corpus look ready. Pre-mutation failures can still retain the
+        # last completed snapshot.
+        sync_in_progress = (
+            sync_status is not None
+            and str(sync_status.status or "").casefold() == "syncing"
+        )
+        if _recently_succeeded(sync_status) and not sync_in_progress:
             logger.warning(
                 f"Calendar {sync_kind} sync transient error for account "
                 f"{self.account_id} (recent success within "
@@ -398,6 +407,13 @@ class CalendarSyncService:
 
             sync_token = sync_status.sync_token
             cal_service = await self._create_calendar_service(db, account)
+            await self._update_sync_status(
+                db,
+                status="syncing",
+                started_at=datetime.now(timezone.utc),
+                error_message=None,
+                needs_reauth=False,
+            )
 
         total_updated = 0
         total_deleted = 0
