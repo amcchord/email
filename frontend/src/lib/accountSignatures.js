@@ -265,12 +265,32 @@ export function effectiveSignatureSnapshot({
   if (!initialized) return null;
   const normalizedMode = normalizeSignatureMode(mode, 'disabled');
   if (normalizedMode === 'disabled') return null;
-  if (normalizedMode === 'default' && !signatureDefaultIncluded(policy, compositionKind)) return null;
   const normalizedSnapshot = normalizeSignatureSnapshot(snapshot);
+  const frozenSnapshot = normalizedSnapshot && Boolean(normalizedSnapshot.content_hash);
+  if (frozenSnapshot) {
+    if (normalizedMode === 'default' && !normalizedSnapshot.applied) return null;
+    return normalizedSnapshot.applied
+      ? normalizedSnapshot
+      : Object.freeze({ ...normalizedSnapshot, applied: true });
+  }
+  if (normalizedMode === 'default' && !signatureDefaultIncluded(policy, compositionKind)) return null;
   if (normalizedSnapshot?.account_id === Number(policy?.account_id)) {
     return normalizedSnapshot.applied
       ? normalizedSnapshot
       : Object.freeze({ ...normalizedSnapshot, applied: true });
+  }
+  return signatureSnapshotFromPolicy(policy);
+}
+
+export function signatureSnapshotAfterModeChange({
+  mode = 'default',
+  policy = null,
+  snapshot = null,
+} = {}) {
+  const normalizedSnapshot = normalizeSignatureSnapshot(snapshot);
+  const normalizedMode = normalizeSignatureMode(mode);
+  if (normalizedMode === 'disabled' || normalizedSnapshot?.content_hash) {
+    return normalizedSnapshot;
   }
   return signatureSnapshotFromPolicy(policy);
 }

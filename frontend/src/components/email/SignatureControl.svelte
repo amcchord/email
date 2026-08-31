@@ -2,6 +2,7 @@
   import Icon from '../common/Icon.svelte';
   import {
     effectiveSignatureSnapshot,
+    normalizeSignatureSnapshot,
     signatureDefaultIncluded,
   } from '../../lib/accountSignatures.js';
   import { sanitizeComposeHtml } from '../../lib/sanitize.js';
@@ -24,16 +25,20 @@
     policy,
     snapshot,
   }));
+  let frozenSnapshot = $derived.by(() => {
+    const normalized = normalizeSignatureSnapshot(snapshot);
+    return normalized?.content_hash ? normalized : null;
+  });
   let canRestore = $derived(
     initialized
     && mode === 'disabled'
-    && Boolean(policy?.body_html || policy?.body_text),
+    && Boolean(frozenSnapshot || policy?.body_html || policy?.body_text),
   );
   let defaultIncluded = $derived(signatureDefaultIncluded(policy, compositionKind));
   let previewHtml = $derived(sanitizeComposeHtml(effective?.body_html || ''));
 </script>
 
-{#if initialized && policy}
+{#if initialized && (policy || frozenSnapshot)}
   <section
     class="signature-control rounded-lg border {compact ? 'px-3 py-2' : 'px-4 py-3'}"
     style="border-color: var(--border-subtle); background: var(--bg-secondary)"

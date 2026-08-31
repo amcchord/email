@@ -69,6 +69,7 @@
     normalizeAccountSignatureList,
     normalizeSignatureMode,
     normalizeSignatureSnapshot,
+    signatureSnapshotAfterModeChange,
     signatureSnapshotFromPolicy,
   } from '../../lib/accountSignatures.js';
 
@@ -1093,9 +1094,11 @@
     if (!signaturePoliciesLoaded || durableReplyOpening || durableReplyState.sendInProgress) return;
     signatureInitialized = true;
     signatureMode = normalizeSignatureMode(mode);
-    if (signatureMode !== 'disabled') {
-      signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
-    }
+    signatureSnapshot = signatureSnapshotAfterModeChange({
+      mode: signatureMode,
+      policy: selectedSignaturePolicy,
+      snapshot: signatureSnapshot,
+    });
     persistInlineReply();
   }
 

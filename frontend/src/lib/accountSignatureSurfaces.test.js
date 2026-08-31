@@ -10,6 +10,7 @@ import {
   normalizeSignatureSnapshot,
   signatureDefaultIncluded,
   signatureDraftFields,
+  signatureSnapshotAfterModeChange,
   signatureSnapshotFromPolicy,
 } from './accountSignatures.js';
 import { composeDraftHasContent, newComposeIntent } from './composeDraft.js';
@@ -84,6 +85,67 @@ test('signature snapshots preserve immutable content and fail closed when unavai
     policy,
     snapshot,
   }), null);
+});
+
+test('a frozen signature survives live-policy changes through Remove and Restore', () => {
+  const frozenRevisionFour = {
+    applied: true,
+    account_id: 7,
+    policy_revision: 4,
+    body_html: '<p>Frozen revision four</p>',
+    body_text: 'Frozen revision four',
+    content_hash: 'c'.repeat(64),
+    sanitizer_version: 1,
+  };
+  const clearedRevisionFive = {
+    ...policy,
+    enabled: false,
+    body_html: '',
+    body_text: '',
+    revision: 5,
+  };
+
+  const removed = signatureSnapshotAfterModeChange({
+    mode: 'disabled',
+    policy: clearedRevisionFive,
+    snapshot: frozenRevisionFour,
+  });
+  assert.equal(effectiveSignatureSnapshot({
+    initialized: true,
+    mode: 'default',
+    compositionKind: 'new',
+    policy: clearedRevisionFive,
+    snapshot: frozenRevisionFour,
+  }).policy_revision, 4);
+  assert.equal(effectiveSignatureSnapshot({
+    initialized: true,
+    mode: 'default',
+    compositionKind: 'new',
+    policy: clearedRevisionFive,
+    snapshot: { ...frozenRevisionFour, applied: false },
+  }), null);
+  assert.equal(effectiveSignatureSnapshot({
+    initialized: true,
+    mode: 'disabled',
+    compositionKind: 'new',
+    policy: clearedRevisionFive,
+    snapshot: removed,
+  }), null);
+
+  const restored = signatureSnapshotAfterModeChange({
+    mode: 'enabled',
+    policy: clearedRevisionFive,
+    snapshot: removed,
+  });
+  assert.equal(restored.policy_revision, 4);
+  assert.equal(restored.body_text, 'Frozen revision four');
+  assert.equal(effectiveSignatureSnapshot({
+    initialized: true,
+    mode: 'enabled',
+    compositionKind: 'new',
+    policy: clearedRevisionFive,
+    snapshot: restored,
+  }).body_text, 'Frozen revision four');
 });
 
 test('wire fields are normalized while signatures alone never make a draft nonblank', () => {
