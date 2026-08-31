@@ -680,6 +680,33 @@ or Trash. The web UI submits non-empty search with `mailbox=ALL`, suspends
 Focused/smart filters while searching, preserves an explicit account filter,
 and restores the prior mailbox/filter context when search is cleared.
 
+The authenticated Inbox, mailbox, and search surfaces can request an
+authoritative conversation projection through:
+
+```text
+GET /api/emails/conversations?mailbox=INBOX&page=1&page_size=50&search={optional_query}
+```
+
+It accepts the same owned-account, mailbox, label, search, timezone, read,
+star, AI-category, and needs-reply filters as the message list. PostgreSQL
+groups and counts before pagination by the exact `(account_id,
+gmail_thread_id)` identity. A missing or whitespace-only thread ID is isolated
+as its own typed message identity instead of being merged with unrelated mail.
+The newest matching message is the row anchor; aggregate fields describe all
+currently synchronized members of that owned conversation:
+
+- `conversation_key`, `account_id`, `account_email`, and `anchor_email_id`;
+- `member_count`, `matched_count`, and `unread_count`;
+- `star_state` (`none`, `some`, or `all`) and attachment-any state; and
+- the label union plus per-label `some`/`all` coverage.
+
+The response envelope is `{ "conversations": [...], "total": n, "page": n,
+"page_size": n, "total_pages": n }`, where totals and page boundaries count
+conversations rather than messages. The ordinary Inbox projection excludes
+active durable Snoozes in the same server query so a page-local client filter
+cannot make totals false. Search and other mailboxes retain those rows and may
+annotate their active reminder state separately.
+
 Email list, detail, and thread payloads include `is_sent`, `is_trash`, and
 `is_spam` alongside the existing read/starred/draft state. These additive
 fields let mixed-folder search results render recipients and expose safe
@@ -699,8 +726,10 @@ GET /api/emails/thread/{thread_id}?account_id={owned_account_id}&order=asc|desc
 
 When `account_id` is supplied, the response contains only messages from that
 owned account. An unknown or foreign account returns the same 404 as a missing
-thread. Omitting the parameter preserves the legacy all-owned-accounts read
-contract for existing clients; reply surfaces always send the exact scope.
+thread. Omitting the parameter preserves a legacy read only when the thread ID
+is unique across the user's owned accounts; an ambiguous cross-account thread
+returns 409 rather than combining mail. First-party conversation and reply
+surfaces always send the exact account scope.
 
 ## Web session-only attachment preview and download
 
@@ -786,9 +815,19 @@ Malformed or failed provider responses never trigger that pruning.
 {
   "email_ids": [9001, 9002],
   "action": "archive",
+  "scope": "conversations",
   "idempotency_key": "e4544fb2-dddf-4323-8e28-fecede02cb72"
 }
 ```
+
+`scope` is additive and defaults to `messages`, preserving the original
+payload and idempotency hash for existing clients. With
+`scope=conversations`, every explicit owned anchor expands under PostgreSQL
+locks to all current synchronized members of its exact account/thread; blank
+thread IDs remain one-message conversations. The existing 200-message bound
+applies after expansion. The original anchor IDs and scope are part of the
+immutable idempotency identity, while `accepted_count`, optimistic state,
+Undo, retry, and worker replay describe the expanded durable operation.
 
 Supported actions are `mark_read`, `mark_unread`, `star`, `unstar`, `archive`,
 `unarchive`, `trash`, `untrash`, `spam`, `unspam`, `add_label`, `remove_label`,

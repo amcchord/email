@@ -3,6 +3,57 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Conversation-first Inbox implementation
+
+### Scope
+
+Replace message-duplicated Inbox presentation with one authoritative owned-
+account conversation row, full chronological thread reading, and durable
+conversation-scoped actions without a schema change or real-mail mutation.
+
+### Completed
+
+- Added server-side grouping/counting before pagination, typed fallback identity
+  for blank thread IDs, aggregate unread/star/attachment/label state, exact
+  account ownership, and server-side active-Snooze exclusion for Inbox totals.
+- Added the account-scoped full-thread reader and one conversation row across
+  normal mailboxes and search. Drafts, Snoozed, and Needs Reply retain their
+  specialized existing projections.
+- Added additive `scope=conversations` durable mail actions that expand and lock
+  every current exact conversation member while preserving default message-
+  scope payload hashes, idempotent replay, retry, Undo, and later-intent-safe
+  optimistic rollback.
+- Added J/K focus, O open, Escape close/focus restoration, aggregate labels and
+  counts, stale-append invalidation after row removal, and responsive 44-pixel
+  reader controls.
+
+### Verification
+
+- Consolidated `make check`: 684 backend passed with 51 intentional skips; 392
+  frontend passed; production build transformed 545 modules.
+- Focused backend: 104 passed. Focused frontend: 36 passed. Disposable
+  PostgreSQL conversation and mail-action gate: 8 passed.
+- Generated `.example.test` self-test and desktop/390-by-844 browser QA passed
+  the seven-row projection, two-message chronological expansion, J/K/O/Escape,
+  generated star plus Undo, focus restoration, and narrow reader. Browser logs
+  contained only Vite connection debug messages; provider calls, rejected
+  mutations, and unknown routes were zero.
+- Independent release review reported one P1 and two P2 issues; whitespace-only
+  thread expansion, page-local Snooze totals, and stale append/removal races were
+  all corrected before this record.
+
+### Production Actions
+
+- None yet. The release is migration-free; production remains at exact clean
+  docs baseline `93b9375b04dde8687421272a987c7590a89a8d47` and Alembic
+  `b5c6d7e8f9a0 (head)` until the authorized deployment step.
+
+### Next
+
+Push the reviewed branch/main, deploy the exact application commit without a
+migration, perform read-only production health and authenticated Inbox QA, then
+record the exact runtime and docs-closeout SHAs.
+
 ## 2026-08-30 — At a Glance firmware protocol and installer foundation
 
 ### Scope

@@ -623,3 +623,26 @@ add a new entry that explicitly supersedes the old one.
   catalog sync prunes only after complete validation. Existing-label actions
   ship independently from future durable create/rename/delete label lifecycle,
   and split/focused Inbox work must reuse this account/conversation boundary.
+
+## D-033 — The Inbox unit is an owned-account conversation
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Project Inbox, ordinary mailboxes, and search as one row per exact
+  `(account_id, gmail_thread_id)` after all filters, grouping, counts, and
+  pagination are resolved in PostgreSQL. Treat a blank thread ID as a typed
+  one-message identity. Use the newest matching member as the presentation
+  anchor, derive aggregate state from every synchronized member, and expand an
+  additive durable conversation action under server locks.
+- Reason: Message-level pagination can display contradictory duplicates, hide a
+  sibling outside the current page, misstate totals, and let a visible-page
+  action pretend to cover a conversation. Gmail thread IDs are account-local,
+  while blank IDs and cross-account collisions cannot safely share a reader or
+  mutation boundary.
+- Consequence: First-party thread reads always include account scope; a legacy
+  unscoped ambiguous read fails with 409. Ordinary Inbox Snoozes are excluded in
+  the authoritative query. Conversation actions retain message-scope backward
+  compatibility but include scope in new idempotency identity and remain capped
+  after expansion. Full thread reading is chronological; focused/split Inbox is
+  a later placement policy over this row primitive, not a second source of mail
+  truth.

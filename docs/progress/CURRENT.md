@@ -4,12 +4,11 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Continue two coordinated tracks from the exact production baseline: build the
-next conversation-first Inbox triage milestone on the shipped durable Gmail
-label primitive, while executing candidate.6's physical E1001/E1002 enrollment,
-trusted TLS, A/B recovery, browser-install, and OTA recovery qualification before
-enabling any terminal write path. Keep real mail/calendar QA read-only except
-for generated `.example.test` fixtures.
+Complete and release the migration-free conversation-first Inbox milestone from
+the exact terminal protocol baseline, while the isolated terminal track builds
+the reserved `c6d7e8f9a0b1` OTA attempt/event ledger. Keep real mail/calendar QA
+read-only except for generated `.example.test` fixtures and preserve every
+terminal write gate.
 
 ## Baseline
 
@@ -81,16 +80,19 @@ live state.
 
 ### P1 — Conversation-first Inbox triage
 
-- State: ready; Labels & Move is the durable account/conversation foundation.
-- Scope: one trustworthy conversation row, split/focused Inbox rules,
-  conversation-wide selection and counts, and keyboard-first navigation that
-  does not duplicate message-level action truth.
-- Acceptance: a conversation never appears as contradictory duplicate rows;
-  split placement is deterministic and explainable; all actions preserve the
-  established account ownership, idempotency, Undo, and generated-only QA
-  boundaries.
-- Next: audit the current list/thread projection and define the smallest
-  shippable conversation-row slice before changing shared shell files.
+- State: verifying; the authoritative row, full thread reader, conversation-
+  scoped actions, and generated browser acceptance are complete and the release
+  is migration-free.
+- Scope: one account-safe conversation row across Inbox, mailboxes, and search;
+  aggregate counts/state; chronological reader rail; conversation-wide bulk and
+  row actions; J/K focus, O open, and Escape restoration. Focused/split placement
+  remains the next independent slice.
+- Acceptance: grouping/counting occurs before pagination; blank thread IDs never
+  merge; cross-account reads fail closed; active Snoozes do not corrupt Inbox
+  totals; actions preserve durable idempotency, Undo, retry, and generated-only
+  QA boundaries.
+- Next: push the reviewed commits, deploy without a migration, run read-only
+  production postflight, and close the exact release record.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 
@@ -113,18 +115,32 @@ live state.
 
 ### P2 — Durable device OTA control plane
 
-- State: policy core, read-only capability reporting, and exact pure OTA1
-  offer/event/replay contracts are shipped locked. Firmware recognizes but
-  does not act on a valid offer; schedule transport, artifact delivery, event
-  ingestion, cohorts, durable state, and device authentication are absent.
-- Scope: one future additive event-ledger migration descending from the
-  then-current head, authenticated device offer/artifact/event endpoints,
+- State: isolated implementation is active from the exact `93b9375` baseline.
+  Terminal revision `c6d7e8f9a0b1`, the direct child of current production head
+  `b5c6d7e8f9a0`, is reserved exclusively for its attempt/event ledger. No merge
+  or deployment has occurred.
+- Scope: one additive event-ledger migration descending from b5, authenticated
+  device offer/artifact/event endpoints,
   idempotent attempt state, power gates, rollout cohorts, and rescue controls.
 - Acceptance: a restart or repeated request cannot duplicate or lose update
   truth, only exact HIL-qualified evidence is offerable, and no single flag can
   enable a write.
-- Next: defer schema allocation and implementation until physical candidate.6
-  HIL establishes the exact event and rollback evidence the ledger must retain.
+- Next: keep the implementation isolated from Inbox files and shared docs until
+  the conversation release provides its exact GitHub/production closeout SHA.
+
+## Pending Conversation-First Inbox Release
+
+- PostgreSQL now returns one exact owned-account conversation row after grouping
+  and counting, with truthful totals, aggregate unread/star/attachment/label
+  state, and active-Snooze exclusion in the ordinary Inbox query.
+- The reader expands the full chronological account-scoped thread. List, table,
+  bulk, reader, and keyboard actions use server-expanded durable conversation
+  scope with Undo/retry/replay and later-intent-safe rollback.
+- Final checks passed 684 backend tests with 51 intentional skips, all 392
+  frontend tests, an eight-test disposable PostgreSQL gate, a 545-module build,
+  and generated desktop/mobile browser QA with zero provider calls, rejected
+  mutations, unknown routes, or console warnings/errors. Full evidence is in
+  `CONVERSATION_FIRST_INBOX_RELEASE_2026-08-30.md`.
 
 ## Recent At a Glance Firmware Protocol & Installer Foundation Release
 
