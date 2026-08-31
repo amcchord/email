@@ -22,12 +22,17 @@ from backend.models.terminal import TerminalDevice, TerminalSettings
 from backend.services.dashboard_snippet import get_current_snippet_dict
 from backend.services.eink.ha_client import empty_ha_shape, fetch_and_shape
 from backend.services.eink.pillow import render_eink_image
+from backend.services.eink.pillow.palette import registered_palette_designs
+from backend.services.eink.pillow.registry import registered_designs_by_content
 from backend.services.terminal.bmp import (
     encode_bw,
     encode_gray16,
     encode_spectra6,
 )
-from backend.services.terminal.catalog import DESIGNS
+from backend.services.terminal.catalog import (
+    DESIGNS,
+    validate_catalog_design_implementations,
+)
 from backend.services.terminal.variants import Variant
 
 logger = logging.getLogger(__name__)
@@ -275,13 +280,20 @@ async def render_day_ahead_bmp(
 
 _VALID_DESIGNS = set(DESIGNS)
 
+validate_catalog_design_implementations(
+    design_implementations=registered_designs_by_content(),
+    palette_designs=registered_palette_designs(),
+)
+
 
 def _resolve_design(device: Optional[TerminalDevice]) -> str:
     if not device:
         return "editorial"
     cfg = device.content_config or {}
-    design = str(cfg.get("design") or "editorial").lower()
-    return design if design in _VALID_DESIGNS else "editorial"
+    design = str(cfg.get("design") or "editorial").strip().lower()
+    if design not in _VALID_DESIGNS:
+        raise ValueError(f"No catalog design registered for {design!r}")
+    return design
 
 
 def _palette_for_variant(variant: Variant) -> str:
@@ -319,7 +331,7 @@ async def render_dashboard_bmp(
 
     design = (design_override or _resolve_design(device)).strip().lower()
     if design not in _VALID_DESIGNS:
-        design = "editorial"
+        raise ValueError(f"No catalog design registered for {design!r}")
     palette = _palette_for_variant(variant)
     tz_name = (settings.timezone or "UTC").strip() or "UTC"
 

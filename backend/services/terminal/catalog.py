@@ -7,12 +7,17 @@ combinations are valid and how they should be presented.
 """
 from __future__ import annotations
 
+from collections.abc import Collection, Mapping
 from dataclasses import asdict, dataclass
 from typing import Optional, Protocol
 
 
 class CatalogError(ValueError):
     """Raised when a requested view/design/profile combination is invalid."""
+
+
+class CatalogImplementationError(RuntimeError):
+    """Raised when catalog declarations and concrete renderers diverge."""
 
 
 @dataclass(frozen=True)
@@ -121,6 +126,98 @@ _VIEW_ALIASES = {
 }
 
 
+def _declared_designs_by_content() -> dict[str, frozenset[str]]:
+    return {
+        view.content_type: frozenset(view.design_keys)
+        for view in VIEWS.values()
+        if view.design_keys
+    }
+
+
+def validate_catalog_design_implementations(
+    *,
+    design_implementations: Mapping[str, Collection[str]],
+    palette_designs: Collection[str],
+) -> None:
+    """Require exact catalog, Pillow renderer, and palette registration.
+
+    Equality is deliberate: a missing implementation would expose a broken
+    catalog option, while an implementation absent from the catalog would be a
+    hidden, unreviewed product surface. Extensions therefore add the catalog
+    declaration, renderer, and palette registration as one coherent change.
+    """
+
+    declared_designs = frozenset(DESIGNS)
+    palette_keys = frozenset(palette_designs)
+    if palette_keys != declared_designs:
+        raise CatalogImplementationError(
+            "At a Glance palette registry does not match catalog designs: "
+            f"catalog={sorted(declared_designs)}, palettes={sorted(palette_keys)}"
+        )
+
+    declared_pairs = _declared_designs_by_content()
+    implemented_pairs = {
+        content_type: frozenset(designs)
+        for content_type, designs in design_implementations.items()
+    }
+    if implemented_pairs != declared_pairs:
+        raise CatalogImplementationError(
+            "At a Glance Pillow registry does not match catalog view/design "
+            f"pairs: catalog={declared_pairs!r}, renderers={implemented_pairs!r}"
+        )
+
+
+def validate_catalog_content_implementations(
+    content_implementations: Collection[str],
+    *,
+    surface: str,
+) -> None:
+    """Require one exact content renderer for every catalog view."""
+
+    declared = frozenset(view.content_type for view in VIEWS.values())
+    implemented = frozenset(content_implementations)
+    if implemented != declared:
+        raise CatalogImplementationError(
+            f"At a Glance {surface} content registry does not match catalog: "
+            f"catalog={sorted(declared)}, renderers={sorted(implemented)}"
+        )
+
+
+def _validate_catalog_declarations() -> None:
+    """Fail at import when catalog records reference missing definitions."""
+
+    if any(key != definition.key for key, definition in DESIGNS.items()):
+        raise CatalogImplementationError("At a Glance design keys are inconsistent")
+    if any(key != profile.key for key, profile in DISPLAY_PROFILES.items()):
+        raise CatalogImplementationError("At a Glance profile keys are inconsistent")
+    if any(key != view.key for key, view in VIEWS.items()):
+        raise CatalogImplementationError("At a Glance view keys are inconsistent")
+
+    content_types = [view.content_type for view in VIEWS.values()]
+    if len(content_types) != len(set(content_types)):
+        raise CatalogImplementationError("At a Glance content types must be unique")
+
+    for view in VIEWS.values():
+        missing_designs = set(view.design_keys) - DESIGNS.keys()
+        missing_profiles = set(view.profile_keys) - DISPLAY_PROFILES.keys()
+        if missing_designs or missing_profiles:
+            raise CatalogImplementationError(
+                f"At a Glance view {view.key!r} has unresolved definitions: "
+                f"designs={sorted(missing_designs)}, profiles={sorted(missing_profiles)}"
+            )
+        if view.design_keys and view.default_design not in view.design_keys:
+            raise CatalogImplementationError(
+                f"At a Glance view {view.key!r} needs a registered default design"
+            )
+        if not view.design_keys and view.default_design is not None:
+            raise CatalogImplementationError(
+                f"At a Glance view {view.key!r} cannot default a design"
+            )
+
+
+_validate_catalog_declarations()
+
+
 def resolve_profile(value: Optional[str]) -> DisplayProfile:
     raw = (value or "landscape_16_9").strip().lower()
     key = _PROFILE_ALIASES.get(raw, raw)
@@ -168,7 +265,10 @@ def resolve_content_type(content_type: Optional[str]) -> ViewDefinition:
     for view in VIEWS.values():
         if view.content_type == raw:
             return view
-    return VIEWS["clock"]
+    raise CatalogError(
+        f"Unknown content type {content_type!r}; "
+        f"choose one of {sorted(view.content_type for view in VIEWS.values())}"
+    )
 
 
 def content_type_options() -> list[dict]:

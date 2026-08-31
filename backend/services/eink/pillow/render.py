@@ -15,8 +15,8 @@ from typing import Any, Optional, Tuple
 
 from PIL import Image
 
-from .palette import Palette, get_palette
-from .helpers import resolve_zone
+from .palette import get_palette
+from .registry import get_design_renderer
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +58,6 @@ def _cache_put(key, img: Image.Image) -> None:
 # ── Main entrypoint ────────────────────────────────────────────────────
 
 
-CANVAS_SIZE = (800, 480)
-
-
 def render_eink_image(
     design: str,
     palette: str,
@@ -71,17 +68,15 @@ def render_eink_image(
 ) -> Image.Image:
     """Render the chosen design to a 800x480 RGB Pillow image.
 
-    `design`  : 'editorial' | 'swiss' (unknown -> editorial)
-    `palette` : 'six' | 'bw' (unknown -> six)
+    `design`  : exact registered design key ('editorial' | 'swiss')
+    `palette` : exact registered palette key ('six' | 'bw')
     `ha_shape`: HAShape dict; None falls through to the calm/quiet state.
     `tz_name` : IANA timezone for the clock in the masthead/header.
     """
-    design = (design or "editorial").lower()
-    if design not in ("editorial", "swiss"):
-        design = "editorial"
-    palette_name = (palette or "six").lower()
-    if palette_name not in ("six", "bw"):
-        palette_name = "six"
+    renderer = get_design_renderer("eink_dashboard", design)
+    design = renderer.design_key
+    palette_name = (palette or "").strip().lower()
+    P = get_palette(design, palette_name)
     tz = (tz_name or "UTC").strip() or "UTC"
 
     key = (design, palette_name, tz, _ha_hash(ha_shape))
@@ -90,15 +85,8 @@ def render_eink_image(
         if cached is not None:
             return cached
 
-    P = get_palette(design, palette_name)
-    img = Image.new("RGB", CANVAS_SIZE, color=P.bg)
-
-    if design == "swiss":
-        from . import swiss
-        swiss.render_dashboard(img, ha_shape or {}, P, tz_name=tz)
-    else:
-        from . import editorial
-        editorial.render_dashboard(img, ha_shape or {}, P, tz_name=tz)
+    img = Image.new("RGB", renderer.canvas_size, color=P.bg)
+    renderer.render(img, ha_shape or {}, P, tz_name=tz)
 
     if use_cache:
         _cache_put(key, img)

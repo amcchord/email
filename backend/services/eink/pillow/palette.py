@@ -7,11 +7,17 @@ quantizer would snap it to black anyway.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Tuple
 
 
 RGB = Tuple[int, int, int]
+
+
+class PaletteRegistryError(ValueError):
+    """Raised when an exact design/palette pair is not registered."""
 
 
 def _hex(h: str) -> RGB:
@@ -100,9 +106,46 @@ SW_PALETTE_BW = Palette(
 )
 
 
+PALETTE_REGISTRY: Mapping[str, Mapping[str, Palette]] = MappingProxyType(
+    {
+        "editorial": MappingProxyType(
+            {
+                "six": E_PALETTE_SIX,
+                "bw": E_PALETTE_BW,
+            }
+        ),
+        "swiss": MappingProxyType(
+            {
+                "six": SW_PALETTE_SIX,
+                "bw": SW_PALETTE_BW,
+            }
+        ),
+    }
+)
+
+
 def get_palette(design: str, palette: str) -> Palette:
-    design = (design or "editorial").lower()
-    palette = (palette or "six").lower()
-    if design == "swiss":
-        return SW_PALETTE_BW if palette == "bw" else SW_PALETTE_SIX
-    return E_PALETTE_BW if palette == "bw" else E_PALETTE_SIX
+    """Resolve one exact registered palette or fail closed.
+
+    Callers own their explicit defaults. Keeping defaults out of this lookup
+    prevents a misspelled future design or palette from silently rendering as
+    Editorial/Six.
+    """
+
+    design_key = (design or "").strip().lower()
+    palette_key = (palette or "").strip().lower()
+    design_palettes = PALETTE_REGISTRY.get(design_key)
+    resolved = design_palettes.get(palette_key) if design_palettes else None
+    if resolved is None:
+        registered = sorted(design_palettes) if design_palettes else []
+        raise PaletteRegistryError(
+            f"No palette registered for design={design_key!r}, "
+            f"palette={palette_key!r}; registered palettes: {registered}"
+        )
+    return resolved
+
+
+def registered_palette_designs() -> frozenset[str]:
+    """Return the designs that have an explicit palette family."""
+
+    return frozenset(PALETTE_REGISTRY)

@@ -34,11 +34,11 @@ from backend.services.terminal.battery import (
     should_record_sample,
 )
 from backend.services.terminal.catalog import (
-    VIEWS,
     CatalogError,
     resolve_design,
     resolve_profile,
     resolve_view,
+    validate_catalog_content_implementations,
 )
 from backend.services.terminal.renderer import (
     render_bmp,
@@ -319,14 +319,7 @@ DEVICE_RENDERERS: dict[str, DeviceRenderer] = {
     "clock": _render_clock_for_device,
 }
 
-_MISSING_DEVICE_RENDERERS = {
-    view.content_type for view in VIEWS.values()
-} - DEVICE_RENDERERS.keys()
-if _MISSING_DEVICE_RENDERERS:
-    raise RuntimeError(
-        "At a Glance catalog has no device renderer for "
-        f"{sorted(_MISSING_DEVICE_RENDERERS)}"
-    )
+validate_catalog_content_implementations(DEVICE_RENDERERS, surface="device")
 
 
 async def _render_for_device(
