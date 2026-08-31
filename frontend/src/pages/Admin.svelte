@@ -25,6 +25,7 @@
   import { getCategories } from '../lib/shortcutDefaults.js';
   import Button from '../components/common/Button.svelte';
   import AIModelsPanel from '../lib/admin/AIModelsPanel.svelte';
+  import WritingPreferences from '../lib/admin/WritingPreferences.svelte';
   import FirmwareInstaller from '../lib/admin/FirmwareInstaller.svelte';
   import TerminalEnrollment from '../lib/admin/TerminalEnrollment.svelte';
   import TerminalOtaManager from '../lib/admin/TerminalOtaManager.svelte';
@@ -96,6 +97,7 @@
   let allTabs = [
     { id: 'profile', label: 'Profile & Accounts', adminOnly: false },
     { id: 'ai-models', label: 'AI Models', adminOnly: false },
+    { id: 'writing', label: 'Writing', adminOnly: false },
     { id: 'preferences', label: 'Preferences', adminOnly: false },
     { id: 'terminals', label: 'At a Glance', adminOnly: false },
     { id: 'data', label: 'Data Management', adminOnly: false },
@@ -2168,6 +2170,8 @@
         onReprocess={reprocessWithModel}
         {Button}
       />
+    {:else if activeTab === 'writing'}
+      <WritingPreferences />
     {:else if activeTab === 'preferences'}
       <!-- Preferences & Keyboard Shortcuts -->
       <div class="space-y-6">

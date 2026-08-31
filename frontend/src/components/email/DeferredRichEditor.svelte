@@ -24,6 +24,7 @@
   let mounted = false;
   let generation = 0;
   let transferFocus = $state(false);
+  let fallbackInsertionRange = null;
 
   function focusIsLost() {
     const active = document.activeElement;
@@ -49,7 +50,9 @@
     node.focus({ preventScroll: true });
     const selection = window.getSelection?.();
     if (!selection) return false;
-    let range = selection.rangeCount > 0 ? selection.getRangeAt(0).cloneRange() : null;
+    let range = fallbackInsertionRange?.cloneRange()
+      || (selection.rangeCount > 0 ? selection.getRangeAt(0).cloneRange() : null);
+    fallbackInsertionRange = null;
     if (!range || !node.contains(range.commonAncestorContainer)) {
       range = document.createRange();
       range.selectNodeContents(node);
@@ -88,6 +91,14 @@
     onReady?.({
       mode: 'fallback',
       insertHtml: html => insertFallbackHtml(node, html),
+      rememberSelection: () => {
+        const selection = window.getSelection?.();
+        if (!selection?.rangeCount) return false;
+        const range = selection.getRangeAt(0);
+        if (!node.contains(range.commonAncestorContainer)) return false;
+        fallbackInsertionRange = range.cloneRange();
+        return true;
+      },
       focus: () => node.focus({ preventScroll: true }),
     });
 

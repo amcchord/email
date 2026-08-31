@@ -3,9 +3,10 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 
-const [picker, manager, compose, reader, flow, rich, deferred, shortcuts] = await Promise.all([
+const [picker, manager, admin, compose, reader, flow, rich, deferred, shortcuts] = await Promise.all([
   readFile(new URL('../components/email/SnippetPicker.svelte', import.meta.url), 'utf8'),
   readFile(new URL('./admin/WritingPreferences.svelte', import.meta.url), 'utf8'),
+  readFile(new URL('../pages/Admin.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../pages/Compose.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../components/email/EmailView.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../pages/Flow.svelte', import.meta.url), 'utf8'),
@@ -34,17 +35,25 @@ test('writing settings preserve dirty and destructive content behind confirmatio
   assert.match(manager, /Delete .*Existing drafts will keep their inserted text/s);
   assert.match(manager, /DeferredRichEditor/);
   assert.match(manager, /role="dialog"/);
+  assert.match(admin, /id: 'writing', label: 'Writing', adminOnly: false/);
+  assert.match(admin, /activeTab === 'writing'[\s\S]*<WritingPreferences \/>/);
 });
 
 
 test('all three writing surfaces use the shared picker and exact editor bridges', () => {
   assert.match(compose, /'compose\.snippets'/);
+  assert.match(compose, /capturePersonalSnippetSelection\(\)[\s\S]*snippetPickerOpen = true/);
   assert.match(compose, /<SnippetPicker[\s\S]*oninsert=\{insertPersonalSnippet\}/);
   assert.match(reader, /'inbox\.snippets'/);
+  assert.match(reader, /snippetSelection = \{[\s\S]*start: editor\.selectionStart[\s\S]*end: editor\.selectionEnd/);
   assert.match(reader, /insertSnippetText/);
   assert.match(flow, /'flow\.snippets'/);
+  assert.match(flow, /capturePersonalSnippetSelection\(\)[\s\S]*snippetPickerOpen = true/);
   assert.match(flow, /replyEditorHandle\?\.insertHtml/);
+  assert.match(rich, /savedInsertionPoint \?\? editor\.state\.selection\.to/);
+  assert.match(rich, /const safeHtml = sanitizeComposeHtml\(String\(html \|\| ''\)\)/);
   assert.match(rich, /setTextSelection\(insertionPoint\)[\s\S]*insertContent\(safeHtml\)/);
+  assert.match(deferred, /const safeHtml = sanitizeComposeHtml\(String\(html \|\| ''\)\)/);
   assert.match(deferred, /Preserve selected draft content/);
   assert.match(shortcuts, /id: 'compose\.snippets', key: 'Ctrl\+;'/);
   assert.match(shortcuts, /id: 'inbox\.snippets', key: 'Ctrl\+;'/);

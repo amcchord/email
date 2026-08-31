@@ -74,12 +74,18 @@ test('editor payloads normalize identity and revisions without inventing content
     bodyText: ' Generated\r\nreply ',
     revision: 4,
   }), {
-    snippet_id: snippets[0].snippet_id,
     expected_revision: 4,
     name: 'Friendly follow-up',
     shortcut: 'followup',
     body_html: '<p>Generated</p>',
     body_text: 'Generated\nreply',
   });
+  assert.equal(snippetEditorPayload({
+    snippetId: snippets[0].snippet_id,
+    name: 'Generated',
+    shortcut: 'generated',
+    bodyHtml: '<p>Generated</p>',
+    bodyText: 'Generated',
+  }).snippet_id, snippets[0].snippet_id);
   assert.equal(snippetHtmlToPlainText('<p>Hello<br>there</p><p>Again</p>'), 'Hello\nthere\nAgain');
 });

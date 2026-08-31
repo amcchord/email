@@ -16,6 +16,7 @@
     disabled = false,
     shortcutId = null,
     oninsert = null,
+    oncapture = null,
     compact = false,
     label = 'Snippets',
   } = $props();
@@ -31,6 +32,7 @@
   let observedOpen = false;
   let returnFocus = null;
   let requestGeneration = 0;
+  let triggerCaptured = false;
 
   let results = $derived(rankPersonalSnippets(snippets, query));
 
@@ -158,10 +160,17 @@
   aria-expanded={open}
   data-shortcut={shortcutId || undefined}
   {disabled}
-  onclick={() => { open = true; }}
+  onpointerdown={() => {
+    triggerCaptured = Boolean(oncapture?.());
+  }}
+  onclick={() => {
+    if (!triggerCaptured) oncapture?.();
+    triggerCaptured = false;
+    open = true;
+  }}
 >
   <Icon name="file-text" size={15} />
-  {#if !compact}<span>{label}</span>{/if}
+  {#if !compact}<span class="snippet-trigger-label">{label}</span>{/if}
 </button>
 
 {#if open}
@@ -275,6 +284,15 @@
   }
 
   @media (max-width: 767px) {
+    .snippet-trigger {
+      min-width: 2.75rem;
+      padding-inline: 0.625rem;
+    }
+
+    .snippet-trigger-label {
+      display: none;
+    }
+
     .snippet-layer {
       align-items: flex-end;
       padding: 0;

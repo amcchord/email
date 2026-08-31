@@ -111,8 +111,11 @@ export function snippetEditorPayload({ snippetId, name, shortcut, bodyHtml, body
     body_html: String(bodyHtml ?? '').trim(),
     body_text: String(bodyText ?? '').replace(/\r\n?/g, '\n').trim(),
   };
-  if (snippetId) payload.snippet_id = String(snippetId);
-  if (revision !== undefined && revision !== null) payload.expected_revision = Number(revision);
+  if (revision !== undefined && revision !== null) {
+    payload.expected_revision = Number(revision);
+  } else if (snippetId) {
+    payload.snippet_id = String(snippetId);
+  }
   return payload;
 }
 

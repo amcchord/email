@@ -300,7 +300,7 @@
             <span class="font-semibold" style="color: var(--text-primary)">Shortcut</span>
             <span class="flex min-h-11 items-center rounded-lg border px-3" style="border-color: var(--border-color); background: var(--bg-secondary)">
               <span class="font-mono" style="color: var(--text-tertiary)">;</span>
-              <input bind:value={shortcut} maxlength="32" class="min-w-0 flex-1 bg-transparent font-mono outline-none" style="color: var(--text-primary)" placeholder="followup" aria-describedby="snippet-shortcut-help" />
+              <input bind:value={shortcut} maxlength="32" class="min-h-11 min-w-0 flex-1 bg-transparent font-mono outline-none" style="color: var(--text-primary)" placeholder="followup" aria-describedby="snippet-shortcut-help" />
             </span>
             <span id="snippet-shortcut-help" class="block text-[11px]" style="color: var(--text-tertiary)">Letters, numbers, hyphens, and underscores</span>
           </label>

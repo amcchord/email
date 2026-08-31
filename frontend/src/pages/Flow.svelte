@@ -424,7 +424,10 @@
                 : 'Open a reply and enter a message first',
       },
       'flow.snippets': {
-        run: () => { snippetPickerOpen = true; },
+        run: () => {
+          capturePersonalSnippetSelection();
+          snippetPickerOpen = true;
+        },
         isEnabled: () => (
           replyViewOpen
           && writingSurfaceReady
@@ -1465,6 +1468,10 @@
   function handleReplyEditorReady(handle) {
     replyEditorHandle = handle || null;
     writingSurfaceReady = true;
+  }
+
+  function capturePersonalSnippetSelection() {
+    return replyEditorHandle?.rememberSelection?.() ?? false;
   }
 
   function insertPersonalSnippet(snippet) {
@@ -2875,6 +2882,7 @@
                 compact={true}
                 shortcutId="flow.snippets"
                 disabled={!writingSurfaceReady || !replyContext?.available || durableReplyOpening || Boolean(durableReplyError)}
+                oncapture={capturePersonalSnippetSelection}
                 oninsert={insertPersonalSnippet}
               />
               <SendSplitButton

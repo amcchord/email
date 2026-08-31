@@ -34,12 +34,23 @@
   let editorElement = $state(null);
   let editor = $state(null);
   let lastSetContent = $state(untrack(() => content || ''));
+  let savedInsertionPoint = null;
+
+  function rememberSelection() {
+    if (!editor) return false;
+    savedInsertionPoint = editor.state.selection.to;
+    return true;
+  }
 
   function insertHtmlAtCaret(html) {
     if (!editor) return false;
     const safeHtml = sanitizeComposeHtml(String(html || ''));
     if (!safeHtml) return false;
-    const insertionPoint = editor.state.selection.to;
+    const insertionPoint = Math.min(
+      savedInsertionPoint ?? editor.state.selection.to,
+      editor.state.doc.content.size,
+    );
+    savedInsertionPoint = null;
     return editor
       .chain()
       .focus()
@@ -103,6 +114,7 @@
     onReady?.({
       mode: 'rich',
       insertHtml: insertHtmlAtCaret,
+      rememberSelection,
       focus: () => editor?.commands.focus(),
     });
   });

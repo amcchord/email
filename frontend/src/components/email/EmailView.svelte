@@ -78,6 +78,7 @@
   let inlineReplyMode = $state(REPLY_ENVELOPE_MODES.REPLY);
   let inlineReplyTextarea = $state(null);
   let snippetPickerOpen = $state(false);
+  let snippetSelection = null;
   let primaryReplyButton = $state(null);
   let openingManagedDraft = $state(false);
   let draftOpenMessage = $state('');
@@ -185,7 +186,10 @@
       },
     },
     'inbox.snippets': {
-      run: () => { snippetPickerOpen = true; },
+      run: () => {
+        capturePersonalSnippetSelection();
+        snippetPickerOpen = true;
+      },
       isEnabled: () => (
         inlineReplyOpen
         && Boolean(inlineReplyTextarea)
@@ -1091,14 +1095,26 @@
     }
   }
 
+  function capturePersonalSnippetSelection() {
+    const editor = inlineReplyTextarea;
+    if (!editor || !inlineReplyOpen) return false;
+    snippetSelection = {
+      start: editor.selectionStart,
+      end: editor.selectionEnd,
+    };
+    return true;
+  }
+
   async function insertPersonalSnippet(snippet) {
     const editor = inlineReplyTextarea;
     if (!editor || !inlineReplyOpen) return false;
+    const selection = snippetSelection;
+    snippetSelection = null;
     const result = insertSnippetText(
       inlineReplyBody,
       snippet?.body_text,
-      editor.selectionStart,
-      editor.selectionEnd,
+      selection?.start ?? editor.selectionStart,
+      selection?.end ?? editor.selectionEnd,
     );
     inlineReplyBody = result.value;
     advanceInlineReplyGeneration();
@@ -1800,6 +1816,7 @@
             compact={true}
             shortcutId="inbox.snippets"
             disabled={!activeReplyEnvelopeResult.available || durableReplyOpening || Boolean(durableReplyError) || durableReplyState.discardInProgress || durableReplyState.sendInProgress}
+            oncapture={capturePersonalSnippetSelection}
             oninsert={insertPersonalSnippet}
           />
           <SendSplitButton

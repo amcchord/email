@@ -158,7 +158,7 @@ const SEEDED_SNIPPETS_BY_USER = Object.freeze({
       snippet_id: '00000000-0000-4000-8000-000000009102',
       name: 'Generated follow up',
       shortcut: 'follow-up',
-      body_html: '<p>Following up with generated-only content.</p>',
+      body_html: '<p>Following up with generated-only content.</p><img src="https://tracker.invalid/pixel.png" onerror="alert(1)"><script>alert(2)</script>',
       body_text: 'Following up with generated-only content.',
     }),
   ]),
@@ -775,10 +775,6 @@ export function createGeneratedProviderDraftFixture({
         });
         return writeJson(response, publicSnippet(existing));
       }
-      counters.snippet_conflicts += 1;
-      return writeError(response, 409, 'snippet_conflict', 'That snippet request ID is already used');
-    }
-    if ([...snippets.values()].some(record => record.snippet_id === payload.snippet_id)) {
       counters.snippet_conflicts += 1;
       return writeError(response, 409, 'snippet_conflict', 'That snippet request ID is already used');
     }
@@ -1982,11 +1978,48 @@ export function createGeneratedProviderDraftFixture({
     if (request.method === 'GET' && pathname === '/api/auth/ui-preferences') {
       return writeJson(response, { thread_order: 'asc', theme: 'default', color_scheme: 'light' });
     }
+    if (request.method === 'GET' && pathname === '/api/auth/about-me') {
+      return writeJson(response, { about_me: '' });
+    }
+    if (request.method === 'GET' && pathname === '/api/auth/ai-preferences') {
+      return writeJson(response, {
+        allowed_models: [],
+        labels: {},
+        effort_levels: {},
+        models_by_preference: {},
+      });
+    }
+    if (request.method === 'GET' && pathname === '/api/auth/api-tokens') {
+      return writeJson(response, []);
+    }
     if (request.method === 'GET' && pathname === '/api/auth/keyboard-shortcuts') {
       return writeJson(response, { shortcuts: {} });
     }
+    if (request.method === 'GET' && pathname === '/api/admin/dashboard') {
+      return writeJson(response, {});
+    }
+    if (request.method === 'GET' && pathname === '/api/admin/settings') {
+      return writeJson(response, []);
+    }
+    if (request.method === 'GET' && pathname === '/api/admin/feature-flags') {
+      return writeJson(response, { desktop_app_enabled: false });
+    }
+    if (request.method === 'GET' && pathname === '/api/accounts/allowed') {
+      return writeJson(response, { allowed_accounts: '@example.test' });
+    }
     if (request.method === 'GET' && pathname === '/api/accounts/') {
       return writeJson(response, clone(ACCOUNTS_BY_USER[currentUser.id] || []));
+    }
+    if (request.method === 'GET' && pathname === '/api/terminal/settings') {
+      return writeJson(response, {
+        code: 'generated-only',
+        home_assistant_url: null,
+        timezone: 'America/New_York',
+        displays: [],
+      });
+    }
+    if (request.method === 'GET' && pathname === '/api/terminal/devices') {
+      return writeJson(response, []);
     }
     if (request.method === 'GET' && pathname === '/api/build-version') {
       return writeJson(response, { version: 'generated-provider-draft-qa' });
@@ -2023,6 +2056,12 @@ export function createGeneratedProviderDraftFixture({
     }
     if (request.method === 'GET' && pathname === '/api/ai/trends') {
       return writeJson(response, { summary: '', urgent_count: 0 });
+    }
+    if (request.method === 'GET' && pathname === '/api/ai/stats') {
+      return writeJson(response, {});
+    }
+    if (request.method === 'GET' && pathname === '/api/ai/processing/status') {
+      return writeJson(response, { active: false, just_finished: false });
     }
     if (
       request.method === 'GET'

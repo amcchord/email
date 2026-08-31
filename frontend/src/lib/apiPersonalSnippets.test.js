@@ -34,7 +34,9 @@ test('personal snippet API uses only authenticated compose routes and exact vers
   };
   await api.listPersonalSnippets();
   await api.createPersonalSnippet(payload);
-  await api.replacePersonalSnippet('id/with spaces', { ...payload, expected_revision: 2 });
+  const replacement = { ...payload, expected_revision: 2 };
+  delete replacement.snippet_id;
+  await api.replacePersonalSnippet('id/with spaces', replacement);
   await api.deletePersonalSnippet('id/with spaces', 3);
 
   assert.deepEqual(calls, [
@@ -43,7 +45,7 @@ test('personal snippet API uses only authenticated compose routes and exact vers
     {
       url: '/api/compose/snippets/id%2Fwith%20spaces',
       method: 'PUT',
-      body: { ...payload, expected_revision: 2 },
+      body: replacement,
     },
     {
       url: '/api/compose/snippets/id%2Fwith%20spaces?expected_revision=3',

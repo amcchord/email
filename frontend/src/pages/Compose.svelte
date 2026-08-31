@@ -371,7 +371,10 @@
         },
       },
       'compose.snippets': {
-        run: () => { snippetPickerOpen = true; },
+        run: () => {
+          capturePersonalSnippetSelection();
+          snippetPickerOpen = true;
+        },
         isEnabled: () => writingSurfaceReady && Boolean(editorHandle) && !draftLocked,
         disabledReason: () => draftLocked
           ? 'Draft editing is locked while its state is being confirmed'
@@ -444,6 +447,10 @@
   function handleEditorReady(handle) {
     editorHandle = handle || null;
     writingSurfaceReady = true;
+  }
+
+  function capturePersonalSnippetSelection() {
+    return editorHandle?.rememberSelection?.() ?? false;
   }
 
   function insertPersonalSnippet(snippet) {
@@ -831,6 +838,7 @@
         bind:open={snippetPickerOpen}
         disabled={draftLocked || !writingSurfaceReady}
         shortcutId="compose.snippets"
+        oncapture={capturePersonalSnippetSelection}
         oninsert={insertPersonalSnippet}
       />
       <SendSplitButton
