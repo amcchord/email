@@ -22,6 +22,7 @@ from backend.routers import (
     compose,
     emails,
     events,
+    follow_up,
     public_api,
     snippets,
     snoozes,
@@ -105,6 +106,7 @@ app.include_router(todos.router)
 app.include_router(chat.router)
 app.include_router(calendar.router)
 app.include_router(events.router)
+app.include_router(follow_up.router)
 app.include_router(public_api.router)
 app.include_router(snoozes.router)
 app.include_router(snippets.router)

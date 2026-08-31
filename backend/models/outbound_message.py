@@ -65,6 +65,12 @@ class OutboundMessage(Base):
         nullable=True,
     )
     client_draft_id: Mapped[UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    follow_up_requested: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
 
     # Payload is intentionally nullable: delivery and cancellation scrub all
     # recipients, bodies, and attachment bytes while retaining safe metadata.

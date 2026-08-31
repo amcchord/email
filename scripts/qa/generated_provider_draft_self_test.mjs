@@ -31,6 +31,8 @@ const ids = Object.freeze({
   sourceRace: '00000000-0000-4000-8000-000000000113',
   personalSnippet: '00000000-0000-4000-8000-000000000114',
   personalSnippetConflict: '00000000-0000-4000-8000-000000000115',
+  followUp: '00000000-0000-4000-8000-000000000116',
+  followUpSend: '00000000-0000-4000-8000-000000000117',
 });
 
 let mutationSequence = 200;
@@ -52,6 +54,8 @@ function draftPayload({
   references = null,
   attachments = [],
   to = ['recipient@example.test'],
+  followUpReminder = 'default',
+  followUpTimeZone = 'America/New_York',
 } = {}) {
   return {
     client_draft_id: clientDraftId,
@@ -68,6 +72,8 @@ function draftPayload({
     thread_id: threadId,
     in_reply_to: inReplyTo,
     references,
+    follow_up_reminder: followUpReminder,
+    follow_up_time_zone: followUpTimeZone,
     is_draft: true,
     attachments,
   };
@@ -133,6 +139,77 @@ async function waitFor(predicate, message, timeoutMs = 1_000) {
 const results = {};
 
 try {
+  // Account defaults remain off until an explicit revisioned save. A custom
+  // 4-day policy round-trips, and the exact draft choice reaches send
+  // admission without any external provider or network call.
+  await reset('clean');
+  let policies = await get('/api/follow-up/policies');
+  assert.equal(policies.total, 2);
+  assert.equal(policies.accounts[0].enabled, false);
+  assert.equal(policies.accounts[0].revision, 0);
+  const savedPolicy = await put('/api/follow-up/policies/1101', {
+    enabled: true,
+    delay_days: 4,
+    wake_local_time: '08:30',
+    time_zone: 'America/New_York',
+    weekdays_only: true,
+    expected_revision: 0,
+  });
+  assert.equal(savedPolicy.revision, 1);
+  assert.equal(savedPolicy.delay_days, 4);
+  const replayedPolicy = await put('/api/follow-up/policies/1101', {
+    enabled: true,
+    delay_days: 4,
+    wake_local_time: '08:30',
+    time_zone: 'America/New_York',
+    weekdays_only: true,
+    expected_revision: 0,
+  });
+  assert.deepEqual(replayedPolicy, savedPolicy);
+  await put('/api/follow-up/policies/1101', {
+    enabled: false,
+    delay_days: 4,
+    wake_local_time: '08:30',
+    time_zone: 'America/New_York',
+    weekdays_only: true,
+    expected_revision: 0,
+  }, { expectedStatus: 409 });
+  const followUpDraftPayload = draftPayload({
+    clientDraftId: ids.followUp,
+    followUpReminder: 'default',
+    followUpTimeZone: 'America/New_York',
+  });
+  await postDraft(followUpDraftPayload);
+  const reopenedFollowUp = await get(
+    `/api/compose/drafts/by-client-id/${ids.followUp}`,
+  );
+  assert.equal(reopenedFollowUp.follow_up_reminder, 'default');
+  assert.equal(reopenedFollowUp.follow_up_time_zone, 'America/New_York');
+  const followUpSend = await post('/api/compose/send', {
+    ...followUpDraftPayload,
+    mutation_id: undefined,
+    revision: undefined,
+    is_draft: undefined,
+    idempotency_key: ids.followUpSend,
+    client_draft_id: ids.followUp,
+    draft_revision: 1,
+  }, { expectedStatus: 202 });
+  assert.equal(followUpSend.follow_up_requested, true);
+  const cancelledFollowUp = await post(
+    `/api/compose/sends/${followUpSend.send_id}/undo`,
+    {},
+  );
+  assert.equal(cancelledFollowUp.state, 'cancelled');
+  let snapshot = await audit();
+  assert.equal(snapshot.counters.follow_up_policy_reads, 1);
+  assert.equal(snapshot.counters.follow_up_policy_writes, 1);
+  assert.equal(snapshot.counters.follow_up_policy_conflicts, 1);
+  assert.equal(snapshot.counters.follow_up_requested_sends, 1);
+  assert.equal(snapshot.logical_outbounds[0].follow_up_requested, true);
+  assert.equal(snapshot.logical_outbounds[0].state, 'cancelled');
+  assertExpectedFlowSafety(snapshot);
+  results.follow_up = snapshot.counters;
+
   // Recipient suggestions are account-scoped, de-duplicated across current
   // and legacy history shapes, exclude every owned address, and never cross
   // the generated authenticated-user boundary.
@@ -436,7 +513,7 @@ try {
   const afterSnippetDelete = await get('/api/compose/snippets');
   assert.equal(afterSnippetDelete.total, 2);
 
-  let snapshot = await audit();
+  snapshot = await audit();
   assert.equal(snapshot.counters.snippet_create_requests, 4);
   assert.equal(snapshot.counters.snippet_creates, 1);
   assert.equal(snapshot.counters.snippet_create_replays, 1);

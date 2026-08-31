@@ -39,6 +39,7 @@ free-form questions about your inbox without touching the web UI.
 - [Web session-only attachment preview and download](#web-session-only-attachment-preview-and-download)
 - [Web session-only durable mail actions](#web-session-only-durable-mail-actions)
 - [Web session-only durable Snooze reminders](#web-session-only-durable-snooze-reminders)
+- [Web session-only automatic follow-up reminders](#web-session-only-automatic-follow-up-reminders)
 - [Web session-only durable outbound delivery](#web-session-only-durable-outbound-delivery)
 - [Web session-only durable draft sessions](#web-session-only-durable-draft-sessions)
 - [Web session-only Todo ownership](#web-session-only-todo-ownership)
@@ -1032,6 +1033,74 @@ Redis is wake-up acceleration and the minutely cron drain recovers lost wakes
 and expired leases. Snooze return actions enter the same ordered mail-action
 sequence as direct user actions, so later manual placement wins.
 
+Automatic follow-up Snoozes additionally return
+`origin="automatic_follow_up"` and their safe originating outbound identifier.
+They never archive or otherwise remove a synchronized Inbox conversation. A
+manual Snooze or newer manual placement always wins.
+
+## Web session-only automatic follow-up reminders
+
+Automatic follow-ups are an authenticated, per-account writing preference and
+delivery-confirmed reminder workflow. Public API tokens cannot read or mutate
+these routes.
+
+```text
+GET /api/follow-up/policies
+PUT /api/follow-up/policies/{account_id}
+```
+
+`GET` returns every active connected account. An account with no saved row is
+represented by a safe default-off revision-zero policy. `PUT` is a complete,
+revision-checked replacement:
+
+```json
+{
+  "expected_revision": 0,
+  "enabled": true,
+  "delay_days": 5,
+  "wake_local_time": "09:00",
+  "time_zone": "America/New_York",
+  "weekdays_only": true
+}
+```
+
+Delay is 1–30 days, local time is strict 24-hour `HH:MM`, and `time_zone` must
+be an IANA zone. A stale revision returns 409
+`follow_up_policy_conflict`; missing, inactive, and foreign accounts share the
+same non-disclosing 404. Exact replacement replay is safe.
+
+Compose, reader reply, and Flow include these fields in both durable draft and
+send payloads:
+
+```json
+{
+  "follow_up_reminder": "default",
+  "follow_up_time_zone": "America/New_York"
+}
+```
+
+`follow_up_reminder` is `default`, `enabled`, or `disabled`. `default` resolves
+the selected account policy once at immutable send admission; changing the
+policy later cannot rewrite an accepted message. Explicit enable requires at
+least one external To or Cc recipient. Self-only and Bcc-only sends fail
+admission instead of silently discarding the user's request.
+
+The server creates a content-free companion intent in the same PostgreSQL
+transaction as the outbound message. It does not schedule a reminder from an
+HTTP 202, undo window, scheduled time, worker attempt, or unconfirmed provider
+response. After provider-confirmed delivery, it reconciles the exact
+synchronized Sent row by provider message ID and unique RFC Message-ID, uses
+the synchronized delivery timestamp, applies the saved local time/business-day
+rule with explicit DST handling, then creates one `if_no_reply` automatic
+Snooze. Identifier disagreement fails closed.
+
+Undo, scheduled cancellation, terminal delivery failure, retry authorization,
+retry expiry, and send-now update the same intent transactionally. Redis only
+accelerates work; the periodic database drainer recovers expired leases and
+lost enqueueing. Reply detection requires a successful sync checkpoint at or
+after wake. No tracking pixel, read receipt, remote image, or message-content
+copy is used.
+
 ## Web session-only recipient suggestions
 
 Compose recipient suggestions are private projections of already-synchronized
@@ -1170,6 +1239,8 @@ Create requires one client-generated UUID for one immutable logical payload:
   "scheduled_for": "2026-08-31T13:00:00Z",
   "schedule_timezone": "America/New_York",
   "archive_source_after_send": false,
+  "follow_up_reminder": "default",
+  "follow_up_time_zone": "America/New_York",
   "source_email_id": null,
   "in_reply_to": null,
   "references": null,
@@ -1208,6 +1279,9 @@ Outbound responses expose `archive_source_after_send` as a safe boolean only
 while the retained intent still has an exact positive source identity. This
 allows scheduled-send management to describe the pending follow-up without
 returning the outbound payload or message content.
+
+Outbound responses also expose `follow_up_requested` as a safe boolean. It
+reports the immutable admission result, not the current account preference.
 
 Admission is serialized transactionally per user. At most 30 active sends may
 consume one account's capacity and 60 may consume one user's capacity; the

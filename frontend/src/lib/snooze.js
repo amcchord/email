@@ -57,6 +57,7 @@ export function snoozedRecordToEmail(record) {
     snooze_wake_at: record?.wake_at ?? null,
     snooze_time_zone: record?.time_zone ?? null,
     snooze_condition: record?.condition ?? 'always',
+    snooze_origin: record?.origin ?? 'manual',
     snooze_state: record?.state ?? null,
     snooze_status_detail: record?.status_detail ?? null,
   };
@@ -107,6 +108,21 @@ export function reconcileActiveSnoozeEmails(emails, reminders, { retain = false 
       reconciled.push(email);
       continue;
     }
+    if (reminder.origin === 'automatic_follow_up') {
+      // Automatic follow-ups are reminders, not mailbox-placement commands.
+      // Preserve the message in Inbox-derived lists while exposing its origin.
+      reconciled.push({
+        ...email,
+        snooze_id: reminder.id,
+        snooze_wake_at: reminder.wake_at,
+        snooze_time_zone: reminder.time_zone,
+        snooze_condition: reminder.condition,
+        snooze_origin: reminder.origin,
+        snooze_state: reminder.state,
+        snooze_outcome_unknown: false,
+      });
+      continue;
+    }
     matchedCount += 1;
     if (!retain) continue;
     reconciled.push({
@@ -115,6 +131,7 @@ export function reconcileActiveSnoozeEmails(emails, reminders, { retain = false 
       snooze_wake_at: reminder.wake_at,
       snooze_time_zone: reminder.time_zone,
       snooze_condition: reminder.condition,
+      snooze_origin: reminder.origin ?? 'manual',
       snooze_state: reminder.state,
       snooze_outcome_unknown: false,
     });

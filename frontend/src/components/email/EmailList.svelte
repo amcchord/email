@@ -600,6 +600,11 @@
                     {formatSnoozeWake(email.snooze_wake_at, email.snooze_time_zone || undefined, { compact: true })}
                   </span>
                 {/if}
+                {#if email.snooze_origin === 'automatic_follow_up'}
+                  <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300" title="Created automatically after a sent message received no reply">
+                    Follow-up
+                  </span>
+                {/if}
                 {#if email.ai_category}
                   <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 {categoryColors[email.ai_category] || ''}">{categoryLabel(email.ai_category)}</span>
                 {/if}

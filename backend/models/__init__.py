@@ -6,6 +6,7 @@ from backend.models.chat import ChatConversation, ChatMessage
 from backend.models.dashboard import DashboardSnippet
 from backend.models.draft import DraftAttachment, DraftMutation, DraftSession
 from backend.models.email import Attachment, Email, EmailLabel
+from backend.models.follow_up import AccountFollowUpPolicy, OutboundFollowUpIntent
 from backend.models.mail_action import MailAction
 from backend.models.outbound_message import OutboundMessage
 from backend.models.snooze import EmailSnooze
@@ -31,6 +32,8 @@ __all__ = [
     "Email",
     "Attachment",
     "EmailLabel",
+    "AccountFollowUpPolicy",
+    "OutboundFollowUpIntent",
     "MailAction",
     "OutboundMessage",
     "EmailSnooze",

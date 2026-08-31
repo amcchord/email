@@ -495,6 +495,8 @@ test('a server-only URL rehydrates without replaying an accepted revision', asyn
           state: 'pending',
           subject: 'Accepted remote draft',
           body_html: '<p>Accepted</p>',
+          follow_up_reminder: 'enabled',
+          follow_up_time_zone: 'America/New_York',
         };
       },
       async saveDraft(payload) {
@@ -507,6 +509,8 @@ test('a server-only URL rehydrates without replaying an accepted revision', asyn
   await controller.load({ clientDraftId, intent: { ...intent, client_draft_id: clientDraftId } });
   assert.equal(controller.getState().status, 'reconciling');
   assert.equal(controller.getState().snapshot.subject, 'Accepted remote draft');
+  assert.equal(controller.getState().snapshot.follow_up_reminder, 'enabled');
+  assert.equal(controller.getState().snapshot.follow_up_time_zone, 'America/New_York');
   await controller.flush();
   assert.equal(saves, 0);
 

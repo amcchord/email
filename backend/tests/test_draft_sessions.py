@@ -118,13 +118,18 @@ def test_draft_hash_ignores_mutation_and_revision_but_covers_bytes():
     })
     assert draft_request_hash(first) == draft_request_hash(same)
     assert draft_request_hash(first) != draft_request_hash(changed)
+    assert draft_request_hash(first) != draft_request_hash(first.model_copy(update={
+        "follow_up_reminder": "enabled",
+        "follow_up_time_zone": "America/New_York",
+    }))
 
 
 def test_public_metadata_is_content_free_and_owned_detail_is_resumable():
     forbidden = {"payload", "to", "cc", "bcc", "subject", "body_html", "body_text", "attachments"}
     assert forbidden.isdisjoint(DraftSessionResponse.model_fields)
     assert {
-        "to", "cc", "bcc", "subject", "body_html", "body_text", "attachments"
+        "to", "cc", "bcc", "subject", "body_html", "body_text", "attachments",
+        "follow_up_reminder", "follow_up_time_zone",
     } <= DraftSessionDetailResponse.model_fields.keys()
     assert "provider_draft_id" not in DraftSessionDetailResponse.model_fields
     assert "provider_message_id" not in DraftSessionDetailResponse.model_fields
@@ -167,7 +172,7 @@ def test_draft_models_routes_migration_and_worker_are_complete():
     assert scripts.get_revision("a4b5c6d7e8f9").down_revision == "f3a4b5c6d7e8"
     assert scripts.get_revision("b5c6d7e8f9a0").down_revision == "a4b5c6d7e8f9"
     assert scripts.get_revision("c6d7e8f9a0b1").down_revision == "b5c6d7e8f9a0"
-    assert scripts.get_heads() == ["d7e8f9a0b1c2"]
+    assert scripts.get_heads() == ["e8f9a0b1c2d3"]
 
     assert drain_draft_sessions_task in CronWorkerSettings.functions
     assert any(job.coroutine is drain_draft_sessions_task for job in CronWorkerSettings.cron_jobs)

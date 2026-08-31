@@ -1,4 +1,5 @@
 import { createDraftSessionController } from './draftSession.js';
+import { normalizeFollowUpReminderMode } from './followUpReminders.js';
 
 function positiveInteger(value) {
   const number = Number(value);
@@ -38,7 +39,12 @@ export function replyTextHtml(bodyText = '') {
   return escaped ? `<p>${escaped.replaceAll('\n', '<br>')}</p>` : '';
 }
 
-export function durableReplySnapshot(envelope = {}, { bodyHtml = '', bodyText = null } = {}) {
+export function durableReplySnapshot(envelope = {}, {
+  bodyHtml = '',
+  bodyText = null,
+  followUpReminder = 'default',
+  followUpTimeZone = null,
+} = {}) {
   const accountId = positiveInteger(envelope.account_id);
   const sourceEmailId = positiveInteger(envelope.source_email_id);
   if (!accountId || !sourceEmailId) {
@@ -56,6 +62,8 @@ export function durableReplySnapshot(envelope = {}, { bodyHtml = '', bodyText = 
     references: envelope.references || null,
     thread_id: envelope.thread_id || null,
     source_email_id: sourceEmailId,
+    follow_up_reminder: normalizeFollowUpReminderMode(followUpReminder),
+    follow_up_time_zone: followUpTimeZone || null,
     attachments: [],
   });
 }
@@ -73,6 +81,8 @@ function snapshotFromDraftResponse(response = {}) {
     references: response.references || null,
     thread_id: response.thread_id || null,
     source_email_id: response.source_email_id || null,
+    follow_up_reminder: normalizeFollowUpReminderMode(response.follow_up_reminder),
+    follow_up_time_zone: response.follow_up_time_zone || null,
     attachments: response.attachments || [],
   };
 }
@@ -244,7 +254,12 @@ export function createDurableReplyController({
     intent,
     controller,
     open,
-    snapshot: (bodyHtml, bodyText = null) => durableReplySnapshot(envelope, { bodyHtml, bodyText }),
+    snapshot: (bodyHtml, bodyText = null, followUp = {}) => durableReplySnapshot(envelope, {
+      bodyHtml,
+      bodyText,
+      followUpReminder: followUp.followUpReminder,
+      followUpTimeZone: followUp.followUpTimeZone,
+    }),
     composeData() {
       const state = controller.getState();
       return {

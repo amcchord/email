@@ -36,6 +36,14 @@
     snoozeThreadKey,
   } from '../lib/snooze.js';
   import { formatSnoozeWake } from '../lib/remindLater.js';
+  import {
+    browserFollowUpTimeZone,
+    followUpPolicyForAccount,
+    followUpRequestFields,
+    followUpSendSummary,
+    normalizeFollowUpPolicyList,
+    normalizeFollowUpReminderMode,
+  } from '../lib/followUpReminders.js';
 
   // --- Day Summary State ---
   let summaryLoading = $state(true);
@@ -130,6 +138,10 @@
   let unsubscribeDurableReply = null;
   let durableReplyRelease = Promise.resolve();
   let replyReturnFocus = null;
+  let followUpPolicies = $state([]);
+  let followUpPoliciesLoaded = $state(false);
+  let followUpMode = $state('default');
+  let followUpTimeZone = $state(browserFollowUpTimeZone());
 
   function replyUnavailableMessage(reason) {
     if (reason === REPLY_ENVELOPE_UNAVAILABLE.SOURCE_ACCOUNT_INACTIVE) {
@@ -482,6 +494,17 @@
       loadAwaitingResponse(),
       loadActiveThreads(),
     ]);
+    void api.listFollowUpPolicies()
+      .then(response => {
+        if (!sessionIsCurrent()) return;
+        followUpPolicies = normalizeFollowUpPolicyList(response).accounts;
+        followUpPoliciesLoaded = true;
+      })
+      .catch(() => {
+        if (!sessionIsCurrent()) return;
+        followUpPolicies = [];
+        followUpPoliciesLoaded = false;
+      });
 
     try {
       durableReplyStorage = createIndexedDbDraftStorage();
@@ -991,7 +1014,15 @@
       || durableReplyState.sendInProgress
     ) return false;
     try {
-      durableReplyController.update(durableReply.snapshot(replyBodyHtml));
+      const followUp = followUpRequestFields({
+        mode: followUpMode,
+        policy: selectedFollowUpPolicy,
+        timeZone: followUpTimeZone,
+      });
+      durableReplyController.update(durableReply.snapshot(replyBodyHtml, null, {
+        followUpReminder: followUp.follow_up_reminder,
+        followUpTimeZone: followUp.follow_up_time_zone,
+      }));
       return true;
     } catch (error) {
       durableReplyError = error?.message || 'Reply could not be saved safely.';
@@ -1075,6 +1106,8 @@
     })) return false;
     durableReplyOpening = true;
     durableReplyError = '';
+    followUpMode = 'default';
+    followUpTimeZone = browserFollowUpTimeZone();
     const owner = createDurableReplyController({
       userId: sessionGuard.userId,
       storage: durableReplyStorage,
@@ -1097,13 +1130,23 @@
       durableReplyState = state;
     });
     try {
-      const state = await owner.open(owner.snapshot(initialHtml));
+      const initialFollowUp = followUpRequestFields({
+        mode: followUpMode,
+        policy: selectedFollowUpPolicy,
+        timeZone: followUpTimeZone,
+      });
+      const state = await owner.open(owner.snapshot(initialHtml, null, {
+        followUpReminder: initialFollowUp.follow_up_reminder,
+        followUpTimeZone: initialFollowUp.follow_up_time_zone,
+      }));
       if (
         durableReplyController !== owner.controller
         || requestGeneration !== threadLoadGeneration
         || !sessionIsCurrent()
       ) return false;
       replyBodyHtml = state.snapshot?.body_html || initialHtml || '';
+      followUpMode = normalizeFollowUpReminderMode(state.snapshot?.follow_up_reminder);
+      followUpTimeZone = state.snapshot?.follow_up_time_zone || browserFollowUpTimeZone();
       initialReplyContent = replyBodyHtml;
       durableReplyState = owner.controller.getState();
       durableReplyOpening = false;
@@ -1971,6 +2014,15 @@
       ? 'Send Reply All'
       : 'Send Reply',
   );
+  let selectedFollowUpPolicy = $derived(followUpPolicyForAccount(
+    followUpPolicies,
+    replyContext?.envelope?.account_id,
+  ));
+  let followUpAvailable = $derived(
+    followUpPoliciesLoaded && Boolean(replyContext?.available) && Boolean(selectedFollowUpPolicy),
+  );
+  let followUpDefault = $derived(Boolean(selectedFollowUpPolicy?.enabled));
+  let followUpSummary = $derived(followUpSendSummary(selectedFollowUpPolicy));
 </script>
 
 <div
@@ -2893,6 +2945,14 @@
                 busyLabel={inlineReplySendMode === 'schedule' ? 'Scheduling…' : 'Sending…'}
                 onsend={() => sendReply()}
                 onschedule={schedule => sendReply(schedule)}
+                {followUpAvailable}
+                {followUpMode}
+                {followUpDefault}
+                {followUpSummary}
+                onfollowupchange={mode => {
+                  followUpMode = normalizeFollowUpReminderMode(mode);
+                  rememberCurrentReplyDraft();
+                }}
               />
             </div>
           </div>

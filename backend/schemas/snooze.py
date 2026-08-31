@@ -88,6 +88,7 @@ class SnoozeResponse(BaseModel):
     wake_at: datetime
     time_zone: str
     condition: SnoozeCondition
+    origin: Literal["manual", "automatic_follow_up"] = "manual"
     state: str
     status_detail: str | None = None
     archive_required: bool

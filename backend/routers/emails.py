@@ -160,6 +160,7 @@ async def _conversation_filter_statement(
             EmailSnooze.user_id == user_id,
             EmailSnooze.account_id == Email.account_id,
             EmailSnooze.state.in_(SNOOZE_ACTIVE_STATES),
+            EmailSnooze.origin == "manual",
             or_(
                 EmailSnooze.email_id == Email.id,
                 and_(

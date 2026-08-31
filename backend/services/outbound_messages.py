@@ -278,25 +278,35 @@ async def _scrub_expired_retry_payloads(
     now: datetime,
     user_id: int | None = None,
 ) -> list[tuple[int, UUID]]:
-    statement = (
-        update(OutboundMessage)
-        .where(
+    statement = select(OutboundMessage).where(
             OutboundMessage.state == "failed",
             OutboundMessage.retry_authorized.is_(True),
             OutboundMessage.retry_expires_at <= now,
-        )
-        .values(
-            payload=None,
-            retry_authorized=False,
-            retry_expires_at=None,
-            updated_at=now,
-        )
-        .returning(OutboundMessage.user_id, OutboundMessage.send_id)
-    )
+        ).with_for_update()
     if user_id is not None:
         statement = statement.where(OutboundMessage.user_id == user_id)
     result = await db.execute(statement)
-    return [(row.user_id, row.send_id) for row in result]
+    rows = list(result.scalars().all())
+    for outbound in rows:
+        outbound.payload = None
+        outbound.retry_authorized = False
+        outbound.retry_expires_at = None
+        outbound.updated_at = now
+        await _sync_follow_up_intent(db, outbound=outbound, now=now)
+    return [(row.user_id, row.send_id) for row in rows]
+
+
+async def _sync_follow_up_intent(
+    db: AsyncSession,
+    *,
+    outbound: OutboundMessage,
+    now: datetime,
+) -> None:
+    if not getattr(outbound, "follow_up_requested", False):
+        return
+    from backend.services.follow_up_reminders import sync_follow_up_intent_with_outbound
+
+    await sync_follow_up_intent_with_outbound(db, outbound=outbound, now=now)
 
 
 async def scrub_expired_retry_payloads(*, now: datetime | None = None) -> int:
@@ -524,6 +534,21 @@ async def _stage_outbound_message(
         request=request,
     )
 
+    from backend.services.follow_up_reminders import (
+        FollowUpEligibilityError,
+        resolve_effective_follow_up,
+    )
+
+    try:
+        follow_up_configuration = await resolve_effective_follow_up(
+            db,
+            user_id=user_id,
+            account_id=account.id,
+            request=request,
+        )
+    except FollowUpEligibilityError as error:
+        raise OutboundMessageValidationError(str(error)) from error
+
     accepted_at = now or utcnow()
     undo_until = accepted_at + timedelta(seconds=OUTBOUND_UNDO_SECONDS)
     execute_after = undo_until
@@ -587,6 +612,7 @@ async def _stage_outbound_message(
         source_email_id=request.source_email_id,
         draft_session_id=linked_draft.id if linked_draft is not None else None,
         client_draft_id=request.client_draft_id,
+        follow_up_requested=follow_up_configuration is not None,
         payload=_canonical_payload(request),
         retry_authorized=False,
         retry_expires_at=None,
@@ -607,6 +633,15 @@ async def _stage_outbound_message(
     )
     db.add(outbound)
     await db.flush()
+    from backend.services.follow_up_reminders import stage_follow_up_intent
+
+    await stage_follow_up_intent(
+        db,
+        outbound=outbound,
+        request=request,
+        configuration=follow_up_configuration,
+        accepted_at=accepted_at,
+    )
     await db.commit()
     for expired_user_id, expired_send_id in expired_notifications:
         await _publish_outbound_event(expired_user_id, expired_send_id)
@@ -754,6 +789,7 @@ async def undo_outbound_message(
             # Release the unique draft-session reservation so the restored
             # writing session can own a later logical send.
             outbound.draft_session_id = None
+    await _sync_follow_up_intent(db, outbound=outbound, now=current)
     await db.commit()
     await _publish_outbound_event(outbound.user_id, outbound.send_id)
     if linked_draft is not None:
@@ -805,6 +841,7 @@ async def cancel_scheduled_outbound_message(
         )
         if linked_draft is not None:
             outbound.draft_session_id = None
+    await _sync_follow_up_intent(db, outbound=outbound, now=current)
     await db.commit()
     await _publish_outbound_event(outbound.user_id, outbound.send_id)
     if linked_draft is not None:
@@ -836,6 +873,7 @@ async def send_scheduled_outbound_now(
     outbound.undo_until = current
     outbound.next_attempt_at = current
     outbound.updated_at = current
+    await _sync_follow_up_intent(db, outbound=outbound, now=current)
     await db.commit()
     await _publish_outbound_event(outbound.user_id, outbound.send_id)
     return outbound
@@ -866,6 +904,7 @@ async def retry_outbound_message(
     outbound.error_code = None
     outbound.error_message = None
     outbound.updated_at = current
+    await _sync_follow_up_intent(db, outbound=outbound, now=current)
     await db.commit()
     await _publish_outbound_event(outbound.user_id, outbound.send_id)
     return outbound
@@ -958,6 +997,7 @@ async def _reclaim_expired_leases(
             outbound.retry_expires_at = None
             outbound.error_code = "send_outcome_unknown"
             outbound.error_message = "Delivery is being confirmed with Gmail"
+        await _sync_follow_up_intent(db, outbound=outbound, now=now)
     return notifications
 
 
@@ -1067,9 +1107,13 @@ async def _record_outbound_sent(
                 send_id=outbound.send_id,
                 now=now,
             )
+        await _sync_follow_up_intent(db, outbound=outbound, now=now)
         await db.commit()
         user_id, send_id = outbound.user_id, outbound.send_id
     await _publish_outbound_event(user_id, send_id)
+    from backend.services.follow_up_reminders import try_enqueue_follow_up_drain
+
+    await try_enqueue_follow_up_drain()
     if linked_draft is not None:
         from backend.services.drafts import publish_draft_session_event, try_enqueue_draft_drain
 
@@ -1132,6 +1176,7 @@ async def _record_preflight_failure(
                 )
                 if linked_draft is not None:
                     outbound.draft_session_id = None
+        await _sync_follow_up_intent(db, outbound=outbound, now=now)
         await db.commit()
         user_id, send_id = outbound.user_id, outbound.send_id
     await _publish_outbound_event(user_id, send_id)
@@ -1175,6 +1220,7 @@ async def _record_reconciling_locked(
         outbound.retry_authorized = False
         outbound.retry_expires_at = None
         outbound.next_attempt_at = now + _reconcile_delay(outbound.reconcile_count)
+    await _sync_follow_up_intent(db, outbound=outbound, now=now)
     await db.commit()
     user_id, send_id = outbound.user_id, outbound.send_id
     await _publish_outbound_event(user_id, send_id)

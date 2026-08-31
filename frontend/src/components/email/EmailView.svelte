@@ -55,6 +55,14 @@
     findInlineSnippetTrigger,
     replaceInlineSnippetText,
   } from '../../lib/inlineSnippetExpansion.js';
+  import {
+    browserFollowUpTimeZone,
+    followUpPolicyForAccount,
+    followUpRequestFields,
+    followUpSendSummary,
+    normalizeFollowUpPolicyList,
+    normalizeFollowUpReminderMode,
+  } from '../../lib/followUpReminders.js';
 
   let {
     email = null,
@@ -138,6 +146,19 @@
   let durableReplyMode = null;
   let replyReturnFocus = null;
   let durableReplyRelease = Promise.resolve();
+  let followUpPolicies = $state([]);
+  let followUpPoliciesLoaded = $state(false);
+  let followUpMode = $state('default');
+  let followUpTimeZone = $state(browserFollowUpTimeZone());
+  let selectedFollowUpPolicy = $derived(followUpPolicyForAccount(
+    followUpPolicies,
+    activeReplyEnvelopeResult?.envelope?.account_id,
+  ));
+  let followUpAvailable = $derived(
+    followUpPoliciesLoaded && activeReplyEnvelopeResult.available && Boolean(selectedFollowUpPolicy),
+  );
+  let followUpDefault = $derived(Boolean(selectedFollowUpPolicy?.enabled));
+  let followUpSummary = $derived(followUpSendSummary(selectedFollowUpPolicy));
 
   function sessionIsCurrent() {
     return sessionGuard.isCurrent();
@@ -216,6 +237,22 @@
           : 'Reply editor is still opening',
     },
   }));
+
+  onMount(() => {
+    let disposed = false;
+    void api.listFollowUpPolicies()
+      .then(response => {
+        if (disposed || !sessionIsCurrent()) return;
+        followUpPolicies = normalizeFollowUpPolicyList(response).accounts;
+        followUpPoliciesLoaded = true;
+      })
+      .catch(() => {
+        if (disposed || !sessionIsCurrent()) return;
+        followUpPolicies = [];
+        followUpPoliciesLoaded = false;
+      });
+    return () => { disposed = true; };
+  });
 
   onDestroy(() => {
     const release = releaseDurableReply({ flush: true });
@@ -665,6 +702,14 @@
       durableReplyController.update(durableReply.snapshot(
         replyTextHtml(inlineReplyBody),
         inlineReplyBody,
+        {
+          followUpReminder: followUpMode,
+          followUpTimeZone: followUpRequestFields({
+            mode: followUpMode,
+            policy: selectedFollowUpPolicy,
+            timeZone: followUpTimeZone,
+          }).follow_up_time_zone,
+        },
       ));
       return true;
     } catch (error) {
@@ -705,6 +750,8 @@
     if (!sessionIsCurrent() || email?.id !== emailAtStart.id) return false;
     durableReplyOpening = true;
     durableReplyError = '';
+    followUpMode = 'default';
+    followUpTimeZone = browserFollowUpTimeZone();
     inlineReplyOpen = true;
     inlineReplyMode = mode;
     lastDraftEmailId = email.id;
@@ -740,7 +787,15 @@
         durableReplyState = state;
       });
       const initialBody = seedBody ?? priorBody;
-      const state = await owner.open(owner.snapshot(replyTextHtml(initialBody), initialBody));
+      const initialFollowUp = followUpRequestFields({
+        mode: followUpMode,
+        policy: selectedFollowUpPolicy,
+        timeZone: followUpTimeZone,
+      });
+      const state = await owner.open(owner.snapshot(replyTextHtml(initialBody), initialBody, {
+        followUpReminder: initialFollowUp.follow_up_reminder,
+        followUpTimeZone: initialFollowUp.follow_up_time_zone,
+      }));
       if (
         !sessionIsCurrent()
         || durableReplyController !== owner.controller
@@ -749,6 +804,8 @@
       ) return false;
       const savedBody = state.snapshot?.body_text || replyBodyText(state.snapshot?.body_html || '');
       inlineReplyBody = savedBody || initialBody || '';
+      followUpMode = normalizeFollowUpReminderMode(state.snapshot?.follow_up_reminder);
+      followUpTimeZone = state.snapshot?.follow_up_time_zone || browserFollowUpTimeZone();
       if (!savedBody && initialBody) persistInlineReply();
       durableReplyState = owner.controller.getState();
       durableReplyOpening = false;
@@ -782,6 +839,8 @@
       replyFromSuggestion = false;
       replyIntent = null;
       inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
+      followUpMode = 'default';
+      followUpTimeZone = browserFollowUpTimeZone();
       return;
     }
 
@@ -789,6 +848,8 @@
     if (draft && draft.emailId === email.id) {
       replyFromSuggestion = !!draft.body;
       inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
+      followUpMode = 'default';
+      followUpTimeZone = browserFollowUpTimeZone();
       lastDraftEmailId = email.id;
       // Clear the pending draft so it doesn't re-trigger
       pendingReplyDraft.set(null);
@@ -802,6 +863,8 @@
       replyFromSuggestion = false;
       replyIntent = null;
       inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
+      followUpMode = 'default';
+      followUpTimeZone = browserFollowUpTimeZone();
     }
   });
 
@@ -828,6 +891,8 @@
     inlineReplyMode = REPLY_ENVELOPE_MODES.REPLY;
     releaseDurableReply();
     inlineReplyBody = '';
+    followUpMode = 'default';
+    followUpTimeZone = browserFollowUpTimeZone();
     const finalState = controller?.getState();
     showToast(
       finalState?.status === 'conflict'
@@ -1980,6 +2045,14 @@
             canArchiveAfterSend={inlineReplyCanArchive}
             onsendarchive={() => sendInlineReply(null, { archiveAfterSend: true })}
             onschedule={schedule => sendInlineReply(schedule, { archiveAfterSend: schedule.archiveAfterSend })}
+            {followUpAvailable}
+            {followUpMode}
+            {followUpDefault}
+            {followUpSummary}
+            onfollowupchange={mode => {
+              followUpMode = normalizeFollowUpReminderMode(mode);
+              persistInlineReply();
+            }}
           />
           <span class="text-[11px]" style="color: var(--text-tertiary)">⌘↵ Send · ⌘⇧↵ Send &amp; archive · Esc Close and keep</span>
         </div>

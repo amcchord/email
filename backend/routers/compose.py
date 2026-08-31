@@ -75,6 +75,7 @@ def _outbound_response(outbound: OutboundMessage) -> OutboundSendResponse:
         account_id=outbound.account_id,
         source_email_id=outbound.source_email_id,
         archive_source_after_send=outbound_archives_source_after_send(outbound),
+        follow_up_requested=outbound.follow_up_requested,
         client_draft_id=outbound.client_draft_id,
         state=outbound.state,
         scheduled_for=outbound_scheduled_for(outbound),
@@ -183,6 +184,8 @@ def _draft_detail_response(draft: DraftSession) -> DraftSessionDetailResponse:
         in_reply_to=payload.get("in_reply_to"),
         references=payload.get("references"),
         thread_id=payload.get("thread_id"),
+        follow_up_reminder=payload.get("follow_up_reminder", "default"),
+        follow_up_time_zone=payload.get("follow_up_time_zone"),
         attachments=attachments,
     )
 

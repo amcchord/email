@@ -50,6 +50,10 @@ function fakeController() {
         return state;
       },
       getState: () => state,
+      update(snapshot) {
+        state = { ...state, snapshot };
+        return state;
+      },
     },
   };
 }
@@ -67,6 +71,29 @@ test('reply identity and canonical snapshot freeze exact source provenance', () 
   assert.equal(snapshot.account_id, 7);
   assert.equal(snapshot.source_email_id, 91);
   assert.equal(snapshot.body_text, 'Hello <team> & "friends"\nSecond line');
+  assert.equal(snapshot.follow_up_reminder, 'default');
+  assert.equal(snapshot.follow_up_time_zone, null);
+});
+
+test('reply snapshots preserve explicit follow-up intent through send payloads', async () => {
+  const fake = fakeController();
+  const owner = createDurableReplyController({
+    userId: 5,
+    storage: { async findByIntent() { return { client_draft_id: CLIENT_ID }; } },
+    api: {},
+    envelope: envelope(),
+    controllerFactory: () => fake.controller,
+  });
+  await owner.open();
+  const snapshot = owner.snapshot('<p>Reminder</p>', 'Reminder', {
+    followUpReminder: 'enabled',
+    followUpTimeZone: 'America/New_York',
+  });
+  assert.equal(snapshot.follow_up_reminder, 'enabled');
+  assert.equal(snapshot.follow_up_time_zone, 'America/New_York');
+  owner.controller.update(snapshot);
+  assert.equal(owner.sendPayload().follow_up_reminder, 'enabled');
+  assert.equal(owner.sendPayload().follow_up_time_zone, 'America/New_York');
 });
 
 test('local reply identity wins before any cross-device lookup', async () => {

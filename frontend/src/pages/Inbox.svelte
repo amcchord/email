@@ -722,6 +722,7 @@
             snooze_wake_at: summary.snooze_wake_at,
             snooze_time_zone: summary.snooze_time_zone,
             snooze_condition: summary.snooze_condition,
+            snooze_origin: summary.snooze_origin,
             snooze_state: summary.snooze_state,
           }
         : detail;
@@ -1632,7 +1633,11 @@
       <Icon name="clock" size={15} />
       <div class="min-w-0">
         <p class="text-xs font-semibold" style="color: var(--text-primary)">Snoozed</p>
-        <p class="text-[11px]" style="color: var(--text-tertiary)">Messages return to the inbox at their reminder time</p>
+        <p class="text-[11px]" style="color: var(--text-tertiary)">
+          {selectedEmail?.snooze_origin === 'automatic_follow_up'
+            ? 'Automatic follow-up · returns only if nobody replies'
+            : 'Messages return to the inbox at their reminder time'}
+        </p>
       </div>
       {#if selectedEmail?.snooze_id}
         <div class="ml-auto flex flex-wrap gap-1">

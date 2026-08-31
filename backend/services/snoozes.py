@@ -33,6 +33,7 @@ from backend.services.mail_actions import (
     MailActionNotFound,
     MailActionValidationError,
     get_mail_action_operation_by_idempotency,
+    publish_mail_action_event,
     retry_mail_action_operation,
     stage_mail_actions,
     try_enqueue_mail_action_drain,
@@ -90,10 +91,41 @@ def _advisory_key(user_id: int, value: UUID) -> int:
     return int.from_bytes(digest[:8], byteorder="big", signed=True)
 
 
+def _conversation_advisory_key(
+    user_id: int,
+    account_id: int,
+    gmail_thread_id: str,
+) -> int:
+    digest = hashlib.sha256(
+        f"snooze-conversation:{user_id}:{account_id}:{gmail_thread_id}".encode("utf-8")
+    ).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=True)
+
+
 async def _lock_idempotency(db: AsyncSession, *, user_id: int, key: UUID) -> None:
     await db.execute(
         text("SELECT pg_advisory_xact_lock(:lock_key)"),
         {"lock_key": _advisory_key(user_id, key)},
+    )
+
+
+async def _lock_conversation_scope(
+    db: AsyncSession,
+    *,
+    user_id: int,
+    account_id: int,
+    gmail_thread_id: str,
+) -> None:
+    """Serialize every Snooze row/Email row mutation for one conversation."""
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(:lock_key)"),
+        {
+            "lock_key": _conversation_advisory_key(
+                user_id,
+                account_id,
+                gmail_thread_id,
+            )
+        },
     )
 
 
@@ -139,6 +171,7 @@ def _response(row: EmailSnooze) -> SnoozeResponse:
         wake_at=row.wake_at,
         time_zone=row.time_zone,
         condition=row.condition,
+        origin=row.origin,
         state=row.state,
         status_detail=row.status_detail,
         archive_required=row.archive_required,
@@ -272,6 +305,7 @@ async def _stage_locked_operation(
     status_detail: str,
     now: datetime,
     retry_failed: bool = False,
+    commit: bool = True,
 ) -> list[MailAction]:
     """Assign mail-action sequence numbers while conversation Email locks are held."""
     key = row.archive_idempotency_key if purpose == "archive" else row.return_idempotency_key
@@ -282,6 +316,7 @@ async def _stage_locked_operation(
             user_id=row.user_id,
             request_id=existing[0].request_id,
             now=now,
+            commit=False,
         )
         existing = await _actions_for_key(db, user_id=row.user_id, key=key)
 
@@ -309,19 +344,23 @@ async def _stage_locked_operation(
                 action=action_name,
                 idempotency_key=key,
                 now=now,
+                commit=False,
             )
         except (MailActionConflict, MailActionNotFound, MailActionValidationError) as exc:
             raise SnoozeConflict(str(exc)) from exc
 
-    # stage_mail_actions commits this same transaction, so manual placement
-    # cannot receive a lower sequence after our decision but before staging.
+    # The Snooze service owns the transaction through this row's final state;
+    # otherwise its conversation advisory lock could be released mid-operation.
     if purpose == "archive":
         row.archive_action_id = actions[0].id
     else:
         row.return_action_id = actions[0].id
     row.next_attempt_at = max(action.execute_after for action in actions)
-    await db.commit()
-    await try_enqueue_mail_action_drain()
+    await db.flush()
+    if commit:
+        await db.commit()
+        await publish_mail_action_event(row.user_id, actions[0].request_id)
+        await try_enqueue_mail_action_drain()
     return actions
 
 
@@ -448,17 +487,17 @@ async def create_snooze(
     if anchor.is_draft:
         raise SnoozeConflict("Drafts cannot be snoozed")
 
-    active = await db.scalar(
-        select(EmailSnooze).where(
-            EmailSnooze.user_id == user_id,
-            EmailSnooze.account_id == account.id,
-            EmailSnooze.gmail_thread_id == anchor.gmail_thread_id,
-            EmailSnooze.state.in_(SNOOZE_ACTIVE_STATES),
-        ).with_for_update()
+    await _lock_conversation_scope(
+        db,
+        user_id=user_id,
+        account_id=account.id,
+        gmail_thread_id=anchor.gmail_thread_id,
     )
-    if active is not None:
-        raise SnoozeConflict("This conversation is already snoozed")
 
+    # Lock the exact conversation before inspecting active reminder state.
+    # Automatic and manual creators use this same lock order, so a manual
+    # request can safely supersede a passive automatic reminder without a
+    # unique-index race.
     conversation_result = await db.execute(
         select(Email)
         .where(
@@ -469,6 +508,48 @@ async def create_snooze(
         .with_for_update()
     )
     conversation = list(conversation_result.scalars().all())
+    active = await db.scalar(
+        select(EmailSnooze).where(
+            EmailSnooze.user_id == user_id,
+            EmailSnooze.account_id == account.id,
+            EmailSnooze.gmail_thread_id == anchor.gmail_thread_id,
+            EmailSnooze.state.in_(SNOOZE_ACTIVE_STATES),
+        ).with_for_update()
+    )
+    if active is not None:
+        replaceable_automatic = (
+            active.origin == "automatic_follow_up"
+            and active.state == "scheduled"
+            and not (
+                active.lease_token is not None
+                and active.lease_expires_at is not None
+                and active.lease_expires_at > accepted_at
+            )
+        )
+        if not replaceable_automatic:
+            raise SnoozeConflict("This conversation is already snoozed")
+        _terminal(active, "cancelled", accepted_at, "replaced_by_manual_reminder")
+        from backend.models.follow_up import OutboundFollowUpIntent
+
+        prior_intents = list((await db.execute(
+            select(OutboundFollowUpIntent).where(
+                OutboundFollowUpIntent.snooze_id == active.id,
+                OutboundFollowUpIntent.state == "scheduled",
+            ).with_for_update()
+        )).scalars().all())
+        for intent in prior_intents:
+            intent.state = "superseded"
+            intent.status_detail = "manual_reminder_created"
+            intent.next_attempt_at = None
+            intent.lease_token = None
+            intent.lease_expires_at = None
+            intent.updated_at = accepted_at
+        # PostgreSQL evaluates the partial active-conversation uniqueness
+        # constraint during INSERT. Persist the terminal replacement state
+        # before creating the manual row so the released key is visible in
+        # this transaction.
+        await db.flush()
+
     eligible = [email for email in conversation if _eligible(email)]
     original_inbox_ids = [
         email.id for email in eligible if "INBOX" in set(email.labels or [])
@@ -486,6 +567,8 @@ async def create_snooze(
         wake_at=wake_at,
         time_zone=request.time_zone,
         condition=request.condition,
+        origin="manual",
+        origin_outbound_id=None,
         state="pending_archive" if original_inbox_ids else "scheduled",
         status_detail="archiving" if original_inbox_ids else "scheduled",
         archive_required=bool(original_inbox_ids),
@@ -591,6 +674,13 @@ async def reschedule_snooze(
     wake_at = wake_at.astimezone(timezone.utc)
     if wake_at <= changed_at:
         raise SnoozeValidationError("wake_at must be in the future")
+    identity = await _owned_snooze(db, user_id=user_id, public_id=public_id)
+    await _lock_conversation_scope(
+        db,
+        user_id=identity.user_id,
+        account_id=identity.account_id,
+        gmail_thread_id=identity.gmail_thread_id,
+    )
     row = await _owned_snooze(
         db, user_id=user_id, public_id=public_id, for_update=True
     )
@@ -610,18 +700,22 @@ async def reschedule_snooze(
 
 async def _undo_operation_if_possible(
     db: AsyncSession, row: EmailSnooze, actions: list[MailAction], now: datetime
-) -> bool:
+) -> UUID | None:
     if not actions or any(action.state != "staged" for action in actions):
-        return False
+        return None
     if any(action.undo_until < now for action in actions):
-        return False
+        return None
     try:
         await undo_mail_action_operation(
-            db, user_id=row.user_id, request_id=actions[0].request_id, now=now
+            db,
+            user_id=row.user_id,
+            request_id=actions[0].request_id,
+            now=now,
+            commit=False,
         )
     except MailActionConflict:
-        return False
-    return True
+        return None
+    return actions[0].request_id
 
 
 async def _restore_original(
@@ -642,9 +736,13 @@ async def _restore_original(
             _terminal(row, completion_state, now, f"{completion_state}_original_placement")
             await db.commit()
             return
-        if await _undo_operation_if_possible(db, row, return_actions, now):
+        undone_request_id = await _undo_operation_if_possible(
+            db, row, return_actions, now
+        )
+        if undone_request_id is not None:
             _terminal(row, completion_state, now, f"{completion_state}_original_placement")
             await db.commit()
+            await publish_mail_action_event(row.user_id, undone_request_id)
             return
         targets = [
             email.id for email in conversation
@@ -668,9 +766,13 @@ async def _restore_original(
         return
 
     archive_actions = await _actions_for_purpose(db, row, "archive")
-    if await _undo_operation_if_possible(db, row, archive_actions, now):
+    undone_request_id = await _undo_operation_if_possible(
+        db, row, archive_actions, now
+    )
+    if undone_request_id is not None:
         _terminal(row, completion_state, now, f"{completion_state}_original_placement")
         await db.commit()
+        await publish_mail_action_event(row.user_id, undone_request_id)
         return
     targets = [
         email.id for email in conversation
@@ -697,6 +799,13 @@ async def cancel_snooze(
     db: AsyncSession, *, user_id: int, public_id: UUID, now: datetime | None = None
 ) -> SnoozeResponse:
     changed_at = now or utcnow()
+    identity = await _owned_snooze(db, user_id=user_id, public_id=public_id)
+    await _lock_conversation_scope(
+        db,
+        user_id=identity.user_id,
+        account_id=identity.account_id,
+        gmail_thread_id=identity.gmail_thread_id,
+    )
     row = await _owned_snooze(
         db, user_id=user_id, public_id=public_id, for_update=True
     )
@@ -714,6 +823,13 @@ async def return_snooze_now(
     db: AsyncSession, *, user_id: int, public_id: UUID, now: datetime | None = None
 ) -> SnoozeResponse:
     changed_at = now or utcnow()
+    identity = await _owned_snooze(db, user_id=user_id, public_id=public_id)
+    await _lock_conversation_scope(
+        db,
+        user_id=identity.user_id,
+        account_id=identity.account_id,
+        gmail_thread_id=identity.gmail_thread_id,
+    )
     row = await _owned_snooze(
         db, user_id=user_id, public_id=public_id, for_update=True
     )
@@ -756,11 +872,17 @@ async def return_snooze_now(
             await db.commit()
         else:
             archive_actions = await _actions_for_purpose(db, row, "archive")
-            if original_ids and await _undo_operation_if_possible(
-                db, row, archive_actions, changed_at
-            ):
+            undone_request_id = (
+                await _undo_operation_if_possible(
+                    db, row, archive_actions, changed_at
+                )
+                if original_ids
+                else None
+            )
+            if undone_request_id is not None:
                 _terminal(row, "returned", changed_at, "returned_now")
                 await db.commit()
+                await publish_mail_action_event(row.user_id, undone_request_id)
             else:
                 await _stage_locked_operation(
                     db,
@@ -808,7 +930,22 @@ async def _claim_due(now: datetime, limit: int) -> list[tuple[int, UUID]]:
 
 
 async def _process_claim(row_id: int, token: UUID, now: datetime) -> None:
+    action_request_ids: set[UUID] = set()
     async with async_session() as db:
+        identity = await db.scalar(
+            select(EmailSnooze).where(
+                EmailSnooze.id == row_id,
+                EmailSnooze.lease_token == token,
+            )
+        )
+        if identity is None:
+            return
+        await _lock_conversation_scope(
+            db,
+            user_id=identity.user_id,
+            account_id=identity.account_id,
+            gmail_thread_id=identity.gmail_thread_id,
+        )
         row = await db.scalar(
             select(EmailSnooze)
             .where(EmailSnooze.id == row_id, EmailSnooze.lease_token == token)
@@ -832,7 +969,7 @@ async def _process_claim(row_id: int, token: UUID, now: datetime) -> None:
                     row.error_code = "conversation_missing"
                     row.error_message = "The conversation no longer exists"
                 else:
-                    await _stage_locked_operation(
+                    actions = await _stage_locked_operation(
                         db,
                         row=row,
                         email_ids=targets,
@@ -841,8 +978,9 @@ async def _process_claim(row_id: int, token: UUID, now: datetime) -> None:
                         completion_state=None,
                         status_detail="archiving",
                         now=now,
+                        commit=False,
                     )
-                    actions = await _actions_for_purpose(db, row, "archive")
+                    action_request_ids.add(actions[0].request_id)
             if actions:
                 row.archive_action_id = actions[0].id
                 states = {action.state for action in actions}
@@ -897,7 +1035,7 @@ async def _process_claim(row_id: int, token: UUID, now: datetime) -> None:
                         row.error_code = "conversation_missing"
                         row.error_message = "The conversation no longer exists"
                 else:
-                    await _stage_locked_operation(
+                    staged_actions = await _stage_locked_operation(
                         db,
                         row=row,
                         email_ids=targets,
@@ -906,7 +1044,9 @@ async def _process_claim(row_id: int, token: UUID, now: datetime) -> None:
                         completion_state="returned",
                         status_detail="returning",
                         now=now,
+                        commit=False,
                     )
+                    action_request_ids.add(staged_actions[0].request_id)
 
         elif row.state == "pending_return":
             purpose = row.pending_action_purpose or "unarchive"
@@ -928,11 +1068,10 @@ async def _process_claim(row_id: int, token: UUID, now: datetime) -> None:
                     if not targets:
                         _terminal(row, "dismissed", now, "newer_manual_action")
                         actions = []
-                        await db.commit()
                     else:
                         row.return_target_email_ids = targets
                 if targets:
-                    await _stage_locked_operation(
+                    actions = await _stage_locked_operation(
                         db,
                         row=row,
                         email_ids=targets,
@@ -941,8 +1080,9 @@ async def _process_claim(row_id: int, token: UUID, now: datetime) -> None:
                         completion_state=row.completion_state or "returned",
                         status_detail=row.status_detail or "returning",
                         now=now,
+                        commit=False,
                     )
-                    actions = await _actions_for_purpose(db, row, purpose)
+                    action_request_ids.add(actions[0].request_id)
             if actions:
                 if purpose == "archive":
                     row.archive_action_id = actions[0].id
@@ -971,6 +1111,10 @@ async def _process_claim(row_id: int, token: UUID, now: datetime) -> None:
         await db.commit()
         user_id = row.user_id
         public_id = row.public_id
+    if action_request_ids:
+        for request_id in action_request_ids:
+            await publish_mail_action_event(user_id, request_id)
+        await try_enqueue_mail_action_drain()
     await _publish_snooze_event(user_id, public_id)
 
 

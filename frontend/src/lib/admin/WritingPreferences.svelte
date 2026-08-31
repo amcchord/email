@@ -17,6 +17,7 @@
   import Button from '../../components/common/Button.svelte';
   import Icon from '../../components/common/Icon.svelte';
   import DeferredRichEditor from '../../components/email/DeferredRichEditor.svelte';
+  import FollowUpPreferences from './FollowUpPreferences.svelte';
 
   let snippets = $state([]);
   let loading = $state(true);
@@ -209,7 +210,9 @@
   });
 </script>
 
-<section class="space-y-5" aria-labelledby="writing-snippets-title">
+<FollowUpPreferences />
+
+<section class="mt-10 space-y-5 border-t pt-10" style="border-color: var(--border-color)" aria-labelledby="writing-snippets-title">
   <div class="flex flex-wrap items-start justify-between gap-3">
     <div>
       <h2 id="writing-snippets-title" class="text-lg font-semibold" style="color: var(--text-primary)">Personal snippets</h2>

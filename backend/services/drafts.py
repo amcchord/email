@@ -227,6 +227,8 @@ def _message_payload(request: ComposeDraftRequest | ComposeRequest) -> dict:
         "references": request.references,
         "thread_id": request.thread_id,
         "source_email_id": request.source_email_id,
+        "follow_up_reminder": request.follow_up_reminder,
+        "follow_up_time_zone": request.follow_up_time_zone,
     }
 
 

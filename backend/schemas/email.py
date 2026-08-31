@@ -311,6 +311,8 @@ class ComposeMessageBase(BaseModel):
     references: Optional[str] = Field(default=None, max_length=8192)
     thread_id: Optional[str] = Field(default=None, max_length=255)
     source_email_id: Optional[StrictInt] = Field(default=None, gt=0)
+    follow_up_reminder: Literal["default", "enabled", "disabled"] = "default"
+    follow_up_time_zone: Optional[str] = Field(default=None, min_length=1, max_length=64)
     is_draft: bool = False
     attachments: list[ComposeAttachment] = Field(default_factory=list)
 
@@ -331,6 +333,18 @@ class ComposeMessageBase(BaseModel):
         if value is not None and ("\r" in value or "\n" in value):
             raise ValueError("Message headers cannot contain newlines")
         return value
+
+    @field_validator("follow_up_time_zone")
+    @classmethod
+    def validate_follow_up_time_zone(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        candidate = value.strip()
+        try:
+            ZoneInfo(candidate)
+        except ZoneInfoNotFoundError as error:
+            raise ValueError("Follow-up timezone is invalid") from error
+        return candidate
 
     @model_validator(mode="after")
     def validate_message_bounds(self):
@@ -473,6 +487,8 @@ class DraftSessionDetailResponse(DraftSessionResponse):
     in_reply_to: Optional[str] = None
     references: Optional[str] = None
     thread_id: Optional[str] = None
+    follow_up_reminder: Literal["default", "enabled", "disabled"] = "default"
+    follow_up_time_zone: Optional[str] = None
     attachments: list[DraftAttachmentDetail] = []
 
 
@@ -493,6 +509,7 @@ class OutboundSendResponse(BaseModel):
     account_id: int
     source_email_id: Optional[int] = None
     archive_source_after_send: bool = False
+    follow_up_requested: bool = False
     client_draft_id: Optional[UUID] = None
     state: OutboundSendState
     scheduled_for: Optional[datetime] = None

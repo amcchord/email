@@ -232,6 +232,8 @@ function snapshotFromServerResponse(response = {}) {
     references: response.references || null,
     thread_id: response.thread_id || null,
     source_email_id: response.source_email_id || null,
+    follow_up_reminder: response.follow_up_reminder || 'default',
+    follow_up_time_zone: response.follow_up_time_zone || null,
     attachments: response.attachments || [],
   };
 }

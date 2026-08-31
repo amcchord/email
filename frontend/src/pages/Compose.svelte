@@ -45,6 +45,14 @@
     sendArchiveAcceptedMessage,
     withArchiveAfterSend,
   } from '../lib/sendArchive.js';
+  import {
+    browserFollowUpTimeZone,
+    followUpPolicyForAccount,
+    followUpRequestFields,
+    followUpSendSummary,
+    normalizeFollowUpPolicyList,
+    normalizeFollowUpReminderMode,
+  } from '../lib/followUpReminders.js';
 
   let toRecipients = $state([]);
   let ccRecipients = $state([]);
@@ -84,8 +92,16 @@
   let replyContext = $state({ in_reply_to: null, references: null, thread_id: null, source_email_id: null });
   let suppressLocalPersistence = false;
   let sessionGuard = null;
+  let followUpPolicies = $state([]);
+  let followUpPoliciesLoaded = $state(false);
+  let followUpMode = $state('default');
+  let followUpTimeZone = $state(browserFollowUpTimeZone());
 
   let senderAccount = $derived(accountList.find(account => account.id === Number(selectedAccountId)) || null);
+  let selectedFollowUpPolicy = $derived(followUpPolicyForAccount(followUpPolicies, selectedAccountId));
+  let followUpAvailable = $derived(followUpPoliciesLoaded && Boolean(selectedFollowUpPolicy));
+  let followUpDefault = $derived(Boolean(selectedFollowUpPolicy?.enabled));
+  let followUpSummary = $derived(followUpSendSummary(selectedFollowUpPolicy));
   let archiveSourceEmailId = $derived(exactSourceEmailId(replyContext.source_email_id));
   let recipientEntryPending = $derived(
     toRecipientPending || ccRecipientPending || bccRecipientPending,
@@ -129,6 +145,11 @@
   }
 
   function draftSnapshot() {
+    const followUp = followUpRequestFields({
+      mode: followUpMode,
+      policy: selectedFollowUpPolicy,
+      timeZone: followUpTimeZone,
+    });
     return {
       account_id: Number(selectedAccountId) || null,
       to: [...toRecipients],
@@ -143,6 +164,7 @@
       references: replyContext.references,
       thread_id: replyContext.thread_id,
       source_email_id: replyContext.source_email_id,
+      ...followUp,
     };
   }
 
@@ -194,6 +216,8 @@
       selectedAccountId = Number(draft.account_id);
     }
     replyContext = composeReplyContext(draft);
+    followUpMode = normalizeFollowUpReminderMode(draft.follow_up_reminder);
+    followUpTimeZone = draft.follow_up_time_zone || browserFollowUpTimeZone();
     showCcBcc = ccRecipients.length > 0 || bccRecipients.length > 0;
     lastPersistedFingerprint = draftFingerprint(draftSnapshot());
     editorRevision += 1;
@@ -339,6 +363,18 @@
         selectedAccountId = chooseSender(v, get(composeData)?.account_id);
       }
     });
+
+    void api.listFollowUpPolicies()
+      .then(response => {
+        if (disposed || !sessionGuard?.isCurrent()) return;
+        followUpPolicies = normalizeFollowUpPolicyList(response).accounts;
+        followUpPoliciesLoaded = true;
+      })
+      .catch(() => {
+        if (disposed || !sessionGuard?.isCurrent()) return;
+        followUpPolicies = [];
+        followUpPoliciesLoaded = false;
+      });
 
     // Register keyboard shortcut actions for the Compose page
     const cleanupShortcuts = registerActions({
@@ -740,6 +776,11 @@
         attachments: attachments.map(({ size, ...item }) => item),
         client_draft_id: capturedDraftKey,
         draft_revision: capturedDraftRevision,
+        ...followUpRequestFields({
+          mode: followUpMode,
+          policy: selectedFollowUpPolicy,
+          timeZone: followUpTimeZone,
+        }),
       };
 
       if (replyContext.in_reply_to) data.in_reply_to = replyContext.in_reply_to;
@@ -837,7 +878,7 @@
 <div class="h-full w-full min-w-0 overflow-x-hidden flex flex-col" style="background: var(--bg-secondary)">
   <!-- Header -->
   <div class="compose-header min-h-14 flex items-center justify-between px-6 border-b shrink-0" style="border-color: var(--border-color)">
-    <div class="flex items-center gap-3">
+    <div class="compose-title flex items-center gap-3">
       <button
         onclick={returnToInbox}
         class="p-1.5 rounded-md transition-fast"
@@ -848,18 +889,20 @@
       </button>
       <h2 class="text-base font-semibold" style="color: var(--text-primary)">New Message</h2>
     </div>
-    <div class="flex items-center gap-2">
-      {#if autosaveStatus}
-        <span class="autosave-label text-[11px]" role="alert" style="color: var(--status-error)">{autosaveStatus}</span>
-      {:else}
-        <DraftStatus
-          state={draftState}
-          onretry={retryDraftStatus}
-          onundo={undoDiscardDraft}
-          onreview={reviewDraftConflict}
-          compact={true}
-        />
-      {/if}
+    <div class="compose-actions flex items-center gap-2">
+      <div class="draft-status-slot min-w-0">
+        {#if autosaveStatus}
+          <span class="autosave-label text-[11px]" role="alert" style="color: var(--status-error)">{autosaveStatus}</span>
+        {:else}
+          <DraftStatus
+            state={draftState}
+            onretry={retryDraftStatus}
+            onundo={undoDiscardDraft}
+            onreview={reviewDraftConflict}
+            compact={true}
+          />
+        {/if}
+      </div>
       <Button
         size="sm"
         onclick={discardDraft}
@@ -888,6 +931,11 @@
         canArchiveAfterSend={archiveSourceEmailId !== null}
         onsendarchive={() => handleSend(null, { archiveAfterSend: true })}
         onschedule={schedule => handleSend(schedule, { archiveAfterSend: schedule.archiveAfterSend })}
+        {followUpAvailable}
+        {followUpMode}
+        {followUpDefault}
+        {followUpSummary}
+        onfollowupchange={mode => { followUpMode = normalizeFollowUpReminderMode(mode); }}
       />
     </div>
   </div>
@@ -1097,11 +1145,22 @@
     .sender-context {
       display: none;
     }
-    .autosave-label {
+    .compose-title {
       flex: 1 1 100%;
-      order: 3;
-      text-align: center;
-      white-space: normal;
+    }
+    .compose-actions {
+      width: 100%;
+      min-width: 0;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .draft-status-slot {
+      flex: 1 1 100%;
+      min-width: 0;
+      overflow: hidden;
+      text-align: right;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .compose-field {
       padding-left: 0.75rem;

@@ -19,6 +19,11 @@
     onschedule = null,
     canArchiveAfterSend = false,
     onsendarchive = null,
+    followUpAvailable = false,
+    followUpMode = 'default',
+    followUpDefault = false,
+    followUpSummary = '',
+    onfollowupchange = null,
   } = $props();
 
   let dialog = $state(null);
@@ -31,6 +36,19 @@
   let scheduledArchive = $state(false);
   let restoreOptionsFocus = false;
   const timezone = browserScheduleTimezone();
+  let followUpChecked = $derived(
+    followUpMode === 'enabled' || (followUpMode === 'default' && followUpDefault),
+  );
+
+  function setFollowUpChecked(checked) {
+    if (!followUpAvailable || disabled || busy || submitting) return;
+    onfollowupchange?.(checked ? 'enabled' : 'disabled');
+  }
+
+  function useFollowUpDefault() {
+    if (!followUpAvailable || disabled || busy || submitting) return;
+    onfollowupchange?.('default');
+  }
 
   function openOptions() {
     if (disabled || busy || submitting) return;
@@ -112,8 +130,24 @@
   }
 </script>
 
-<div class="send-split inline-flex min-h-11 shrink-0 overflow-hidden rounded-lg shadow-sm">
-  <button
+<div class="inline-flex min-h-11 shrink-0 items-stretch gap-2">
+  {#if followUpAvailable}
+    <button
+      type="button"
+      class="inline-flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-lg border px-2.5 text-xs font-semibold transition-fast disabled:cursor-not-allowed disabled:opacity-50"
+      style="border-color: {followUpChecked ? 'var(--color-accent-500)' : 'var(--border-color)'}; background: {followUpChecked ? 'var(--bg-tertiary)' : 'transparent'}; color: {followUpChecked ? 'var(--color-accent-700)' : 'var(--text-secondary)'}"
+      disabled={disabled || busy || submitting}
+      onclick={() => setFollowUpChecked(!followUpChecked)}
+      aria-pressed={followUpChecked}
+      aria-label={followUpChecked ? 'Turn off follow-up reminder' : 'Remind me if nobody replies'}
+      title={followUpChecked ? `Follow-up on${followUpSummary ? ` · ${followUpSummary}` : ''}` : 'Remind me if nobody replies'}
+    >
+      <Icon name="bell" size={compact ? 13 : 14} />
+      {#if !compact}<span>Follow up</span>{/if}
+    </button>
+  {/if}
+  <div class="send-split inline-flex min-h-11 overflow-hidden rounded-lg shadow-sm">
+    <button
     type="button"
     class="send-primary inline-flex min-h-11 items-center justify-center gap-1.5 bg-accent-600 px-3 font-medium text-white transition-fast hover:bg-accent-700 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
     class:text-xs={compact}
@@ -128,8 +162,8 @@
       <Icon name="send" size={compact ? 12 : 14} />
       {label}
     {/if}
-  </button>
-  <button
+    </button>
+    <button
     bind:this={optionsButton}
     type="button"
     class="send-options inline-flex min-h-11 min-w-11 items-center justify-center border-l border-white/25 bg-accent-600 px-2 text-white transition-fast hover:bg-accent-700 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
@@ -140,7 +174,8 @@
     aria-expanded={dialogOpen}
   >
     <Icon name="chevron-down" size={compact ? 12 : 14} />
-  </button>
+    </button>
+  </div>
 </div>
 
 <dialog
@@ -172,6 +207,40 @@
     </div>
 
     <div class="grid gap-2">
+      {#if followUpAvailable}
+        <div class="flex min-h-12 items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm" style="border-color: var(--border-color); background: var(--bg-secondary)">
+          <label class="flex min-w-0 flex-1 items-start gap-3">
+            <input
+              type="checkbox"
+              checked={followUpChecked}
+              class="mt-0.5 h-5 w-5 shrink-0 accent-accent-600"
+              disabled={submitting}
+              onchange={(event) => setFollowUpChecked(event.currentTarget.checked)}
+            />
+            <span class="min-w-0">
+              <span class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span class="font-medium">Remind me if nobody replies</span>
+                {#if followUpMode === 'default'}
+                  <span class="text-[10px] font-semibold uppercase tracking-wide" style="color: var(--text-tertiary)">Account default</span>
+                {/if}
+              </span>
+            <span class="mt-0.5 block text-[11px] leading-relaxed" style="color: var(--text-tertiary)">
+              {followUpSummary || 'Scheduled from confirmed delivery. A reply cancels the reminder.'}
+            </span>
+            </span>
+          </label>
+          {#if followUpMode !== 'default'}
+            <button
+              type="button"
+              class="min-h-9 shrink-0 rounded-md px-2 text-[11px] font-semibold hover:opacity-75"
+              style="color: var(--color-accent-700)"
+              disabled={submitting}
+              onclick={useFollowUpDefault}
+            >Use default</button>
+          {/if}
+        </div>
+      {/if}
+
       {#if canArchiveAfterSend}
         <button
           data-first-choice=""

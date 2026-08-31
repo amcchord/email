@@ -50,6 +50,17 @@ class EmailSnooze(Base):
     wake_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     time_zone: Mapped[str] = mapped_column(String(64), nullable=False)
     condition: Mapped[str] = mapped_column(String(24), nullable=False, default="always")
+    origin: Mapped[str] = mapped_column(
+        String(24),
+        nullable=False,
+        default="manual",
+        server_default=text("'manual'"),
+    )
+    origin_outbound_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("outbound_messages.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     state: Mapped[str] = mapped_column(String(24), nullable=False)
     status_detail: Mapped[str | None] = mapped_column(String(64), nullable=True)
     archive_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -109,6 +120,10 @@ class EmailSnooze(Base):
             "condition IN ('always','if_no_reply')",
             name="ck_email_snoozes_condition",
         ),
+        CheckConstraint(
+            "origin IN ('manual','automatic_follow_up')",
+            name="ck_email_snoozes_origin",
+        ),
         CheckConstraint("attempt_count >= 0", name="ck_email_snoozes_attempt_count"),
         CheckConstraint(
             "jsonb_typeof(conversation_email_ids) = 'array' AND "
@@ -135,6 +150,12 @@ class EmailSnooze(Base):
         ),
         Index("ix_email_snoozes_user_wake", "user_id", "wake_at", "id"),
         Index("ix_email_snoozes_due", "state", "next_attempt_at", "wake_at", "id"),
+        Index(
+            "uq_email_snoozes_origin_outbound",
+            "origin_outbound_id",
+            unique=True,
+            postgresql_where=text("origin_outbound_id IS NOT NULL"),
+        ),
         Index(
             "uq_email_snoozes_active_conversation",
             "user_id",

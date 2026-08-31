@@ -440,6 +440,11 @@ export const api = {
     );
   },
 
+  // Per-account, opt-in automatic follow-up reminder policies.
+  listFollowUpPolicies: () => request('GET', '/follow-up/policies'),
+  replaceFollowUpPolicy: (accountId, payload) =>
+    request('PUT', `/follow-up/policies/${encodeURIComponent(accountId)}`, payload),
+
   // Accounts
   listAccounts: () => request('GET', '/accounts/'),
   startOAuth: () => request('GET', '/accounts/oauth/start'),

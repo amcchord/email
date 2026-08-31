@@ -10,6 +10,7 @@ from backend.services.mail_actions import MAIL_ACTION_QUEUE_NAME, drain_due_mail
 from backend.services.outbound_messages import drain_due_outbound_messages
 from backend.services.drafts import drain_due_draft_sessions
 from backend.services.snoozes import drain_due_snoozes
+from backend.services.follow_up_reminders import drain_follow_up_intents
 from backend.services.ai import AIService
 from backend.database import async_session
 from backend.models.email import Email
@@ -580,6 +581,11 @@ async def drain_draft_sessions_task(ctx):
 async def drain_snoozes_task(ctx):
     """Advance PostgreSQL-authoritative snooze lifecycle work."""
     return await drain_due_snoozes()
+
+
+async def drain_follow_up_intents_task(ctx):
+    """Bridge confirmed outbound sends into reply-aware Snooze reminders."""
+    return await drain_follow_up_intents()
 
 
 def _is_rate_limit_exception(exc: Exception) -> bool:
@@ -1535,6 +1541,7 @@ class CronWorkerSettings:
         drain_mail_actions_task,
         drain_outbound_messages_task,
         drain_draft_sessions_task,
+        drain_follow_up_intents_task,
         drain_snoozes_task,
         sync_calendar_full,
         sync_calendar_incremental,
@@ -1553,6 +1560,7 @@ class CronWorkerSettings:
         cron(drain_mail_actions_task, minute={i for i in range(0, 60)}, second=20),
         cron(drain_outbound_messages_task, minute={i for i in range(0, 60)}, second=30),
         cron(drain_draft_sessions_task, minute={i for i in range(0, 60)}, second=40),
+        cron(drain_follow_up_intents_task, minute={i for i in range(0, 60)}, second=45),
         cron(drain_snoozes_task, minute={i for i in range(0, 60)}, second=50),
         cron(sync_all_calendars, minute={0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}),
         cron(generate_dashboard_snippet_task, minute={2}, run_at_startup=True),

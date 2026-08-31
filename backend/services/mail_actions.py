@@ -438,6 +438,7 @@ async def stage_mail_actions(
     label_id: int | None = None,
     scope: str = "messages",
     now: datetime | None = None,
+    commit: bool = True,
 ) -> tuple[list[MailAction], bool]:
     """Atomically stage a fully-owned operation and its optimistic state."""
     if action not in MAIL_ACTION_TYPES:
@@ -574,9 +575,11 @@ async def stage_mail_actions(
         db.add(item)
         actions.append(item)
 
-    await db.flush()
-    await db.commit()
-    await _publish_action_event(user_id, request_id)
+    if commit:
+        await db.commit()
+        await _publish_action_event(user_id, request_id)
+    else:
+        await db.flush()
     return actions, True
 
 
@@ -694,6 +697,7 @@ async def undo_mail_action_operation(
     user_id: int,
     request_id: UUID,
     now: datetime | None = None,
+    commit: bool = True,
 ) -> list[MailAction]:
     current_time = now or utcnow()
     initial_actions = await get_mail_action_operation(
@@ -748,8 +752,11 @@ async def undo_mail_action_operation(
             transition_state="cancelled",
         )
         apply_mail_state(emails[action.email_id], effective_state)
-    await db.commit()
-    await _publish_action_event(user_id, request_id)
+    if commit:
+        await db.commit()
+        await _publish_action_event(user_id, request_id)
+    else:
+        await db.flush()
     return actions
 
 
@@ -759,6 +766,7 @@ async def retry_mail_action_operation(
     user_id: int,
     request_id: UUID,
     now: datetime | None = None,
+    commit: bool = True,
 ) -> list[MailAction]:
     current_time = now or utcnow()
     initial_actions = await get_mail_action_operation(
@@ -826,9 +834,17 @@ async def retry_mail_action_operation(
             transition_state="retry_wait",
         )
         apply_mail_state(email, effective_state)
-    await db.commit()
-    await _publish_action_event(user_id, request_id)
+    if commit:
+        await db.commit()
+        await _publish_action_event(user_id, request_id)
+    else:
+        await db.flush()
     return actions
+
+
+async def publish_mail_action_event(user_id: int, request_id: UUID) -> None:
+    """Publish an operation update after a caller-owned transaction commits."""
+    await _publish_action_event(user_id, request_id)
 
 
 async def overlay_active_mail_actions(

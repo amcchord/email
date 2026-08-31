@@ -494,6 +494,10 @@ function newCounters() {
     recipient_lookup_held: 0,
     recipient_lookup_stale_session_responses: 0,
     recipient_lookup_account_rejections: 0,
+    follow_up_policy_reads: 0,
+    follow_up_policy_writes: 0,
+    follow_up_policy_conflicts: 0,
+    follow_up_requested_sends: 0,
     expected_mutations: 0,
     unexpected_mutations: 0,
     unknown_routes: 0,
@@ -543,6 +547,7 @@ export function createGeneratedProviderDraftFixture({
   const drafts = new Map();
   const outbounds = new Map();
   const outboundIdempotency = new Map();
+  const followUpPolicies = new Map();
   const mutations = new Map();
   const snippets = new Map();
   const offlineMutationIds = new Set();
@@ -568,6 +573,33 @@ export function createGeneratedProviderDraftFixture({
 
   function snippetKey(userId, snippetId) {
     return `${userId}:${snippetId}`;
+  }
+
+  function followUpPolicyKey(userId, accountId) {
+    return `${userId}:${accountId}`;
+  }
+
+  function validTimeZone(value) {
+    try {
+      new Intl.DateTimeFormat('en-US', { timeZone: value }).format();
+      return typeof value === 'string' && Boolean(value.trim());
+    } catch {
+      return false;
+    }
+  }
+
+  function publicFollowUpPolicy(account) {
+    const policy = followUpPolicies.get(followUpPolicyKey(currentUser.id, account.id));
+    return policy ? clone(policy) : {
+      account_id: account.id,
+      account_email: account.email,
+      enabled: false,
+      delay_days: 3,
+      wake_local_time: '09:00',
+      time_zone: 'UTC',
+      weekdays_only: true,
+      revision: 0,
+    };
   }
 
   function clockIso() {
@@ -746,6 +778,15 @@ export function createGeneratedProviderDraftFixture({
       error.code = 'draft_provenance_invalid';
       throw error;
     }
+    if (
+      raw.follow_up_reminder !== undefined
+      && !['default', 'enabled', 'disabled'].includes(raw.follow_up_reminder)
+    ) {
+      throw new Error('follow_up_reminder is invalid');
+    }
+    if (raw.follow_up_time_zone != null && !validTimeZone(raw.follow_up_time_zone)) {
+      throw new Error('follow_up_time_zone is invalid');
+    }
 
     return {
       client_draft_id: raw.client_draft_id,
@@ -760,6 +801,12 @@ export function createGeneratedProviderDraftFixture({
       references,
       thread_id: threadId,
       source_email_id: sourceEmailId,
+      follow_up_reminder: ['default', 'enabled', 'disabled'].includes(raw.follow_up_reminder)
+        ? raw.follow_up_reminder
+        : 'default',
+      follow_up_time_zone: validTimeZone(raw.follow_up_time_zone)
+        ? raw.follow_up_time_zone.trim()
+        : null,
       is_draft: true,
       attachments: normalizedAttachments,
       _attachment_bytes: attachmentTotal,
@@ -1773,6 +1820,7 @@ export function createGeneratedProviderDraftFixture({
       account_id: record.account_id,
       source_email_id: record.source_email_id,
       archive_source_after_send: record.archive_source_after_send,
+      follow_up_requested: record.follow_up_requested,
       client_draft_id: record.client_draft_id,
       state: record.state,
       scheduled_for: record.scheduled_for,
@@ -1852,6 +1900,12 @@ export function createGeneratedProviderDraftFixture({
       ) {
         throw new Error('archive_source_after_send must be a boolean when supplied');
       }
+      if (!['default', 'enabled', 'disabled'].includes(body.follow_up_reminder || 'default')) {
+        throw new Error('follow_up_reminder is invalid');
+      }
+      if (body.follow_up_time_zone != null && !validTimeZone(body.follow_up_time_zone)) {
+        throw new Error('follow_up_time_zone is invalid');
+      }
       for (const field of ['to', 'cc', 'bcc']) {
         if (!Array.isArray(body[field] || []) || !(body[field] || []).every(isGeneratedAddress)) {
           counters.non_example_test_rejections += 1;
@@ -1889,6 +1943,19 @@ export function createGeneratedProviderDraftFixture({
         'Generated send must retain the draft exact-source provenance',
       );
     }
+    const followUpMode = body.follow_up_reminder || 'default';
+    const followUpTimeZone = body.follow_up_time_zone || null;
+    if (
+      followUpMode !== (draft.payload.follow_up_reminder || 'default')
+      || followUpTimeZone !== (draft.payload.follow_up_time_zone || null)
+    ) {
+      return writeError(
+        response,
+        409,
+        'outbound_conflict',
+        'Generated send must retain the draft follow-up reminder choice',
+      );
+    }
     const sourceEmailId = provenance.source_email_id;
     const archiveSourceAfterSend = body.archive_source_after_send === true;
     if (archiveSourceAfterSend && !sourceForUser(currentUser.id, sourceEmailId)) {
@@ -1916,6 +1983,8 @@ export function createGeneratedProviderDraftFixture({
       in_reply_to: provenance.in_reply_to,
       references: provenance.references,
       archive_source_after_send: archiveSourceAfterSend,
+      follow_up_reminder: followUpMode,
+      follow_up_time_zone: followUpTimeZone,
       client_draft_id: body.client_draft_id,
       draft_revision: body.draft_revision,
       scheduled_for: body.scheduled_for || null,
@@ -1934,6 +2003,11 @@ export function createGeneratedProviderDraftFixture({
     }
 
     const sendId = randomUUID();
+    const selectedPolicy = followUpPolicies.get(
+      followUpPolicyKey(currentUser.id, body.account_id),
+    );
+    const followUpRequested = followUpMode === 'enabled'
+      || (followUpMode === 'default' && Boolean(selectedPolicy?.enabled));
     const undoUntil = new Date(clockNowMs + DEFAULT_DISCARD_WINDOW_MS).toISOString();
     const executeAfter = body.scheduled_for
       ? new Date(scheduleMs).toISOString()
@@ -1945,6 +2019,7 @@ export function createGeneratedProviderDraftFixture({
       account_id: body.account_id,
       source_email_id: sourceEmailId,
       archive_source_after_send: archiveSourceAfterSend,
+      follow_up_requested: followUpRequested,
       client_draft_id: body.client_draft_id,
       payload_hash: payloadHash,
       payload: immutable,
@@ -1970,10 +2045,12 @@ export function createGeneratedProviderDraftFixture({
     draft.linked_send_id = sendId;
     draft.updated_at = clockIso();
     counters.outbound_accepts += 1;
+    if (followUpRequested) counters.follow_up_requested_sends += 1;
     recordEvent('outbound_accepted', request, pathname, {
       send_id: sendId,
       scheduled_for: record.scheduled_for,
       archive_source_after_send: record.archive_source_after_send,
+      follow_up_requested: record.follow_up_requested,
     });
     return writeJson(response, outboundResponse(record), 202);
   }
@@ -2113,6 +2190,7 @@ export function createGeneratedProviderDraftFixture({
       scheduled_for: record.scheduled_for,
       source_email_id: record.source_email_id,
       archive_source_after_send: record.archive_source_after_send,
+      follow_up_requested: record.follow_up_requested,
       execute_after: record.execute_after,
       attempt_count: record.attempt_count,
       payload_retained: Boolean(record.payload),
@@ -2141,6 +2219,7 @@ export function createGeneratedProviderDraftFixture({
       logical_drafts: logicalDrafts,
       logical_outbounds: logicalOutbounds,
       logical_snippets: logicalSnippets,
+      follow_up_policies: (ACCOUNTS_BY_USER[currentUser?.id] || []).map(publicFollowUpPolicy),
       events: clone(events),
     };
   }
@@ -2230,6 +2309,7 @@ export function createGeneratedProviderDraftFixture({
     drafts.clear();
     outbounds.clear();
     outboundIdempotency.clear();
+    followUpPolicies.clear();
     mutations.clear();
     offlineMutationIds.clear();
     events.length = 0;
@@ -2386,6 +2466,66 @@ export function createGeneratedProviderDraftFixture({
     }
     if (request.method === 'GET' && pathname === '/api/accounts/') {
       return writeJson(response, clone(ACCOUNTS_BY_USER[currentUser.id] || []));
+    }
+    if (request.method === 'GET' && pathname === '/api/follow-up/policies') {
+      counters.follow_up_policy_reads += 1;
+      const accounts = (ACCOUNTS_BY_USER[currentUser.id] || []).map(publicFollowUpPolicy);
+      return writeJson(response, { accounts, total: accounts.length });
+    }
+    const followUpPolicyMatch = pathname.match(/^\/api\/follow-up\/policies\/(\d+)$/);
+    if (request.method === 'PUT' && followUpPolicyMatch) {
+      markExpectedMutation(request, pathname, 'follow_up_policy_replace');
+      const account = accountForUser(currentUser.id, Number(followUpPolicyMatch[1]));
+      if (!account) return writeError(response, 404, 'follow_up_policy_not_found', 'Generated account not found');
+      let body;
+      try {
+        body = await readJson(request);
+        if (typeof body.enabled !== 'boolean') throw new Error('enabled must be a boolean');
+        if (!Number.isSafeInteger(body.delay_days) || body.delay_days < 1 || body.delay_days > 30) {
+          throw new Error('delay_days must be between 1 and 30');
+        }
+        if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(body.wake_local_time || '')) {
+          throw new Error('wake_local_time must use HH:MM');
+        }
+        if (!validTimeZone(body.time_zone)) throw new Error('time_zone must be valid');
+        if (typeof body.weekdays_only !== 'boolean') throw new Error('weekdays_only must be a boolean');
+        if (!Number.isSafeInteger(body.expected_revision) || body.expected_revision < 0) {
+          throw new Error('expected_revision must be a non-negative integer');
+        }
+      } catch (error) {
+        counters.rejected_payloads += 1;
+        return writeError(response, 422, 'follow_up_policy_invalid', error.message);
+      }
+      const key = followUpPolicyKey(currentUser.id, account.id);
+      const existing = followUpPolicies.get(key);
+      const currentRevision = existing?.revision || 0;
+      const sameValues = existing && [
+        ['enabled', body.enabled],
+        ['delay_days', body.delay_days],
+        ['wake_local_time', body.wake_local_time],
+        ['time_zone', body.time_zone],
+        ['weekdays_only', body.weekdays_only],
+      ].every(([field, value]) => existing[field] === value);
+      if (existing && existing.revision === body.expected_revision + 1 && sameValues) {
+        return writeJson(response, clone(existing));
+      }
+      if (currentRevision !== body.expected_revision) {
+        counters.follow_up_policy_conflicts += 1;
+        return writeError(response, 409, 'follow_up_policy_conflict', 'Generated policy revision changed');
+      }
+      const saved = {
+        account_id: account.id,
+        account_email: account.email,
+        enabled: body.enabled,
+        delay_days: body.delay_days,
+        wake_local_time: body.wake_local_time,
+        time_zone: body.time_zone.trim(),
+        weekdays_only: body.weekdays_only,
+        revision: currentRevision + 1,
+      };
+      followUpPolicies.set(key, saved);
+      counters.follow_up_policy_writes += 1;
+      return writeJson(response, clone(saved));
     }
     if (request.method === 'GET' && pathname === '/api/terminal/settings') {
       return writeJson(response, {

@@ -109,6 +109,7 @@ test('snooze list records become Inbox-compatible rows without losing reminder i
     wake_at: '2099-01-01T14:00:00Z',
     time_zone: 'America/New_York',
     condition: 'always',
+    origin: 'automatic_follow_up',
     state: 'scheduled',
     email: { id: 9, subject: 'Generated reminder', snippet: 'Safe fixture' },
   };
@@ -124,6 +125,7 @@ test('snooze list records become Inbox-compatible rows without losing reminder i
     snooze_wake_at: '2099-01-01T14:00:00Z',
     snooze_time_zone: 'America/New_York',
     snooze_condition: 'always',
+    snooze_origin: 'automatic_follow_up',
     snooze_state: 'scheduled',
     snooze_status_detail: null,
   });
@@ -154,6 +156,39 @@ test('active reminders match every row in the owned account and conversation', (
   }), false);
   assert.equal(snoozeMatchesEmail({ email_id: 9 }, { id: 9 }), true);
   assert.equal(snoozeMatchesEmail({ email_id: 9 }, { id: 10 }), false);
+});
+
+test('automatic follow-up reminders never remove Inbox-derived rows', () => {
+  const email = {
+    id: 9,
+    account_id: 3,
+    gmail_thread_id: 'thread-9',
+    subject: 'Generated follow-up',
+  };
+  const reminder = {
+    id: 'automatic-reminder',
+    email_id: 9,
+    account_id: 3,
+    gmail_thread_id: 'thread-9',
+    origin: 'automatic_follow_up',
+    wake_at: '2099-01-01T14:00:00Z',
+    time_zone: 'America/New_York',
+    condition: 'if_no_reply',
+    state: 'scheduled',
+  };
+  assert.deepEqual(reconcileActiveSnoozeEmails([email], [reminder], { retain: false }), {
+    emails: [{
+      ...email,
+      snooze_id: 'automatic-reminder',
+      snooze_wake_at: '2099-01-01T14:00:00Z',
+      snooze_time_zone: 'America/New_York',
+      snooze_condition: 'if_no_reply',
+      snooze_origin: 'automatic_follow_up',
+      snooze_state: 'scheduled',
+      snooze_outcome_unknown: false,
+    }],
+    matchedCount: 0,
+  });
 });
 
 test('Inbox conversation projection removes siblings and retained views annotate them', () => {
