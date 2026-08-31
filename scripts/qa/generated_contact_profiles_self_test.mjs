@@ -34,7 +34,12 @@ async function request(method, pathname, body, expectedStatus = 200) {
   return payload;
 }
 
-const get = pathname => request('GET', pathname);
+const get = (pathname, expectedStatus = 200) => request(
+  'GET',
+  pathname,
+  undefined,
+  expectedStatus,
+);
 const post = (pathname, body = {}, expectedStatus = 200) => (
   request('POST', pathname, body, expectedStatus)
 );
@@ -186,6 +191,12 @@ try {
   assert.equal(primary.total_pages, 1);
   assert.equal(primary.coverage.rows_scanned, 7);
   assert.equal(primary.coverage.history_may_be_truncated, false);
+  assert.deepEqual(primary.contacts.map(contact => contact.address), [
+    'ada.profile@example.test',
+    'outbound-only@example.test',
+    'inbound-only@example.test',
+    'shared@example.test',
+  ]);
   primary.contacts.forEach(contact => {
     assertExactKeys(contact, SUMMARY_KEYS);
     assert.equal(contact.account_id, 1101);
@@ -227,6 +238,29 @@ try {
     direction: 'bidirectional',
   });
   assertMetadataOnly(adaProfile);
+  const recentPointer = adaProfile.recent_conversations[0];
+  const contactThread = await get(
+    `/api/emails/thread/${recentPointer.thread_id}?order=asc&account_id=${recentPointer.account_id}`,
+  );
+  assert.equal(contactThread.thread_id, recentPointer.thread_id);
+  assert.deepEqual(contactThread.emails.map(email => email.id), [1402, 1401]);
+  assert.ok(contactThread.emails.every(email => email.account_id === recentPointer.account_id));
+  assert.ok(contactThread.emails.every(email => email.gmail_thread_id === recentPointer.thread_id));
+  assert.ok(contactThread.emails.every(email => email.is_read === true));
+  assert.ok(contactThread.emails.some(email => email.id === recentPointer.anchor_email_id));
+  assert.equal(
+    JSON.stringify(contactThread).includes('GENERATED_CONTACT_PRIVATE_SUBJECT_MUST_NOT_ESCAPE'),
+    false,
+  );
+  assert.equal(
+    JSON.stringify(contactThread).includes('GENERATED_CONTACT_PRIVATE_BODY_MUST_NOT_ESCAPE'),
+    false,
+  );
+  await get(
+    `/api/emails/thread/${recentPointer.thread_id}?order=asc&account_id=1102`,
+    404,
+  );
+  await get(`/api/emails/thread/${recentPointer.thread_id}?order=asc`, 404);
 
   const alternate = await query(1102, { query: 'shared@example.test' });
   assert.equal(alternate.total, 1);
@@ -236,8 +270,27 @@ try {
   assert.equal(alternateShared.account_id, 1102);
   assert.equal(alternateShared.relationship, 'inbound_only');
   assert.notEqual(alternateShared.contact_key, primaryShared.contact_key);
+  const alternateAll = await query(1102);
+  const alternateOnly = alternateAll.contacts.find(
+    contact => contact.address === 'alternate-profile@example.test',
+  );
+  assert.ok(alternateOnly);
+  const alternateProfile = await profile(1102, alternateOnly.contact_key);
+  assert.equal(alternateProfile.recent_conversations[0].thread_id, null);
+  assert.equal(alternateProfile.recent_conversations[0].anchor_email_id, 1502);
+  const alternateMessage = await get('/api/emails/1502');
+  assert.equal(alternateMessage.id, 1502);
+  assert.equal(alternateMessage.account_id, 1102);
+  assert.equal(alternateMessage.gmail_thread_id, null);
+  assert.equal(alternateMessage.is_read, true);
   await profile(1101, alternateShared.contact_key, {}, 404);
   await query(1201, {}, 404);
+
+  let snapshot = await get('/api/qa/audit');
+  assert.equal(snapshot.counters.contact_handoff_thread_reads, 1);
+  assert.equal(snapshot.counters.contact_handoff_message_reads, 1);
+  assert.equal(snapshot.counters.contact_handoff_rejections, 2);
+  assertReadOnlyAudit(snapshot);
 
   await post('/api/auth/login', {
     username: 'generated-b',
@@ -250,6 +303,8 @@ try {
   assert.notEqual(userB.contacts[0].contact_key, alternateShared.contact_key);
   assert.equal(JSON.stringify(userB).includes('Shared Primary Relationship'), false);
   assert.equal(JSON.stringify(userB).includes('Shared Alternate Relationship'), false);
+  await get('/api/emails/thread/generated-contact-ada-thread?account_id=1101', 404);
+  await get('/api/emails/1401', 404);
   results.isolation = true;
 
   await reset();
@@ -261,7 +316,7 @@ try {
   await reset('contact-delay');
   await query(1101);
   await profile(1101, ada.contact_key);
-  let snapshot = await get('/api/qa/audit');
+  snapshot = await get('/api/qa/audit');
   assert.equal(snapshot.counters.contact_query_delays, 1);
   assert.equal(snapshot.counters.contact_profile_delays, 1);
   assert.equal(snapshot.counters.contact_query_successes, 1);
@@ -276,6 +331,8 @@ try {
   assert.deepEqual(snapshot.allowed_contact_routes, [
     'POST /api/contacts/query',
     'POST /api/contacts/profile',
+    'GET /api/emails/thread/{thread_id}',
+    'GET /api/emails/{anchor_email_id}',
   ]);
   assert.equal(snapshot.counters.contact_query_failures, 1);
   assert.equal(snapshot.counters.contact_profile_failures, 1);

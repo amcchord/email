@@ -632,6 +632,8 @@ const CONTACT_ROW_LIMIT = 4_000;
 const CONTACT_ALLOWED_ROUTES = Object.freeze([
   'POST /api/contacts/query',
   'POST /api/contacts/profile',
+  'GET /api/emails/thread/{thread_id}',
+  'GET /api/emails/{anchor_email_id}',
 ]);
 
 function generatedContactKey(userId, accountId, address) {
@@ -820,6 +822,67 @@ function generatedContactProjection(userId, accountId) {
   };
 }
 
+function generatedContactRowIsVisible(userId, row) {
+  if (row.is_draft || row.is_spam || row.is_trash) return false;
+  const ownedAddresses = new Set(
+    (ACCOUNTS_BY_USER[userId] || []).map(account => account.email.toLowerCase()),
+  );
+  const candidates = row.is_sent
+    ? [
+        ...(Array.isArray(row.to_addresses) ? row.to_addresses : []),
+        ...(Array.isArray(row.cc_addresses) ? row.cc_addresses : []),
+      ]
+    : [{ name: row.from_name, address: row.from_address }];
+  return candidates.some(candidate => {
+    const mailbox = generatedMailbox(candidate);
+    return mailbox && !ownedAddresses.has(mailbox.address);
+  });
+}
+
+function publicGeneratedContactEmail(userId, row) {
+  const account = accountForUser(userId, row.account_id);
+  if (!account || !generatedContactRowIsVisible(userId, row)) return null;
+  const publicMailboxes = values => (Array.isArray(values) ? values : [])
+    .map(generatedMailbox)
+    .filter(Boolean);
+  const subject = row.thread_id
+    ? 'Generated contact conversation'
+    : 'Generated contact message';
+  const bodyText = row.is_sent
+    ? 'Generated sent contact message for local browser handoff QA.'
+    : 'Generated received contact message for local browser handoff QA.';
+  return {
+    id: row.anchor_email_id,
+    account_id: row.account_id,
+    account_email: account.email,
+    gmail_message_id: `generated-contact-message-${row.anchor_email_id}`,
+    gmail_thread_id: row.thread_id,
+    message_id_header: `<generated-contact-${row.anchor_email_id}@example.test>`,
+    references_header: null,
+    from_name: row.from_name,
+    from_address: row.from_address,
+    reply_to: row.is_sent ? null : row.from_address,
+    to_addresses: publicMailboxes(row.to_addresses),
+    cc_addresses: publicMailboxes(row.cc_addresses),
+    subject,
+    snippet: bodyText,
+    body_text: bodyText,
+    body_html: `<p>${bodyText}</p>`,
+    date: row.observed_at,
+    labels: row.is_sent ? ['SENT'] : ['INBOX'],
+    is_read: true,
+    is_starred: false,
+    is_trash: false,
+    is_spam: false,
+    is_sent: row.is_sent,
+    is_draft: false,
+    has_attachments: false,
+    attachments: [],
+    ai_action_items: [],
+    is_subscription: false,
+  };
+}
+
 function generatedContactQueryRank(contact, query) {
   const needle = query.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
   if (!needle) return 0;
@@ -920,6 +983,9 @@ function newCounters() {
     contact_profile_stale_session_responses: 0,
     contact_profile_account_rejections: 0,
     contact_profile_key_rejections: 0,
+    contact_handoff_thread_reads: 0,
+    contact_handoff_message_reads: 0,
+    contact_handoff_rejections: 0,
     follow_up_policy_reads: 0,
     follow_up_policy_writes: 0,
     follow_up_policy_conflicts: 0,
@@ -1901,8 +1967,8 @@ export function createGeneratedProviderDraftFixture({
       ))
       .sort((left, right) => (
         left.rank - right.rank
-        || relationshipTier[left.contact.relationship] - relationshipTier[right.contact.relationship]
         || Date.parse(right.contact.observed_last_at) - Date.parse(left.contact.observed_last_at)
+        || relationshipTier[left.contact.relationship] - relationshipTier[right.contact.relationship]
         || right.contact.observed_message_count - left.contact.observed_message_count
         || left.contact.address.localeCompare(right.contact.address)
       ));
@@ -3570,6 +3636,46 @@ export function createGeneratedProviderDraftFixture({
     if (request.method === 'GET' && threadMatch) {
       const threadId = decodeURIComponent(threadMatch[1]);
       const accountId = Number(url.searchParams.get('account_id')) || null;
+      const contactEmails = accountId ? (CONTACT_HISTORY_BY_USER[currentUser.id] || [])
+        .filter(row => (
+          row.thread_id === threadId
+          && row.account_id === accountId
+        ))
+        .map(row => publicGeneratedContactEmail(currentUser.id, row))
+        .filter(Boolean)
+        .sort((left, right) => {
+          const ascending = url.searchParams.get('order') !== 'desc';
+          const difference = Date.parse(left.date) - Date.parse(right.date) || left.id - right.id;
+          return ascending ? difference : -difference;
+        }) : [];
+      if (contactEmails.length) {
+        counters.contact_handoff_thread_reads += 1;
+        recordEvent('contact_handoff_thread_read', request, pathname, {
+          account_id: contactEmails[0].account_id,
+          anchor_email_ids: contactEmails.map(email => email.id),
+          thread_id: threadId,
+        });
+        const ownedAddresses = new Set(
+          (ACCOUNTS_BY_USER[currentUser.id] || []).map(account => account.email.toLowerCase()),
+        );
+        const participants = new Map();
+        for (const email of contactEmails) {
+          for (const mailbox of [
+            { name: email.from_name, address: email.from_address },
+            ...email.to_addresses,
+            ...email.cc_addresses,
+          ]) {
+            if (!mailbox.address || ownedAddresses.has(mailbox.address)) continue;
+            participants.set(mailbox.address, mailbox);
+          }
+        }
+        return writeJson(response, {
+          thread_id: threadId,
+          subject: contactEmails[0].subject,
+          emails: contactEmails,
+          participants: [...participants.values()],
+        });
+      }
       const emails = Object.values(SOURCE_MESSAGES)
         .filter(source => (
           source.owner_user_id === currentUser.id
@@ -3577,7 +3683,13 @@ export function createGeneratedProviderDraftFixture({
           && (!accountId || source.account_id === accountId)
         ))
         .map(source => clone(source));
-      if (!emails.length) return writeError(response, 404, 'thread_not_found', 'Generated thread not found');
+      if (!emails.length) {
+        const knownContactThread = Object.values(CONTACT_HISTORY_BY_USER)
+          .flat()
+          .some(row => row.thread_id === threadId);
+        if (knownContactThread) counters.contact_handoff_rejections += 1;
+        return writeError(response, 404, 'thread_not_found', 'Generated thread not found');
+      }
       return writeJson(response, {
         thread_id: threadId,
         subject: emails[0].subject,
@@ -3587,10 +3699,28 @@ export function createGeneratedProviderDraftFixture({
     }
     const emailMatch = pathname.match(/^\/api\/emails\/(\d+)$/);
     if (request.method === 'GET' && emailMatch) {
-      const source = sourceForUser(currentUser.id, Number(emailMatch[1]));
-      return source
-        ? writeJson(response, clone(source))
-        : writeError(response, 404, 'email_not_found', 'Generated email not found');
+      const emailId = Number(emailMatch[1]);
+      const source = sourceForUser(currentUser.id, emailId);
+      if (source) return writeJson(response, clone(source));
+      const contactRow = (CONTACT_HISTORY_BY_USER[currentUser.id] || [])
+        .find(row => row.anchor_email_id === emailId);
+      const contactEmail = contactRow
+        ? publicGeneratedContactEmail(currentUser.id, contactRow)
+        : null;
+      if (contactEmail) {
+        counters.contact_handoff_message_reads += 1;
+        recordEvent('contact_handoff_message_read', request, pathname, {
+          account_id: contactEmail.account_id,
+          anchor_email_id: contactEmail.id,
+          thread_id: contactEmail.gmail_thread_id,
+        });
+        return writeJson(response, contactEmail);
+      }
+      const knownContactMessage = Object.values(CONTACT_HISTORY_BY_USER)
+        .flat()
+        .some(row => row.anchor_email_id === emailId);
+      if (knownContactMessage) counters.contact_handoff_rejections += 1;
+      return writeError(response, 404, 'email_not_found', 'Generated email not found');
     }
 
     if (request.method === 'POST' && pathname === '/api/compose/draft') {
