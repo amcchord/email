@@ -445,6 +445,11 @@ export const api = {
   getContactProfile: (payload, { signal } = {}) =>
     request('POST', '/contacts/profile', payload, { signal }),
 
+  // Private attachment metadata projection. Attachment bytes remain behind
+  // the existing explicit preview and download endpoints.
+  queryAttachments: (payload, { signal } = {}) =>
+    request('POST', '/attachments/query', payload, { signal }),
+
   // Private reusable writing snippets
   listPersonalSnippets: () => request('GET', '/compose/snippets'),
   createPersonalSnippet: (payload) => request('POST', '/compose/snippets', payload),

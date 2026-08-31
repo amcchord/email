@@ -37,6 +37,7 @@ free-form questions about your inbox without touching the web UI.
 - [Web session-only calendar reads](#web-session-only-calendar-reads)
 - [Web session-only structured email search](#web-session-only-structured-email-search)
 - [Web session-only Saved Views](#web-session-only-saved-views)
+- [Web session-only attachment workspace](#web-session-only-attachment-workspace)
 - [Web session-only attachment preview and download](#web-session-only-attachment-preview-and-download)
 - [Web session-only durable mail actions](#web-session-only-durable-mail-actions)
 - [Web session-only durable Snooze reminders](#web-session-only-durable-snooze-reminders)
@@ -838,6 +839,75 @@ not cache message IDs or results, call Gmail or AI, move mail, or write any
 mail/calendar state. The first-party UI keeps queries in authenticated session
 memory and request bodies; opening a view applies its account and query without
 placing private terms in navigation URLs or browser storage.
+
+## Web session-only attachment workspace
+
+The authenticated browser application exposes a read-only file-discovery
+projection over already synchronized local metadata:
+
+```text
+POST /api/attachments/query
+```
+
+The request is always bound to one exact active account owned by the session
+user:
+
+```json
+{
+  "account_id": 7,
+  "query": "quarterly",
+  "kind": "document",
+  "direction": "received",
+  "cursor": null,
+  "page_size": 30
+}
+```
+
+`query` is a literal case-insensitive filename, subject, sender-name, or
+sender-address search limited to 256 characters. `kind` is one of `all`,
+`document`, `image`, `archive`, or `other`; `direction` is `all`, `received`,
+or `sent`; and `page_size` is 1–50. A supplied cursor is signed and bound to
+the exact user, account, query, kind, and direction, so it cannot be replayed
+under a broader or different query. Missing, inactive, and foreign accounts
+all return 404 instead of falling back to another account.
+
+The response contains only explicitly allowlisted display metadata:
+
+```json
+{
+  "account_id": 7,
+  "items": [
+    {
+      "account_id": 7,
+      "attachment_id": 44,
+      "email_id": 1201,
+      "filename": "quarterly-report.pdf",
+      "content_type": "application/pdf",
+      "size_bytes": 84721,
+      "message_date": "2026-08-30T18:00:00Z",
+      "sender_name": "Example Sender",
+      "sender_address": "sender@example.test",
+      "subject": "Quarterly review",
+      "is_sent": false
+    }
+  ],
+  "next_cursor": null,
+  "has_more": false
+}
+```
+
+Results use stable keyset order by message date, email ID, and attachment ID.
+Draft, Spam, Trash, and inline parts are excluded. Invalid sender metadata is
+reduced to `null`; filenames and content types use sanitized fallbacks. The
+projection never returns provider IDs, cache/storage paths, content IDs,
+recipient fields, Bcc, snippets, bodies, or AI output.
+
+Listing, search, filtering, pagination, keyboard selection, and parent-message
+navigation are PostgreSQL-only and never fetch attachment bytes, call Gmail,
+or populate the attachment cache. Bytes remain available only through the
+existing explicit Preview and Download routes below. Every response, including
+authentication, validation, and not-found responses, is `private, no-store`.
+Public `/api/v1` tokens cannot call this route.
 
 ## Web session-only attachment preview and download
 

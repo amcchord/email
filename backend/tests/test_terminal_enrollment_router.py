@@ -273,4 +273,4 @@ def test_enrollment_models_and_migration_form_one_additive_head():
     assert scripts.get_revision("a4b5c6d7e8f9").down_revision == "f3a4b5c6d7e8"
     assert scripts.get_revision("b5c6d7e8f9a0").down_revision == "a4b5c6d7e8f9"
     assert scripts.get_revision("c6d7e8f9a0b1").down_revision == "b5c6d7e8f9a0"
-    assert scripts.get_heads() == ["a0b1c2d3e4f5"]
+    assert scripts.get_heads() == ["b1c2d3e4f5a6"]

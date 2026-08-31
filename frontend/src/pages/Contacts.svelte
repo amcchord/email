@@ -4,6 +4,7 @@
   import {
     accounts,
     accountsLoadError,
+    attachmentParentIntent,
     composeData,
     contactConversationIntent,
     createAuthenticatedSessionGuard,
@@ -179,6 +180,7 @@
     currentMailbox.set('ALL');
     searchQuery.set('');
     smartFilter.set(null);
+    attachmentParentIntent.set(null);
     contactConversationIntent.set(intent);
     selectedEmailId.set(intent.anchor_email_id);
     currentPage.set('inbox');

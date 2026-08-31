@@ -176,7 +176,7 @@ def test_model_and_reserved_migration_are_content_free_owner_scoped_head():
     config.set_main_option("script_location", "alembic")
     scripts = ScriptDirectory.from_config(config)
     assert scripts.get_revision("a0b1c2d3e4f5").down_revision == "f9a0b1c2d3e4"
-    assert scripts.get_heads() == ["a0b1c2d3e4f5"]
+    assert scripts.get_heads() == ["b1c2d3e4f5a6"]
 
 
 def test_owner_predicates_bind_both_user_and_exact_resource_ids():

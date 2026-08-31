@@ -23,6 +23,9 @@ export const selectedThreadId = writable(null);
 // One-shot, account-authoritative handoff from Contacts to Inbox. It is
 // intentionally session memory only and is cleared on every auth transition.
 export const contactConversationIntent = writable(null);
+// One-shot, account-authoritative handoff from Attachments to Inbox. It keeps
+// private library filters out of URLs and is cleared at every auth transition.
+export const attachmentParentIntent = writable(null);
 // Session-only Saved Views state. Queries are deliberately never mirrored to
 // URLs or browser storage and are purged at every authenticated transition.
 export const savedViews = writable([]);
@@ -310,6 +313,7 @@ function resetAuthenticatedSessionState() {
   selectedEmailId.set(null);
   selectedThreadId.set(null);
   contactConversationIntent.set(null);
+  attachmentParentIntent.set(null);
   savedViews.set([]);
   savedViewsLoading.set(false);
   savedViewsLoaded.set(false);

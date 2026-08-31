@@ -946,3 +946,28 @@ add a new entry that explicitly supersedes the old one.
   scoped views. Future provider rules, notifications, badges, shared views, or
   cached counts require a separate model and review rather than widening this
   definition contract.
+
+## D-048 — Attachment discovery is metadata-only until an explicit byte action
+
+- Date: 2026-08-31
+- Status: accepted
+- Decision: Project the Attachments workspace from synchronized local metadata
+  for one exact active owned account, with a strict response allowlist and
+  deterministic signed-cursor pagination. Exclude Draft, Spam, Trash, and
+  inline parts. Listing, searching, filtering, keyboard selection, and parent
+  navigation must never fetch provider bytes, populate the attachment cache,
+  render thumbnails, or expose provider/storage identifiers. Reuse the existing
+  exact email-and-attachment Preview and Download routes only after an explicit
+  user action.
+- Reason: Mailbox-wide file discovery is valuable, but filenames, MIME claims,
+  and source-message metadata remain private and attacker-controlled. Eager
+  previewing would turn a read-only list into hidden Gmail reads and cache
+  writes, while an unscoped or client-filtered query could cross account or
+  session boundaries. The existing attachment foreign key also lacked the
+  index required for a durable all-history projection.
+- Consequence: The feature adds only an `attachments.email_id` index and no new
+  file content or provider permission. Search stays POST-only and private,
+  responses are no-store, filenames are sanitized, late account/session results
+  fail closed, and real-mail production QA remains metadata-only. Thumbnails,
+  OCR, AI summaries, bulk ZIP, compose reuse, provider-wide reindexing, and
+  writable file organization require separately reviewed contracts.

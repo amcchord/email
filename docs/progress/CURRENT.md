@@ -4,12 +4,13 @@ Last updated: 2026-08-31
 
 ## Active Objective
 
-Operate deterministic user-owned Saved Views / Custom Splits over the existing
-structured-search and conversation Inbox authority. Keep their bounded names,
-exact optional account scope, and validated queries private and revision-safe;
-never cache results, store message content, invoke AI, or mutate Gmail. Keep
-first-class Contacts, writing, Universal Send & Archive, Focused/Split Inbox,
-and the terminal track operating as durable, truthful workflows. Continue
+Deliver a first-class read-only Attachments workspace over synchronized local
+metadata. Keep every query bound to one exact active owned account, make file
+bytes available only after an explicit Preview or Download action, and never
+prefetch Gmail, cache content, expose provider/storage identifiers, or include
+Draft, Spam, Trash, or inline parts. Keep Saved Views, first-class Contacts,
+writing, Universal Send & Archive, Focused/Split Inbox, and the terminal track
+operating as durable, truthful workflows. Continue
 physical qualification of the independently gated Web Serial installer and OTA control
 plane on exact E1001/E1002 hardware. Keep real mail/calendar QA read-only except
 for generated `.example.test` fixtures and preserve every independent terminal
@@ -168,6 +169,29 @@ This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
 
 ## Active Work Items
+
+### P1 — First-class Attachments workspace
+
+- State: implementation is frozen and the bounded release gate is green. The
+  metadata-only API, exact-account ownership boundary, signed keyset cursor,
+  allowlisted response, responsive first-class UI, keyboard model, generated
+  fixture, and additive index revision `b1c2d3e4f5a6` are complete from exact
+  release baseline `e753e3bad62c05ee31b1048f2620847a68fda7c8`.
+- Scope: one `attachments.email_id` index; a session-only POST query over
+  synchronized metadata; a responsive More → Attachments workspace with exact
+  account, filename/sender/subject search, type and direction filters, safe
+  explicit Preview/Download, exact parent-message navigation, `G X`, and
+  keyboard list movement. No new attachment content, provider scope, AI,
+  thumbnail, background fetch, mail action, or calendar action is allowed.
+- Acceptance: foreign, inactive, or mismatched accounts fail closed; list and
+  filter paths make zero attachment-byte/provider/cache calls; response fields
+  are explicitly allowlisted and filenames sanitized; late session/account
+  responses cannot publish; desktop and 390x844 generated acceptance covers
+  loading, empty, failure/retry, pagination, keyboard/focus, and malicious
+  metadata; one consolidated backend/frontend/build/migration gate passes.
+- Next: commit and push the frozen release, take a protected production backup,
+  migrate exactly `a0b1c2d3e4f5 -> b1c2d3e4f5a6`, deploy once, and complete one
+  metadata-only production postflight.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 

@@ -16,6 +16,7 @@ from backend.routers import (
     accounts,
     admin,
     ai,
+    attachments,
     auth,
     calendar,
     chat,
@@ -101,6 +102,7 @@ app.add_middleware(
 # Routers
 app.include_router(auth.router)
 app.include_router(admin.router)
+app.include_router(attachments.router)
 app.include_router(emails.router)
 app.include_router(compose.router)
 app.include_router(contacts.router)

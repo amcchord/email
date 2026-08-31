@@ -64,7 +64,7 @@ test('contact API and Inbox handoff stay POST-only, exact-account, off-page, and
   assert.match(inbox, /exactContactIntent[\s\S]*await api\.getEmail\(id\)/);
   assert.match(inbox, /contact conversation did not contain its exact anchor message/i);
   assert.match(inbox, /contactConversationIntent\.set\(null\)/);
-  assert.match(inbox, /const initialDirectOpenEmailId = initialDirectOpen\.commit\(datasetAuthoritative\);[\s\S]*const contactDirectOpenEmailId = pendingContactAnchorEmailId\(snapshot\.accountId\);[\s\S]*contactDirectOpenEmailId \?\? initialDirectOpenEmailId/);
+  assert.match(inbox, /const initialDirectOpenEmailId = initialDirectOpen\.commit\(datasetAuthoritative\);[\s\S]*const attachmentDirectOpenEmailId = pendingAttachmentAnchorEmailId\(snapshot\.accountId\);[\s\S]*const contactDirectOpenEmailId = pendingContactAnchorEmailId\(snapshot\.accountId\);[\s\S]*attachmentDirectOpenEmailId\s*\?\? contactDirectOpenEmailId\s*\?\? initialDirectOpenEmailId/);
   assert.match(inbox, /selectedReaderUsesThread = \$derived\(\s*Array\.isArray\(selectedThread\?\.emails\) && selectedThread\.emails\.length > 0/);
   assert.match(inbox, /selectedReaderConversation = \$derived\([\s\S]*isConversationSummary\(selectedListConversation\)[\s\S]*conversation_scope: false/);
   assert.equal((inbox.match(/\{#if selectedReaderUsesThread\}/g) || []).length, 2);

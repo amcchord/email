@@ -26,6 +26,7 @@
       inbox: 'inbox',
       compose: 'compose',
       calendar: 'calendar',
+      attachments: 'attachments',
       todos: 'todos',
       chat: 'chat',
       'ai-insights': 'ai-insights',

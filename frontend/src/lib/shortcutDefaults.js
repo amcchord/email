@@ -30,6 +30,7 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'nav.calendar', key: 'g l', label: 'Go to Calendar',          context: 'global', category: 'Navigation' },
   { id: 'nav.glance',   key: 'g g', label: 'Go to At a Glance',       context: 'global', category: 'Navigation' },
   { id: 'nav.contacts', key: 'g p', label: 'Go to Contacts',          context: 'global', category: 'Navigation', keywords: ['people', 'correspondents', 'relationships'] },
+  { id: 'nav.attachments', key: 'g x', label: 'Go to Attachments',    context: 'global', category: 'Navigation', keywords: ['files', 'documents', 'downloads'] },
   { id: 'nav.todos',    key: 'g t', label: 'Go to Todos',             context: 'global', category: 'Navigation' },
   { id: 'nav.stats',    key: 'g s', label: 'Go to Stats',             context: 'global', category: 'Navigation' },
   { id: 'nav.insights', key: 'g a', label: 'Go to AI Insights',       context: 'global', category: 'Navigation' },
@@ -112,6 +113,15 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'contacts.email',  key: 'c',      label: 'Email contact',     context: 'contacts', category: 'Contacts' },
   { id: 'contacts.search', key: '/',      label: 'Search contacts',   context: 'contacts', category: 'Contacts' },
   { id: 'contacts.back',   key: 'Escape', label: 'Back to contacts', context: 'contacts', category: 'Contacts' },
+
+  // ── Attachments ───────────────────────────────────────────
+  { id: 'attachments.next',     key: 'j',      label: 'Next attachment',        context: 'attachments', category: 'Attachments' },
+  { id: 'attachments.prev',     key: 'k',      label: 'Previous attachment',    context: 'attachments', category: 'Attachments' },
+  { id: 'attachments.preview',  key: 'Enter',  label: 'Preview attachment',     context: 'attachments', category: 'Attachments' },
+  { id: 'attachments.download', key: 'd',      label: 'Download attachment',    context: 'attachments', category: 'Attachments' },
+  { id: 'attachments.open',     key: 'o',      label: 'Open containing email',  context: 'attachments', category: 'Attachments' },
+  { id: 'attachments.search',   key: '/',      label: 'Search attachments',     context: 'attachments', category: 'Attachments' },
+  { id: 'attachments.close',    key: 'Escape', label: 'Close attachment preview', context: 'attachments', category: 'Attachments' },
 
   // ── Todos ────────────────────────────────────────────────────────
   { id: 'todos.new',    key: 'n',     label: 'New todo',        context: 'todos', category: 'Todos' },

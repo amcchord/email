@@ -7,7 +7,7 @@
     currentMailbox, selectedEmailId, selectedAccountId,
     searchQuery, showToast, pageSize, viewMode, smartFilter,
     hideIgnored, sidebarCollapsed, createAuthenticatedSessionGuard,
-    accounts, contactConversationIntent, labels as labelsStore,
+    accounts, attachmentParentIntent, contactConversationIntent, labels as labelsStore,
   } from '../lib/stores.js';
   import { registerActions } from '../lib/shortcutStore.js';
   import { lastEvent } from '../lib/realtime.js';
@@ -80,6 +80,10 @@
     contactConversationAnchorForAccount,
     normalizeContactConversationNavigationIntent,
   } from '../lib/contactProfiles.js';
+  import {
+    attachmentParentAnchorForAccount,
+    normalizeAttachmentParentIntent,
+  } from '../lib/attachmentLibrary.js';
 
   let selectedEmail = $state(null);
   let selectedThread = $state(null);
@@ -481,6 +485,15 @@
     }
   }
 
+  function pendingAttachmentAnchorEmailId(accountId) {
+    try {
+      return attachmentParentAnchorForAccount(get(attachmentParentIntent), accountId);
+    } catch {
+      attachmentParentIntent.set(null);
+      return null;
+    }
+  }
+
   function refreshDataset() {
     if (!inboxSessionIsCurrent()) return Promise.resolve(false);
     currentPageNum.set(1);
@@ -623,11 +636,14 @@
         datasetError = false;
         datasetErrorMessage = '';
         const initialDirectOpenEmailId = initialDirectOpen.commit(datasetAuthoritative);
-        // Contacts owns a one-shot, exact-account reader intent. Restore its
-        // anchor only after this Inbox dataset is authoritative so a cold lazy
-        // mount cannot erase the selection before the detail request begins.
+        // Contacts and Attachments own one-shot, exact-account reader intents.
+        // Restore their anchor only after this Inbox dataset is authoritative
+        // so a cold lazy mount cannot erase it before detail loading begins.
+        const attachmentDirectOpenEmailId = pendingAttachmentAnchorEmailId(snapshot.accountId);
         const contactDirectOpenEmailId = pendingContactAnchorEmailId(snapshot.accountId);
-        const directOpenEmailId = contactDirectOpenEmailId ?? initialDirectOpenEmailId;
+        const directOpenEmailId = attachmentDirectOpenEmailId
+          ?? contactDirectOpenEmailId
+          ?? initialDirectOpenEmailId;
         if (directOpenEmailId !== null) {
           focusedEmailId = directOpenEmailId;
           selectedEmailId.set(directOpenEmailId);
@@ -741,17 +757,24 @@
     selectedEmail = null;
     selectedThread = null;
     let exactContactIntent = null;
+    let exactAttachmentIntent = null;
     try {
       const pendingContactIntent = get(contactConversationIntent);
       if (pendingContactIntent !== null) {
         exactContactIntent = normalizeContactConversationNavigationIntent(pendingContactIntent);
         if (exactContactIntent.anchor_email_id !== Number(id)) exactContactIntent = null;
       }
+      const pendingAttachmentIntent = get(attachmentParentIntent);
+      if (pendingAttachmentIntent !== null) {
+        exactAttachmentIntent = normalizeAttachmentParentIntent(pendingAttachmentIntent);
+        if (exactAttachmentIntent.email_id !== Number(id)) exactAttachmentIntent = null;
+      }
+      const exactAccountId = exactContactIntent?.account_id ?? exactAttachmentIntent?.account_id ?? null;
       if (
-        exactContactIntent
-        && Number(get(selectedAccountId)) !== exactContactIntent.account_id
+        exactAccountId !== null
+        && Number(get(selectedAccountId)) !== exactAccountId
       ) {
-        throw new Error('The contact conversation account no longer matches the active account.');
+        throw new Error('The requested message account no longer matches the active account.');
       }
 
       const summary = get(emails).find(email => email.id === id);
@@ -759,7 +782,7 @@
       const threadId = String(summary?.gmail_thread_id || '').trim();
       const result = exactContactIntent?.thread_id
         ? await api.getThread(exactContactIntent.thread_id, 'asc', exactContactIntent.account_id)
-        : (exactContactIntent
+        : (exactContactIntent || exactAttachmentIntent
           ? await api.getEmail(id)
           : (conversation && threadId
             ? await api.getThread(threadId, 'asc', summary.account_id)
@@ -778,9 +801,10 @@
         if (!anchor) throw new Error('The contact conversation did not contain its exact anchor message.');
         selectedThread = result;
         selectedEmail = anchor;
-      } else if (exactContactIntent) {
-        if (Number(result?.account_id) !== exactContactIntent.account_id || Number(result?.id) !== exactContactIntent.anchor_email_id) {
-          throw new Error('The contact message response did not match its account and anchor.');
+      } else if (exactContactIntent || exactAttachmentIntent) {
+        const expectedEmailId = exactContactIntent?.anchor_email_id ?? exactAttachmentIntent.email_id;
+        if (Number(result?.account_id) !== exactAccountId || Number(result?.id) !== expectedEmailId) {
+          throw new Error('The requested message response did not match its account and anchor.');
         }
         selectedThread = null;
         selectedEmail = result;
@@ -805,7 +829,7 @@
             }
           : detail;
       }
-      if (exactContactIntent ? !selectedEmail?.is_read : (conversation ? Number(summary.unread_count) > 0 : !selectedEmail?.is_read)) {
+      if (exactContactIntent || exactAttachmentIntent ? !selectedEmail?.is_read : (conversation ? Number(summary.unread_count) > 0 : !selectedEmail?.is_read)) {
         // Rendering the message must never wait for a mailbox mutation. The
         // durable action path owns retries and exposes any terminal failure.
         void handleAction('mark_read', [id], { announce: false, offerUndo: false });
@@ -820,6 +844,13 @@
           && Number(pending?.anchor_email_id) === exactContactIntent.anchor_email_id
           && (pending?.thread_id ?? null) === exactContactIntent.thread_id
         ) contactConversationIntent.set(null);
+      }
+      if (exactAttachmentIntent) {
+        const pending = get(attachmentParentIntent);
+        if (
+          Number(pending?.account_id) === exactAttachmentIntent.account_id
+          && Number(pending?.email_id) === exactAttachmentIntent.email_id
+        ) attachmentParentIntent.set(null);
       }
       if (inboxSessionIsCurrent() && emailRequests.isCurrent(requestId)) emailLoading = false;
     }

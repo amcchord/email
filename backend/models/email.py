@@ -85,6 +85,10 @@ class Attachment(Base):
 
     email = relationship("Email", back_populates="attachments")
 
+    __table_args__ = (
+        Index("ix_attachments_email_id", "email_id"),
+    )
+
 
 class EmailLabel(Base):
     __tablename__ = "email_labels"

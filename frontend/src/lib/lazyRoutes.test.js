@@ -12,8 +12,10 @@ test('authenticated page normalization accepts known pages and safely falls back
   assert.ok(AUTHENTICATED_PAGES.includes('flow'));
   assert.ok(AUTHENTICATED_PAGES.includes('inbox'));
   assert.ok(AUTHENTICATED_PAGES.includes('at-a-glance'));
+  assert.ok(AUTHENTICATED_PAGES.includes('attachments'));
   assert.equal(normalizeAuthenticatedPage('calendar'), 'calendar');
   assert.equal(normalizeAuthenticatedPage('at-a-glance'), 'at-a-glance');
+  assert.equal(normalizeAuthenticatedPage('attachments'), 'attachments');
   assert.equal(normalizeAuthenticatedPage('standalone-email'), 'flow');
   assert.equal(normalizeAuthenticatedPage('unknown'), 'flow');
   assert.equal(normalizeAuthenticatedPage(null), 'flow');

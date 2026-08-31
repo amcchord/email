@@ -33,6 +33,7 @@
       compose: 'compose',
       calendar: 'calendar',
       contacts: 'contacts',
+      attachments: 'attachments',
       todos: 'todos',
       chat: 'chat',
       'ai-insights': 'ai-insights',
