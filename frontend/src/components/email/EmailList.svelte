@@ -8,6 +8,7 @@
   import { selectedBooleanState } from '../../lib/inboxDataset.js';
   import { formatSnoozeWake } from '../../lib/remindLater.js';
   import { safeLabelColor, visibleUserLabels } from '../../lib/labelWorkflows.js';
+  import { placementReasonLabel } from '../../lib/focusedInbox.js';
 
   let {
     emails = [],
@@ -20,6 +21,7 @@
     searchActive = false,
     loadFailed = false,
     actionsDisabled = false,
+    sectionTotals = null,
     selectionEpoch = 0,
     onSelect = null,
     onFocus = null,
@@ -342,6 +344,7 @@
           {#if searchActive}No mail matches this search
           {:else if mailbox === 'SPAM'}No spam
           {:else if mailbox === 'SNOOZED'}No snoozed emails
+          {:else if sectionTotals}Split Inbox is clear
           {:else}No emails
           {/if}
         </p>
@@ -349,12 +352,42 @@
           {#if searchActive}Edit a filter above or clear the search
           {:else if mailbox === 'SPAM'}Your spam folder is clean
           {:else if mailbox === 'SNOOZED'}Snoozed messages will appear here
+          {:else if sectionTotals}There are no Focused or Other conversations in Inbox
           {:else}This mailbox is empty
           {/if}
         </p>
       </div>
     {:else}
-      {#each emails as email (email.id)}
+      {#if sectionTotals}
+        <div
+          class="sticky top-0 z-10 border-b px-4 py-2.5"
+          style="background: color-mix(in srgb, var(--bg-secondary) 94%, var(--color-accent-500) 6%); border-color: var(--border-color)"
+          data-inbox-section="focused"
+        >
+          <div class="flex items-baseline gap-2">
+            <span class="text-sm font-semibold" style="color: var(--text-primary)">Focused</span>
+            <span class="text-xs tabular-nums" style="color: var(--text-tertiary)">{sectionTotals.focused.toLocaleString()}</span>
+          </div>
+          <p class="mt-0.5 text-[11px]" style="color: var(--text-secondary)">Priority, reply, trusted, and direct conversations</p>
+        </div>
+        {#if sectionTotals.focused === 0}
+          <div class="border-b px-4 py-4 text-xs" style="border-color: var(--border-subtle); color: var(--text-tertiary)">No conversations need focus right now.</div>
+        {/if}
+      {/if}
+      {#each emails as email, emailIndex (email.id)}
+        {#if sectionTotals && email.inbox_placement === 'other' && (emailIndex === 0 || emails[emailIndex - 1]?.inbox_placement !== 'other')}
+          <div
+            class="sticky top-0 z-10 border-y px-4 py-2.5"
+            style="background: var(--bg-tertiary); border-color: var(--border-color)"
+            data-inbox-section="other"
+          >
+            <div class="flex items-baseline gap-2">
+              <span class="text-sm font-semibold" style="color: var(--text-primary)">Other</span>
+              <span class="text-xs tabular-nums" style="color: var(--text-tertiary)">{sectionTotals.other.toLocaleString()}</span>
+            </div>
+            <p class="mt-0.5 text-[11px]" style="color: var(--text-secondary)">Lower-priority conversations · still in Inbox</p>
+          </div>
+        {/if}
         {#if hiddenDigestEmails.has(email.id)}
           <!-- Hidden: part of a digested thread (rendered grouped under header) -->
         {:else if !email.conversation_scope && email.thread_digest_type && seenThreadIds[email.id]}
@@ -552,6 +585,13 @@
                 {#if email.needs_reply}
                   <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300">Needs reply</span>
                 {/if}
+                {#if sectionTotals && placementReasonLabel(email.inbox_placement_reason)}
+                  <span
+                    class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0"
+                    style="background: var(--bg-tertiary); color: var(--text-secondary)"
+                    title="Why this conversation is in {email.inbox_placement === 'other' ? 'Other' : 'Focused'}"
+                  >{placementReasonLabel(email.inbox_placement_reason)}</span>
+                {/if}
                 {#if email.is_subscription}
                   <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium shrink-0 bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300">Subscription</span>
                 {/if}
@@ -571,6 +611,19 @@
           </div>
         {/if}
       {/each}
+      {#if sectionTotals && sectionTotals.other === 0}
+        <div
+          class="border-y px-4 py-2.5"
+          style="background: var(--bg-tertiary); border-color: var(--border-color)"
+          data-inbox-section="other"
+        >
+          <div class="flex items-baseline gap-2">
+            <span class="text-sm font-semibold" style="color: var(--text-primary)">Other</span>
+            <span class="text-xs tabular-nums" style="color: var(--text-tertiary)">0</span>
+          </div>
+          <p class="mt-0.5 text-[11px]" style="color: var(--text-secondary)">No lower-priority conversations · everything remains in Inbox</p>
+        </div>
+      {/if}
 
       <!-- Infinite scroll sentinel -->
       <div bind:this={sentinelEl} class="h-1"></div>

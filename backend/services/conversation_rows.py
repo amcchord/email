@@ -12,11 +12,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import Select, and_, asc, case, desc, func, select
+from sqlalchemy import Select, and_, asc, case, desc, exists, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
+from backend.models.ai import AIAnalysis
 from backend.models.email import Email
+from backend.services.workflow_context import TRUSTED_CONTACTS, delegated_scheduling_sql
+
+
+INBOX_PLACEMENTS = frozenset({"focused", "other"})
+OTHER_PLACEMENT_REASONS = frozenset(
+    {"delegated_scheduling", "subscription", "low_priority"}
+)
 
 
 @dataclass(frozen=True)
@@ -29,6 +37,8 @@ class ConversationRow:
     starred_count: int
     attachment_count: int
     member_labels: list[list[str]]
+    inbox_placement: str | None = None
+    inbox_placement_reason: str | None = None
 
 
 def _conversation_identity(email_id, gmail_thread_id):
@@ -72,21 +82,9 @@ def _ranked_matches(filtered_messages: Select[Any]):
     ).cte("ranked_matching_messages")
 
 
-def conversation_count_statement(filtered_messages: Select[Any]):
+def _conversation_anchors(filtered_messages: Select[Any]):
     ranked = _ranked_matches(filtered_messages)
-    return select(func.count()).select_from(ranked).where(ranked.c.match_rank == 1)
-
-
-def conversation_page_statement(
-    filtered_messages: Select[Any],
-    *,
-    page: int,
-    page_size: int,
-    sort_by: str,
-    sort_order: str,
-):
-    ranked = _ranked_matches(filtered_messages)
-    anchors = (
+    return (
         select(
             ranked.c.anchor_email_id,
             ranked.c.account_id,
@@ -97,6 +95,125 @@ def conversation_page_statement(
         )
         .where(ranked.c.match_rank == 1)
         .cte("conversation_anchors")
+    )
+
+
+def _inbox_placement_reason(email, analysis):
+    """Return one stable reason for the authoritative Inbox anchor.
+
+    This uses only already-persisted analysis and exact deterministic workflow
+    relationships. Missing or lagging analysis stays Focused so background AI
+    work can never silently hide new mail.
+    """
+    sent_email = aliased(Email, flat=True)
+    normalized_thread = func.nullif(func.btrim(email.gmail_thread_id), "")
+    later_sent_reply = exists(
+        select(literal(1))
+        .select_from(sent_email)
+        .where(
+            normalized_thread.is_not(None),
+            sent_email.account_id == email.account_id,
+            sent_email.gmail_thread_id == email.gmail_thread_id,
+            sent_email.is_sent.is_(True),
+            sent_email.is_trash.is_(False),
+            sent_email.date > email.date,
+        )
+        .correlate(email)
+    )
+    priority = func.coalesce(analysis.priority, 0)
+    trusted_addresses = tuple(contact.email.lower() for contact in TRUSTED_CONTACTS)
+    trusted_sender = func.lower(func.btrim(func.coalesce(email.from_address, ""))).in_(
+        trusted_addresses
+    )
+    delegated_scheduling = delegated_scheduling_sql(
+        analysis.conversation_type,
+        email.to_addresses,
+        email.cc_addresses,
+    )
+    active_needs_reply = and_(
+        analysis.needs_reply.is_(True),
+        analysis.needs_reply_ignored.is_not(True),
+        ~later_sent_reply,
+    )
+    return case(
+        (or_(priority >= 2, analysis.category == "urgent"), "high_priority"),
+        (active_needs_reply, "needs_reply"),
+        (trusted_sender, "trusted_contact"),
+        (and_(delegated_scheduling, priority < 2), "delegated_scheduling"),
+        (analysis.is_subscription.is_(True), "subscription"),
+        (analysis.category == "can_ignore", "low_priority"),
+        (analysis.id.is_(None), "unclassified"),
+        else_="direct_or_fyi",
+    )
+
+
+def _placed_conversation_anchors(filtered_messages: Select[Any]):
+    anchors = _conversation_anchors(filtered_messages)
+    reasoned = (
+        select(
+            anchors.c.anchor_email_id,
+            anchors.c.account_id,
+            anchors.c.gmail_thread_id,
+            anchors.c.conversation_identity,
+            anchors.c.matched_date,
+            anchors.c.matched_count,
+            _inbox_placement_reason(Email, AIAnalysis).label("inbox_placement_reason"),
+        )
+        .join(Email, Email.id == anchors.c.anchor_email_id)
+        .outerjoin(AIAnalysis, AIAnalysis.email_id == Email.id)
+        .cte("reasoned_conversation_anchors")
+    )
+    placement = case(
+        (
+            reasoned.c.inbox_placement_reason.in_(OTHER_PLACEMENT_REASONS),
+            "other",
+        ),
+        else_="focused",
+    )
+    return (
+        select(
+            reasoned.c.anchor_email_id,
+            reasoned.c.account_id,
+            reasoned.c.gmail_thread_id,
+            reasoned.c.conversation_identity,
+            reasoned.c.matched_date,
+            reasoned.c.matched_count,
+            placement.label("inbox_placement"),
+            reasoned.c.inbox_placement_reason,
+        )
+        .cte("placed_conversation_anchors")
+    )
+
+
+def conversation_count_statement(
+    filtered_messages: Select[Any],
+    *,
+    inbox_placement: str | None = None,
+):
+    if inbox_placement is None:
+        ranked = _ranked_matches(filtered_messages)
+        return select(func.count()).select_from(ranked).where(ranked.c.match_rank == 1)
+    placed = _placed_conversation_anchors(filtered_messages)
+    return (
+        select(func.count())
+        .select_from(placed)
+        .where(placed.c.inbox_placement == inbox_placement)
+    )
+
+
+def conversation_page_statement(
+    filtered_messages: Select[Any],
+    *,
+    page: int,
+    page_size: int,
+    sort_by: str,
+    sort_order: str,
+    inbox_placement: str | None = None,
+):
+    anchors = (
+        _placed_conversation_anchors(filtered_messages)
+        if inbox_placement is not None
+        else _conversation_anchors(filtered_messages)
     )
     member_identity = _conversation_identity(Email.id, Email.gmail_thread_id)
     aggregates = (
@@ -131,17 +248,22 @@ def conversation_page_statement(
         .cte("conversation_aggregates")
     )
 
-    statement = (
-        select(
-            Email,
-            anchors.c.conversation_identity,
-            anchors.c.matched_count,
-            aggregates.c.member_count,
-            aggregates.c.unread_count,
-            aggregates.c.starred_count,
-            aggregates.c.attachment_count,
-            aggregates.c.member_labels,
+    selected_columns = [
+        Email,
+        anchors.c.conversation_identity,
+        anchors.c.matched_count,
+        aggregates.c.member_count,
+        aggregates.c.unread_count,
+        aggregates.c.starred_count,
+        aggregates.c.attachment_count,
+        aggregates.c.member_labels,
+    ]
+    if inbox_placement is not None:
+        selected_columns.extend(
+            [anchors.c.inbox_placement, anchors.c.inbox_placement_reason]
         )
+    statement = (
+        select(*selected_columns)
         .options(selectinload(Email.ai_analysis))
         .join(anchors, anchors.c.anchor_email_id == Email.id)
         .join(
@@ -152,6 +274,8 @@ def conversation_page_statement(
             ),
         )
     )
+    if inbox_placement is not None:
+        statement = statement.where(anchors.c.inbox_placement == inbox_placement)
 
     allowed = {"date", "subject", "sender", "is_read", "has_attachments"}
     selected_sort = sort_by if sort_by in allowed else "date"
@@ -182,9 +306,20 @@ async def load_conversation_page(
     page_size: int,
     sort_by: str,
     sort_order: str,
+    inbox_placement: str | None = None,
 ) -> tuple[list[ConversationRow], int]:
     """Return one exact row per matching account/thread plus exact total."""
-    total = int(await db.scalar(conversation_count_statement(filtered_messages)) or 0)
+    if inbox_placement is not None and inbox_placement not in INBOX_PLACEMENTS:
+        raise ValueError("Inbox placement must be focused or other")
+    total = int(
+        await db.scalar(
+            conversation_count_statement(
+                filtered_messages,
+                inbox_placement=inbox_placement,
+            )
+        )
+        or 0
+    )
     if total == 0:
         return [], 0
     result = await db.execute(
@@ -194,6 +329,7 @@ async def load_conversation_page(
             page_size=page_size,
             sort_by=sort_by,
             sort_order=sort_order,
+            inbox_placement=inbox_placement,
         )
     )
     rows = [
@@ -206,6 +342,12 @@ async def load_conversation_page(
             starred_count=int(row.starred_count),
             attachment_count=int(row.attachment_count),
             member_labels=[list(labels or []) for labels in (row.member_labels or [])],
+            inbox_placement=(
+                str(row.inbox_placement) if inbox_placement is not None else None
+            ),
+            inbox_placement_reason=(
+                str(row.inbox_placement_reason) if inbox_placement is not None else None
+            ),
         )
         for row in result.all()
     ]

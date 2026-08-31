@@ -2,7 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy import and_, select, func, desc, asc, or_, literal, tuple_
-from typing import Optional
+from typing import Annotated, Optional
 from uuid import UUID
 from backend.database import get_db
 from backend.models.user import User
@@ -612,10 +612,33 @@ async def list_conversations(
     exclude_ai_category: Optional[str] = None,
     ai_email_type: Optional[str] = None,
     needs_reply: Optional[bool] = None,
+    inbox_placement: Annotated[
+        Optional[str], Query(pattern="^(focused|other)$")
+    ] = None,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     """List one authoritative row per exact owned account/conversation."""
+    placement_conflicts = any(
+        value is not None
+        for value in (
+            label,
+            search,
+            is_read,
+            is_starred,
+            ai_category,
+            exclude_ai_category,
+            ai_email_type,
+            needs_reply,
+        )
+    )
+    if inbox_placement is not None and (
+        mailbox != "INBOX" or placement_conflicts
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Inbox placement is only available for the standard Inbox",
+        )
     account_result = await db.execute(
         select(
             GoogleAccount.id,
@@ -656,6 +679,7 @@ async def list_conversations(
         page_size=page_size,
         sort_by=sort_by,
         sort_order=sort_order,
+        inbox_placement=inbox_placement,
     )
 
     from backend.models.ai import ThreadDigest
@@ -760,6 +784,8 @@ async def list_conversations(
             thread_digest_outcome=digest.resolved_outcome if digest else None,
             thread_digest_resolved=digest.is_resolved if digest else None,
             thread_digest_count=digest.message_count if digest else None,
+            inbox_placement=row.inbox_placement,
+            inbox_placement_reason=row.inbox_placement_reason,
         ))
 
     total_pages = (total + page_size - 1) // page_size if total else 0

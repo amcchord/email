@@ -58,7 +58,9 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'inbox.move',     key: 'v',       label: 'Move to label',         context: 'inbox', category: 'Inbox', keywords: ['folder', 'file'] },
   { id: 'inbox.viewMode', key: 'Shift+v', label: 'Toggle table/column',   context: 'inbox', category: 'Inbox' },
   { id: 'inbox.sidebar',  key: '[',       label: 'Toggle sidebar',        context: 'inbox', category: 'Inbox' },
-  { id: 'inbox.focused',  key: 'Shift+f', label: 'Toggle focused filter', context: 'inbox', category: 'Inbox' },
+  { id: 'inbox.focused',  key: 'Shift+f', label: 'Toggle Split Inbox',     context: 'inbox', category: 'Inbox' },
+  { id: 'inbox.nextSection', key: 'Shift+j', label: 'Next inbox section', context: 'inbox', category: 'Inbox' },
+  { id: 'inbox.prevSection', key: 'Shift+k', label: 'Previous inbox section', context: 'inbox', category: 'Inbox' },
   { id: 'inbox.undo',     key: 'z',       label: 'Undo last email action', context: 'inbox', category: 'Inbox' },
 
   // ── Flow ─────────────────────────────────────────────────────────

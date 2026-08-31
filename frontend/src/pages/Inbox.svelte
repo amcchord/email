@@ -43,6 +43,14 @@
     nextConversationFocus,
     normalizeConversationList,
   } from '../lib/conversationInbox.js';
+  import {
+    adjustInboxSectionTotals,
+    combineInboxSections,
+    isSplitInboxActive,
+    mergeInboxSectionPages,
+    nextInboxSectionFocus,
+    normalizeInboxSectionResult,
+  } from '../lib/focusedInbox.js';
   import EmailList from '../components/email/EmailList.svelte';
   import EmailTable from '../components/email/EmailTable.svelte';
   import EmailView from '../components/email/EmailView.svelte';
@@ -116,6 +124,7 @@
   let snoozeTarget = $state(null);
   let snoozeBusyIds = $state(new Set());
   let labelPicker = $state(null);
+  let focusSectionTotals = $state(null);
 
   function registerEmailViewTransitionGuard(guard) {
     emailViewTransitionGuard = typeof guard === 'function' ? guard : null;
@@ -239,6 +248,16 @@
       'inbox.focused': () => {
         hideIgnored.update(v => !v);
       },
+      'inbox.nextSection': {
+        run: () => navigateInboxSection(1),
+        isEnabled: () => Boolean(focusSectionTotals && get(emails).length > 0),
+        disabledReason: 'Split Inbox is not active',
+      },
+      'inbox.prevSection': {
+        run: () => navigateInboxSection(-1),
+        isEnabled: () => Boolean(focusSectionTotals && get(emails).length > 0),
+        disabledReason: 'Split Inbox is not active',
+      },
       'inbox.undo': {
         run: runLatestUndo,
         isEnabled: () => Boolean(latestUndo && latestUndo.expiresAt > Date.now()),
@@ -301,6 +320,7 @@
     focusedEmailId = null;
     emailLoading = false;
     loadingMore = false;
+    focusSectionTotals = null;
     emailsLoading.set(false);
   });
 
@@ -324,6 +344,22 @@
       } else {
         queueMicrotask(() => focusEmailRow(document.querySelector('.inbox-page'), nextId));
       }
+    }
+  }
+
+  async function navigateInboxSection(direction) {
+    if (!inboxSessionIsCurrent() || !datasetAuthoritative || !focusSectionTotals) return;
+    const nextId = nextInboxSectionFocus(
+      get(emails),
+      focusedEmailId || get(selectedEmailId),
+      direction,
+    );
+    if (nextId == null) return;
+    focusedEmailId = nextId;
+    if (get(selectedEmailId)) {
+      await handleSelect(nextId);
+    } else {
+      queueMicrotask(() => focusEmailRow(document.querySelector('.inbox-page'), nextId));
     }
   }
 
@@ -479,15 +515,31 @@
             params.ai_email_type = sf.value;
           }
         }
-        if (snapshot.hideIgnored) {
-          params.exclude_ai_category = 'can_ignore';
-        }
         const useConversations = Boolean(snapshot.search)
           || (!sf && snapshot.mailbox !== 'DRAFTS');
         resultUsesConversations = useConversations;
-        result = useConversations
-          ? normalizeConversationList(await api.listConversations(params))
-          : await api.listEmails(params);
+        if (isSplitInboxActive(snapshot)) {
+          const sectionPageSize = Math.max(1, Math.ceil(snapshot.pageSize / 2));
+          const sectionParams = { ...params, page_size: sectionPageSize };
+          const [focusedPayload, otherPayload] = await Promise.all([
+            api.listConversations({ ...sectionParams, inbox_placement: 'focused' }),
+            api.listConversations({ ...sectionParams, inbox_placement: 'other' }),
+          ]);
+          const focused = normalizeInboxSectionResult(
+            normalizeConversationList(focusedPayload),
+            'focused',
+          );
+          const other = normalizeInboxSectionResult(
+            normalizeConversationList(otherPayload),
+            'other',
+          );
+          result = combineInboxSections(focused, other);
+          resultUsesConversations = true;
+        } else {
+          result = useConversations
+            ? normalizeConversationList(await api.listConversations(params))
+            : await api.listEmails(params);
+        }
       }
 
       const activeSnoozesExcludedByServer = !sf
@@ -510,9 +562,14 @@
 
       if (append) {
         emails.update(existing => {
-          const existingIds = new Set(existing.map(e => e.id));
-          const newOnes = result.emails.filter(e => !existingIds.has(e.id));
-          return [...existing, ...newOnes];
+          if (result.sectionTotals) {
+            return mergeInboxSectionPages(existing, result.emails);
+          }
+          const existingIds = new Set(existing.map(email => email.id));
+          return [
+            ...existing,
+            ...result.emails.filter(email => !existingIds.has(email.id)),
+          ];
         });
       } else {
         emails.set(result.emails);
@@ -530,8 +587,11 @@
           selectedEmailId.set(directOpenEmailId);
         }
       }
+      focusSectionTotals = result.sectionTotals || null;
       emailsTotal.set(result.total);
-      hasMore = (snapshot.page * snapshot.pageSize) < result.total;
+      hasMore = typeof result.hasMore === 'boolean'
+        ? result.hasMore
+        : (snapshot.page * snapshot.pageSize) < result.total;
       return true;
     } catch (err) {
       if (!listRequestIsCurrent(requestId)) return false;
@@ -709,7 +769,18 @@
       && currentDatasetSnapshot().key === datasetKey;
   }
 
-  function restoreOptimisticAction({ action, snapshot, optimistic, detailBefore, threadBefore, removedCount, gmailLabelId, focusedBefore }) {
+  function restoreOptimisticAction({
+    action,
+    snapshot,
+    optimistic,
+    detailBefore,
+    threadBefore,
+    removedCount,
+    gmailLabelId,
+    focusedBefore,
+    sectionTotalsBefore,
+    hasMoreBefore,
+  }) {
     emails.update(current => restoreInboxAction(
       current,
       snapshot,
@@ -718,7 +789,8 @@
       { gmailLabelId },
     ));
     if (removedCount > 0) emailsTotal.update(total => total + removedCount);
-    hasMore = get(emails).length < get(emailsTotal);
+    focusSectionTotals = sectionTotalsBefore;
+    hasMore = hasMoreBefore;
     if (get(selectedEmailId) === optimistic.selectedId) {
       selectedEmailId.set(snapshot.selectedId);
     }
@@ -915,6 +987,10 @@
     const threadBefore = selectedThread;
     const focusedBefore = focusedEmailId;
     const emailsBefore = get(emails);
+    const sectionTotalsBefore = focusSectionTotals
+      ? { ...focusSectionTotals }
+      : null;
+    const hasMoreBefore = hasMore;
     const snapshot = captureInboxAction(emailsBefore, get(selectedEmailId), uniqueIds);
     const optimistic = optimisticInboxAction({
       emails: emailsBefore,
@@ -929,6 +1005,13 @@
 
     emails.set(optimistic.emails);
     if (removedCount > 0) emailsTotal.update(total => Math.max(0, total - removedCount));
+    if (removedCount > 0 && focusSectionTotals) {
+      focusSectionTotals = adjustInboxSectionTotals(
+        focusSectionTotals,
+        snapshot.items,
+        -1,
+      );
+    }
     if (optimistic.removed) {
       // Offset pagination cannot safely accept a response computed before a
       // row-removing action. Discard any append and restart from page one once
@@ -984,6 +1067,8 @@
       removedCount,
       snapshot,
       scope,
+      sectionTotalsBefore,
+      hasMoreBefore,
     };
     const requestKey = idempotencyKey();
     let releaseQueue = null;
@@ -1115,6 +1200,9 @@
 
   function removeEmailOptimistically(target) {
     const list = get(emails);
+    const sectionTotalsBefore = focusSectionTotals
+      ? { ...focusSectionTotals }
+      : null;
     const emailId = Number(target?.id ?? target);
     const identity = {
       email_id: emailId,
@@ -1133,6 +1221,13 @@
     if (conversation.matched.length > 0) {
       emails.set(conversation.remaining);
       emailsTotal.update(total => Math.max(0, total - conversation.matched.length));
+      if (focusSectionTotals) {
+        focusSectionTotals = adjustInboxSectionTotals(
+          focusSectionTotals,
+          conversation.matched.map(entry => entry.email),
+          -1,
+        );
+      }
     }
     const removedIds = new Set(conversation.matched.map(entry => entry.email.id));
     const selectedId = get(selectedEmailId);
@@ -1159,6 +1254,7 @@
       nextFocusId,
       removed: conversation.matched.length > 0,
       selectedId,
+      sectionTotalsBefore,
       wasSelected,
     };
   }
@@ -1245,6 +1341,7 @@
       return next;
     });
     emailsTotal.update(total => total + missing.length);
+    focusSectionTotals = snapshot.sectionTotalsBefore || null;
     if (snapshot.wasSelected) {
       selectedEmailId.set(snapshot.selectedId);
       selectedEmail = snapshot.detail;
@@ -1584,6 +1681,7 @@
           searchActive={!!$searchQuery}
           loadFailed={datasetError && !datasetAuthoritative && $emails.length === 0}
           actionsDisabled={!datasetAuthoritative}
+          sectionTotals={focusSectionTotals}
           {selectionEpoch}
           onSelect={handleSelect}
           onFocus={handleRowFocus}
@@ -1650,6 +1748,7 @@
         searchActive={!!$searchQuery}
         loadFailed={datasetError && !datasetAuthoritative && $emails.length === 0}
         actionsDisabled={!datasetAuthoritative}
+        sectionTotals={focusSectionTotals}
         {selectionEpoch}
         onSelect={handleSelect}
         onFocus={handleRowFocus}

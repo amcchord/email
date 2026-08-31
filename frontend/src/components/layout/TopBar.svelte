@@ -5,7 +5,7 @@
   import { activeShortcuts, formatComboForDisplay, openCommandPalette } from '../../lib/shortcutStore.js';
   import { api } from '../../lib/api.js';
   import { preloadAuthenticatedPage } from '../../lib/lazyRoutes.js';
-  import { sidebarCollapsed, currentPage, currentMailbox, viewMode, overallSyncState, syncStatus, showToast, forceSyncPoll, selectedAccountId, accounts, accountColorMap, hideIgnored, transitionAuthenticatedSession, createAuthenticatedSessionGuard, user } from '../../lib/stores.js';
+  import { sidebarCollapsed, currentPage, currentMailbox, viewMode, overallSyncState, syncStatus, showToast, forceSyncPoll, selectedAccountId, accounts, accountColorMap, hideIgnored, searchQuery, smartFilter, transitionAuthenticatedSession, createAuthenticatedSessionGuard, user } from '../../lib/stores.js';
   import EmailSearchBox from '../email/EmailSearchBox.svelte';
 
   let syncDropdownOpen = $state(false);
@@ -23,6 +23,10 @@
   let selectedAccountColor = $derived(
     selectedAccount ? $accountColorMap[selectedAccount.email] : null
   );
+  let splitInboxAvailable = $derived(
+    $currentMailbox === 'INBOX' && !$searchQuery && !$smartFilter
+  );
+  let splitInboxActive = $derived(splitInboxAvailable && $hideIgnored);
   let countdownText = $state('');
   let countdownInterval = null;
   let sessionGuard = null;
@@ -343,7 +347,7 @@
 
   <!-- Center: Contextual content -->
   {#if $currentPage === 'inbox'}
-    <!-- Email tab: Focused toggle + search + view mode -->
+    <!-- Email tab: Split Inbox toggle + search + view mode -->
     <div class="inbox-tools flex items-center gap-2 flex-1 min-w-0">
       <!-- Sidebar toggle (only on email tab) -->
       <button
@@ -355,16 +359,22 @@
         <Icon name="menu" size={16} />
       </button>
 
-      <!-- Focused toggle -->
+      <!-- Split Inbox toggle -->
       <button
-        onclick={() => hideIgnored.update(v => !v)}
-        class="focused-toggle min-h-11 flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-fast shrink-0 {$hideIgnored ? 'bg-accent-500/15' : ''}"
-        style="color: {$hideIgnored ? 'var(--color-accent-600)' : 'var(--text-tertiary)'}"
-        title="{$hideIgnored ? 'Showing focused emails (hiding low priority)' : 'Click to hide low priority emails'}"
-        aria-label="Toggle hide low priority emails"
+        onclick={() => { if (splitInboxAvailable) hideIgnored.update(value => !value); }}
+        disabled={!splitInboxAvailable}
+        class="focused-toggle min-h-11 flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-medium transition-fast shrink-0 disabled:opacity-40 disabled:cursor-not-allowed {splitInboxActive ? 'bg-accent-500/15' : ''}"
+        style="color: {splitInboxActive ? 'var(--color-accent-600)' : 'var(--text-tertiary)'}"
+        title={splitInboxAvailable
+          ? (splitInboxActive
+            ? 'Showing Focused and Other sections. No mail is moved in Gmail.'
+            : 'Split Inbox into Focused and Other. No mail is moved in Gmail.')
+          : 'Split Inbox is available in the standard Inbox'}
+        aria-label="Toggle Split Inbox"
+        aria-pressed={splitInboxActive}
       >
-        <Icon name="filter" size={14} />
-        <span class="focused-label">Focused</span>
+        <Icon name="columns" size={14} />
+        <span class="focused-label">Split</span>
       </button>
 
       <!-- Active account filter chip -->

@@ -101,7 +101,7 @@ test('active search broadens to regular mail while preserving account scope', ()
   assert.equal(snapshot.hideIgnored, false);
 });
 
-test('clearing search restores the caller mailbox and focused filters', () => {
+test('Split Inbox is inactive outside the literal unfiltered Inbox', () => {
   const smartFilter = { type: 'needs_reply' };
   const snapshot = normalizeInboxDatasetSnapshot({
     mailbox: 'SENT',
@@ -112,6 +112,17 @@ test('clearing search restores the caller mailbox and focused filters', () => {
 
   assert.equal(snapshot.mailbox, 'SENT');
   assert.equal(snapshot.smartFilter, smartFilter);
+  assert.equal(snapshot.hideIgnored, false);
+});
+
+test('Split Inbox stays active for the literal unfiltered Inbox', () => {
+  const snapshot = normalizeInboxDatasetSnapshot({
+    mailbox: 'INBOX',
+    hideIgnored: true,
+  });
+
+  assert.equal(snapshot.mailbox, 'INBOX');
+  assert.equal(snapshot.smartFilter, null);
   assert.equal(snapshot.hideIgnored, true);
 });
 

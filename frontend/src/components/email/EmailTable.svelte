@@ -8,6 +8,7 @@
   import { selectedBooleanState } from '../../lib/inboxDataset.js';
   import { formatSnoozeWake } from '../../lib/remindLater.js';
   import { safeLabelColor, visibleUserLabels } from '../../lib/labelWorkflows.js';
+  import { placementReasonLabel } from '../../lib/focusedInbox.js';
 
   let {
     emails = [],
@@ -20,6 +21,7 @@
     searchActive = false,
     loadFailed = false,
     actionsDisabled = false,
+    sectionTotals = null,
     selectionEpoch = 0,
     onSelect = null,
     onFocus = null,
@@ -381,12 +383,15 @@
         <p class="text-sm font-medium" style="color: var(--text-primary)">
           {#if searchActive}No mail matches this search
           {:else if mailbox === 'SNOOZED'}No snoozed emails
+          {:else if sectionTotals}Split Inbox is clear
           {:else}No emails{/if}
         </p>
         {#if searchActive}
           <p class="text-xs mt-1" style="color: var(--text-secondary)">Edit a filter above or clear the search</p>
         {:else if mailbox === 'SNOOZED'}
           <p class="text-xs mt-1" style="color: var(--text-secondary)">Messages you snooze will wait here until their reminder time</p>
+        {:else if sectionTotals}
+          <p class="text-xs mt-1" style="color: var(--text-secondary)">There are no Focused or Other conversations in Inbox</p>
         {/if}
       </div>
     {:else}
@@ -441,7 +446,40 @@
           </tr>
         </thead>
         <tbody>
-          {#each emails as email (email.id)}
+          {#if sectionTotals}
+            <tr data-inbox-section="focused">
+              <th
+                colspan={showAccountCol ? 8 : 7}
+                class="sticky z-10 border-b px-4 py-2.5 text-left"
+                style="top: 37px; background: color-mix(in srgb, var(--bg-secondary) 94%, var(--color-accent-500) 6%); border-color: var(--border-color)"
+                scope="rowgroup"
+              >
+                <span class="text-sm font-semibold" style="color: var(--text-primary)">Focused</span>
+                <span class="ml-2 text-xs tabular-nums font-normal" style="color: var(--text-tertiary)">{sectionTotals.focused.toLocaleString()}</span>
+                <span class="ml-3 text-[11px] font-normal" style="color: var(--text-secondary)">Priority, reply, trusted, and direct conversations</span>
+              </th>
+            </tr>
+            {#if sectionTotals.focused === 0}
+              <tr>
+                <td colspan={showAccountCol ? 8 : 7} class="border-b px-4 py-4 text-xs" style="border-color: var(--border-subtle); color: var(--text-tertiary)">No conversations need focus right now.</td>
+              </tr>
+            {/if}
+          {/if}
+          {#each emails as email, emailIndex (email.id)}
+            {#if sectionTotals && email.inbox_placement === 'other' && (emailIndex === 0 || emails[emailIndex - 1]?.inbox_placement !== 'other')}
+              <tr data-inbox-section="other">
+                <th
+                  colspan={showAccountCol ? 8 : 7}
+                  class="sticky z-10 border-y px-4 py-2.5 text-left"
+                  style="top: 37px; background: var(--bg-tertiary); border-color: var(--border-color)"
+                  scope="rowgroup"
+                >
+                  <span class="text-sm font-semibold" style="color: var(--text-primary)">Other</span>
+                  <span class="ml-2 text-xs tabular-nums font-normal" style="color: var(--text-tertiary)">{sectionTotals.other.toLocaleString()}</span>
+                  <span class="ml-3 text-[11px] font-normal" style="color: var(--text-secondary)">Lower-priority conversations · still in Inbox</span>
+                </th>
+              </tr>
+            {/if}
             {#if hiddenDigestEmails.has(email.id)}
               <!-- Hidden: part of a digested thread (rendered grouped under header) -->
             {:else if !email.conversation_scope && email.thread_digest_type && seenThreadIds[email.id]}
@@ -656,6 +694,13 @@
                         Needs reply
                       </span>
                     {/if}
+                    {#if sectionTotals && placementReasonLabel(email.inbox_placement_reason)}
+                      <span
+                        class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap"
+                        style="background: var(--bg-tertiary); color: var(--text-secondary)"
+                        title="Why this conversation is in {email.inbox_placement === 'other' ? 'Other' : 'Focused'}"
+                      >{placementReasonLabel(email.inbox_placement_reason)}</span>
+                    {/if}
                     {#if email.is_subscription}
                       <span class="text-[10px] px-1.5 py-0.5 rounded-full font-medium whitespace-nowrap bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300">
                         Subscription
@@ -684,6 +729,20 @@
               </tr>
             {/if}
           {/each}
+          {#if sectionTotals && sectionTotals.other === 0}
+            <tr data-inbox-section="other">
+              <th
+                colspan={showAccountCol ? 8 : 7}
+                class="border-y px-4 py-2.5 text-left"
+                style="background: var(--bg-tertiary); border-color: var(--border-color)"
+                scope="rowgroup"
+              >
+                <span class="text-sm font-semibold" style="color: var(--text-primary)">Other</span>
+                <span class="ml-2 text-xs tabular-nums font-normal" style="color: var(--text-tertiary)">0</span>
+                <span class="ml-3 text-[11px] font-normal" style="color: var(--text-secondary)">No lower-priority conversations · everything remains in Inbox</span>
+              </th>
+            </tr>
+          {/if}
         </tbody>
       </table>
 

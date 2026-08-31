@@ -1,11 +1,12 @@
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 
 from backend.models.email import Email
-from backend.routers.emails import _conversation_filter_statement
+from backend.routers.emails import _conversation_filter_statement, list_conversations
 from backend.services.conversation_rows import (
     conversation_count_statement,
     conversation_page_statement,
@@ -73,6 +74,56 @@ def test_conversation_sort_uses_aggregate_state_for_read_and_attachment():
 
     assert "conversation_aggregates.unread_count ASC" in unread_sql
     assert "conversation_aggregates.attachment_count DESC" in attachment_sql
+
+
+def test_inbox_placement_is_chosen_after_one_authoritative_thread_anchor():
+    filtered = select(Email).where(Email.account_id.in_([7, 8]))
+    count_sql = str(conversation_count_statement(
+        filtered,
+        inbox_placement="focused",
+    ).compile(dialect=postgresql.dialect()))
+    page_sql = str(conversation_page_statement(
+        filtered,
+        page=1,
+        page_size=25,
+        sort_by="date",
+        sort_order="desc",
+        inbox_placement="other",
+    ).compile(dialect=postgresql.dialect()))
+
+    for sql in (count_sql, page_sql):
+        assert "conversation_anchors" in sql
+        assert "reasoned_conversation_anchors" in sql
+        assert "placed_conversation_anchors" in sql
+        assert sql.index("match_rank =") < sql.index("reasoned_conversation_anchors")
+        assert "LEFT OUTER JOIN ai_analyses" in sql
+        assert "placed_conversation_anchors.inbox_placement =" in sql
+        assert "emails_1.account_id = emails.account_id" in sql
+        assert "emails_1.gmail_thread_id = emails.gmail_thread_id" in sql
+
+
+@pytest.mark.asyncio
+async def test_inbox_placement_rejects_mailbox_or_filter_combinations_before_db_work():
+    user = SimpleNamespace(id=42)
+
+    with pytest.raises(HTTPException) as non_inbox:
+        await list_conversations(
+            mailbox="SENT",
+            inbox_placement="focused",
+            db=None,
+            user=user,
+        )
+    assert getattr(non_inbox.value, "status_code", None) == 422
+
+    with pytest.raises(HTTPException) as filtered:
+        await list_conversations(
+            mailbox="INBOX",
+            ai_category="urgent",
+            inbox_placement="other",
+            db=None,
+            user=user,
+        )
+    assert getattr(filtered.value, "status_code", None) == 422
 
 
 @pytest.mark.asyncio

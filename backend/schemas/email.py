@@ -141,6 +141,19 @@ class ConversationSummary(BaseModel):
     thread_digest_outcome: Optional[str] = None
     thread_digest_resolved: Optional[bool] = None
     thread_digest_count: Optional[int] = None
+    inbox_placement: Optional[Literal["focused", "other"]] = None
+    inbox_placement_reason: Optional[
+        Literal[
+            "high_priority",
+            "needs_reply",
+            "trusted_contact",
+            "delegated_scheduling",
+            "subscription",
+            "low_priority",
+            "unclassified",
+            "direct_or_fyi",
+        ]
+    ] = None
 
 
 class ConversationListResponse(BaseModel):

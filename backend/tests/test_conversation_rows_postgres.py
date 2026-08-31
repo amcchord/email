@@ -8,7 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.models.account import GoogleAccount
-from backend.models.ai import ThreadDigest
+from backend.models.ai import AIAnalysis, ThreadDigest
 from backend.models.email import Email
 from backend.models.user import User
 from backend.routers.emails import list_conversations
@@ -205,5 +205,190 @@ async def test_conversation_route_groups_before_pagination_and_isolates_accounts
         assert first.label_coverage["INBOX"] == "some"
         assert first.thread_digest_summary == "First account digest"
         assert second.thread_digest_summary == "Second account digest"
+    finally:
+        await engine.dispose()
+
+
+async def test_split_inbox_places_each_conversation_once_from_its_newest_anchor():
+    engine, sessions = _session_factory()
+    try:
+        await _reset_database(engine)
+        async with sessions() as db:
+            user = User(username="generated-focused-inbox", is_admin=False, is_active=True)
+            db.add(user)
+            await db.flush()
+            account = GoogleAccount(
+                user_id=user.id,
+                email="focused-owner@example.test",
+                is_active=True,
+            )
+            db.add(account)
+            await db.flush()
+
+            def message(message_id, thread_id, subject, date, sender="sender@example.test", **values):
+                return Email(
+                    account_id=account.id,
+                    gmail_message_id=message_id,
+                    gmail_thread_id=thread_id,
+                    subject=subject,
+                    from_address=sender,
+                    date=date,
+                    labels=values.pop("labels", ["INBOX"]),
+                    is_read=values.pop("is_read", False),
+                    is_starred=False,
+                    is_trash=False,
+                    is_spam=False,
+                    is_draft=False,
+                    is_sent=values.pop("is_sent", False),
+                    has_attachments=False,
+                    **values,
+                )
+
+            mixed_older = message(
+                "generated-mixed-older",
+                "mixed-thread",
+                "Generated mixed older",
+                NOW - timedelta(hours=8),
+            )
+            mixed_newer = message(
+                "generated-mixed-newer",
+                "mixed-thread",
+                "Generated mixed newest",
+                NOW - timedelta(hours=7),
+            )
+            subscription = message(
+                "generated-subscription",
+                "subscription-thread",
+                "Generated subscription",
+                NOW - timedelta(hours=6),
+            )
+            delegated = message(
+                "generated-delegated",
+                "delegated-thread",
+                "Generated delegated scheduling",
+                NOW - timedelta(hours=5),
+                cc_addresses=[{"address": "andrea@mcchord.net"}],
+            )
+            unclassified = message(
+                "generated-unclassified",
+                "unclassified-thread",
+                "Generated new mail",
+                NOW - timedelta(hours=4),
+            )
+            replied = message(
+                "generated-needs-reply",
+                "replied-thread",
+                "Generated already answered",
+                NOW - timedelta(hours=3),
+            )
+            sent_reply = message(
+                "generated-sent-reply",
+                "replied-thread",
+                "Generated reply",
+                NOW - timedelta(hours=2),
+                labels=["SENT"],
+                is_read=True,
+                is_sent=True,
+            )
+            trusted = message(
+                "generated-trusted",
+                "trusted-thread",
+                "Generated trusted sender",
+                NOW - timedelta(hours=1),
+                sender="andrea@mcchord.net",
+            )
+            db.add_all([
+                mixed_older,
+                mixed_newer,
+                subscription,
+                delegated,
+                unclassified,
+                replied,
+                sent_reply,
+                trusted,
+            ])
+            await db.flush()
+            db.add_all([
+                AIAnalysis(
+                    email_id=mixed_older.id,
+                    category="can_ignore",
+                    priority=0,
+                    is_subscription=True,
+                ),
+                AIAnalysis(
+                    email_id=mixed_newer.id,
+                    category="urgent",
+                    priority=2,
+                    is_subscription=True,
+                ),
+                AIAnalysis(
+                    email_id=subscription.id,
+                    category="can_ignore",
+                    priority=0,
+                    is_subscription=True,
+                ),
+                AIAnalysis(
+                    email_id=delegated.id,
+                    category="fyi",
+                    priority=1,
+                    conversation_type="scheduling",
+                ),
+                AIAnalysis(
+                    email_id=replied.id,
+                    category="awaiting_reply",
+                    priority=1,
+                    needs_reply=True,
+                ),
+                AIAnalysis(
+                    email_id=trusted.id,
+                    category="can_ignore",
+                    priority=0,
+                    is_subscription=True,
+                ),
+            ])
+            await db.commit()
+            user_id = user.id
+
+        async with sessions() as db:
+            focused = await list_conversations(
+                mailbox="INBOX",
+                page=1,
+                page_size=50,
+                inbox_placement="focused",
+                db=db,
+                user=type("OwnedUser", (), {"id": user_id})(),
+            )
+            other = await list_conversations(
+                mailbox="INBOX",
+                page=1,
+                page_size=50,
+                inbox_placement="other",
+                db=db,
+                user=type("OwnedUser", (), {"id": user_id})(),
+            )
+
+        focused_by_subject = {row.subject: row for row in focused.conversations}
+        other_by_subject = {row.subject: row for row in other.conversations}
+        assert focused.total == 4
+        assert other.total == 2
+        assert set(focused_by_subject) == {
+            "Generated mixed newest",
+            "Generated new mail",
+            "Generated already answered",
+            "Generated trusted sender",
+        }
+        assert set(other_by_subject) == {
+            "Generated subscription",
+            "Generated delegated scheduling",
+        }
+        assert focused_by_subject["Generated mixed newest"].inbox_placement_reason == "high_priority"
+        assert focused_by_subject["Generated new mail"].inbox_placement_reason == "unclassified"
+        assert focused_by_subject["Generated already answered"].inbox_placement_reason == "direct_or_fyi"
+        assert focused_by_subject["Generated trusted sender"].inbox_placement_reason == "trusted_contact"
+        assert other_by_subject["Generated subscription"].inbox_placement_reason == "subscription"
+        assert other_by_subject["Generated delegated scheduling"].inbox_placement_reason == "delegated_scheduling"
+        assert {row.conversation_key for row in focused.conversations}.isdisjoint(
+            {row.conversation_key for row in other.conversations}
+        )
     finally:
         await engine.dispose()

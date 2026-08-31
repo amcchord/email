@@ -75,12 +75,17 @@ export function normalizeInboxDatasetSnapshot({
 } = {}) {
   const normalizedSearch = String(search || '').trim();
   const searching = normalizedSearch.length > 0;
+  const normalizedSmartFilter = searching ? null : smartFilter;
+  const splitInbox = !searching
+    && mailbox === 'INBOX'
+    && !normalizedSmartFilter
+    && Boolean(hideIgnored);
   const snapshot = {
     mailbox: searching ? 'ALL' : mailbox,
     accountId,
     search: normalizedSearch,
-    smartFilter: searching ? null : smartFilter,
-    hideIgnored: searching ? false : Boolean(hideIgnored),
+    smartFilter: normalizedSmartFilter,
+    hideIgnored: splitInbox,
     pageSize,
     page,
   };
