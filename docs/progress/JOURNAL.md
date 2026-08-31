@@ -3,7 +3,7 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
-## 2026-08-30 — Safe recipient autocomplete candidate
+## 2026-08-30 — Safe recipient autocomplete
 
 ### Scope
 
@@ -42,13 +42,21 @@ calls and migrations, and use the bounded D-041 release cadence.
 
 ### Production Actions
 
-- Pending. No production file, process, database, provider, mail, or calendar
-  state changed during candidate development.
+- Fast-forwarded GitHub and production to exact application/runtime
+  `b955c6766203661f0efa6db916447adfb67f0cc6`, replaced only `mailapp`, and
+  built the same 598 frontend modules. No dependency change, database backup,
+  migration, worker/Caddy restart, provider request, or mail/calendar action was
+  required.
+- The retired API process hit the host's known graceful-stop timeout.
+  Replacement PID 2139380 is active with `NRestarts=0`; all seven services and
+  public health are healthy, Alembic remains `d7e8f9a0b1c2 (head)`, anonymous
+  recipient lookup is 401, and no warning-or-higher entry exists after the
+  replacement boundary.
 
 ### Next
 
-Complete the bounded acceptance and final gate, deploy the exact candidate,
-then continue writing acceleration with inline semicolon snippet expansion.
+Continue writing acceleration with inline semicolon snippet expansion using
+the same focused-iteration, single-review, single-final-gate cadence.
 
 ## 2026-08-30 — Personal Snippets
 

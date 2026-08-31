@@ -2,8 +2,8 @@
 
 ## Outcome
 
-Recipient autocomplete is a migration-free Compose improvement prepared from
-baseline `8b0aa873a1089093783b0bd08d5964b508e1b186`. To, Cc, and Bcc now use one
+Recipient autocomplete is complete at migration-free application/runtime
+commit `b955c6766203661f0efa6db916447adfb67f0cc6`. To, Cc, and Bcc now use one
 account-safe, keyboard-first chip workflow that preserves quoted display names,
 manual entry, durable drafts, and exact outbound recipients.
 
@@ -87,5 +87,18 @@ recipient arrays remain compatible with both boundaries.
 
 ## Production result
 
-Pending deployment. Production has not been mutated during development or
-generated browser acceptance.
+- GitHub and production deployed exact application/runtime
+  `b955c6766203661f0efa6db916447adfb67f0cc6` from baseline
+  `8b0aa873a1089093783b0bd08d5964b508e1b186`.
+- Production replaced only `mailapp` and built the same 598 frontend modules.
+  No package definition, migration, backup, worker, Caddy, AI, terminal,
+  provider, mail, or calendar action was required. Alembic remains exact at
+  `d7e8f9a0b1c2 (head)`.
+- The retired API process hit the host's known graceful-stop timeout.
+  Replacement PID 2139380 is active with `NRestarts=0` and no warning-or-higher
+  entry after its startup boundary.
+- All seven checked services are active, public health is `ok`, production Git
+  is exact and clean at the runtime boundary, and anonymous recipient lookup
+  returns 401. Real Compose was not opened in production because its durable
+  autosave is a mutation; generated browser acceptance covered the affected
+  workflow without a provider send.

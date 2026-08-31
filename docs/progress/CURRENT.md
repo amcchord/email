@@ -4,16 +4,23 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Ship safe account-scoped recipient autocomplete as the next bounded writing
-acceleration milestone, then continue with inline snippet expansion. Operate
-Personal Snippets, Universal Send & Archive, Focused/Split Inbox, and the
-terminal track as durable, truthful workflows. Continue physical qualification
-of the independently gated Web Serial installer and OTA control plane on exact
-E1001/E1002 hardware. Keep real mail/calendar QA read-only except for generated
-`.example.test` fixtures and preserve every independent terminal write gate.
+Operate safe account-scoped recipient autocomplete as a durable Compose
+workflow and continue writing acceleration with inline snippet expansion.
+Operate Personal Snippets, Universal Send & Archive, Focused/Split Inbox, and
+the terminal track as durable, truthful workflows. Continue physical
+qualification of the independently gated Web Serial installer and OTA control
+plane on exact E1001/E1002 hardware. Keep real mail/calendar QA read-only except
+for generated `.example.test` fixtures and preserve every independent terminal
+write gate.
 
 ## Baseline
 
+- The deployed Recipient Autocomplete application/runtime is
+  `b955c6766203661f0efa6db916447adfb67f0cc6`. Compose To/Cc/Bcc use one
+  account-scoped metadata suggestion endpoint, quoted-comma-safe canonical
+  chips, cross-field duplicate protection, and local-only pending text that
+  blocks every durable/save/send boundary until resolved. The release is
+  migration-free and adds no Contacts scope or provider request.
 - The deployed Personal Snippets application/runtime is
   `1397160c2318d4d48997e800dbda20c536d8b0d5`. Settings → Writing owns private
   revisioned CRUD, while Compose, reader, and Flow share one `Cmd/Ctrl+;`
@@ -158,7 +165,7 @@ live state.
   interrupted-write, rollback, recovery, and USB-rescue evidence before
   installing any eligible descriptor or changing rollout from zero.
 
-## Recipient Autocomplete Release Candidate
+## Recent Recipient Autocomplete Release
 
 - One reusable accessible recipient field replaces delimiter-fragile Compose
   text boxes with canonical To/Cc/Bcc chips, quoted-comma-safe paste/manual
@@ -176,8 +183,10 @@ live state.
   acceptance passed. The review's two P1 findings were fixed. The single
   consolidated post-freeze gate passed 734 backend tests with 66 expected
   skips, all 462 frontend tests, and a 598-module production build.
-- Full behavior, validation, production, and rollback evidence is being
-  recorded in `RECIPIENT_AUTOCOMPLETE_RELEASE_2026-08-30.md`.
+- Full behavior, validation, production, and rollback evidence is recorded in
+  `RECIPIENT_AUTOCOMPLETE_RELEASE_2026-08-30.md`. Production built
+  the same 598 modules; all seven services and public health are healthy,
+  Alembic remains d7, and anonymous recipient lookup is 401.
 
 ## Recent Personal Snippets Release
 
