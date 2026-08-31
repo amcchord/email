@@ -42,12 +42,14 @@
   import DraftStatus from './DraftStatus.svelte';
   import EmailHtmlFrame from './EmailHtmlFrame.svelte';
   import SendSplitButton from '../common/SendSplitButton.svelte';
+  import SnippetPicker from './SnippetPicker.svelte';
   import { safeLabelColor, visibleUserLabels } from '../../lib/labelWorkflows.js';
   import {
     canArchiveAfterSend,
     sendArchiveAcceptedMessage,
     withArchiveAfterSend,
   } from '../../lib/sendArchive.js';
+  import { insertSnippetText } from '../../lib/personalSnippets.js';
 
   let {
     email = null,
@@ -75,6 +77,7 @@
   let attachmentPreviewReturnFocus = $state(null);
   let inlineReplyMode = $state(REPLY_ENVELOPE_MODES.REPLY);
   let inlineReplyTextarea = $state(null);
+  let snippetPickerOpen = $state(false);
   let primaryReplyButton = $state(null);
   let openingManagedDraft = $state(false);
   let draftOpenMessage = $state('');
@@ -180,6 +183,22 @@
         if (!durableReplyState.canSend) return 'Reply is not ready to send';
         return inlineReplySending ? 'Reply is already sending' : 'Reply is unavailable';
       },
+    },
+    'inbox.snippets': {
+      run: () => { snippetPickerOpen = true; },
+      isEnabled: () => (
+        inlineReplyOpen
+        && Boolean(inlineReplyTextarea)
+        && !durableReplyOpening
+        && !durableReplyError
+        && !durableReplyState.discardInProgress
+        && !durableReplyState.sendInProgress
+      ),
+      disabledReason: () => !inlineReplyOpen
+        ? 'Open a reply first'
+        : durableReplyError
+          ? 'Retry the saved reply before inserting a snippet'
+          : 'Reply editor is still opening',
     },
   }));
 
@@ -1072,6 +1091,27 @@
     }
   }
 
+  async function insertPersonalSnippet(snippet) {
+    const editor = inlineReplyTextarea;
+    if (!editor || !inlineReplyOpen) return false;
+    const result = insertSnippetText(
+      inlineReplyBody,
+      snippet?.body_text,
+      editor.selectionStart,
+      editor.selectionEnd,
+    );
+    inlineReplyBody = result.value;
+    advanceInlineReplyGeneration();
+    if (!persistInlineReply()) return false;
+    await tick();
+    if (editor.isConnected) {
+      editor.focus({ preventScroll: true });
+      editor.setSelectionRange(result.caret, result.caret);
+    }
+    showToast(`Inserted “${snippet.name}”`, 'success');
+    return true;
+  }
+
   async function openManagedDraft() {
     if (!email?.is_draft || openingManagedDraft || !sessionIsCurrent()) return;
     const emailIdAtStart = email.id;
@@ -1755,6 +1795,13 @@
           rows="4"
         ></textarea>
         <div class="reply-actions flex items-center gap-2 mt-2">
+          <SnippetPicker
+            bind:open={snippetPickerOpen}
+            compact={true}
+            shortcutId="inbox.snippets"
+            disabled={!activeReplyEnvelopeResult.available || durableReplyOpening || Boolean(durableReplyError) || durableReplyState.discardInProgress || durableReplyState.sendInProgress}
+            oninsert={insertPersonalSnippet}
+          />
           <SendSplitButton
             label={inlineReplyActionLabel}
             disabled={!inlineReplyBody.trim() || !activeReplyEnvelopeResult.available || !durableReplyState.canSend || Boolean(durableReplyError)}

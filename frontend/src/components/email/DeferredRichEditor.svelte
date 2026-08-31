@@ -43,6 +43,41 @@
     selection.addRange(range);
   }
 
+  function insertFallbackHtml(node, html) {
+    const safeHtml = sanitizeComposeHtml(String(html || ''));
+    if (!safeHtml) return false;
+    node.focus({ preventScroll: true });
+    const selection = window.getSelection?.();
+    if (!selection) return false;
+    let range = selection.rangeCount > 0 ? selection.getRangeAt(0).cloneRange() : null;
+    if (!range || !node.contains(range.commonAncestorContainer)) {
+      range = document.createRange();
+      range.selectNodeContents(node);
+      range.collapse(false);
+    } else {
+      // Preserve selected draft content and insert at its trailing boundary.
+      range.collapse(false);
+    }
+    const fragment = range.createContextualFragment(safeHtml);
+    const lastNode = fragment.lastChild;
+    range.insertNode(fragment);
+    if (lastNode) {
+      range.setStartAfter(lastNode);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    const sanitized = sanitizeComposeHtml(node.innerHTML);
+    if (sanitized !== node.innerHTML) {
+      node.innerHTML = sanitized;
+      moveCaretToEnd(node);
+    }
+    fallbackDirty = true;
+    latestContent = sanitized;
+    onUpdate?.(sanitized);
+    return true;
+  }
+
   function initializeFallback(node) {
     fallbackElement = node;
     node.innerHTML = sanitizeComposeHtml(latestContent);
@@ -50,7 +85,11 @@
       node.focus({ preventScroll: true });
       moveCaretToEnd(node);
     }
-    onReady?.({ mode: 'fallback' });
+    onReady?.({
+      mode: 'fallback',
+      insertHtml: html => insertFallbackHtml(node, html),
+      focus: () => node.focus({ preventScroll: true }),
+    });
 
     return {
       destroy() {
@@ -77,8 +116,8 @@
     onUpdate?.(sanitized);
   }
 
-  function handleRichReady() {
-    onReady?.({ mode: 'rich' });
+  function handleRichReady(handle) {
+    onReady?.(handle || { mode: 'rich' });
   }
 
   async function openEditor() {

@@ -53,6 +53,7 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'inbox.spam',     key: '!',       label: 'Report spam',           context: 'inbox', category: 'Inbox' },
   { id: 'inbox.reply',    key: 'r',       label: 'Reply',                 context: 'inbox', category: 'Inbox' },
   { id: 'inbox.sendArchive', key: 'Ctrl+Shift+Enter', label: 'Send reply & archive', context: 'inbox', category: 'Inbox', keywords: ['send and archive', 'done'] },
+  { id: 'inbox.snippets', key: 'Ctrl+;', label: 'Insert personal snippet', context: 'inbox', category: 'Inbox', keywords: ['template', 'saved reply', 'canned response'] },
   { id: 'inbox.forward',  key: 'f',       label: 'Forward',               context: 'inbox', category: 'Inbox' },
   { id: 'inbox.snooze',   key: 'h',       label: 'Snooze / remind later', context: 'inbox', category: 'Inbox', keywords: ['remind later', 'return to inbox'] },
   { id: 'inbox.label',    key: 'l',       label: 'Apply or remove label', context: 'inbox', category: 'Inbox', keywords: ['tag', 'organize'] },
@@ -75,6 +76,7 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'flow.snooze',     key: 'h',          label: 'Snooze / remind later',     context: 'flow', category: 'Flow', keywords: ['return to inbox', 'remind me'] },
   { id: 'flow.newChat',    key: 'n',          label: 'New chat',                 context: 'flow', category: 'Flow' },
   { id: 'flow.send',       key: 'Ctrl+Enter', label: 'Send reply',               context: 'flow', category: 'Flow' },
+  { id: 'flow.snippets',   key: 'Ctrl+;',     label: 'Insert personal snippet',   context: 'flow', category: 'Flow', keywords: ['template', 'saved reply', 'canned response'] },
   { id: 'flow.back',       key: 'Escape',     label: 'Back to list / deselect',  context: 'flow', category: 'Flow' },
   { id: 'flow.replyOption1', key: '1',       label: 'Select reply option 1',    context: 'flow', category: 'Flow' },
   { id: 'flow.replyOption2', key: '2',       label: 'Select reply option 2',    context: 'flow', category: 'Flow' },
@@ -93,6 +95,7 @@ export const SHORTCUT_DEFAULTS = [
   // ── Compose ──────────────────────────────────────────────────────
   { id: 'compose.send',    key: 'Ctrl+Enter',   label: 'Send email',  context: 'compose', category: 'Compose' },
   { id: 'compose.sendArchive', key: 'Ctrl+Shift+Enter', label: 'Send reply & archive', context: 'compose', category: 'Compose', keywords: ['send and archive', 'done'] },
+  { id: 'compose.snippets', key: 'Ctrl+;', label: 'Insert personal snippet', context: 'compose', category: 'Compose', keywords: ['template', 'saved reply', 'canned response'] },
   { id: 'compose.draft',   key: 'Ctrl+s',       label: 'Save draft',  context: 'compose', category: 'Compose' },
   { id: 'compose.discard', key: 'Escape',        label: 'Close and keep draft', context: 'compose', category: 'Compose' },
   { id: 'compose.deleteDraft', key: 'Ctrl+Shift+,', label: 'Discard draft', context: 'compose', category: 'Compose' },

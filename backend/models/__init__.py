@@ -10,6 +10,7 @@ from backend.models.mail_action import MailAction
 from backend.models.outbound_message import OutboundMessage
 from backend.models.snooze import EmailSnooze
 from backend.models.settings import Setting
+from backend.models.snippet import PersonalSnippet
 from backend.models.terminal import (
     TerminalBatterySample,
     TerminalDevice,
@@ -35,6 +36,7 @@ __all__ = [
     "EmailSnooze",
     "AIAnalysis",
     "Setting",
+    "PersonalSnippet",
     "TodoItem",
     "ChatConversation",
     "ChatMessage",

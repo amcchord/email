@@ -167,7 +167,7 @@ def test_draft_models_routes_migration_and_worker_are_complete():
     assert scripts.get_revision("a4b5c6d7e8f9").down_revision == "f3a4b5c6d7e8"
     assert scripts.get_revision("b5c6d7e8f9a0").down_revision == "a4b5c6d7e8f9"
     assert scripts.get_revision("c6d7e8f9a0b1").down_revision == "b5c6d7e8f9a0"
-    assert scripts.get_heads() == ["c6d7e8f9a0b1"]
+    assert scripts.get_heads() == ["d7e8f9a0b1c2"]
 
     assert drain_draft_sessions_task in CronWorkerSettings.functions
     assert any(job.coroutine is drain_draft_sessions_task for job in CronWorkerSettings.cron_jobs)

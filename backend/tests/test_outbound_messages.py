@@ -266,7 +266,7 @@ def test_outbound_migration_is_immediate_post_c0_head():
     assert scripts.get_revision("a4b5c6d7e8f9").down_revision == "f3a4b5c6d7e8"
     assert scripts.get_revision("b5c6d7e8f9a0").down_revision == "a4b5c6d7e8f9"
     assert scripts.get_revision("c6d7e8f9a0b1").down_revision == "b5c6d7e8f9a0"
-    assert scripts.get_heads() == ["c6d7e8f9a0b1"]
+    assert scripts.get_heads() == ["d7e8f9a0b1c2"]
 
 
 def test_ten_second_undo_and_cron_worker_recovery_contract():

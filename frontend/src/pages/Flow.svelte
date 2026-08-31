@@ -26,6 +26,7 @@
   import { createDurableReplyController } from '../lib/durableReply.js';
   import DraftStatus from '../components/email/DraftStatus.svelte';
   import SendSplitButton from '../components/common/SendSplitButton.svelte';
+  import SnippetPicker from '../components/email/SnippetPicker.svelte';
   import SnoozePicker from '../components/common/SnoozePicker.svelte';
   import {
     buildSnoozeRequest,
@@ -116,6 +117,8 @@
   let selectedOptionIndex = $state(-1);
   let editorKey = $state(0);
   let writingSurfaceReady = $state(false);
+  let replyEditorHandle = $state.raw(null);
+  let snippetPickerOpen = $state(false);
   let threadLoadGeneration = 0;
   let durableReplyStorage = null;
   let durableReply = $state.raw(null);
@@ -419,6 +422,22 @@
               : replyContext && !replyContext.available
                 ? replyUnavailableMessage(replyContext.reason)
                 : 'Open a reply and enter a message first',
+      },
+      'flow.snippets': {
+        run: () => { snippetPickerOpen = true; },
+        isEnabled: () => (
+          replyViewOpen
+          && writingSurfaceReady
+          && Boolean(replyEditorHandle)
+          && Boolean(replyContext?.available)
+          && !durableReplyOpening
+          && !durableReplyError
+        ),
+        disabledReason: () => !replyViewOpen
+          ? 'Open a reply first'
+          : durableReplyError
+            ? 'Retry the saved reply before inserting a snippet'
+            : 'Reply editor is still opening',
       },
       'flow.back': () => {
         if (replyViewOpen) {
@@ -1100,6 +1119,7 @@
 
   function remountReplyEditor() {
     writingSurfaceReady = false;
+    replyEditorHandle = null;
     editorKey += 1;
   }
 
@@ -1440,6 +1460,21 @@
   function handleEditorUpdate(html) {
     replyBodyHtml = html;
     rememberCurrentReplyDraft();
+  }
+
+  function handleReplyEditorReady(handle) {
+    replyEditorHandle = handle || null;
+    writingSurfaceReady = true;
+  }
+
+  function insertPersonalSnippet(snippet) {
+    const inserted = replyEditorHandle?.insertHtml?.(snippet?.body_html);
+    if (!inserted) {
+      showToast('Place the cursor in the reply before inserting a snippet.', 'error');
+      return false;
+    }
+    showToast(`Inserted “${snippet.name}”`, 'success');
+    return true;
   }
 
   function useSuggestedReply() {
@@ -2660,7 +2695,7 @@
                 <DeferredRichEditor
                   content={initialReplyContent}
                   onUpdate={handleEditorUpdate}
-                  onReady={() => { writingSurfaceReady = true; }}
+                  onReady={handleReplyEditorReady}
                   placeholder="Write your reply..."
                   externalScroll={true}
                   autofocus={true}
@@ -2835,6 +2870,13 @@
                 <Icon name="external-link" size={12} />
                 Full Compose
               </button>
+              <SnippetPicker
+                bind:open={snippetPickerOpen}
+                compact={true}
+                shortcutId="flow.snippets"
+                disabled={!writingSurfaceReady || !replyContext?.available || durableReplyOpening || Boolean(durableReplyError)}
+                oninsert={insertPersonalSnippet}
+              />
               <SendSplitButton
                 label={replyActionLabel}
                 disabled={!canSendReply()}

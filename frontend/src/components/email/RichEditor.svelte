@@ -7,6 +7,7 @@
   import Placeholder from '@tiptap/extension-placeholder';
   import Underline from '@tiptap/extension-underline';
   import { isSafeEmbeddedResourceUrl } from '../../lib/remoteContent.js';
+  import { sanitizeComposeHtml } from '../../lib/sanitize.js';
 
   const EmbeddedImage = Image.extend({
     parseHTML() {
@@ -33,6 +34,19 @@
   let editorElement = $state(null);
   let editor = $state(null);
   let lastSetContent = $state(untrack(() => content || ''));
+
+  function insertHtmlAtCaret(html) {
+    if (!editor) return false;
+    const safeHtml = sanitizeComposeHtml(String(html || ''));
+    if (!safeHtml) return false;
+    const insertionPoint = editor.state.selection.to;
+    return editor
+      .chain()
+      .focus()
+      .setTextSelection(insertionPoint)
+      .insertContent(safeHtml)
+      .run();
+  }
 
   onMount(() => {
     editor = new Editor({
@@ -86,7 +100,11 @@
         || !active.isConnected;
       if (focusIsLost) editor.commands.focus('end');
     }
-    onReady?.();
+    onReady?.({
+      mode: 'rich',
+      insertHtml: insertHtmlAtCaret,
+      focus: () => editor?.commands.focus(),
+    });
   });
 
   // Sync content prop changes into TipTap after mount

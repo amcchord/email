@@ -37,6 +37,7 @@
   import DeferredRichEditor from '../components/email/DeferredRichEditor.svelte';
   import DraftStatus from '../components/email/DraftStatus.svelte';
   import SendSplitButton from '../components/common/SendSplitButton.svelte';
+  import SnippetPicker from '../components/email/SnippetPicker.svelte';
   import {
     exactSourceEmailId,
     sendArchiveAcceptedMessage,
@@ -59,6 +60,8 @@
   let autosaveReady = $state(false);
   let fileInput = $state(null);
   let writingSurfaceReady = $state(false);
+  let editorHandle = $state.raw(null);
+  let snippetPickerOpen = $state(false);
   let savingDraft = $state(false);
   let conflictDialogOpen = $state(false);
   let conflictDialog = $state(null);
@@ -240,6 +243,7 @@
     }
     autosaveReady = false;
     writingSurfaceReady = false;
+    editorHandle = null;
     if (requestGeneration !== openingDraftGeneration || !sessionGuard.isCurrent()) return;
 
     hydrateDraftSnapshot(data);
@@ -366,6 +370,13 @@
           return savingDraft ? 'Draft is already saving' : 'Message editor is still opening';
         },
       },
+      'compose.snippets': {
+        run: () => { snippetPickerOpen = true; },
+        isEnabled: () => writingSurfaceReady && Boolean(editorHandle) && !draftLocked,
+        disabledReason: () => draftLocked
+          ? 'Draft editing is locked while its state is being confirmed'
+          : 'Message editor is still opening',
+      },
       'compose.discard': () => returnToInbox(),
       'compose.deleteDraft': {
         run: () => discardDraft(),
@@ -428,6 +439,21 @@
 
   function handleEditorUpdate(html) {
     bodyHtml = html;
+  }
+
+  function handleEditorReady(handle) {
+    editorHandle = handle || null;
+    writingSurfaceReady = true;
+  }
+
+  function insertPersonalSnippet(snippet) {
+    const inserted = editorHandle?.insertHtml?.(snippet?.body_html);
+    if (!inserted) {
+      showToast('Place the cursor in the message before inserting a snippet.', 'error');
+      return false;
+    }
+    showToast(`Inserted “${snippet.name}”`, 'success');
+    return true;
   }
 
   function focusInitialRecipient(node) {
@@ -801,6 +827,12 @@
       >
         {savingDraft ? 'Saving…' : 'Save Draft'}
       </Button>
+      <SnippetPicker
+        bind:open={snippetPickerOpen}
+        disabled={draftLocked || !writingSurfaceReady}
+        shortcutId="compose.snippets"
+        oninsert={insertPersonalSnippet}
+      />
       <SendSplitButton
         compact={true}
         disabled={!writingSurfaceReady || !draftState.canSend}
@@ -954,7 +986,7 @@
         <DeferredRichEditor
           content={initialContent}
           onUpdate={handleEditorUpdate}
-          onReady={() => { writingSurfaceReady = true; }}
+          onReady={handleEditorReady}
           placeholder="Write your message..."
           autofocus={true}
           ariaLabel="Message body"

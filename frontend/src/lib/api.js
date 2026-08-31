@@ -417,6 +417,19 @@ export const api = {
       mutation_id: mutationId,
     }),
 
+  // Private reusable writing snippets
+  listPersonalSnippets: () => request('GET', '/compose/snippets'),
+  createPersonalSnippet: (payload) => request('POST', '/compose/snippets', payload),
+  replacePersonalSnippet: (snippetId, payload) =>
+    request('PUT', `/compose/snippets/${encodeURIComponent(snippetId)}`, payload),
+  deletePersonalSnippet: (snippetId, expectedRevision) => {
+    const params = new URLSearchParams({ expected_revision: String(expectedRevision) });
+    return request(
+      'DELETE',
+      `/compose/snippets/${encodeURIComponent(snippetId)}?${params.toString()}`,
+    );
+  },
+
   // Accounts
   listAccounts: () => request('GET', '/accounts/'),
   startOAuth: () => request('GET', '/accounts/oauth/start'),

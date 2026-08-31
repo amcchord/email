@@ -23,6 +23,7 @@ from backend.routers import (
     emails,
     events,
     public_api,
+    snippets,
     snoozes,
     terminal,
     terminal_admin,
@@ -106,6 +107,7 @@ app.include_router(calendar.router)
 app.include_router(events.router)
 app.include_router(public_api.router)
 app.include_router(snoozes.router)
+app.include_router(snippets.router)
 app.include_router(terminal_admin.router)
 app.include_router(terminal_enrollment.router)
 app.include_router(terminal_firmware.router)
