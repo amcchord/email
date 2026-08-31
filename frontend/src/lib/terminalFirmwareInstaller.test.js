@@ -76,7 +76,7 @@ test('operator state presentation distinguishes recovery from safe pre-write can
     state: 'recovery_required',
     tone: 'danger',
     title: 'Recovery required',
-    detail: 'Keep the terminal connected and return it to ROM mode before retrying the exact preserve-config package.',
+    detail: 'Leave the USB cable connected, return the terminal to ROM mode, and retry only the exact preserve-config package.',
     errorCode: 'write_interrupted',
     recoveryRequired: true,
     canDisconnect: false,
@@ -84,6 +84,8 @@ test('operator state presentation distinguishes recovery from safe pre-write can
   const cancelled = describeTerminalFirmwareInstallState('cancelled_before_write');
   assert.equal(cancelled.recoveryRequired, false);
   assert.equal(cancelled.canDisconnect, true);
+  assert.equal(describeTerminalFirmwareInstallState('probing').canDisconnect, true);
+  assert.equal(describeTerminalFirmwareInstallState('flashing').canDisconnect, false);
   assert.equal(describeTerminalFirmwareInstallState('unknown').state, 'blocked');
 });
 

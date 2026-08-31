@@ -20,12 +20,13 @@
     TERMINAL_FIRMWARE_INSTALL_STATES,
     runTerminalFirmwareInstallWorkflow,
   } from '../terminalFirmwareInstallWorkflow.js';
+  import { createTerminalFirmwareWebSerialTransports } from '../terminalFirmwareWebSerial.js';
   import { validateTerminalFirmwareCatalog } from '../terminalFirmwarePolicy.js';
   import { verifyTerminalFirmwareRelease } from '../terminalFirmwareVerifier.js';
 
   const sessionGuard = createAuthenticatedSessionGuard();
   const deviceSession = createTerminalFirmwareDeviceSession();
-  const PRODUCTION_TRANSPORT_AVAILABLE = false;
+  const PRODUCTION_TRANSPORT_AVAILABLE = true;
 
   let loading = $state(true);
   let loadError = $state('');
@@ -47,6 +48,7 @@
   let workflowState = $state('preflight');
   let workflowErrorCode = $state('');
   let workflowProgress = $state(null);
+  let connecting = $state(false);
   let deviceConnected = $state(false);
   let disconnecting = $state(false);
   let preflightController = null;
@@ -63,6 +65,14 @@
   let preflightBlockers = $derived(selectionBlockers());
   let canPreparePackage = $derived(
     preflightBlockers.length === 0 && !['fetching', 'verifying'].includes(packageState),
+  );
+  let canConnectInstall = $derived(
+    PRODUCTION_TRANSPORT_AVAILABLE
+      && support.supported
+      && !lock.locked
+      && Boolean(preparedPlan)
+      && !connecting
+      && !deviceConnected,
   );
   let workflowPresentation = $derived(
     describeTerminalFirmwareInstallState(workflowState, workflowErrorCode),
@@ -97,6 +107,29 @@
       return 'background: var(--status-success-bg); border-color: var(--status-success-border); color: var(--status-success-text)';
     }
     return 'background: var(--bg-primary); border-color: var(--border-color); color: var(--text-secondary)';
+  }
+
+  function operatorDetail() {
+    if (connecting) return 'Choose the terminal serial port in the browser prompt. No bytes are written until ROM identity passes.';
+    if (deviceConnected || [
+      'probing', 'flashing', 'verifying_flash', 'resetting', 'awaiting_status',
+      'verifying_status', 'succeeded', 'cancelled_before_write', 'blocked',
+      'recovery_required',
+    ].includes(workflowState)) {
+      return workflowPresentation.detail;
+    }
+    return packageState === 'idle' ? workflowPresentation.detail : packageDetail;
+  }
+
+  function progressLabel(progress) {
+    if (!progress?.role) return '';
+    if (Number.isFinite(progress.bytesTransferred)
+      && Number.isFinite(progress.transferTotalBytes)
+      && progress.transferTotalBytes > 0) {
+      const percent = Math.min(100, Math.max(0, (progress.bytesTransferred / progress.transferTotalBytes) * 100));
+      return `Writing ${progress.role.replaceAll('_', ' ')} · ${percent.toFixed(0)}% transferred`;
+    }
+    return `Writing ${progress.role.replaceAll('_', ' ')} · ${formatBytes(progress.bytesWritten || 0)}`;
   }
 
   function selectDefaults(releases) {
@@ -216,10 +249,12 @@
     }
   }
 
-  // This is the only bridge from the operator UI to the pure workflow. No
-  // production transport calls it until the physical HIL gate is complete.
   async function runPreparedInstall({ romTransport, applicationTransport }) {
-    if (!preparedPlan || !PRODUCTION_TRANSPORT_AVAILABLE || !sessionGuard.isCurrent()) return null;
+    if (!preparedPlan
+      || !PRODUCTION_TRANSPORT_AVAILABLE
+      || lock.locked
+      || !support.supported
+      || !sessionGuard.isCurrent()) return null;
     operationController = new AbortController();
     deviceSession.attach({
       abortController: operationController,
@@ -248,6 +283,42 @@
       await deviceSession.disconnect();
       operationController = null;
       deviceConnected = false;
+    }
+  }
+
+  async function connectAndInstall() {
+    if (!canConnectInstall || !sessionGuard.isCurrent()) return;
+    connecting = true;
+    workflowState = 'awaiting_rom';
+    workflowErrorCode = '';
+    workflowProgress = null;
+    let transports = null;
+    try {
+      transports = await createTerminalFirmwareWebSerialTransports({
+        onDisconnect() {
+          operationController?.abort();
+        },
+      });
+      if (!sessionGuard.isCurrent()) {
+        await Promise.allSettled([
+          transports.applicationTransport.close(),
+          transports.romTransport.close(),
+        ]);
+        return;
+      }
+      await runPreparedInstall(transports);
+    } catch (error) {
+      if (!sessionGuard.isCurrent()) return;
+      workflowErrorCode = error?.code || 'permission_denied';
+      workflowState = error?.code === 'permission_denied' ? 'cancelled_before_write' : 'blocked';
+      if (transports) {
+        await Promise.allSettled([
+          transports.applicationTransport.close(),
+          transports.romTransport.close(),
+        ]);
+      }
+    } finally {
+      connecting = false;
     }
   }
 
@@ -350,13 +421,13 @@
         Browser firmware installer
       </h4>
       <p class="text-[11px] mt-0.5 max-w-3xl" style="color: var(--text-tertiary)">
-        Inspect signed releases and prepare a fully hashed preserve-config package in this browser. Device connection, erase, and flash remain locked until the physical recovery gate is complete.
+        Verify a signed preserve-config package, then install it through an exclusive Web Serial session once every independent release, enrollment, and physical recovery gate is satisfied.
       </p>
     </div>
     <span
       class="inline-flex items-center rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider"
       style="background: var(--status-warning-bg); border-color: var(--status-warning-border); color: var(--status-warning-text)"
-    >Transport locked</span>
+    >{!support.supported ? 'Browser unsupported' : lock.locked ? 'Transport gated' : 'Transport ready'}</span>
   </div>
 
   <div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2" aria-label="Browser firmware prerequisites">
@@ -439,7 +510,7 @@
                 {#if verification?.state === 'checking'}
                   Checking exact manifest bytes and detached signature…
                 {:else if verification?.state === 'verified'}
-                  Exact manifest bytes and Ed25519 signature verified in this browser. Flashing remains locked.
+                  Exact manifest bytes and Ed25519 signature verified in this browser. Device access still requires every independent install gate.
                 {:else}
                   Browser signature preflight locked{verification?.errors?.[0] ? `: ${verification.errors[0]}` : '.'}
                 {/if}
@@ -554,12 +625,12 @@
 
     <div class="mt-3 rounded-md border p-3 text-[10px]" style={operatorToneStyle(workflowPresentation.tone)} aria-live="polite">
       <p class="font-semibold">{workflowPresentation.title}</p>
-      <p class="mt-1">{packageState === 'idle' ? workflowPresentation.detail : packageDetail}</p>
+      <p class="mt-1">{operatorDetail()}</p>
       {#if packageState === 'fetching' && packageProgress.completed > 0}
         <p class="mt-1 font-mono">{packageProgress.completed}/{packageProgress.total} · {packageProgress.role}</p>
       {/if}
       {#if workflowProgress?.role}
-        <p class="mt-1 font-mono">Writing {workflowProgress.role} · {formatBytes(workflowProgress.bytesWritten || 0)}</p>
+        <p class="mt-1 font-mono">{progressLabel(workflowProgress)}</p>
       {/if}
       {#if workflowErrorCode}<p class="mt-1 font-mono">{workflowErrorCode}</p>{/if}
     </div>
@@ -581,6 +652,7 @@
     {#if workflowPresentation.recoveryRequired}
       <div class="mt-3 rounded-md border p-3 text-xs" style="background: var(--status-error-bg); border-color: var(--status-error-border); color: var(--status-error-text)" role="alert">
         <p class="font-semibold">Do not retry automatically or use erase-all.</p>
+        <p class="mt-1 text-[10px]">The browser has released its serial session. Leave the physical USB cable connected while returning the terminal to ROM mode.</p>
         <ol class="mt-1.5 list-decimal space-y-1 pl-5 text-[10px]">
           <li>Keep USB connected and return the terminal to ESP32-S3 ROM download mode.</li>
           <li>Confirm the same physical model and revision again.</li>
@@ -607,21 +679,22 @@
       >Clear package</button>
       <button
         type="button"
-        disabled={!PRODUCTION_TRANSPORT_AVAILABLE || !preparedPlan}
+        onclick={connectAndInstall}
+        disabled={!canConnectInstall}
         class="inline-flex min-h-9 items-center justify-center rounded-lg border px-3 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50"
         style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-secondary)"
-        title="Real device transport remains locked until E1001/E1002 hardware-in-the-loop qualification is complete."
-      >Connect &amp; install</button>
+        title={lock.locked ? 'Independent browser signature, enrollment, server qualification, and E1001/E1002 recovery gates remain closed.' : 'Select the terminal serial port and install the verified preserve-config package.'}
+      >{connecting ? 'Choose serial port…' : 'Connect &amp; install'}</button>
       <button
         type="button"
         onclick={disconnectDevice}
-        disabled={!deviceConnected || disconnecting}
+        disabled={!deviceConnected || disconnecting || !workflowPresentation.canDisconnect}
         class="inline-flex min-h-9 items-center justify-center rounded-lg border px-3 text-xs font-medium disabled:opacity-50"
         style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-secondary)"
       >{disconnecting ? 'Disconnecting…' : 'Disconnect device'}</button>
     </div>
     <p class="mt-2 text-[10px]" style="color: var(--text-tertiary)">
-      Package verification may download signed firmware bytes. It never requests a serial port. Device transport is not present in this build.
+      Package verification may download signed firmware bytes, but does not request a serial port. Only the enabled Connect &amp; install button opens the browser chooser; the adapter never uses erase-all.
     </p>
   </div>
 
@@ -633,7 +706,7 @@
       {/each}
     </ul>
     <p class="mt-2 text-[10px] font-medium" style="color: var(--text-secondary)">
-      This screen can verify signed artifact bytes, but it never requests a serial port and cannot write or erase a terminal.
+      The Web Serial transport is installed but cannot be entered while any blocker above remains. Unsupported browsers stay locked, and port selection always requires an explicit click.
     </p>
   </div>
 </section>
