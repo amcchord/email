@@ -214,7 +214,7 @@
         Save polished replies and insert them from any message with <kbd class="rounded border px-1.5 py-0.5 text-xs" style="border-color: var(--border-color)">⌘;</kbd> or <kbd class="rounded border px-1.5 py-0.5 text-xs" style="border-color: var(--border-color)">Ctrl+;</kbd>.
       </p>
     </div>
-    <Button variant="primary" onclick={(event) => openEditor(null, event)}>
+    <Button variant="primary" class="min-h-11" onclick={(event) => openEditor(null, event)}>
       <Icon name="plus" size={16} /> New snippet
     </Button>
   </div>
@@ -234,7 +234,7 @@
     <div class="flex min-h-48 flex-col items-center justify-center gap-3 rounded-xl border px-5 text-center" style="border-color: var(--border-color)" role="alert">
       <Icon name="alert-circle" size={24} />
       <p class="text-sm" style="color: var(--status-error)">{loadError}</p>
-      <Button onclick={loadSnippets}>Retry</Button>
+      <Button class="min-h-11" onclick={loadSnippets}>Retry</Button>
     </div>
   {:else if filtered.length === 0}
     <div class="flex min-h-52 flex-col items-center justify-center gap-3 rounded-xl border px-6 text-center" style="border-color: var(--border-color); background: var(--bg-secondary)">
@@ -243,7 +243,7 @@
         <p class="text-sm font-semibold" style="color: var(--text-primary)">{snippets.length ? 'No snippets match' : 'Write it once, reuse it anywhere'}</p>
         <p class="mt-1 text-xs" style="color: var(--text-tertiary)">{snippets.length ? 'Try another search.' : 'Create a reusable reply, introduction, follow-up, or handoff.'}</p>
       </div>
-      {#if !snippets.length}<Button variant="primary" onclick={(event) => openEditor(null, event)}>Create your first snippet</Button>{/if}
+      {#if !snippets.length}<Button variant="primary" class="min-h-11" onclick={(event) => openEditor(null, event)}>Create your first snippet</Button>{/if}
     </div>
   {:else}
     <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -277,6 +277,7 @@
       class="writing-dialog relative flex max-h-[92dvh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border shadow-2xl"
       style="background: var(--bg-primary); border-color: var(--border-color)"
       role="dialog"
+      tabindex="-1"
       aria-modal="true"
       aria-labelledby="writing-editor-title"
       onkeydown={handleDialogKeydown}
@@ -330,24 +331,24 @@
           <div class="flex flex-wrap items-center justify-between gap-3" role="alert">
             <p class="text-sm font-medium" style="color: var(--text-primary)">Discard your unsaved changes?</p>
             <div class="flex gap-2">
-              <Button onclick={() => { discardConfirm = false; }}>Keep editing</Button>
-              <Button variant="danger" onclick={() => closeEditor({ force: true })}>Discard changes</Button>
+              <Button class="min-h-11" onclick={() => { discardConfirm = false; }}>Keep editing</Button>
+              <Button variant="danger" class="min-h-11" onclick={() => closeEditor({ force: true })}>Discard changes</Button>
             </div>
           </div>
         {:else if deleteConfirm}
           <div class="flex flex-wrap items-center justify-between gap-3" role="alert">
             <p class="text-sm font-medium" style="color: var(--text-primary)">Delete “{editing?.name}”? Existing drafts will keep their inserted text.</p>
             <div class="flex gap-2">
-              <Button onclick={() => { deleteConfirm = false; }}>Cancel</Button>
-              <Button variant="danger" disabled={saving} onclick={deleteSnippet}>{saving ? 'Deleting…' : 'Delete snippet'}</Button>
+              <Button class="min-h-11" onclick={() => { deleteConfirm = false; }}>Cancel</Button>
+              <Button variant="danger" class="min-h-11" disabled={saving} onclick={deleteSnippet}>{saving ? 'Deleting…' : 'Delete snippet'}</Button>
             </div>
           </div>
         {:else}
           <div class="flex flex-wrap items-center justify-between gap-3">
-            <div>{#if editing}<Button variant="danger" disabled={saving} onclick={() => { deleteConfirm = true; }}>Delete</Button>{/if}</div>
+            <div>{#if editing}<Button variant="danger" class="min-h-11" disabled={saving} onclick={() => { deleteConfirm = true; }}>Delete</Button>{/if}</div>
             <div class="flex gap-2">
-              <Button disabled={saving} onclick={() => closeEditor()}>Cancel</Button>
-              <Button variant="primary" disabled={saving} onclick={saveSnippet}>{saving ? 'Saving…' : 'Save snippet'}</Button>
+              <Button class="min-h-11" disabled={saving} onclick={() => closeEditor()}>Cancel</Button>
+              <Button variant="primary" class="min-h-11" disabled={saving} onclick={saveSnippet}>{saving ? 'Saving…' : 'Save snippet'}</Button>
             </div>
           </div>
         {/if}

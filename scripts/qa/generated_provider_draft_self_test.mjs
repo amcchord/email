@@ -29,6 +29,8 @@ const ids = Object.freeze({
   mailboxA: '00000000-0000-4000-8000-000000000111',
   mailboxB: '00000000-0000-4000-8000-000000000112',
   sourceRace: '00000000-0000-4000-8000-000000000113',
+  personalSnippet: '00000000-0000-4000-8000-000000000114',
+  personalSnippetConflict: '00000000-0000-4000-8000-000000000115',
 });
 
 let mutationSequence = 200;
@@ -77,7 +79,8 @@ async function request(method, pathname, body, { expectedStatus = 200 } = {}) {
     headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  const payload = await response.json();
+  const responseText = await response.text();
+  const payload = responseText ? JSON.parse(responseText) : null;
   assert.equal(
     response.status,
     expectedStatus,
@@ -88,6 +91,8 @@ async function request(method, pathname, body, { expectedStatus = 200 } = {}) {
 
 const get = pathname => request('GET', pathname);
 const post = (pathname, body = {}, options = {}) => request('POST', pathname, body, options);
+const put = (pathname, body = {}, options = {}) => request('PUT', pathname, body, options);
+const del = (pathname, options = {}) => request('DELETE', pathname, undefined, options);
 const postDraft = (body, options = {}) => post(
   '/api/compose/draft',
   body,
@@ -128,6 +133,120 @@ async function waitFor(predicate, message, timeoutMs = 1_000) {
 const results = {};
 
 try {
+  // Personal Snippets are seeded per generated user, owner-scoped, revisioned,
+  // replay-safe, and delete-idempotent. Their audit surface contains only
+  // identifiers and revision metadata, never snippet content.
+  await reset('clean');
+  const seededForA = await get('/api/compose/snippets');
+  assert.equal(seededForA.total, 2);
+  assert.equal(seededForA.limit, 250);
+  assert.ok(seededForA.snippets.every(item => item.shortcut !== 'response'));
+
+  const snippetCreatePayload = {
+    snippet_id: ids.personalSnippet,
+    name: 'Generated scheduling note',
+    shortcut: ';schedule',
+    body_html: '<p>Generated private scheduling note.</p>',
+    body_text: 'Generated private scheduling note.',
+  };
+  const createdSnippet = await post(
+    '/api/compose/snippets',
+    snippetCreatePayload,
+    { expectedStatus: 201 },
+  );
+  assert.equal(createdSnippet.shortcut, 'schedule');
+  assert.equal(createdSnippet.revision, 1);
+  const replayedCreate = await post('/api/compose/snippets', snippetCreatePayload);
+  assert.deepEqual(replayedCreate, createdSnippet);
+  await post('/api/compose/snippets', {
+    ...snippetCreatePayload,
+    name: 'Divergent request-id reuse',
+  }, { expectedStatus: 409 });
+  await post('/api/compose/snippets', {
+    ...snippetCreatePayload,
+    snippet_id: ids.personalSnippetConflict,
+    shortcut: 'intro',
+  }, { expectedStatus: 409 });
+
+  const snippetRevisionTwo = {
+    name: 'Generated scheduling note updated',
+    shortcut: 'schedule',
+    body_html: '<p>Generated private scheduling note, revised.</p>',
+    body_text: 'Generated private scheduling note, revised.',
+    expected_revision: 1,
+  };
+  const updatedSnippet = await put(
+    `/api/compose/snippets/${ids.personalSnippet}`,
+    snippetRevisionTwo,
+  );
+  assert.equal(updatedSnippet.revision, 2);
+  const replayedUpdate = await put(
+    `/api/compose/snippets/${ids.personalSnippet}`,
+    snippetRevisionTwo,
+  );
+  assert.deepEqual(replayedUpdate, updatedSnippet);
+  await put(`/api/compose/snippets/${ids.personalSnippet}`, {
+    ...snippetRevisionTwo,
+    name: 'Stale divergent update',
+  }, { expectedStatus: 409 });
+
+  await post('/api/auth/login', {
+    username: 'generated-b',
+    password: 'generated-only',
+  });
+  const seededForB = await get('/api/compose/snippets');
+  assert.equal(seededForB.total, 1);
+  assert.equal(seededForB.snippets[0].shortcut, 'response');
+  assert.ok(!seededForB.snippets.some(item => item.snippet_id === ids.personalSnippet));
+  await put(`/api/compose/snippets/${ids.personalSnippet}`, {
+    ...snippetRevisionTwo,
+    expected_revision: 2,
+  }, { expectedStatus: 404 });
+  await del(
+    `/api/compose/snippets/${ids.personalSnippet}?expected_revision=2`,
+    { expectedStatus: 204 },
+  );
+
+  await post('/api/auth/login', {
+    username: 'generated-a',
+    password: 'generated-only',
+  });
+  const stillOwnedByA = await get('/api/compose/snippets');
+  assert.ok(stillOwnedByA.snippets.some(item => item.snippet_id === ids.personalSnippet));
+  await del(
+    `/api/compose/snippets/${ids.personalSnippet}?expected_revision=1`,
+    { expectedStatus: 409 },
+  );
+  await del(
+    `/api/compose/snippets/${ids.personalSnippet}?expected_revision=2`,
+    { expectedStatus: 204 },
+  );
+  await del(
+    `/api/compose/snippets/${ids.personalSnippet}?expected_revision=2`,
+    { expectedStatus: 204 },
+  );
+  const afterSnippetDelete = await get('/api/compose/snippets');
+  assert.equal(afterSnippetDelete.total, 2);
+
+  let snapshot = await audit();
+  assert.equal(snapshot.counters.snippet_create_requests, 4);
+  assert.equal(snapshot.counters.snippet_creates, 1);
+  assert.equal(snapshot.counters.snippet_create_replays, 1);
+  assert.equal(snapshot.counters.snippet_replace_requests, 4);
+  assert.equal(snapshot.counters.snippet_updates, 1);
+  assert.equal(snapshot.counters.snippet_update_replays, 1);
+  assert.equal(snapshot.counters.snippet_delete_requests, 4);
+  assert.equal(snapshot.counters.snippet_deletes, 1);
+  assert.equal(snapshot.counters.snippet_conflicts, 4);
+  assert.equal(snapshot.counters.snippet_not_found, 3);
+  assert.equal(snapshot.counters.logical_snippets, 3);
+  assertExpectedFlowSafety(snapshot);
+  const serializedSnippetAudit = JSON.stringify(snapshot);
+  assert.doesNotMatch(serializedSnippetAudit, /Generated private scheduling note/);
+  assert.doesNotMatch(serializedSnippetAudit, /Generated introduction/);
+  assert.doesNotMatch(serializedSnippetAudit, /"(?:name|shortcut|body_html|body_text)":/);
+  results.personal_snippets = snapshot.counters;
+
   // Repeated autosave: one create, one immutable mutation replay, one same-
   // revision replay under a fresh mutation, and one higher-revision update.
   await reset('clean');
@@ -151,7 +270,7 @@ try {
   }));
   assert.equal(updated.client_draft_id, created.client_draft_id);
   assert.equal(updated.state, 'synced');
-  let snapshot = await audit();
+  snapshot = await audit();
   assert.equal(snapshot.counters.draft_upsert_requests, 4);
   assert.equal(snapshot.counters.provider_draft_creates, 1);
   assert.equal(snapshot.counters.provider_draft_updates, 1);

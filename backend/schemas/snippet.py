@@ -1,4 +1,4 @@
-"""Validation contracts for private snippets and account signatures."""
+"""Validation contracts for private reusable Personal Snippets."""
 
 import re
 from datetime import datetime
@@ -90,4 +90,3 @@ class PersonalSnippetListResponse(BaseModel):
     snippets: list[PersonalSnippetResponse]
     total: int
     limit: int = MAX_PERSONAL_SNIPPETS
-

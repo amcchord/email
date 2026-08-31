@@ -1,4 +1,4 @@
-"""Owner-scoped reusable compose snippets and per-account signatures."""
+"""Owner-scoped reusable Personal Snippets."""
 
 from datetime import datetime, timezone
 from uuid import UUID

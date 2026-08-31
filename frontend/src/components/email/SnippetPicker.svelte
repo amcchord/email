@@ -177,6 +177,7 @@
       class="snippet-dialog relative flex w-full max-w-xl flex-col overflow-hidden rounded-2xl border shadow-2xl"
       style="background: var(--bg-primary); border-color: var(--border-color)"
       role="dialog"
+      tabindex="-1"
       aria-modal="true"
       aria-labelledby="snippet-picker-title"
       onkeydown={handleDialogKeydown}

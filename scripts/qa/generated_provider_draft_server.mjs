@@ -23,8 +23,10 @@ export const GENERATED_PROVIDER_DRAFT_SCENARIOS = Object.freeze([
 const MAX_BODY_BYTES = 20 * 1024 * 1024;
 const MAX_ATTACHMENT_BYTES = 18 * 1024 * 1024;
 const MAX_ATTACHMENTS = 10;
+const MAX_PERSONAL_SNIPPETS = 250;
 const DEFAULT_DISCARD_WINDOW_MS = 10_000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SNIPPET_SHORTCUT_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
 
 const USERS = Object.freeze({
   'generated-a': Object.freeze({
@@ -143,6 +145,34 @@ const SOURCE_MESSAGES = Object.freeze({
   }),
 });
 
+const SEEDED_SNIPPETS_BY_USER = Object.freeze({
+  9101: Object.freeze([
+    Object.freeze({
+      snippet_id: '00000000-0000-4000-8000-000000009101',
+      name: 'Generated introduction',
+      shortcut: 'intro',
+      body_html: '<p>Hello from the generated snippet fixture.</p>',
+      body_text: 'Hello from the generated snippet fixture.',
+    }),
+    Object.freeze({
+      snippet_id: '00000000-0000-4000-8000-000000009102',
+      name: 'Generated follow up',
+      shortcut: 'follow-up',
+      body_html: '<p>Following up with generated-only content.</p>',
+      body_text: 'Following up with generated-only content.',
+    }),
+  ]),
+  9102: Object.freeze([
+    Object.freeze({
+      snippet_id: '00000000-0000-4000-8000-000000009201',
+      name: 'Generated response',
+      shortcut: 'response',
+      body_html: '<p>This response belongs only to generated user B.</p>',
+      body_text: 'This response belongs only to generated user B.',
+    }),
+  ]),
+});
+
 function integerInRange(raw, fallback, minimum, maximum) {
   const value = Number.parseInt(raw ?? '', 10);
   return Number.isSafeInteger(value)
@@ -234,6 +264,17 @@ function newCounters() {
     auth_transitions: 0,
     discard_undos: 0,
     discard_replays: 0,
+    snippet_list_requests: 0,
+    snippet_create_requests: 0,
+    snippet_replace_requests: 0,
+    snippet_delete_requests: 0,
+    snippet_creates: 0,
+    snippet_updates: 0,
+    snippet_deletes: 0,
+    snippet_create_replays: 0,
+    snippet_update_replays: 0,
+    snippet_conflicts: 0,
+    snippet_not_found: 0,
     expected_mutations: 0,
     unexpected_mutations: 0,
     unknown_routes: 0,
@@ -282,6 +323,7 @@ export function createGeneratedProviderDraftFixture({
   const outbounds = new Map();
   const outboundIdempotency = new Map();
   const mutations = new Map();
+  const snippets = new Map();
   const offlineMutationIds = new Set();
   const events = [];
   const heldResponses = [];
@@ -301,6 +343,10 @@ export function createGeneratedProviderDraftFixture({
 
   function outboundIdempotencyKey(userId, idempotencyKey) {
     return `${userId}:${idempotencyKey}`;
+  }
+
+  function snippetKey(userId, snippetId) {
+    return `${userId}:${snippetId}`;
   }
 
   function clockIso() {
@@ -338,6 +384,14 @@ export function createGeneratedProviderDraftFixture({
       detail: { code, message },
       ...extra,
     }, status);
+  }
+
+  function writeEmpty(response, status = 204) {
+    if (response.destroyed || response.writableEnded) return;
+    response.writeHead(status, {
+      'Cache-Control': 'no-store',
+    });
+    response.end();
   }
 
   async function readJson(request) {
@@ -579,6 +633,284 @@ export function createGeneratedProviderDraftFixture({
     counters.expected_mutations += 1;
     recordEvent(kind, request, pathname, { expected: true });
   }
+
+  function snippetInvalid(message) {
+    const error = new Error(message);
+    error.code = 'snippet_invalid';
+    return error;
+  }
+
+  function normalizeSnippetPayload(body, { replace = false } = {}) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      throw snippetInvalid('Snippet payload must be an object');
+    }
+    const allowed = new Set([
+      'name',
+      'shortcut',
+      'body_html',
+      'body_text',
+      replace ? 'expected_revision' : 'snippet_id',
+    ]);
+    if (Object.keys(body).some(key => !allowed.has(key))) {
+      throw snippetInvalid('Snippet payload contains unsupported fields');
+    }
+
+    const name = typeof body.name === 'string'
+      ? body.name.trim().split(/\s+/).filter(Boolean).join(' ')
+      : '';
+    let shortcut = typeof body.shortcut === 'string' ? body.shortcut.trim().toLowerCase() : '';
+    if (shortcut.startsWith(';')) shortcut = shortcut.slice(1).trim();
+    const normalizeBody = value => (
+      typeof value === 'string'
+        ? value.replace(/\r\n?/g, '\n').trim()
+        : ''
+    );
+    const bodyHtml = normalizeBody(body.body_html);
+    const bodyText = normalizeBody(body.body_text);
+
+    if (!name || name.length > 120) throw snippetInvalid('Snippet name is invalid');
+    if (!SNIPPET_SHORTCUT_RE.test(shortcut)) throw snippetInvalid('Snippet shortcut is invalid');
+    if (!bodyHtml || bodyHtml.length > 50_000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(bodyHtml)) {
+      throw snippetInvalid('Snippet HTML is invalid');
+    }
+    if (!bodyText || bodyText.length > 20_000 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(bodyText)) {
+      throw snippetInvalid('Snippet text is invalid');
+    }
+
+    const normalized = {
+      name,
+      shortcut,
+      body_html: bodyHtml,
+      body_text: bodyText,
+    };
+    if (replace) {
+      if (!Number.isSafeInteger(body.expected_revision) || body.expected_revision <= 0) {
+        throw snippetInvalid('expected_revision must be a positive integer');
+      }
+      normalized.expected_revision = body.expected_revision;
+    } else {
+      if (!isUuid(body.snippet_id)) throw snippetInvalid('snippet_id must be a UUID');
+      normalized.snippet_id = body.snippet_id.toLowerCase();
+    }
+    return normalized;
+  }
+
+  function publicSnippet(record) {
+    return {
+      snippet_id: record.snippet_id,
+      name: record.name,
+      shortcut: record.shortcut,
+      body_html: record.body_html,
+      body_text: record.body_text,
+      revision: record.revision,
+      created_at: record.created_at,
+      updated_at: record.updated_at,
+    };
+  }
+
+  function snippetContentMatches(record, payload) {
+    return record.name === payload.name
+      && record.shortcut === payload.shortcut
+      && record.body_html === payload.body_html
+      && record.body_text === payload.body_text;
+  }
+
+  function seedSnippets() {
+    snippets.clear();
+    for (const [userIdRaw, seeded] of Object.entries(SEEDED_SNIPPETS_BY_USER)) {
+      const userId = Number(userIdRaw);
+      for (const item of seeded) {
+        const timestamp = clockIso();
+        snippets.set(snippetKey(userId, item.snippet_id), {
+          ...clone(item),
+          owner_user_id: userId,
+          revision: 1,
+          created_at: timestamp,
+          updated_at: timestamp,
+          seeded: true,
+        });
+      }
+    }
+  }
+
+  function ownedSnippets() {
+    return [...snippets.values()]
+      .filter(record => record.owner_user_id === currentUser.id)
+      .sort((left, right) => (
+        left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })
+        || left.snippet_id.localeCompare(right.snippet_id)
+      ));
+  }
+
+  function handleSnippetList(request, response, pathname) {
+    counters.snippet_list_requests += 1;
+    const records = ownedSnippets();
+    recordEvent('snippet_listed', request, pathname, { count: records.length });
+    return writeJson(response, {
+      snippets: records.map(publicSnippet),
+      total: records.length,
+      limit: MAX_PERSONAL_SNIPPETS,
+    });
+  }
+
+  async function handleSnippetCreate(request, response, pathname) {
+    markExpectedMutation(request, pathname, 'snippet_create_request');
+    counters.snippet_create_requests += 1;
+    let payload;
+    try {
+      payload = normalizeSnippetPayload(await readJson(request));
+    } catch (error) {
+      counters.rejected_payloads += 1;
+      return writeError(response, 422, error.code || 'snippet_invalid', error.message);
+    }
+
+    const ownKey = snippetKey(currentUser.id, payload.snippet_id);
+    const existing = snippets.get(ownKey);
+    if (existing) {
+      if (snippetContentMatches(existing, payload)) {
+        counters.snippet_create_replays += 1;
+        recordEvent('snippet_create_replayed', request, pathname, {
+          snippet_id: existing.snippet_id,
+          revision: existing.revision,
+        });
+        return writeJson(response, publicSnippet(existing));
+      }
+      counters.snippet_conflicts += 1;
+      return writeError(response, 409, 'snippet_conflict', 'That snippet request ID is already used');
+    }
+    if ([...snippets.values()].some(record => record.snippet_id === payload.snippet_id)) {
+      counters.snippet_conflicts += 1;
+      return writeError(response, 409, 'snippet_conflict', 'That snippet request ID is already used');
+    }
+    if (ownedSnippets().some(record => record.shortcut === payload.shortcut)) {
+      counters.snippet_conflicts += 1;
+      return writeError(response, 409, 'snippet_conflict', 'That snippet shortcut is already in use');
+    }
+    if (ownedSnippets().length >= MAX_PERSONAL_SNIPPETS) {
+      return writeError(
+        response,
+        429,
+        'snippet_quota_exceeded',
+        `A user can keep at most ${MAX_PERSONAL_SNIPPETS} personal snippets`,
+      );
+    }
+
+    const timestamp = clockIso();
+    const record = {
+      ...payload,
+      owner_user_id: currentUser.id,
+      revision: 1,
+      created_at: timestamp,
+      updated_at: timestamp,
+      seeded: false,
+    };
+    snippets.set(ownKey, record);
+    counters.snippet_creates += 1;
+    recordEvent('snippet_created', request, pathname, {
+      snippet_id: record.snippet_id,
+      revision: record.revision,
+    });
+    return writeJson(response, publicSnippet(record), 201);
+  }
+
+  async function handleSnippetReplace(request, response, pathname, snippetId) {
+    markExpectedMutation(request, pathname, 'snippet_replace_request');
+    counters.snippet_replace_requests += 1;
+    if (!isUuid(snippetId)) {
+      counters.rejected_payloads += 1;
+      return writeError(response, 422, 'snippet_invalid', 'snippet_id must be a UUID');
+    }
+    let payload;
+    try {
+      payload = normalizeSnippetPayload(await readJson(request), { replace: true });
+    } catch (error) {
+      counters.rejected_payloads += 1;
+      return writeError(response, 422, error.code || 'snippet_invalid', error.message);
+    }
+
+    const record = snippets.get(snippetKey(currentUser.id, snippetId.toLowerCase()));
+    if (!record) {
+      counters.snippet_not_found += 1;
+      return writeError(response, 404, 'snippet_not_found', 'Snippet not found');
+    }
+    if (record.revision === payload.expected_revision + 1 && snippetContentMatches(record, payload)) {
+      counters.snippet_update_replays += 1;
+      recordEvent('snippet_update_replayed', request, pathname, {
+        snippet_id: record.snippet_id,
+        revision: record.revision,
+      });
+      return writeJson(response, publicSnippet(record));
+    }
+    if (record.revision !== payload.expected_revision) {
+      counters.snippet_conflicts += 1;
+      return writeError(
+        response,
+        409,
+        'snippet_conflict',
+        'This snippet changed on another device; refresh it',
+      );
+    }
+    if (ownedSnippets().some(item => (
+      item.snippet_id !== record.snippet_id && item.shortcut === payload.shortcut
+    ))) {
+      counters.snippet_conflicts += 1;
+      return writeError(response, 409, 'snippet_conflict', 'That snippet shortcut is already in use');
+    }
+
+    Object.assign(record, {
+      name: payload.name,
+      shortcut: payload.shortcut,
+      body_html: payload.body_html,
+      body_text: payload.body_text,
+      revision: record.revision + 1,
+      updated_at: clockIso(),
+    });
+    counters.snippet_updates += 1;
+    recordEvent('snippet_updated', request, pathname, {
+      snippet_id: record.snippet_id,
+      revision: record.revision,
+    });
+    return writeJson(response, publicSnippet(record));
+  }
+
+  function handleSnippetDelete(request, response, pathname, snippetId, expectedRevisionRaw) {
+    markExpectedMutation(request, pathname, 'snippet_delete_request');
+    counters.snippet_delete_requests += 1;
+    const expectedRevision = Number(expectedRevisionRaw);
+    if (!isUuid(snippetId) || !Number.isSafeInteger(expectedRevision) || expectedRevision <= 0) {
+      counters.rejected_payloads += 1;
+      return writeError(response, 422, 'snippet_invalid', 'A UUID and positive expected_revision are required');
+    }
+
+    const key = snippetKey(currentUser.id, snippetId.toLowerCase());
+    const record = snippets.get(key);
+    if (!record) {
+      counters.snippet_not_found += 1;
+      recordEvent('snippet_delete_replayed_or_hidden', request, pathname, {
+        snippet_id: snippetId.toLowerCase(),
+      });
+      return writeEmpty(response);
+    }
+    if (record.revision !== expectedRevision) {
+      counters.snippet_conflicts += 1;
+      return writeError(
+        response,
+        409,
+        'snippet_conflict',
+        'This snippet changed on another device; refresh it',
+      );
+    }
+
+    snippets.delete(key);
+    counters.snippet_deletes += 1;
+    recordEvent('snippet_deleted', request, pathname, {
+      snippet_id: record.snippet_id,
+      revision: record.revision,
+    });
+    return writeEmpty(response);
+  }
+
+  seedSnippets();
 
   function dropResponseAfterPersistence(request, response, record) {
     firstLostResponseUsed = true;
@@ -1450,6 +1782,12 @@ export function createGeneratedProviderDraftFixture({
       attempt_count: record.attempt_count,
       payload_retained: Boolean(record.payload),
     }));
+    const logicalSnippets = [...snippets.values()].map(record => ({
+      snippet_id: record.snippet_id,
+      owner_user_id: record.owner_user_id,
+      revision: record.revision,
+      seeded: record.seeded,
+    }));
     return {
       fixture: 'generated-provider-draft-sessions',
       fixture_domains: ['example.test'],
@@ -1463,9 +1801,11 @@ export function createGeneratedProviderDraftFixture({
         ...counters,
         logical_drafts: logicalDrafts.length,
         live_provider_drafts: logicalDrafts.filter(item => item.state !== 'discarded').length,
+        logical_snippets: logicalSnippets.length,
       },
       logical_drafts: logicalDrafts,
       logical_outbounds: logicalOutbounds,
+      logical_snippets: logicalSnippets,
       events: clone(events),
     };
   }
@@ -1529,6 +1869,7 @@ export function createGeneratedProviderDraftFixture({
     clockNowMs = Number.isFinite(Date.parse(body.clock_now))
       ? Date.parse(body.clock_now)
       : Date.parse('2026-08-30T16:00:00.000Z');
+    seedSnippets();
     recordEvent('qa_reset', request, '/api/qa/reset', {
       scenario,
       discard_window_ms: activeDiscardWindowMs,
@@ -1559,6 +1900,12 @@ export function createGeneratedProviderDraftFixture({
           message_id_header: source.message_id_header,
           references_header: source.references_header,
         })),
+        snippet_ids_by_user: Object.fromEntries(
+          Object.entries(SEEDED_SNIPPETS_BY_USER).map(([userId, records]) => [
+            userId,
+            records.map(record => record.snippet_id),
+          ]),
+        ),
         scenarios: GENERATED_PROVIDER_DRAFT_SCENARIOS,
       });
     }
@@ -1757,6 +2104,30 @@ export function createGeneratedProviderDraftFixture({
 
     if (request.method === 'POST' && pathname === '/api/compose/draft') {
       return handleDraftUpsert(request, response, pathname);
+    }
+    if (request.method === 'GET' && pathname === '/api/compose/snippets') {
+      return handleSnippetList(request, response, pathname);
+    }
+    if (request.method === 'POST' && pathname === '/api/compose/snippets') {
+      return handleSnippetCreate(request, response, pathname);
+    }
+    const snippetMatch = pathname.match(/^\/api\/compose\/snippets\/([^/]+)$/);
+    if (request.method === 'PUT' && snippetMatch) {
+      return handleSnippetReplace(
+        request,
+        response,
+        pathname,
+        decodeURIComponent(snippetMatch[1]),
+      );
+    }
+    if (request.method === 'DELETE' && snippetMatch) {
+      return handleSnippetDelete(
+        request,
+        response,
+        pathname,
+        decodeURIComponent(snippetMatch[1]),
+        url.searchParams.get('expected_revision'),
+      );
     }
     if (request.method === 'POST' && pathname === '/api/compose/send') {
       return handleOutboundSend(request, response, pathname);
