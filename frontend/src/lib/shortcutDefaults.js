@@ -52,6 +52,7 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'inbox.unread',   key: 'Shift+u', label: 'Mark as unread',        context: 'inbox', category: 'Inbox' },
   { id: 'inbox.spam',     key: '!',       label: 'Report spam',           context: 'inbox', category: 'Inbox' },
   { id: 'inbox.reply',    key: 'r',       label: 'Reply',                 context: 'inbox', category: 'Inbox' },
+  { id: 'inbox.sendArchive', key: 'Ctrl+Shift+Enter', label: 'Send reply & archive', context: 'inbox', category: 'Inbox', keywords: ['send and archive', 'done'] },
   { id: 'inbox.forward',  key: 'f',       label: 'Forward',               context: 'inbox', category: 'Inbox' },
   { id: 'inbox.snooze',   key: 'h',       label: 'Snooze / remind later', context: 'inbox', category: 'Inbox', keywords: ['remind later', 'return to inbox'] },
   { id: 'inbox.label',    key: 'l',       label: 'Apply or remove label', context: 'inbox', category: 'Inbox', keywords: ['tag', 'organize'] },
@@ -91,6 +92,7 @@ export const SHORTCUT_DEFAULTS = [
 
   // ── Compose ──────────────────────────────────────────────────────
   { id: 'compose.send',    key: 'Ctrl+Enter',   label: 'Send email',  context: 'compose', category: 'Compose' },
+  { id: 'compose.sendArchive', key: 'Ctrl+Shift+Enter', label: 'Send reply & archive', context: 'compose', category: 'Compose', keywords: ['send and archive', 'done'] },
   { id: 'compose.draft',   key: 'Ctrl+s',       label: 'Save draft',  context: 'compose', category: 'Compose' },
   { id: 'compose.discard', key: 'Escape',        label: 'Close and keep draft', context: 'compose', category: 'Compose' },
   { id: 'compose.deleteDraft', key: 'Ctrl+Shift+,', label: 'Discard draft', context: 'compose', category: 'Compose' },

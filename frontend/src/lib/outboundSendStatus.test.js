@@ -48,3 +48,8 @@ test('global outbound status follows authenticated generation and never reads me
   assert.doesNotMatch(statusSource, /operation\.(to|cc|bcc|subject|body_html|body_text|attachments)\b/);
   assert.doesNotMatch(statusSource, /error_message/);
 });
+
+test('scheduled management makes the confirmed-delivery archive intent visible', () => {
+  assert.match(statusSource, /operation\.archive_source_after_send/);
+  assert.match(statusSource, /Archive after confirmed delivery/);
+});

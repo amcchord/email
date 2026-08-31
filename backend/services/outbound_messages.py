@@ -134,8 +134,18 @@ def outbound_is_scheduled(outbound: OutboundMessage) -> bool:
     return outbound_scheduled_for(outbound) is not None
 
 
+def outbound_archives_source_after_send(outbound: OutboundMessage) -> bool:
+    """Expose only the safe, active archive intent—not the retained payload."""
+    payload = outbound.payload if isinstance(outbound.payload, dict) else {}
+    return (
+        payload.get("archive_source_after_send") is True
+        and isinstance(outbound.source_email_id, int)
+        and outbound.source_email_id > 0
+    )
+
+
 async def _ensure_post_send_archive(outbound: OutboundMessage) -> bool:
-    """Durably stage Flow's archive-after-send intent before terminal send truth.
+    """Durably stage post-send archive intent before terminal send truth.
 
     The deterministic mail-action key makes a crash between staging the action
     and marking the outbound sent harmless: provider reconciliation repeats

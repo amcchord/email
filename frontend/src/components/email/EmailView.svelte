@@ -43,6 +43,11 @@
   import EmailHtmlFrame from './EmailHtmlFrame.svelte';
   import SendSplitButton from '../common/SendSplitButton.svelte';
   import { safeLabelColor, visibleUserLabels } from '../../lib/labelWorkflows.js';
+  import {
+    canArchiveAfterSend,
+    sendArchiveAcceptedMessage,
+    withArchiveAfterSend,
+  } from '../../lib/sendArchive.js';
 
   let {
     email = null,
@@ -96,6 +101,10 @@
   );
   let inlineReplyActionLabel = $derived(
     inlineReplyMode === REPLY_ENVELOPE_MODES.REPLY_ALL ? 'Send Reply All' : 'Send Reply',
+  );
+  let inlineReplyCanArchive = $derived(
+    activeReplyEnvelopeResult.available
+      && canArchiveAfterSend({ source_email_id: email?.id }),
   );
   let replySourceResult = $derived(resolveReplySourceAccount({
     message: email,
@@ -153,6 +162,24 @@
       disabledReason: () => loading
         ? 'Wait for the selected email to load'
         : replyUnavailableMessage(replySourceResult.reason),
+    },
+    'inbox.sendArchive': {
+      run: () => sendInlineReply(null, { archiveAfterSend: true }),
+      isEnabled: () => (
+        inlineReplyOpen
+        && inlineReplyCanArchive
+        && Boolean(inlineReplyBody.trim())
+        && durableReplyState.canSend
+        && !inlineReplySending
+        && !durableReplyError
+      ),
+      disabledReason: () => {
+        if (!inlineReplyOpen || !inlineReplyCanArchive) return 'Open a verified reply first';
+        if (!inlineReplyBody.trim()) return 'Write a reply first';
+        if (durableReplyError) return 'Retry the saved reply before sending';
+        if (!durableReplyState.canSend) return 'Reply is not ready to send';
+        return inlineReplySending ? 'Reply is already sending' : 'Reply is unavailable';
+      },
     },
   }));
 
@@ -781,12 +808,16 @@
     return true;
   }
 
-  async function sendInlineReply(schedule = null) {
+  async function sendInlineReply(schedule = null, { archiveAfterSend = false } = {}) {
     if (!email || !inlineReplyBody.trim() || !sessionIsCurrent() || !durableReplyController) return;
     const replyAtStart = activeReplyEnvelopeResult;
     if (!replyAtStart.available) {
       showToast(replyUnavailableMessage(replyAtStart.reason), 'error');
       return;
+    }
+    if (archiveAfterSend && !inlineReplyCanArchive) {
+      showToast('Open a verified reply before using Send & archive.', 'error');
+      return false;
     }
     const emailAtStart = email;
     const emailIdAtStart = email.id;
@@ -802,11 +833,13 @@
     const controllerAtStart = durableReplyController;
     const replyOwnerAtStart = durableReply;
     const sendReturnFocus = replyReturnFocus;
-    const payload = replyOwnerAtStart.sendPayload();
+    let payload = withArchiveAfterSend(replyOwnerAtStart.sendPayload(), archiveAfterSend);
     const restoreDraft = {
       draft_key: `client:${payload.client_draft_id}`,
       ...payload,
     };
+    // Recovered drafts never remember an explicit Send & archive invocation.
+    delete restoreDraft.archive_source_after_send;
     if (schedule?.scheduledFor) {
       payload.scheduled_for = schedule.scheduledFor;
       payload.schedule_timezone = schedule.scheduleTimezone;
@@ -835,10 +868,18 @@
       }
     };
     inlineReplySending = true;
-    inlineReplySendMode = schedule ? 'schedule' : 'send';
+    inlineReplySendMode = schedule ? 'schedule' : (archiveAfterSend ? 'archive' : 'send');
     try {
       const operation = await submitOutboundSend(payload, {
-        onAccepted: () => {},
+        onAccepted: () => {
+          if (archiveAfterSend && sessionIsCurrent()) {
+            showToast(
+              sendArchiveAcceptedMessage({ scheduled: Boolean(schedule?.scheduledFor) }),
+              'info',
+              6000,
+            );
+          }
+        },
         onSent: () => {
           void durableDraftStorage?.delete?.(sessionGuard.userId, payload.client_draft_id);
           if (
@@ -1021,7 +1062,10 @@
     }
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
-      if (durableReplyState.canSend && inlineReplyBody.trim()) void sendInlineReply();
+      event.stopPropagation();
+      if (durableReplyState.canSend && inlineReplyBody.trim()) {
+        void sendInlineReply(null, { archiveAfterSend: event.shiftKey });
+      }
     }
   }
 
@@ -1714,9 +1758,11 @@
             busy={inlineReplySending}
             busyLabel={inlineReplySendMode === 'schedule' ? 'Scheduling…' : 'Sending…'}
             onsend={() => sendInlineReply()}
-            onschedule={schedule => sendInlineReply(schedule)}
+            canArchiveAfterSend={inlineReplyCanArchive}
+            onsendarchive={() => sendInlineReply(null, { archiveAfterSend: true })}
+            onschedule={schedule => sendInlineReply(schedule, { archiveAfterSend: schedule.archiveAfterSend })}
           />
-          <span class="text-[11px]" style="color: var(--text-tertiary)">⌘↵ Send · Esc Close and keep</span>
+          <span class="text-[11px]" style="color: var(--text-tertiary)">⌘↵ Send · ⌘⇧↵ Send &amp; archive · Esc Close and keep</span>
         </div>
       </div>
     {/if}

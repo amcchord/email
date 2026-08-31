@@ -117,6 +117,8 @@ export function normalizeOutboundSendOperation(raw, { fallbackKey = null } = {})
     idempotency_key: idempotencyKey,
     account_id: safePositiveInteger(source.account_id),
     source_email_id: safePositiveInteger(source.source_email_id),
+    archive_source_after_send: source.archive_source_after_send === true
+      && safePositiveInteger(source.source_email_id) !== null,
     client_draft_id: safeUuid(source.client_draft_id),
     state,
     scheduled_for: safeDate(source.scheduled_for),

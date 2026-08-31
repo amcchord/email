@@ -480,6 +480,7 @@ class OutboundSendResponse(BaseModel):
     idempotency_key: UUID
     account_id: int
     source_email_id: Optional[int] = None
+    archive_source_after_send: bool = False
     client_draft_id: Optional[UUID] = None
     state: OutboundSendState
     scheduled_for: Optional[datetime] = None

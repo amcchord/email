@@ -30,6 +30,7 @@ from backend.services.outbound_messages import (
     drain_due_outbound_messages,
     outbound_can_retry,
     outbound_can_cancel,
+    outbound_archives_source_after_send,
     outbound_scheduled_for,
     outbound_payload_hash,
     stage_outbound_message,
@@ -60,6 +61,7 @@ def _outbound(*, attempted=False, payload=None):
         send_id=send_id,
         user_id=5,
         account_id=7,
+        source_email_id=81,
         lease_token=uuid4(),
         rfc_message_id=f"<mail-{send_id}@email.mcchord.net>",
         provider_attempted_at=NOW if attempted else None,
@@ -171,6 +173,7 @@ def test_outbound_model_and_routes_expose_complete_state_contract():
     send_route = next(route for route in router.routes if route.path == "/api/compose/send")
     assert send_route.status_code == 202
     assert "payload" not in OutboundSendResponse.model_fields
+    assert OutboundSendResponse.model_fields["archive_source_after_send"].default is False
 
 
 def test_scheduled_send_metadata_and_actionability_are_deadline_bound():
@@ -181,10 +184,14 @@ def test_scheduled_send_metadata_and_actionability_are_deadline_bound():
     outbound.execute_after = NOW + timedelta(hours=2)
     outbound.payload["scheduled_for"] = outbound.execute_after.isoformat()
     outbound.payload["schedule_timezone"] = "America/New_York"
+    outbound.payload["archive_source_after_send"] = True
 
     assert outbound_scheduled_for(outbound) == outbound.execute_after
     assert outbound_can_cancel(outbound, now=NOW + timedelta(hours=1)) is True
     assert outbound_can_cancel(outbound, now=outbound.execute_after) is False
+    assert outbound_archives_source_after_send(outbound) is True
+    outbound.source_email_id = None
+    assert outbound_archives_source_after_send(outbound) is False
     assert "retry_authorized" not in OutboundSendResponse.model_fields
     index_names = {index.name for index in OutboundMessage.__table__.indexes}
     assert {

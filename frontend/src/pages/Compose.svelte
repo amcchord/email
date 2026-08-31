@@ -37,6 +37,11 @@
   import DeferredRichEditor from '../components/email/DeferredRichEditor.svelte';
   import DraftStatus from '../components/email/DraftStatus.svelte';
   import SendSplitButton from '../components/common/SendSplitButton.svelte';
+  import {
+    exactSourceEmailId,
+    sendArchiveAcceptedMessage,
+    withArchiveAfterSend,
+  } from '../lib/sendArchive.js';
 
   let to = $state('');
   let cc = $state('');
@@ -73,6 +78,7 @@
   let sessionGuard = null;
 
   let senderAccount = $derived(accountList.find(account => account.id === Number(selectedAccountId)) || null);
+  let archiveSourceEmailId = $derived(exactSourceEmailId(replyContext.source_email_id));
   let recipientChips = $derived(parseRecipients(to));
   let totalAttachmentBytes = $derived(attachments.reduce((sum, item) => sum + item.size, 0));
   let draftLocked = $derived(
@@ -326,6 +332,22 @@
           : !draftState.canSend
             ? 'Draft is not ready to send'
             : 'Message editor is still opening',
+      },
+      'compose.sendArchive': {
+        run: () => handleSend(null, { archiveAfterSend: true }),
+        isEnabled: () => (
+          !sending
+          && writingSurfaceReady
+          && draftState.canSend
+          && archiveSourceEmailId !== null
+        ),
+        disabledReason: () => {
+          if (archiveSourceEmailId === null) return 'Open a verified reply first';
+          if (sending) return 'Email is already sending';
+          if (draftState.status === 'offline') return 'Reconnect to send';
+          if (!draftState.canSend) return 'Draft is not ready to send';
+          return 'Message editor is still opening';
+        },
       },
       'compose.draft': {
         run: () => handleSaveDraft(),
@@ -587,8 +609,12 @@
     }
   }
 
-  async function handleSend(schedule = null) {
+  async function handleSend(schedule = null, { archiveAfterSend = false } = {}) {
     if (sending || !writingSurfaceReady || !draftState.canSend || !sessionGuard?.isCurrent()) return false;
+    if (archiveAfterSend && archiveSourceEmailId === null) {
+      showToast('Open a verified reply before using Send & archive.', 'error');
+      return false;
+    }
     if (!to.trim()) {
       showToast('Please add recipients', 'error');
       return false;
@@ -600,7 +626,7 @@
 
     persistLocalDraft();
     sending = true;
-    sendMode = schedule ? 'schedule' : 'send';
+    sendMode = schedule ? 'schedule' : (archiveAfterSend ? 'archive' : 'send');
     try {
       await draftController?.markSending(true);
     } catch (err) {
@@ -635,7 +661,7 @@
       currentPage.set('inbox');
     };
     try {
-      const data = {
+      let data = {
         account_id: selectedAccountId,
         to: parseRecipients(to),
         cc: parseRecipients(cc),
@@ -652,6 +678,7 @@
       if (replyContext.references) data.references = replyContext.references;
       if (replyContext.thread_id) data.thread_id = replyContext.thread_id;
       if (replyContext.source_email_id) data.source_email_id = replyContext.source_email_id;
+      data = withArchiveAfterSend(data, archiveAfterSend);
 
       const composeIntent = get(composeData);
       const restoreDraft = {
@@ -660,6 +687,9 @@
         client_draft_id: capturedDraftKey,
         attachments: attachments.map(item => ({ ...item })),
       };
+      // Send & archive is an explicit one-shot action, never a recovered-draft
+      // default after Undo, cancellation, or delivery failure.
+      delete restoreDraft.archive_source_after_send;
       if (schedule?.scheduledFor) {
         data.scheduled_for = schedule.scheduledFor;
         data.schedule_timezone = schedule.scheduleTimezone;
@@ -672,7 +702,16 @@
       );
 
       const operation = await submitOutboundSend(data, {
-        onAccepted: releaseEditor,
+        onAccepted: acceptedOperation => {
+          if (archiveAfterSend && isAuthenticatedSessionCurrent(sendSession)) {
+            showToast(
+              sendArchiveAcceptedMessage({ scheduled: Boolean(schedule?.scheduledFor) }),
+              'info',
+              6000,
+            );
+          }
+          releaseEditor(acceptedOperation);
+        },
         onSent: forgetSentDraft,
         onRestore: restoreEditor,
       });
@@ -767,7 +806,9 @@
         busy={sending}
         busyLabel={sendMode === 'schedule' ? 'Scheduling…' : 'Sending…'}
         onsend={() => handleSend()}
-        onschedule={schedule => handleSend(schedule)}
+        canArchiveAfterSend={archiveSourceEmailId !== null}
+        onsendarchive={() => handleSend(null, { archiveAfterSend: true })}
+        onschedule={schedule => handleSend(schedule, { archiveAfterSend: schedule.archiveAfterSend })}
       />
     </div>
   </div>

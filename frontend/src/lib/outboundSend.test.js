@@ -16,6 +16,7 @@ function serverOperation(overrides = {}) {
     idempotency_key: '00000000-0000-4000-8000-000000000222',
     account_id: 7,
     source_email_id: 81,
+    archive_source_after_send: false,
     state: 'staged',
     execute_after: '2026-08-30T16:00:10.000Z',
     undo_until: '2026-08-30T16:00:10.000Z',
@@ -61,6 +62,7 @@ test('normalization exposes only safe lifecycle fields and honors server retry a
     state: 'failed',
     can_undo: false,
     can_retry: true,
+    archive_source_after_send: true,
     attempt_count: 3,
     max_attempts: 8,
     to: ['private@example.com'],
@@ -72,6 +74,7 @@ test('normalization exposes only safe lifecycle fields and honors server retry a
   assert.equal(normalized.can_retry, true);
   assert.equal(normalized.can_undo, false);
   assert.equal(normalized.source_email_id, 81);
+  assert.equal(normalized.archive_source_after_send, true);
   assert.equal(normalized.attempt_count, 3);
   assert.equal(normalized.max_attempts, 8);
   assert.equal('retryable' in normalized, false);
@@ -79,6 +82,13 @@ test('normalization exposes only safe lifecycle fields and honors server retry a
   assert.equal('subject' in normalized, false);
   assert.equal('body_html' in normalized, false);
   assert.equal('attachments' in normalized, false);
+});
+
+test('archive status fails closed when the server omits an exact source identity', () => {
+  assert.equal(normalizeOutboundSendOperation(serverOperation({
+    source_email_id: null,
+    archive_source_after_send: true,
+  })).archive_source_after_send, false);
 });
 
 test('normalization retains only a valid durable draft identity for recovery', () => {

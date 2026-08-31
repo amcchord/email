@@ -17,38 +17,78 @@
     compact = false,
     onsend = null,
     onschedule = null,
+    canArchiveAfterSend = false,
+    onsendarchive = null,
   } = $props();
 
   let dialog = $state(null);
+  let optionsButton = $state(null);
   let choices = $state([]);
   let customValue = $state('');
   let customResult = $state(null);
   let submitting = $state(false);
   let dialogOpen = $state(false);
+  let scheduledArchive = $state(false);
+  let restoreOptionsFocus = false;
   const timezone = browserScheduleTimezone();
 
-  function openSchedule() {
+  function openOptions() {
     if (disabled || busy || submitting) return;
     choices = scheduledSendQuickChoices();
     customValue = localScheduleInputValue();
     customResult = null;
+    scheduledArchive = false;
+    restoreOptionsFocus = false;
     dialogOpen = true;
     dialog?.showModal?.();
     void tick().then(() => dialog?.querySelector?.('[data-first-choice]')?.focus?.());
   }
 
-  function closeSchedule() {
-    if (dialog?.open && !submitting) dialog.close();
-    if (!submitting) dialogOpen = false;
+  function closeOptions() {
+    if (submitting) return;
+    restoreOptionsFocus = true;
+    if (dialog?.open) dialog.close();
+    else handleDialogClosed();
+  }
+
+  function handleDialogClosed() {
+    dialogOpen = false;
+    scheduledArchive = false;
+    if (restoreOptionsFocus) {
+      void tick().then(() => optionsButton?.isConnected && optionsButton.focus?.());
+    }
+    restoreOptionsFocus = false;
+  }
+
+  function handleCancel(event) {
+    if (submitting) {
+      event.preventDefault();
+      return;
+    }
+    restoreOptionsFocus = true;
+  }
+
+  async function chooseArchive() {
+    if (!canArchiveAfterSend || submitting) return;
+    submitting = true;
+    try {
+      const accepted = await onsendarchive?.();
+      if (accepted !== false) dialog?.close?.();
+    } finally {
+      submitting = false;
+    }
   }
 
   async function chooseSchedule(iso) {
     if (!iso || submitting) return;
     submitting = true;
     try {
-      await onschedule?.({ scheduledFor: iso, scheduleTimezone: timezone });
-      dialog?.close?.();
-      dialogOpen = false;
+      const accepted = await onschedule?.({
+        scheduledFor: iso,
+        scheduleTimezone: timezone,
+        archiveAfterSend: canArchiveAfterSend && scheduledArchive,
+      });
+      if (accepted !== false) dialog?.close?.();
     } finally {
       submitting = false;
     }
@@ -62,7 +102,7 @@
   }
 
   function handleBackdrop(event) {
-    if (event.target === dialog) closeSchedule();
+    if (event.target === dialog) closeOptions();
   }
 </script>
 
@@ -84,10 +124,11 @@
     {/if}
   </button>
   <button
+    bind:this={optionsButton}
     type="button"
     class="send-options inline-flex min-h-11 min-w-11 items-center justify-center border-l border-white/25 bg-accent-600 px-2 text-white transition-fast hover:bg-accent-700 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-500 disabled:cursor-not-allowed disabled:opacity-50"
     disabled={disabled || busy || submitting}
-    onclick={openSchedule}
+    onclick={openOptions}
     aria-label="Send options"
     aria-haspopup="dialog"
     aria-expanded={dialogOpen}
@@ -98,34 +139,61 @@
 
 <dialog
   bind:this={dialog}
-  class="send-later-dialog m-auto w-[min(92vw,30rem)] rounded-2xl border p-0 shadow-2xl backdrop:bg-black/40"
+  class="send-options-dialog m-auto w-[min(92vw,30rem)] rounded-2xl border p-0 shadow-2xl backdrop:bg-black/40"
   style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary)"
-  aria-labelledby="send-later-title"
+  aria-labelledby="send-options-title"
   onclick={handleBackdrop}
-  onclose={() => { dialogOpen = false; }}
+  oncancel={handleCancel}
+  onclose={handleDialogClosed}
 >
   <div class="p-5 sm:p-6">
     <div class="mb-4 flex items-start justify-between gap-4">
       <div>
-        <h2 id="send-later-title" class="text-lg font-semibold">Send later</h2>
+        <h2 id="send-options-title" class="text-lg font-semibold">Send options</h2>
         <p class="mt-1 text-xs" style="color: var(--text-secondary)">
-          Times use {timezone}. You can cancel or send early from the scheduled-mail bar.
+          Send now or choose a future time in {timezone}.
         </p>
       </div>
       <button
         type="button"
         class="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg hover:opacity-70"
-        onclick={closeSchedule}
-        aria-label="Close send later"
+        onclick={closeOptions}
+        aria-label="Close send options"
       >
         <Icon name="x" size={18} />
       </button>
     </div>
 
     <div class="grid gap-2">
+      {#if canArchiveAfterSend}
+        <button
+          data-first-choice=""
+          type="button"
+          class="flex min-h-12 items-center justify-between gap-4 rounded-xl border px-4 py-2.5 text-left transition-fast hover:border-accent-400 hover:bg-accent-50/50 dark:hover:bg-accent-950/20"
+          style="border-color: var(--border-color)"
+          disabled={submitting}
+          onclick={chooseArchive}
+        >
+          <span class="flex items-center gap-3 font-medium">
+            <Icon name="archive" size={16} />
+            Send &amp; archive
+          </span>
+          <kbd class="text-[11px]" style="color: var(--text-tertiary)">⌘⇧↵</kbd>
+        </button>
+        <p class="px-1 text-[11px] leading-relaxed" style="color: var(--text-tertiary)">
+          The conversation stays in place if you undo, cancel, or delivery fails.
+        </p>
+      {/if}
+
+      <div class="my-2 flex items-center gap-3" aria-hidden="true">
+        <span class="h-px flex-1" style="background: var(--border-color)"></span>
+        <span class="text-[11px] font-semibold uppercase tracking-wider" style="color: var(--text-tertiary)">Send later</span>
+        <span class="h-px flex-1" style="background: var(--border-color)"></span>
+      </div>
+
       {#each choices as choice, index}
         <button
-          data-first-choice={index === 0 ? '' : undefined}
+          data-first-choice={!canArchiveAfterSend && index === 0 ? '' : undefined}
           type="button"
           class="flex min-h-12 items-center justify-between gap-4 rounded-xl border px-4 py-2.5 text-left transition-fast hover:border-accent-400 hover:bg-accent-50/50 dark:hover:bg-accent-950/20"
           style="border-color: var(--border-color)"
@@ -140,6 +208,20 @@
         </button>
       {/each}
     </div>
+
+    {#if canArchiveAfterSend}
+      <label class="mt-4 flex min-h-11 items-start gap-3 rounded-xl border px-3 py-2.5 text-sm" style="border-color: var(--border-color); background: var(--bg-secondary)">
+        <input
+          type="checkbox"
+          bind:checked={scheduledArchive}
+          class="mt-0.5 h-5 w-5 accent-accent-600"
+        />
+        <span>
+          <span class="block font-medium">Archive conversation after delivery</span>
+          <span class="mt-0.5 block text-[11px]" style="color: var(--text-tertiary)">Cancellation or failed delivery leaves it where it is.</span>
+        </span>
+      </label>
+    {/if}
 
     <div class="my-5 flex items-center gap-3" aria-hidden="true">
       <span class="h-px flex-1" style="background: var(--border-color)"></span>
@@ -187,13 +269,13 @@
 </dialog>
 
 <style>
-  .send-later-dialog[open] { animation: send-later-in 120ms ease-out; }
-  @keyframes send-later-in {
+  .send-options-dialog[open] { animation: send-options-in 120ms ease-out; }
+  @keyframes send-options-in {
     from { opacity: 0; transform: translateY(8px) scale(.99); }
     to { opacity: 1; transform: translateY(0) scale(1); }
   }
   @media (max-width: 640px) {
-    .send-later-dialog {
+    .send-options-dialog {
       width: 100%;
       max-width: none;
       margin: auto 0 0;

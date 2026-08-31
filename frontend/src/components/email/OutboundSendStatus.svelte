@@ -260,6 +260,11 @@
             <p class="text-[11px]" style="color: var(--text-secondary)">
               {formatScheduledDelivery(operation.scheduled_for, operation.schedule_timezone || undefined)}
             </p>
+            {#if operation.archive_source_after_send}
+              <p class="mt-0.5 inline-flex items-center gap-1 text-[11px] font-medium" style="color: var(--color-accent-600)">
+                <Icon name="archive" size={12} /> Archive after confirmed delivery
+              </p>
+            {/if}
           </div>
           <button
             type="button"

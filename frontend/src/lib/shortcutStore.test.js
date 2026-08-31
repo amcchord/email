@@ -119,6 +119,8 @@ test('durable send shortcuts remain palette-visible and keep their existing bind
   assert.notEqual(byId['compose.send'].palette, false);
   assert.notEqual(byId['flow.send'].palette, false);
   assert.equal(byId['compose.send'].key, 'Ctrl+Enter');
+  assert.equal(byId['compose.sendArchive'].key, 'Ctrl+Shift+Enter');
+  assert.equal(byId['inbox.sendArchive'].key, 'Ctrl+Shift+Enter');
   assert.equal(byId['flow.send'].key, 'Ctrl+Enter');
 });
 
