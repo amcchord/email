@@ -12,6 +12,7 @@ from backend.models.outbound_message import OutboundMessage
 from backend.models.snooze import EmailSnooze
 from backend.models.settings import Setting
 from backend.models.snippet import PersonalSnippet
+from backend.models.signature import AccountSignature
 from backend.models.terminal import (
     TerminalBatterySample,
     TerminalDevice,
@@ -40,6 +41,7 @@ __all__ = [
     "AIAnalysis",
     "Setting",
     "PersonalSnippet",
+    "AccountSignature",
     "TodoItem",
     "ChatConversation",
     "ChatMessage",

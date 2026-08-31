@@ -98,7 +98,7 @@ def test_snippet_model_and_migration_are_one_owner_scoped_head():
     config.set_main_option("script_location", "alembic")
     scripts = ScriptDirectory.from_config(config)
     assert scripts.get_revision("d7e8f9a0b1c2").down_revision == "c6d7e8f9a0b1"
-    assert scripts.get_heads() == ["e8f9a0b1c2d3"]
+    assert scripts.get_heads() == ["f9a0b1c2d3e4"]
 
 
 def test_snippet_routes_stay_session_only_under_compose():

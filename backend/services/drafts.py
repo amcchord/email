@@ -215,7 +215,7 @@ def _attachment_material(
 
 
 def _message_payload(request: ComposeDraftRequest | ComposeRequest) -> dict:
-    return {
+    payload = {
         "account_id": request.account_id,
         "to": list(request.to),
         "cc": list(request.cc),
@@ -230,6 +230,16 @@ def _message_payload(request: ComposeDraftRequest | ComposeRequest) -> dict:
         "follow_up_reminder": request.follow_up_reminder,
         "follow_up_time_zone": request.follow_up_time_zone,
     }
+    # Older persisted draft hashes predate first-class signature/quote fields.
+    # Only an explicit signature-aware client enters the new payload contract.
+    if "signature_mode" in request.model_fields_set:
+        payload.update({
+            "quoted_html": request.quoted_html,
+            "quoted_text": request.quoted_text,
+            "composition_kind": request.composition_kind,
+            "signature_mode": request.signature_mode,
+        })
+    return payload
 
 
 def _payload_hash(payload: dict, attachment_manifest: list[dict]) -> str:
@@ -496,6 +506,53 @@ async def _stage_draft_upsert(
         if request.account_id != draft.account_id:
             raise DraftNotFound("Draft not found")
         _validate_existing_reply_provenance(draft, request)
+
+    signature_snapshot = None
+    existing_payload = draft.payload if draft is not None and isinstance(draft.payload, dict) else {}
+    existing_snapshot = existing_payload.get("signature_snapshot")
+    if existing_snapshot is not None:
+        from backend.services.signatures import (
+            SignatureValidationError,
+            resolve_signature_snapshot,
+            valid_signature_snapshot,
+        )
+
+        validated = valid_signature_snapshot(existing_snapshot, account_id=account.id)
+        if validated is None:
+            raise DraftValidationError("Draft signature snapshot is invalid")
+        if (
+            existing_payload.get("signature_mode") == payload.get("signature_mode")
+            and existing_payload.get("composition_kind") == payload.get("composition_kind")
+        ):
+            signature_snapshot = validated
+        else:
+            try:
+                signature_snapshot = await resolve_signature_snapshot(
+                    db,
+                    account_id=account.id,
+                    composition_kind=request.composition_kind,
+                    signature_mode=request.signature_mode,
+                )
+            except SignatureValidationError as error:
+                raise DraftValidationError(str(error)) from error
+    elif draft is None and "signature_mode" in request.model_fields_set:
+        from backend.services.signatures import (
+            SignatureValidationError,
+            resolve_signature_snapshot,
+        )
+
+        try:
+            signature_snapshot = await resolve_signature_snapshot(
+                db,
+                account_id=account.id,
+                composition_kind=request.composition_kind,
+                signature_mode=request.signature_mode,
+            )
+        except SignatureValidationError as error:
+            raise DraftValidationError(str(error)) from error
+    # A pre-f9 draft intentionally remains unsigned on every later revision.
+    if signature_snapshot is not None:
+        payload["signature_snapshot"] = signature_snapshot
 
     source = None
     if draft is None:
@@ -1481,13 +1538,35 @@ async def _process_upsert(draft: DraftSession, *, gmail: GmailService) -> None:
             now=utcnow(),
         )
         return
+    from backend.services.signatures import SignatureValidationError, render_signature_bodies
+
+    try:
+        body_html, body_text = render_signature_bodies(
+            account_id=draft.account_id,
+            body_html=str(payload.get("body_html") or ""),
+            body_text=str(payload.get("body_text") or ""),
+            quoted_html=str(payload.get("quoted_html") or ""),
+            quoted_text=str(payload.get("quoted_text") or ""),
+            signature_snapshot=payload.get("signature_snapshot"),
+        )
+    except SignatureValidationError:
+        await _record_retry_or_failure(
+            claimed=draft,
+            disposition=DraftErrorDisposition(
+                False,
+                "signature_snapshot_invalid",
+                "Draft signature data is invalid",
+            ),
+            now=utcnow(),
+        )
+        return
     kwargs = {
         "to": list(payload.get("to") or []),
         "cc": list(payload.get("cc") or []),
         "bcc": list(payload.get("bcc") or []),
         "subject": str(payload.get("subject") or ""),
-        "body_html": str(payload.get("body_html") or ""),
-        "body_text": str(payload.get("body_text") or ""),
+        "body_html": body_html,
+        "body_text": body_text,
         "thread_id": payload.get("thread_id"),
         "attachments": _gmail_attachment_payload(draft),
         "in_reply_to": payload.get("in_reply_to"),

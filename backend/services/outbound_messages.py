@@ -96,7 +96,16 @@ def utcnow() -> datetime:
 
 
 def _canonical_payload(request: ComposeRequest) -> dict:
-    return request.model_dump(mode="json", exclude={"idempotency_key", "is_draft"})
+    excluded = {"idempotency_key", "is_draft"}
+    if "signature_mode" not in request.model_fields_set:
+        # Preserve pre-f9 idempotency hashes for legacy clients and replays.
+        excluded.update({
+            "quoted_html",
+            "quoted_text",
+            "composition_kind",
+            "signature_mode",
+        })
+    return request.model_dump(mode="json", exclude=excluded)
 
 
 def outbound_payload_hash(request: ComposeRequest) -> str:
@@ -603,6 +612,35 @@ async def _stage_outbound_message(
             raise OutboundMessageConflict(str(error)) from error
         except DraftValidationError as error:
             raise OutboundMessageValidationError(str(error)) from error
+    signature_snapshot = None
+    if linked_draft is not None:
+        from backend.services.signatures import valid_signature_snapshot
+
+        draft_payload = linked_draft.payload if isinstance(linked_draft.payload, dict) else {}
+        candidate = draft_payload.get("signature_snapshot")
+        if candidate is not None:
+            signature_snapshot = valid_signature_snapshot(candidate, account_id=account.id)
+            if signature_snapshot is None:
+                raise OutboundMessageValidationError("Draft signature snapshot is invalid")
+    elif "signature_mode" in request.model_fields_set:
+        from backend.services.signatures import (
+            SignatureValidationError,
+            resolve_signature_snapshot,
+        )
+
+        try:
+            signature_snapshot = await resolve_signature_snapshot(
+                db,
+                account_id=account.id,
+                composition_kind=request.composition_kind,
+                signature_mode=request.signature_mode,
+            )
+        except SignatureValidationError as error:
+            raise OutboundMessageValidationError(str(error)) from error
+
+    outbound_payload = _canonical_payload(request)
+    if signature_snapshot is not None:
+        outbound_payload["signature_snapshot"] = signature_snapshot
     outbound = OutboundMessage(
         send_id=send_id,
         idempotency_key=request.idempotency_key,
@@ -613,7 +651,7 @@ async def _stage_outbound_message(
         draft_session_id=linked_draft.id if linked_draft is not None else None,
         client_draft_id=request.client_draft_id,
         follow_up_requested=follow_up_configuration is not None,
-        payload=_canonical_payload(request),
+        payload=outbound_payload,
         retry_authorized=False,
         retry_expires_at=None,
         rfc_message_id=(
@@ -1343,6 +1381,30 @@ async def _process_claimed_outbound(
         )
         return
 
+    from backend.services.signatures import SignatureValidationError, render_signature_bodies
+
+    try:
+        body_html, body_text = render_signature_bodies(
+            account_id=outbound.account_id,
+            body_html=str(payload.get("body_html") or ""),
+            body_text=str(payload.get("body_text") or ""),
+            quoted_html=str(payload.get("quoted_html") or ""),
+            quoted_text=str(payload.get("quoted_text") or ""),
+            signature_snapshot=payload.get("signature_snapshot"),
+        )
+    except SignatureValidationError:
+        await _record_preflight_failure(
+            outbound_id=outbound.id,
+            lease_token=lease_token,
+            disposition=OutboundErrorDisposition(
+                False,
+                "signature_snapshot_invalid",
+                "Send signature data is invalid",
+            ),
+            now=utcnow(),
+        )
+        return
+
     attempted_at = utcnow()
     if not await _mark_provider_attempt_started(
         outbound_id=outbound.id,
@@ -1358,8 +1420,8 @@ async def _process_claimed_outbound(
             cc=list(payload.get("cc") or []),
             bcc=list(payload.get("bcc") or []),
             subject=str(payload.get("subject") or ""),
-            body_html=str(payload.get("body_html") or ""),
-            body_text=str(payload.get("body_text") or ""),
+            body_html=body_html,
+            body_text=body_text,
             in_reply_to=payload.get("in_reply_to"),
             references=payload.get("references"),
             thread_id=payload.get("thread_id"),

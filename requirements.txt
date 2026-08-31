@@ -26,6 +26,7 @@ email-validator>=2.2.0
 aiofiles>=24.1.0
 jinja2>=3.1.4
 html2text>=2024.2.26
+nh3>=0.3.1
 playwright>=1.49.0
 pillow>=11.0.0
 pytest>=8.0.0

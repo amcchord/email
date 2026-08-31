@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from backend.schemas.signature import SignatureSnapshotResponse
+
 
 class EmailAddress(BaseModel):
     name: Optional[str] = None
@@ -307,6 +309,10 @@ class ComposeMessageBase(BaseModel):
     subject: str = Field(default="", max_length=998)
     body_html: str = Field(default="", max_length=MAX_COMPOSE_BODY_CHARS)
     body_text: str = Field(default="", max_length=MAX_COMPOSE_BODY_CHARS)
+    quoted_html: str = Field(default="", max_length=MAX_COMPOSE_BODY_CHARS)
+    quoted_text: str = Field(default="", max_length=MAX_COMPOSE_BODY_CHARS)
+    composition_kind: Literal["new", "reply", "forward"] = "new"
+    signature_mode: Literal["default", "enabled", "disabled"] = "default"
     in_reply_to: Optional[str] = Field(default=None, max_length=998)
     references: Optional[str] = Field(default=None, max_length=8192)
     thread_id: Optional[str] = Field(default=None, max_length=255)
@@ -315,6 +321,16 @@ class ComposeMessageBase(BaseModel):
     follow_up_time_zone: Optional[str] = Field(default=None, min_length=1, max_length=64)
     is_draft: bool = False
     attachments: list[ComposeAttachment] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_legacy_composition_kind(cls, values):
+        if isinstance(values, dict) and "composition_kind" not in values:
+            values = dict(values)
+            values["composition_kind"] = (
+                "reply" if values.get("source_email_id") is not None else "new"
+            )
+        return values
 
     @field_validator("to", "cc", "bcc")
     @classmethod
@@ -360,6 +376,12 @@ class ComposeMessageBase(BaseModel):
             raise ValueError(f"A message can include at most {MAX_COMPOSE_ATTACHMENT_COUNT} attachments")
         if sum(item.decoded_size() for item in self.attachments) > MAX_COMPOSE_ATTACHMENT_BYTES:
             raise ValueError("Attachments exceed the 18 MB message limit")
+        if len(self.body_html) + len(self.quoted_html) > MAX_COMPOSE_BODY_CHARS:
+            raise ValueError("Combined HTML message content exceeds the message limit")
+        if len(self.body_text) + len(self.quoted_text) > MAX_COMPOSE_BODY_CHARS:
+            raise ValueError("Combined plain-text message content exceeds the message limit")
+        if self.composition_kind == "reply" and self.source_email_id is None:
+            raise ValueError("Reply composition requires an exact source email")
         return self
 
 
@@ -484,6 +506,11 @@ class DraftSessionDetailResponse(DraftSessionResponse):
     subject: str = ""
     body_html: str = ""
     body_text: str = ""
+    quoted_html: str = ""
+    quoted_text: str = ""
+    composition_kind: Literal["new", "reply", "forward"] = "new"
+    signature_mode: Literal["default", "enabled", "disabled"] = "default"
+    signature_snapshot: Optional[SignatureSnapshotResponse] = None
     in_reply_to: Optional[str] = None
     references: Optional[str] = None
     thread_id: Optional[str] = None

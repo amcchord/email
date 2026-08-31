@@ -25,6 +25,7 @@ from backend.routers import (
     follow_up,
     public_api,
     snippets,
+    signatures,
     snoozes,
     terminal,
     terminal_admin,
@@ -110,6 +111,7 @@ app.include_router(follow_up.router)
 app.include_router(public_api.router)
 app.include_router(snoozes.router)
 app.include_router(snippets.router)
+app.include_router(signatures.router)
 app.include_router(terminal_admin.router)
 app.include_router(terminal_enrollment.router)
 app.include_router(terminal_firmware.router)

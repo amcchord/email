@@ -153,6 +153,8 @@ markupsafe==3.0.3
     #   mako
 mdurl==0.1.2
     # via markdown-it-py
+nh3==0.3.7
+    # via -r requirements.txt
 oauthlib==3.3.1
     # via requests-oauthlib
 openai==2.54.0
