@@ -108,3 +108,14 @@ test('Saved Views surfaces stay in Email navigation, reset with auth, and keep p
   assert.match(api, /listSavedViews:[\s\S]*'GET', '\/saved-views'/);
   assert.match(api, /deleteSavedView:[\s\S]*revision: String\(revision\)/);
 });
+
+test('conflict reload closes and clears the stale editor before refreshing authority', async () => {
+  const surface = await readFile(
+    new URL('../components/email/SavedViews.svelte', import.meta.url),
+    'utf8',
+  );
+  assert.match(surface, /function recoverFromConflict\(\)[\s\S]*closeEditor\(\);[\s\S]*refreshSavedViews\(\)/);
+  assert.match(surface, /function closeEditor\(\)[\s\S]*editingId = null;[\s\S]*draftName = '';[\s\S]*draftQuery = '';[\s\S]*confirmingDelete = false;/);
+  assert.match(surface, /onclick=\{recoverFromConflict\}>Reload Saved Views/);
+  assert.doesNotMatch(surface, /Reload Saved Views<\/button>[\s\S]{0,80}refreshSavedViews/);
+});

@@ -101,7 +101,23 @@
     savedViewEditorRequest.set(null);
     const target = returnFocus;
     returnFocus = null;
+    mode = 'create';
+    editingId = null;
+    draftName = '';
+    draftAccount = '';
+    draftQuery = '';
+    createId = '';
+    confirmingDelete = false;
+    dialogError = '';
+    dialogStatus = '';
     void tick().then(() => target?.isConnected ? target.focus() : sectionButton?.focus());
+  }
+
+  function recoverFromConflict() {
+    // Discard the entire stale revision snapshot before accepting a refreshed
+    // collection. A later edit must reopen from that authoritative store.
+    closeEditor();
+    void refreshSavedViews();
   }
 
   function replaceLocalView(view) {
@@ -338,7 +354,7 @@
           <div class="rounded-lg p-3 text-sm" role="alert" style="color: var(--status-error); background: color-mix(in srgb, var(--status-error) 9%, transparent)">
             <p>{dialogError}</p>
             {#if dialogError.includes('Reload')}
-              <button type="button" class="mt-2 min-h-11 font-semibold underline" onclick={() => refreshSavedViews()}>Reload Saved Views</button>
+              <button type="button" class="mt-2 min-h-11 font-semibold underline" onclick={recoverFromConflict}>Reload Saved Views</button>
             {/if}
           </div>
         {/if}
