@@ -154,11 +154,14 @@
   let signaturePolicies = $state([]);
   let signaturePoliciesLoaded = $state(false);
   let signaturePoliciesFailed = $state(false);
+  let signatureUnsignedAcknowledged = $state(false);
+  let signaturePolicyLoadGeneration = 0;
   let signatureMode = $state('disabled');
   let signatureSnapshot = $state.raw(null);
   let signatureInitialized = $state(false);
   let signatureReady = $derived(
-    !signatureInitialized || signaturePoliciesLoaded || signaturePoliciesFailed,
+    signaturePoliciesLoaded
+      || (signaturePoliciesFailed && signatureUnsignedAcknowledged),
   );
 
   function replyUnavailableMessage(reason) {
@@ -182,6 +185,28 @@
       return 'The full conversation could not be verified. Refresh the conversation before replying.';
     }
     return 'Reply recipients could not be verified. Refresh the conversation before sending.';
+  }
+
+  function loadSignaturePolicies() {
+    const requestGeneration = ++signaturePolicyLoadGeneration;
+    signaturePoliciesLoaded = false;
+    signaturePoliciesFailed = false;
+    signatureUnsignedAcknowledged = false;
+    return api.listAccountSignatures()
+      .then(response => {
+        if (requestGeneration !== signaturePolicyLoadGeneration || !sessionIsCurrent()) return;
+        signaturePolicies = normalizeAccountSignatureList(response).accounts;
+        signaturePoliciesLoaded = true;
+        if (signatureInitialized && signatureMode === 'default' && !signatureSnapshot) {
+          signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
+          rememberCurrentReplyDraft();
+        }
+      })
+      .catch(() => {
+        if (requestGeneration !== signaturePolicyLoadGeneration || !sessionIsCurrent()) return;
+        signaturePolicies = [];
+        signaturePoliciesFailed = true;
+      });
   }
 
   // --- Keyboard navigation state for dashboard ---
@@ -523,27 +548,7 @@
         followUpPolicies = [];
         followUpPoliciesLoaded = false;
       });
-    void api.listAccountSignatures()
-      .then(response => {
-        if (!sessionIsCurrent()) return;
-        signaturePolicies = normalizeAccountSignatureList(response).accounts;
-        signaturePoliciesLoaded = true;
-        signaturePoliciesFailed = false;
-        if (signatureInitialized && signatureMode === 'default' && !signatureSnapshot) {
-          signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
-          rememberCurrentReplyDraft();
-        }
-      })
-      .catch(() => {
-        if (!sessionIsCurrent()) return;
-        signaturePolicies = [];
-        signaturePoliciesLoaded = false;
-        signaturePoliciesFailed = true;
-        if (signatureInitialized && signatureMode === 'default' && !signatureSnapshot) {
-          signatureMode = 'disabled';
-          rememberCurrentReplyDraft();
-        }
-      });
+    void loadSignaturePolicies();
 
     try {
       durableReplyStorage = createIndexedDbDraftStorage();
@@ -552,6 +557,7 @@
     }
 
     return () => {
+      signaturePolicyLoadGeneration += 1;
       const release = releaseFlowDurableReply({ flush: true });
       sessionGuard.dispose();
       void Promise.resolve(release).finally(() => durableReplyStorage?.close?.());
@@ -1151,7 +1157,8 @@
     followUpMode = 'default';
     followUpTimeZone = browserFollowUpTimeZone();
     signatureInitialized = true;
-    signatureMode = signaturePoliciesFailed ? 'disabled' : 'default';
+    signatureUnsignedAcknowledged = false;
+    signatureMode = 'default';
     signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
     const owner = createDurableReplyController({
       userId: sessionGuard.userId,
@@ -1590,6 +1597,13 @@
       policy: selectedSignaturePolicy,
       snapshot: signatureSnapshot,
     });
+    rememberCurrentReplyDraft();
+  }
+
+  function handleContinueWithoutSignature() {
+    if (!signaturePoliciesFailed || durableReplyOpening || durableReplyState.sendInProgress) return;
+    signatureUnsignedAcknowledged = true;
+    signatureMode = 'disabled';
     rememberCurrentReplyDraft();
   }
 
@@ -3033,8 +3047,12 @@
               policy={selectedSignaturePolicy}
               snapshot={signatureSnapshot}
               compact={true}
-              disabled={!signaturePoliciesLoaded || durableReplyOpening || durableReplyState.sendInProgress || durableReplyState.discardInProgress}
+              disabled={durableReplyOpening || durableReplyState.sendInProgress || durableReplyState.discardInProgress}
+              loadError={signaturePoliciesFailed}
+              unsignedAcknowledged={signatureUnsignedAcknowledged}
               onchange={handleSignatureChange}
+              onretry={loadSignaturePolicies}
+              oncontinueunsigned={handleContinueWithoutSignature}
             />
           </div>
         </div>

@@ -111,6 +111,8 @@
   let signaturePolicies = $state([]);
   let signaturePoliciesLoaded = $state(false);
   let signaturePoliciesFailed = $state(false);
+  let signatureUnsignedAcknowledged = $state(false);
+  let signaturePolicyLoadGeneration = 0;
   let compositionKind = $state('new');
   let signatureMode = $state('disabled');
   let signatureSnapshot = $state.raw(null);
@@ -125,7 +127,8 @@
   let followUpSummary = $derived(followUpSendSummary(selectedFollowUpPolicy));
   let selectedSignaturePolicy = $derived(accountSignatureFor(signaturePolicies, selectedAccountId));
   let signatureReady = $derived(
-    !signatureInitialized || signaturePoliciesLoaded || signaturePoliciesFailed,
+    signaturePoliciesLoaded
+      || (signaturePoliciesFailed && signatureUnsignedAcknowledged),
   );
   let archiveSourceEmailId = $derived(exactSourceEmailId(replyContext.source_email_id));
   let recipientEntryPending = $derived(
@@ -231,6 +234,28 @@
     }
   }
 
+  function loadSignaturePolicies() {
+    const requestGeneration = ++signaturePolicyLoadGeneration;
+    signaturePoliciesLoaded = false;
+    signaturePoliciesFailed = false;
+    signatureUnsignedAcknowledged = false;
+    return api.listAccountSignatures()
+      .then(response => {
+        if (requestGeneration !== signaturePolicyLoadGeneration || !sessionGuard?.isCurrent()) return;
+        signaturePolicies = normalizeAccountSignatureList(response).accounts;
+        signaturePoliciesLoaded = true;
+        if (signatureInitialized && signatureMode === 'default' && !signatureSnapshot) {
+          signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
+          persistLocalDraft();
+        }
+      })
+      .catch(() => {
+        if (requestGeneration !== signaturePolicyLoadGeneration || !sessionGuard?.isCurrent()) return;
+        signaturePolicies = [];
+        signaturePoliciesFailed = true;
+      });
+  }
+
   function normalizeDraftAttachment(item = {}) {
     return {
       ...(item.attachment_id ? { attachment_id: item.attachment_id } : {}),
@@ -261,6 +286,7 @@
       replyContext.source_email_id ? 'reply' : 'new',
     );
     signatureInitialized = draft.signature_initialized === true || Boolean(draft.signature_snapshot);
+    signatureUnsignedAcknowledged = false;
     signatureMode = signatureInitialized
       ? normalizeSignatureMode(draft.signature_mode)
       : 'disabled';
@@ -427,27 +453,7 @@
         followUpPoliciesLoaded = false;
       });
 
-    void api.listAccountSignatures()
-      .then(response => {
-        if (disposed || !sessionGuard?.isCurrent()) return;
-        signaturePolicies = normalizeAccountSignatureList(response).accounts;
-        signaturePoliciesLoaded = true;
-        signaturePoliciesFailed = false;
-        if (signatureInitialized && signatureMode === 'default' && !signatureSnapshot) {
-          signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
-          persistLocalDraft();
-        }
-      })
-      .catch(() => {
-        if (disposed || !sessionGuard?.isCurrent()) return;
-        signaturePolicies = [];
-        signaturePoliciesLoaded = false;
-        signaturePoliciesFailed = true;
-        if (signatureInitialized && signatureMode === 'default' && !signatureSnapshot) {
-          signatureMode = 'disabled';
-          persistLocalDraft();
-        }
-      });
+    void loadSignaturePolicies();
 
     // Register keyboard shortcut actions for the Compose page
     const cleanupShortcuts = registerActions({
@@ -555,6 +561,7 @@
 
     return () => {
       disposed = true;
+      signaturePolicyLoadGeneration += 1;
       openingDraftGeneration += 1;
       if (autosaveReady) persistLocalDraft();
       void draftController?.flush();
@@ -610,6 +617,13 @@
     persistLocalDraft();
   }
 
+  function handleContinueWithoutSignature() {
+    if (!signaturePoliciesFailed || draftLocked) return;
+    signatureUnsignedAcknowledged = true;
+    signatureMode = 'disabled';
+    persistLocalDraft();
+  }
+
   function capturePersonalSnippetSelection() {
     return editorHandle?.rememberSelection?.() ?? false;
   }
@@ -651,10 +665,6 @@
 
   $effect(() => {
     if (!autosaveReady || !signatureInitialized || signatureSnapshot) return;
-    if (signaturePoliciesFailed && signatureMode === 'default') {
-      signatureMode = 'disabled';
-      return;
-    }
     if (signaturePoliciesLoaded && signatureMode === 'default') {
       signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
     }
@@ -1220,8 +1230,12 @@
         {compositionKind}
         policy={selectedSignaturePolicy}
         snapshot={signatureSnapshot}
-        disabled={draftLocked || !signaturePoliciesLoaded}
+        disabled={draftLocked}
+        loadError={signaturePoliciesFailed}
+        unsignedAcknowledged={signatureUnsignedAcknowledged}
         onchange={handleSignatureChange}
+        onretry={loadSignaturePolicies}
+        oncontinueunsigned={handleContinueWithoutSignature}
       />
       <QuotedContentPreview html={quotedHtml} text={quotedText} />
     </div>

@@ -148,6 +148,32 @@ test('a frozen signature survives live-policy changes through Remove and Restore
   }).body_text, 'Frozen revision four');
 });
 
+test('an authoritative frozen unsigned snapshot is not replaced by later policy content', () => {
+  const frozenUnsigned = normalizeSignatureSnapshot({
+    applied: false,
+    account_id: 7,
+    policy_revision: 0,
+    body_html: '',
+    body_text: '',
+    content_hash: 'd'.repeat(64),
+    sanitizer_version: 1,
+  });
+  assert.equal(frozenUnsigned.applied, false);
+  assert.equal(frozenUnsigned.body_html, '');
+  assert.equal(effectiveSignatureSnapshot({
+    initialized: true,
+    mode: 'default',
+    compositionKind: 'new',
+    policy,
+    snapshot: frozenUnsigned,
+  }), null);
+  assert.equal(signatureSnapshotAfterModeChange({
+    mode: 'default',
+    policy,
+    snapshot: frozenUnsigned,
+  }).policy_revision, 0);
+});
+
 test('wire fields are normalized while signatures alone never make a draft nonblank', () => {
   assert.deepEqual(signatureDraftFields({
     compositionKind: 'forward',
@@ -184,7 +210,21 @@ test('all writing surfaces use the shared policy API and signature control', asy
     assert.match(source, /signatureMode|signatureDraftFields|signature_mode:/);
     assert.match(source, /signatureSnapshot|signature_snapshot:/);
     assert.match(source, /signatureInitialized|signature_initialized:/);
+    assert.match(source, /signaturePoliciesFailed && signatureUnsignedAcknowledged/);
+    assert.match(source, /onretry=\{loadSignaturePolicies\}/);
+    assert.match(source, /oncontinueunsigned=\{handleContinueWithoutSignature\}/);
+    assert.match(source, /signatureReady/);
+    assert.doesNotMatch(source, /signatureMode = signaturePoliciesFailed \? 'disabled' : 'default'/);
   }
+});
+
+test('signature policy failures require an explicit retry or unsigned acknowledgement', async () => {
+  const source = await readFile(new URL('../components/email/SignatureControl.svelte', import.meta.url), 'utf8');
+  assert.match(source, /Signature settings are unavailable/);
+  assert.match(source, /Continue unsigned/);
+  assert.match(source, /onclick=\{\(\) => onretry\?\.\(\)\}/);
+  assert.match(source, /onclick=\{\(\) => oncontinueunsigned\?\.\(\)\}/);
+  assert.match(source, /role=\{unsignedAcknowledged \? 'status' : 'alert'\}/);
 });
 
 test('forward handoff keeps the original message out of editable body fields', async () => {

@@ -7,6 +7,7 @@ import {
   cloneDraftValue,
   draftStorageNamespace,
 } from './draftStorage.js';
+import { normalizeSignatureSnapshot } from './accountSignatures.js';
 
 export const DRAFT_SESSION_STATES = Object.freeze([
   'pristine',
@@ -664,6 +665,14 @@ export function createDraftSession({
     const next = activeIsSame && active.revision > stored.revision
       ? persistentRecord(cloneDraftValue(active))
       : stored;
+    const authoritativeSignatureSnapshot = normalizeSignatureSnapshot(response?.signature_snapshot);
+    if (authoritativeSignatureSnapshot) {
+      next.snapshot = {
+        ...(next.snapshot || {}),
+        signature_snapshot: authoritativeSignatureSnapshot,
+        signature_initialized: true,
+      };
+    }
     const server = recordFromServer(next, response, request.revision);
     const responseState = serverDraftState(response) || 'synced';
     server.state = responseState;
@@ -705,6 +714,13 @@ export function createDraftSession({
 
     if (!currentAuthority(capturedGeneration, capturedSession, request.clientDraftId)) return;
     active.server = server;
+    if (authoritativeSignatureSnapshot) {
+      active.snapshot = {
+        ...(active.snapshot || {}),
+        signature_snapshot: cloneDraftValue(authoritativeSignatureSnapshot),
+        signature_initialized: true,
+      };
+    }
     active.synced_revision = next.synced_revision;
     active.error = null;
     active.conflict = null;

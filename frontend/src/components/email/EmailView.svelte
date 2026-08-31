@@ -171,6 +171,8 @@
   let signaturePolicies = $state([]);
   let signaturePoliciesLoaded = $state(false);
   let signaturePoliciesFailed = $state(false);
+  let signatureUnsignedAcknowledged = $state(false);
+  let signaturePolicyLoadGeneration = 0;
   let signatureMode = $state('disabled');
   let signatureSnapshot = $state.raw(null);
   let signatureInitialized = $state(false);
@@ -179,11 +181,34 @@
     activeReplyEnvelopeResult?.envelope?.account_id,
   ));
   let signatureReady = $derived(
-    !signatureInitialized || signaturePoliciesLoaded || signaturePoliciesFailed,
+    signaturePoliciesLoaded
+      || (signaturePoliciesFailed && signatureUnsignedAcknowledged),
   );
 
   function sessionIsCurrent() {
     return sessionGuard.isCurrent();
+  }
+
+  function loadSignaturePolicies() {
+    const requestGeneration = ++signaturePolicyLoadGeneration;
+    signaturePoliciesLoaded = false;
+    signaturePoliciesFailed = false;
+    signatureUnsignedAcknowledged = false;
+    return api.listAccountSignatures()
+      .then(response => {
+        if (requestGeneration !== signaturePolicyLoadGeneration || !sessionIsCurrent()) return;
+        signaturePolicies = normalizeAccountSignatureList(response).accounts;
+        signaturePoliciesLoaded = true;
+        if (signatureInitialized && signatureMode === 'default' && !signatureSnapshot) {
+          signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
+          persistInlineReply();
+        }
+      })
+      .catch(() => {
+        if (requestGeneration !== signaturePolicyLoadGeneration || !sessionIsCurrent()) return;
+        signaturePolicies = [];
+        signaturePoliciesFailed = true;
+      });
   }
 
   function replyUnavailableMessage(reason) {
@@ -278,29 +303,8 @@
   });
 
   onMount(() => {
-    let disposed = false;
-    void api.listAccountSignatures()
-      .then(response => {
-        if (disposed || !sessionIsCurrent()) return;
-        signaturePolicies = normalizeAccountSignatureList(response).accounts;
-        signaturePoliciesLoaded = true;
-        signaturePoliciesFailed = false;
-        if (signatureInitialized && signatureMode === 'default' && !signatureSnapshot) {
-          signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
-          persistInlineReply();
-        }
-      })
-      .catch(() => {
-        if (disposed || !sessionIsCurrent()) return;
-        signaturePolicies = [];
-        signaturePoliciesLoaded = false;
-        signaturePoliciesFailed = true;
-        if (signatureInitialized && signatureMode === 'default' && !signatureSnapshot) {
-          signatureMode = 'disabled';
-          persistInlineReply();
-        }
-      });
-    return () => { disposed = true; };
+    void loadSignaturePolicies();
+    return () => { signaturePolicyLoadGeneration += 1; };
   });
 
   onDestroy(() => {
@@ -805,7 +809,8 @@
     followUpMode = 'default';
     followUpTimeZone = browserFollowUpTimeZone();
     signatureInitialized = true;
-    signatureMode = signaturePoliciesFailed ? 'disabled' : 'default';
+    signatureUnsignedAcknowledged = false;
+    signatureMode = 'default';
     signatureSnapshot = signatureSnapshotFromPolicy(selectedSignaturePolicy);
     inlineReplyOpen = true;
     inlineReplyMode = mode;
@@ -1099,6 +1104,13 @@
       policy: selectedSignaturePolicy,
       snapshot: signatureSnapshot,
     });
+    persistInlineReply();
+  }
+
+  function handleContinueWithoutSignature() {
+    if (!signaturePoliciesFailed || durableReplyOpening || durableReplyState.sendInProgress) return;
+    signatureUnsignedAcknowledged = true;
+    signatureMode = 'disabled';
     persistInlineReply();
   }
 
@@ -2135,8 +2147,12 @@
           policy={selectedSignaturePolicy}
           snapshot={signatureSnapshot}
           compact={true}
-          disabled={!signaturePoliciesLoaded || durableReplyOpening || durableReplyState.sendInProgress || durableReplyState.discardInProgress}
+          disabled={durableReplyOpening || durableReplyState.sendInProgress || durableReplyState.discardInProgress}
+          loadError={signaturePoliciesFailed}
+          unsignedAcknowledged={signatureUnsignedAcknowledged}
           onchange={handleSignatureChange}
+          onretry={loadSignaturePolicies}
+          oncontinueunsigned={handleContinueWithoutSignature}
         />
         <div class="reply-actions flex items-center gap-2 mt-2">
           <SnippetPicker

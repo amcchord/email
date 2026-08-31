@@ -243,14 +243,18 @@ export function normalizeSignatureSnapshot(record, { sanitizeHtml } = {}) {
   ) return null;
   const bodyHtml = normalizeBodyHtml(record.body_html, sanitizeHtml);
   const bodyText = normalizeBodyText(record.body_text);
-  if (!bodyHtml || !bodyText) return null;
+  const contentHash = String(record.content_hash || '').trim();
+  if (Boolean(bodyHtml) !== Boolean(bodyText)) return null;
+  if (applied && !bodyHtml) return null;
+  if (!applied && !bodyHtml && !contentHash) return null;
+  if (contentHash && contentHash.length !== 64) return null;
   return Object.freeze({
     applied,
     account_id: accountId,
     policy_revision: policyRevision,
     body_html: bodyHtml,
     body_text: bodyText,
-    content_hash: String(record.content_hash || ''),
+    content_hash: contentHash,
     sanitizer_version: sanitizerVersion,
   });
 }
@@ -268,6 +272,7 @@ export function effectiveSignatureSnapshot({
   const normalizedSnapshot = normalizeSignatureSnapshot(snapshot);
   const frozenSnapshot = normalizedSnapshot && Boolean(normalizedSnapshot.content_hash);
   if (frozenSnapshot) {
+    if (!normalizedSnapshot.body_html || !normalizedSnapshot.body_text) return null;
     if (normalizedMode === 'default' && !normalizedSnapshot.applied) return null;
     return normalizedSnapshot.applied
       ? normalizedSnapshot

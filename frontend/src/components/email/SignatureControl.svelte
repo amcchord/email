@@ -15,7 +15,11 @@
     snapshot = null,
     disabled = false,
     compact = false,
+    loadError = false,
+    unsignedAcknowledged = false,
     onchange = null,
+    onretry = null,
+    oncontinueunsigned = null,
   } = $props();
 
   let effective = $derived(effectiveSignatureSnapshot({
@@ -32,20 +36,56 @@
   let canRestore = $derived(
     initialized
     && mode === 'disabled'
-    && Boolean(frozenSnapshot || policy?.body_html || policy?.body_text),
+    && Boolean(
+      frozenSnapshot
+        ? frozenSnapshot.body_html && frozenSnapshot.body_text
+        : policy?.body_html || policy?.body_text
+    ),
   );
   let defaultIncluded = $derived(signatureDefaultIncluded(policy, compositionKind));
   let previewHtml = $derived(sanitizeComposeHtml(effective?.body_html || ''));
 </script>
 
-{#if initialized && (policy || frozenSnapshot)}
+{#if loadError || (initialized && (policy || frozenSnapshot))}
   <section
     class="signature-control rounded-lg border {compact ? 'px-3 py-2' : 'px-4 py-3'}"
     style="border-color: var(--border-subtle); background: var(--bg-secondary)"
     data-signature-control=""
     aria-label="Message signature"
   >
-    {#if effective}
+    {#if loadError}
+      <div class="flex min-h-11 flex-wrap items-center justify-between gap-2" role={unsignedAcknowledged ? 'status' : 'alert'}>
+        <div class="min-w-0 flex-1">
+          <p class="text-xs font-semibold" style="color: var(--text-secondary)">
+            {unsignedAcknowledged ? 'Sending without a signature' : 'Signature settings are unavailable'}
+          </p>
+          <p class="mt-0.5 text-[11px]" style="color: var(--text-tertiary)">
+            {unsignedAcknowledged ? 'Retry to restore account signature controls.' : 'Retry, or explicitly continue without a signature.'}
+          </p>
+        </div>
+        <div class="flex min-h-11 items-center gap-1.5">
+          <button
+            type="button"
+            class="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-xs font-semibold hover:opacity-75 disabled:opacity-50"
+            style="color: var(--text-secondary)"
+            {disabled}
+            onclick={() => onretry?.()}
+          >
+            <Icon name="refresh-cw" size={13} />
+            Retry
+          </button>
+          {#if !unsignedAcknowledged}
+            <button
+              type="button"
+              class="inline-flex min-h-11 items-center rounded-md px-2 text-xs font-semibold hover:opacity-75 disabled:opacity-50"
+              style="color: var(--color-accent-700)"
+              {disabled}
+              onclick={() => oncontinueunsigned?.()}
+            >Continue unsigned</button>
+          {/if}
+        </div>
+      </div>
+    {:else if effective}
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0 flex-1">
           <p class="mb-1 text-[10px] font-semibold uppercase tracking-wide" style="color: var(--text-tertiary)">
@@ -86,6 +126,8 @@
           Restore
         </button>
       </div>
+    {:else if frozenSnapshot && !frozenSnapshot.applied && !frozenSnapshot.body_html}
+      <p class="text-[11px]" style="color: var(--text-tertiary)">This draft was saved without a signature.</p>
     {:else if mode === 'default' && !defaultIncluded}
       <p class="text-[11px]" style="color: var(--text-tertiary)">Account signature is off for this message type.</p>
     {/if}

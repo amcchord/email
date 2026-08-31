@@ -122,6 +122,77 @@ test('a lost save response reconciles by owned client identity and mutation with
   assert.equal(controller.getState().server.draft_id, 'provider-generated-1');
 });
 
+test('a save acknowledgement adopts its authoritative signature snapshot without replacing newer edits', async () => {
+  const randomUUID = uuidFactory();
+  const storage = createMemoryDraftStorage();
+  const acknowledgement = deferred();
+  const started = deferred();
+  let saveCalls = 0;
+  const frozen = {
+    applied: true,
+    account_id: 7,
+    policy_revision: 4,
+    body_html: '<p>Frozen revision four</p>',
+    body_text: 'Frozen revision four',
+    content_hash: 'e'.repeat(64),
+    sanitizer_version: 1,
+  };
+  const controller = createDraftSessionController(controllerOptions({
+    storage,
+    randomUUID,
+    api: {
+      async saveDraft(payload) {
+        saveCalls += 1;
+        if (saveCalls === 1) {
+          started.resolve();
+          await acknowledgement.promise;
+        }
+        return {
+          ...payload,
+          state: 'synced',
+          synced_revision: payload.revision,
+          signature_snapshot: frozen,
+        };
+      },
+    },
+  }));
+  const intent = newComposeIntent({}, { randomUUID });
+  await controller.create({
+    intent,
+    initialSnapshot: {
+      account_id: 7,
+      subject: 'Original subject',
+      body_html: '<p>Generated</p>',
+      signature_mode: 'default',
+      signature_initialized: true,
+      signature_snapshot: {
+        ...frozen,
+        policy_revision: 3,
+        content_hash: '',
+        body_html: '<p>Placeholder</p>',
+        body_text: 'Placeholder',
+      },
+    },
+  });
+  const firstFlush = controller.flush();
+  await started.promise;
+  controller.update({
+    ...controller.getState().snapshot,
+    subject: 'Newer authored subject',
+  });
+  acknowledgement.resolve();
+  await firstFlush;
+
+  const active = controller.getState();
+  const stored = await storage.get(7, intent.client_draft_id);
+  assert.equal(active.snapshot.subject, 'Newer authored subject');
+  assert.equal(active.snapshot.signature_snapshot.content_hash, 'e'.repeat(64));
+  assert.equal(active.snapshot.signature_snapshot.policy_revision, 4);
+  assert.equal(active.snapshot.signature_initialized, true);
+  assert.equal(stored.snapshot.subject, 'Newer authored subject');
+  assert.equal(stored.snapshot.signature_snapshot.content_hash, 'e'.repeat(64));
+});
+
 test('a 202-style pending response remains saving until GET reports provider synced', async () => {
   const randomUUID = uuidFactory();
   const timers = fakeTimers();
