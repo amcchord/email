@@ -10,8 +10,8 @@ safe content, and open the exact parent message. Ordinary browsing performs no
 provider read, attachment-cache write, mail mutation, calendar mutation, or AI
 call.
 
-Application/runtime commit and production evidence are recorded after the
-authorized deployment below.
+Exact application/runtime commit:
+`fcbea4afccfa2226b5519c6c2f278960bee8b29c`.
 
 ## Durable data and API contract
 
@@ -98,10 +98,29 @@ Generated-only visual evidence is stored outside the repository:
 
 ## Production result
 
-Pending the authorized deployment of the frozen runtime. This section will
-record the exact GitHub/production commit, protected backup, migration,
-service/health/log checks, aggregate-only database evidence, and signed-in
-metadata-only browser acceptance.
+- GitHub `main`, the feature branch, and clean production were fast-forwarded
+  to exact application/runtime `fcbea4afccfa2226b5519c6c2f278960bee8b29c`.
+- Protected pre-b1 custom-format backup:
+  `/var/backups/mailapp/maildb-pre-attachments-20260831T1636Z.dump`,
+  1,384,170,863 bytes, `postgres:postgres`, mode `0600`, SHA-256
+  `c46e82341a1381556ebcfddcad1077ca17ccedd30c24a69946a8990a395b416f`;
+  `pg_restore --list` passed before any code or schema change.
+- Production upgraded exactly `a0b1c2d3e4f5 -> b1c2d3e4f5a6`, replaced only
+  `mailapp`, verified local API health, then built and published the same
+  619-module frontend. Workers, cron, TUI, Caddy, PostgreSQL, and Redis were not
+  restarted.
+- The retired API process reached the known 90-second graceful-stop limit.
+  Replacement PID 2175594 is active with `NRestarts=0`; no warning-or-higher
+  entry occurred after its 16:40:02 UTC start boundary.
+- All seven checked services and public/local health are healthy. The exact
+  `ix_attachments_email_id` definition is present. Aggregate-only inspection
+  found 79,777 synchronized attachment metadata rows; no row was added,
+  changed, fetched, previewed, or downloaded by release QA.
+- Anonymous workspace access is 401 with `private, no-store`. Signed-in
+  production browser QA opened Attachments from More and confirmed the exact
+  route, account controls, a 50-row metadata page, one keyboard selection, and
+  no preview dialog. It did not search, switch account, preview, download, open
+  a parent message, or perform a mail/calendar/provider mutation.
 
 ## Rollback boundary
 

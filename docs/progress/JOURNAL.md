@@ -3,6 +3,66 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-31 — First-class Attachments workspace
+
+### Scope
+
+Add an exact-account, read-only file-discovery workspace over synchronized
+attachment metadata. Keep list/search/filter/navigation PostgreSQL-only, bytes
+behind explicit existing Preview/Download actions, real production mail
+metadata-only, and the concurrent terminal track isolated.
+
+### Completed
+
+- Added additive index revision `b1c2d3e4f5a6` and private/no-store
+  `POST /api/attachments/query` with exact active ownership, signed tuple-bound
+  keyset cursors, stable order, bounded literal search, type/direction filters,
+  exclusion rules, sanitized metadata, and an explicit response allowlist.
+- Added Attachments as the second More destination, lazy route, command target,
+  `G X` chord, responsive account/search/filter/pagination surface, keyboard
+  selection, explicit safe transfer actions, and exact one-shot parent-message
+  handoff into Inbox.
+- Added generated `.example.test` user/account-isolated metadata, malicious
+  display strings, delay/error/pagination/session cases, explicit byte counters,
+  and desktop/mobile acceptance without an external/provider connection.
+
+### Verification
+
+- Independent data, UX, and safety audits completed. One bounded P0/P1 review
+  found four P1 issues and browser QA found mobile min-content overflow; all
+  five were fixed with focused regressions. No P0/P1 remains.
+- Focused checks passed 12 backend and 6 frontend tests plus the generated
+  self-test. Disposable PostgreSQL passed exact `a0 -> b1 -> a0 -> b1` and
+  confirmed `ix_attachments_email_id`.
+- The single consolidated post-freeze gate passed 794 backend tests with 75
+  expected skips, all 522 frontend tests, and a 619-module build. Generated
+  desktop/390x844 browser QA recorded zero implicit byte reads, downloads,
+  provider operations, mail/calendar mutations, unexpected writes, or external
+  calls. Visual evidence is stored outside the repository under
+  `/Users/austinmcchord/Development/Email-release-evidence/attachments-2026-08-31/`.
+
+### Production Actions
+
+- Fast-forwarded GitHub and production to exact runtime
+  `fcbea4afccfa2226b5519c6c2f278960bee8b29c`. Created and validated protected
+  pre-b1 backup
+  `/var/backups/mailapp/maildb-pre-attachments-20260831T1636Z.dump`,
+  1,384,170,863 bytes, mode `0600`, SHA-256
+  `c46e82341a1381556ebcfddcad1077ca17ccedd30c24a69946a8990a395b416f`.
+- Upgraded exactly `a0b1c2d3e4f5 -> b1c2d3e4f5a6`, replaced only `mailapp`,
+  then published the 619-module frontend. All seven services and public/local
+  health are healthy; replacement PID 2175594 has zero restarts and no
+  post-start warning-or-higher entries. Anonymous query is 401 private/no-store.
+- Signed-in production QA opened More → Attachments and inspected metadata-only
+  controls/results without search, account change, preview, download, parent
+  navigation, or any mail/calendar/provider mutation.
+
+### Next
+
+Operate the release and choose the next bounded modern-client gap. Thumbnails,
+OCR, AI summaries, bulk ZIP, compose reuse, provider-wide indexing, or writable
+file organization require separate byte/privacy/mutation contracts.
+
 ## 2026-08-31 — Deterministic Saved Views / Custom Splits
 
 ### Scope

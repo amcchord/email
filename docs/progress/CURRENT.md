@@ -4,11 +4,11 @@ Last updated: 2026-08-31
 
 ## Active Objective
 
-Deliver a first-class read-only Attachments workspace over synchronized local
-metadata. Keep every query bound to one exact active owned account, make file
-bytes available only after an explicit Preview or Download action, and never
-prefetch Gmail, cache content, expose provider/storage identifiers, or include
-Draft, Spam, Trash, or inline parts. Keep Saved Views, first-class Contacts,
+Operate the deployed first-class read-only Attachments workspace and select the
+next bounded modern-client gap. Keep every file query bound to one exact active
+owned account, make bytes available only after an explicit Preview or Download
+action, and never prefetch Gmail, cache content, expose provider/storage
+identifiers, or include Draft, Spam, Trash, or inline parts. Keep Saved Views, first-class Contacts,
 writing, Universal Send & Archive, Focused/Split Inbox, and the terminal track
 operating as durable, truthful workflows. Continue
 physical qualification of the independently gated Web Serial installer and OTA control
@@ -18,6 +18,13 @@ write gate.
 
 ## Baseline
 
+- The deployed first-class Attachments application/runtime is
+  `fcbea4afccfa2226b5519c6c2f278960bee8b29c`. More → Attachments provides an
+  exact-account metadata library with literal search, type/direction filters,
+  signed keyset pagination, responsive keyboard navigation, explicit safe
+  Preview/Download, and exact parent-message handoff. Ordinary browsing is
+  PostgreSQL-only and performs no provider read, cache write, mail/calendar
+  mutation, or AI call.
 - The deployed Saved Views / Custom Splits application/runtime is
   `a3f02a3a0ba07226f653c8d0986874ac12404bd4`. A user can save up to twelve
   validated structured searches with an optional exact owned-account scope,
@@ -142,10 +149,10 @@ write gate.
 - The deployed secure-enrollment application/runtime commit is
   `8ff01848a2be2818dfd9eb88b84be9aab4befb0a`; the following closeout is docs
   only. Production and GitHub were exact and clean at the runtime boundary.
-- Production Alembic is `a0b1c2d3e4f5 (head)`, the additive Saved Views child
-  of Signatures revision `f9a0b1c2d3e4`. The new table required no backfill and
-  began empty. Existing signature/follow-up/OTA tables retain their prior state;
-  all four existing terminals remain legacy.
+- Production Alembic is `b1c2d3e4f5a6 (head)`, the additive Attachments index
+  child of Saved Views revision `a0b1c2d3e4f5`. The migration added no table,
+  content, or backfill. Existing Saved View/signature/follow-up/OTA state is
+  unchanged.
 - All seven checked production services are active, public health is `ok`, and
   the replacement API process has zero automatic restarts and no post-start
   warning-or-higher entries. Production has no secure-enrollment or OTA
@@ -169,29 +176,6 @@ This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
 
 ## Active Work Items
-
-### P1 — First-class Attachments workspace
-
-- State: implementation is frozen and the bounded release gate is green. The
-  metadata-only API, exact-account ownership boundary, signed keyset cursor,
-  allowlisted response, responsive first-class UI, keyboard model, generated
-  fixture, and additive index revision `b1c2d3e4f5a6` are complete from exact
-  release baseline `e753e3bad62c05ee31b1048f2620847a68fda7c8`.
-- Scope: one `attachments.email_id` index; a session-only POST query over
-  synchronized metadata; a responsive More → Attachments workspace with exact
-  account, filename/sender/subject search, type and direction filters, safe
-  explicit Preview/Download, exact parent-message navigation, `G X`, and
-  keyboard list movement. No new attachment content, provider scope, AI,
-  thumbnail, background fetch, mail action, or calendar action is allowed.
-- Acceptance: foreign, inactive, or mismatched accounts fail closed; list and
-  filter paths make zero attachment-byte/provider/cache calls; response fields
-  are explicitly allowlisted and filenames sanitized; late session/account
-  responses cannot publish; desktop and 390x844 generated acceptance covers
-  loading, empty, failure/retry, pagination, keyboard/focus, and malicious
-  metadata; one consolidated backend/frontend/build/migration gate passes.
-- Next: commit and push the frozen release, take a protected production backup,
-  migrate exactly `a0b1c2d3e4f5 -> b1c2d3e4f5a6`, deploy once, and complete one
-  metadata-only production postflight.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 
@@ -228,6 +212,27 @@ live state.
 - Next: attach dedicated hardware and complete physical A/B migration,
   interrupted-write, rollback, recovery, and USB-rescue evidence before
   installing any eligible descriptor or changing rollout from zero.
+
+## Recent First-class Attachments Release
+
+- Attachments is the second More destination, command-palette target, and `G X`
+  route. It exposes exact account, literal filename/sender/subject search,
+  type/direction filters, keyset pagination, `J`/`K`, Enter, `D`, `O`, `/`, and
+  responsive explicit Preview/Download without placing private terms in URLs.
+- The private/no-store POST API returns one allowlisted metadata projection,
+  excludes Draft/Spam/Trash/inline parts, sanitizes hostile metadata, and binds
+  every signed cursor to the exact user/account/query/filter tuple. Listing is
+  PostgreSQL-only; bytes remain behind existing explicit transfer routes.
+- Independent data, safety, and UX review plus generated desktop/390x844
+  browser acceptance found and fixed five P1 issues, including stale-account
+  publication and real mobile min-content overflow. Final generated counters
+  showed zero provider reads/writes, mail/calendar mutations, unexpected
+  writes, or external calls.
+- Exact migration `a0b1c2d3e4f5 -> b1c2d3e4f5a6 -> a0b1c2d3e4f5 ->
+  b1c2d3e4f5a6`, the one consolidated 794-backend/522-frontend/619-module gate,
+  protected backup, production migration, API replacement, frontend build, and
+  signed-in metadata-only postflight all passed. Full evidence is in
+  `ATTACHMENTS_WORKSPACE_RELEASE_2026-08-31.md`.
 
 ## Recent Saved Views / Custom Splits Release
 
