@@ -671,3 +671,25 @@ add a new entry that explicitly supersedes the old one.
   power truth, nonzero rollout, and server enablement. Generic firmware remains
   transport-disabled and unkeyed; physical E1001/E1002 interruption, rollback,
   and recovery evidence is still required before any production offer.
+
+## D-035 — Split Inbox is a projection over one authoritative conversation
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Classify the authoritative newest mailbox-matching anchor exactly
+  once, after owned-account conversation identity is established and before
+  count or pagination. Use only persisted deterministic signals with stable
+  precedence: high priority, unanswered needs-reply, trusted contact, delegated
+  scheduling, subscription, low priority, unclassified, then direct/FYI.
+- Reason: Filtering individual messages before grouping can put one Gmail
+  conversation into both Focused and Other with contradictory anchors and
+  totals. Invoking or backfilling AI during reads would make placement unstable,
+  expensive, and capable of hiding newly synchronized mail while classification
+  lags.
+- Consequence: Focused and Other are disjoint views whose totals sum to the
+  ordinary Inbox. Missing analysis stays visibly Focused; later-sent-reply
+  correlation is scoped to the exact account/thread; account filters remain
+  safe; every placement has an explainable reason. Split changes presentation
+  only: Gmail placement, labels, durable conversation actions, Snooze, Undo,
+  retry, and idempotency retain their existing ownership boundary. No migration
+  or AI-provider call is part of the feature.

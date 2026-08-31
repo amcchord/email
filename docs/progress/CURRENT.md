@@ -4,8 +4,8 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Continue from the shipped conversation-first Inbox baseline: build the next
-focused/split placement slice as policy over one authoritative row, while the
+Release the completed focused/split placement slice as policy over one
+authoritative conversation row, while the
 terminal track qualifies the now-deployed, default-locked OTA control plane and
 candidate.7 firmware coordinator on physical E1001/E1002 hardware. Keep real
 mail/calendar QA read-only except for generated `.example.test` fixtures and
@@ -91,16 +91,19 @@ live state.
 
 ### P1 — Focused/split Inbox placement
 
-- State: ready; the authoritative conversation row and durable action boundary
-  are shipped.
-- Scope: deterministic, explainable focused/other placement over the existing
-  row without creating a second message-level truth, plus fast keyboard movement
-  between the sections.
+- State: implementation and consolidated local gate are complete on the exact
+  terminal OTA docs baseline `81a277e`; production remains unchanged until the
+  reviewed branch is fast-forwarded and its read-only postflight passes.
+- Scope: deterministic, explainable Focused/Other placement over the existing
+  row without creating a second message-level truth, exact section totals,
+  visible reasons, responsive list/table layout, and fast keyboard movement
+  between sections.
 - Acceptance: each conversation appears exactly once; placement reasons are
   visible and stable; manual mailbox/label/Snooze actions keep their existing
   account ownership, idempotency, Undo, and retry semantics.
-- Next: audit the current Focused filter and define the smallest split placement
-  contract before changing shared shell or Inbox files.
+- Next: close the independent release review, fast-forward GitHub and production,
+  then run authenticated read-only section/count/console QA without opening or
+  mutating real mail.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 

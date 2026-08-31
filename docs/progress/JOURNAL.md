@@ -3,6 +3,55 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Focused/Split Inbox implementation
+
+### Scope
+
+Turn the former message-level ignored-category toggle into one truthful,
+explainable Focused/Other projection over the authoritative owned-account
+conversation row, without a migration, AI-provider call, or Gmail move.
+
+### Completed
+
+- Added post-anchor, pre-count/pagination server placement with stable reasons,
+  account/thread-scoped later-reply suppression, trusted-contact and delegated-
+  scheduling alignment, and a fail-visible unclassified default.
+- Added exact independent section totals/pages, disjoint-response validation,
+  responsive list/table sections, reason chips, truthful empty states, a
+  stateful accessible Split control, and Shift+J/K section navigation while
+  preserving J/K/O/Escape behavior.
+- Preserved optimistic conversation actions, section counts, Undo/retry/replay,
+  split preference across reload, and explicit DOM-focus restoration after an
+  Undo removes its toast control.
+
+### Verification
+
+- Consolidated backend: 696 passed with 56 expected skips. Consolidated
+  frontend: 404 passed. Production frontend build: 546 modules.
+- Focused backend: 43 passed. Fresh disposable PostgreSQL at exact Alembic
+  `c6d7e8f9a0b1`: 2 passed for newest-anchor precedence, disjoint totals,
+  trusted/delegated/subscription/unclassified policy, and sent-reply scope.
+- Generated `.example.test` self-test passed seven exact conversations split
+  4 Focused/3 Other, full union/disjointness, Undo, and zero provider calls.
+  Desktop list/table and 390-by-844 browser QA passed exact counts, visible
+  reasons, J/K/Shift+J/Shift+K/O/Escape, responsive overflow, Split reload
+  persistence, and generated archive/Undo. Browser warnings/errors, rejected
+  mutations, and unknown routes were zero.
+- Independent release review closed the two-request classifier race, stale
+  delegated needs-reply contradiction, cross-page reclassification duplicate,
+  same-section removal/Undo focus loss, empty-page total drift, and table-header
+  semantics. Final review reported no remaining actionable P0–P2 findings.
+
+### Production Actions
+
+- Pending the final independent review and exact fast-forward/postflight. No
+  production action or real-mail/calendar mutation has occurred in this slice.
+
+### Next
+
+Ship one exact reviewed build, perform aggregate/read-only authenticated
+production QA, and close the release record with exact runtime/docs SHAs.
+
 ## 2026-08-30 — At a Glance OTA control plane and firmware coordinator
 
 ### Scope
