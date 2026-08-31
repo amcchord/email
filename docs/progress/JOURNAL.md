@@ -3,6 +3,57 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-31 — Inline semicolon snippet expansion
+
+### Scope
+
+Extend the deployed Personal Snippets library with a caret-anchored
+`;shortcut` workflow across rich Compose/Flow and plain reader replies. Preserve
+literal text until explicit selection, one-step Undo, durable drafts, session
+isolation, existing picker/settings behavior, and zero real-mail writes.
+
+### Completed
+
+- Added one shared accessible suggestion menu, safe trigger/range contract,
+  viewport clamping, fresh activation fetch, authenticated generation guards,
+  and keyboard/modifier containment.
+- Wired exact-range sanitized rich insertion through one Tiptap transaction and
+  undoable plain insertion through one native editor transaction. Unsupported
+  compatibility editors keep the existing picker rather than degrading Undo.
+- Extended the localhost `.example.test` fixture with a deterministic held
+  snippet-list response and content-free stale-session counters.
+
+### Verification
+
+- Focused checks passed during iteration. The bounded review found no P0 and
+  two P1 findings: soft-line-break triggers and non-undoable compatibility
+  fallback mutations. Both were fixed; the focused regression passed.
+- Generated browser QA passed rich/plain selection, one-step Undo, Escape and
+  send-shortcut containment, hostile HTML sanitization, durable draft reopen,
+  A→B held-response rejection, desktop and 390×844 layouts, and zero browser
+  warnings/errors, sends, external calls, or unexpected mutations.
+- Independent user acceptance found no P0/P1 issue. The one consolidated final
+  gate passed 734 backend tests with 66 expected skips, all 470 frontend tests,
+  and a 601-module build.
+
+### Production Actions
+
+- Fast-forwarded GitHub and production to exact application/runtime
+  `e7292f0ee9eb5ba469a898faa63f7f8fbab000dc`, installed the unchanged locked
+  frontend dependency tree, and built the same 601 modules. No API/worker/Caddy
+  restart, database backup, migration, provider request, or mail/calendar action
+  was required.
+- Production is exact and clean; all seven checked services and public health
+  are healthy. Mailapp PID 2139380 and its 03:44:51 UTC activation boundary are
+  unchanged with `NRestarts=0`; no warning-or-higher entry appeared after the
+  deployment, and Alembic remains `d7e8f9a0b1c2 (head)`.
+
+### Next
+
+Continue writing acceleration with bounded snippet variables and keep
+per-account signatures separate because signatures participate in durable
+draft identity and sender changes.
+
 ## 2026-08-30 — Safe recipient autocomplete
 
 ### Scope

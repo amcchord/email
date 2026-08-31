@@ -1,13 +1,14 @@
 # Current Status
 
-Last updated: 2026-08-30
+Last updated: 2026-08-31
 
 ## Active Objective
 
-Operate safe account-scoped recipient autocomplete as a durable Compose
-workflow and continue writing acceleration with inline snippet expansion.
-Operate Personal Snippets, Universal Send & Archive, Focused/Split Inbox, and
-the terminal track as durable, truthful workflows. Continue physical
+Operate safe inline snippet expansion, account-scoped recipient autocomplete,
+and Personal Snippets as durable writing workflows. Continue writing
+acceleration with bounded variables and separate per-account signatures.
+Operate Universal Send & Archive, Focused/Split Inbox, and the terminal track
+as durable, truthful workflows. Continue physical
 qualification of the independently gated Web Serial installer and OTA control
 plane on exact E1001/E1002 hardware. Keep real mail/calendar QA read-only except
 for generated `.example.test` fixtures and preserve every independent terminal
@@ -15,6 +16,15 @@ write gate.
 
 ## Baseline
 
+- The deployed Inline Snippet Expansion application/runtime is
+  `e7292f0ee9eb5ba469a898faa63f7f8fbab000dc`. Typing a boundary-safe
+  `;shortcut` in Compose, reader reply, or Flow opens one accessible,
+  session-scoped menu at the live caret. Explicit Enter, Tab, or pointer
+  selection replaces only the verified literal trigger with a sanitized
+  materialized snapshot; Escape leaves the typed text unchanged. Rich and
+  plain replacements each preserve one-step Undo, while unsupported editor
+  compatibility paths retain the existing picker instead of silently losing
+  Undo. The release is frontend-only and migration-free.
 - The deployed Recipient Autocomplete application/runtime is
   `b955c6766203661f0efa6db916447adfb67f0cc6`. Compose To/Cc/Bcc use one
   account-scoped metadata suggestion endpoint, quoted-comma-safe canonical
@@ -164,6 +174,27 @@ live state.
 - Next: attach dedicated hardware and complete physical A/B migration,
   interrupted-write, rollback, recovery, and USB-rescue evidence before
   installing any eligible descriptor or changing rollout from zero.
+
+## Recent Inline Snippet Expansion Release
+
+- Compose, reader reply, and Flow now share a keyboard-first `;shortcut`
+  suggestion menu. It activates only at a block start or after whitespace,
+  ignores selections, composition, links, and code, and never auto-expands an
+  async result.
+- Every selection revalidates the live editor range and authenticated session,
+  sanitizes rich content or uses the stored plain fallback, and enters one Undo
+  transaction. Escape, caret movement, and empty/error states preserve the
+  literal trigger; modifier chords cannot leak into Send or Send & Archive.
+- Generated `.example.test` QA proved rich/plain insertion, hostile-markup
+  sanitization, draft reopen continuity, A→B held-response rejection, zero
+  sends/external calls, desktop placement, and 390×844 clamping. Independent
+  P0/P1 review and user acceptance passed after the two P1 findings were fixed.
+- The single consolidated post-freeze gate passed 734 backend tests with 66
+  expected skips, all 470 frontend tests, and a 601-module production build.
+  Full evidence is in
+  `INLINE_SNIPPET_EXPANSION_RELEASE_2026-08-31.md`. Production built the same
+  601 modules without restarting a service; all seven services and health are
+  healthy, and Alembic remains `d7e8f9a0b1c2`.
 
 ## Recent Recipient Autocomplete Release
 

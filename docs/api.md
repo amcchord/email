@@ -1125,6 +1125,16 @@ every insertion boundary; plain-text surfaces insert the stored plain fallback.
 Insertion materializes a copy into the draft, so later snippet edits or deletion
 never rewrite an existing draft.
 
+Compose, reader reply, and Flow also provide client-side inline expansion.
+Typing a leading or whitespace-delimited `;shortcut` opens a fresh
+authenticated list for the current editor activation; the client never
+auto-replaces from an asynchronous response. Enter, Tab, or explicit pointer
+selection revalidates the current session and exact live trigger range before
+materializing the sanitized rich snapshot or stored plain-text fallback in one
+Undo transaction. Escape, movement, loading, empty, error, and stale-session
+states preserve the literal text. Browsers that cannot provide an undoable
+compatibility transaction retain the existing `Cmd/Ctrl+;` picker instead.
+
 ## Web session-only durable outbound delivery
 
 Interactive email sends use the authenticated browser session and a

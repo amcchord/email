@@ -835,3 +835,23 @@ add a new entry that explicitly supersedes the old one.
   selection, duplicates across To/Cc/Bcc, account switches, stale responses,
   and manual entry share one parser and fail closed. Inline snippet expansion
   and a first-class contacts directory remain separate milestones.
+
+## D-043 — Inline snippet expansion replaces only a live verified literal
+
+- Date: 2026-08-31
+- Status: accepted
+- Decision: Treat `;shortcut` as ordinary draft text until the user explicitly
+  selects a result in the same authenticated editor activation. At selection,
+  re-read and verify the exact trigger range, sanitize the chosen snapshot at
+  the editor boundary, and replace it in one undoable transaction. Never use a
+  captured asynchronous range as mutation authority.
+- Reason: Automatic or stale expansion can overwrite text after caret movement,
+  leak one user's private template into another session, trigger Send shortcuts,
+  or leave a change that cannot be undone. A compatibility fallback that edits
+  text without browser/editor Undo would make the same visible feature carry a
+  materially weaker safety contract.
+- Consequence: Triggering is limited to block start or whitespace and is
+  suppressed during composition, selection, links, and code. Loading, empty,
+  error, Escape, movement, identity change, and stale response paths preserve
+  the literal. Rich and plain surfaces share keyboard containment and one-step
+  Undo; an unsupported compatibility editor keeps the existing explicit picker.
