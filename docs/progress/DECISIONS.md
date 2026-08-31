@@ -776,3 +776,23 @@ add a new entry that explicitly supersedes the old one.
   replayed automatically. Only the first matching scoped HTTPS check-in
   activates the candidate. Production exposes no Wi-Fi fields and disables
   Connect until every independent gate is deliberately satisfied.
+
+## D-040 — Personal Snippets are private revisioned templates that materialize on insertion
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Store Personal Snippets as user-owned records with a stable
+  client-generated create UUID, a unique normalized shortcut, and full
+  revision-checked replacement. Sanitize rich HTML at each editor insertion
+  boundary and materialize the selected content into the active draft instead
+  of retaining a live reference to the template.
+- Reason: Reusable writing must survive devices and lost responses without
+  disclosing content across users, duplicating records, silently overwriting a
+  concurrent edit, or letting later template changes rewrite an already
+  composed message. Treating stored rich content as trusted would also widen
+  the draft rendering boundary unnecessarily.
+- Consequence: Exact create and update replays are safe, stale revisions fail
+  visibly, missing and foreign identifiers remain non-disclosing, and deletion
+  affects only future selection. Compose, reader, and Flow all insert one
+  sanitized snapshot with one Undo step. Inline semicolon expansion, variables,
+  sharing, analytics, and per-account signatures remain separate milestones.

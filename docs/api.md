@@ -1032,6 +1032,60 @@ Redis is wake-up acceleration and the minutely cron drain recovers lost wakes
 and expired leases. Snooze return actions enter the same ordered mail-action
 sequence as direct user actions, so later manual placement wins.
 
+## Web session-only Personal Snippets
+
+Personal Snippets are private reusable writing blocks owned by the authenticated
+user. Public API tokens cannot list or mutate them.
+
+```text
+GET    /api/compose/snippets
+POST   /api/compose/snippets
+PUT    /api/compose/snippets/{snippet_id}
+DELETE /api/compose/snippets/{snippet_id}?expected_revision=3
+```
+
+Create uses a client-generated UUID as the stable identity for one logical
+request:
+
+```json
+{
+  "snippet_id": "71ea1d53-9fbc-4683-83ba-c0b5b876d755",
+  "name": "Generated follow-up",
+  "shortcut": "follow_up",
+  "body_html": "<p>Generated fixture content</p>",
+  "body_text": "Generated fixture content"
+}
+```
+
+Names are normalized to 1–120 characters. Shortcuts are case-folded, may omit
+or include a leading semicolon at admission, and persist as 1–32 lowercase
+letters, numbers, hyphens, or underscores. They are unique per user. Plain text
+is limited to 20,000 characters, HTML to 50,000 characters, the complete
+request to 128 KiB, and each user to 250 snippets.
+
+An exact create replay with the same UUID and canonical content returns the
+existing record with 200; the first create returns 201. Reusing the UUID for
+different content, reusing a shortcut, or replacing a stale revision returns
+409 `snippet_conflict`. Replace is a full revisioned update:
+
+```json
+{
+  "expected_revision": 3,
+  "name": "Generated follow-up",
+  "shortcut": "follow_up",
+  "body_html": "<p>Updated generated content</p>",
+  "body_text": "Updated generated content"
+}
+```
+
+An exact lost-response update replay is safe. Delete requires the current
+positive revision and is idempotent after success; missing and foreign UUIDs
+share the same non-disclosing behavior. List results are bounded, sorted by
+name, and contain only the current user's records. Snippet HTML is sanitized at
+every insertion boundary; plain-text surfaces insert the stored plain fallback.
+Insertion materializes a copy into the draft, so later snippet edits or deletion
+never rewrite an existing draft.
+
 ## Web session-only durable outbound delivery
 
 Interactive email sends use the authenticated browser session and a
