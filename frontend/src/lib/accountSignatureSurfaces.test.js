@@ -233,11 +233,14 @@ test('all writing surfaces use the shared policy API and signature control', asy
     assert.match(source, /signatureSnapshot|signature_snapshot:/);
     assert.match(source, /signatureInitialized|signature_initialized:/);
     assert.match(source, /signaturePoliciesFailed && signatureUnsignedAcknowledged/);
-    assert.match(source, /onretry=\{loadSignaturePolicies\}/);
-    assert.match(source, /oncontinueunsigned=\{handleContinueWithoutSignature\}/);
+    assert.match(source, /onModeChange=\{handleSignatureChange\}/);
+    assert.match(source, /onRetry=\{loadSignaturePolicies\}/);
+    assert.match(source, /onContinueUnsigned=\{handleContinueWithoutSignature\}/);
     assert.match(source, /signatureReady/);
     assert.match(source, /authoritativeSignatureSnapshot\(state\.snapshot\?\.signature_snapshot\)/);
     assert.doesNotMatch(source, /signatureMode = signaturePoliciesFailed \? 'disabled' : 'default'/);
+    const modeHandler = source.match(/function handleSignatureChange\(mode\) \{([\s\S]*?)\n  \}/)?.[1] || '';
+    assert.doesNotMatch(modeHandler, /!signaturePoliciesLoaded/);
   }
 });
 
@@ -245,8 +248,10 @@ test('signature policy failures require an explicit retry or unsigned acknowledg
   const source = await readFile(new URL('../components/email/SignatureControl.svelte', import.meta.url), 'utf8');
   assert.match(source, /Signature settings are unavailable/);
   assert.match(source, /Continue unsigned/);
-  assert.match(source, /onclick=\{\(\) => onretry\?\.\(\)\}/);
-  assert.match(source, /onclick=\{\(\) => oncontinueunsigned\?\.\(\)\}/);
+  assert.match(source, /onclick=\{\(\) => onRetry\?\.\(\)\}/);
+  assert.match(source, /onclick=\{\(\) => onContinueUnsigned\?\.\(\)\}/);
+  assert.match(source, /onclick=\{\(\) => onModeChange\?\.\('disabled'\)\}/);
+  assert.match(source, /signature-control relative z-10/);
   assert.match(source, /role=\{unsignedAcknowledged \? 'status' : 'alert'\}/);
 });
 

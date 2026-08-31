@@ -612,7 +612,7 @@
   }
 
   function handleSignatureChange(mode) {
-    if (draftLocked || !signaturePoliciesLoaded) return;
+    if (draftLocked) return;
     signatureInitialized = true;
     signatureMode = normalizeSignatureMode(mode);
     signatureSnapshot = signatureSnapshotAfterModeChange({
@@ -1239,9 +1239,9 @@
         disabled={draftLocked}
         loadError={signaturePoliciesFailed}
         unsignedAcknowledged={signatureUnsignedAcknowledged}
-        onchange={handleSignatureChange}
-        onretry={loadSignaturePolicies}
-        oncontinueunsigned={handleContinueWithoutSignature}
+        onModeChange={handleSignatureChange}
+        onRetry={loadSignaturePolicies}
+        onContinueUnsigned={handleContinueWithoutSignature}
       />
       <QuotedContentPreview html={quotedHtml} text={quotedText} />
     </div>

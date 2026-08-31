@@ -1102,7 +1102,7 @@
   }
 
   function handleSignatureChange(mode) {
-    if (!signaturePoliciesLoaded || durableReplyOpening || durableReplyState.sendInProgress) return;
+    if (durableReplyOpening || durableReplyState.sendInProgress) return;
     signatureInitialized = true;
     signatureMode = normalizeSignatureMode(mode);
     signatureSnapshot = signatureSnapshotAfterModeChange({
@@ -2156,9 +2156,9 @@
           disabled={durableReplyOpening || durableReplyState.sendInProgress || durableReplyState.discardInProgress}
           loadError={signaturePoliciesFailed}
           unsignedAcknowledged={signatureUnsignedAcknowledged}
-          onchange={handleSignatureChange}
-          onretry={loadSignaturePolicies}
-          oncontinueunsigned={handleContinueWithoutSignature}
+          onModeChange={handleSignatureChange}
+          onRetry={loadSignaturePolicies}
+          onContinueUnsigned={handleContinueWithoutSignature}
         />
         <div class="reply-actions flex items-center gap-2 mt-2">
           <SnippetPicker

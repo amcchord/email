@@ -18,9 +18,9 @@
     compact = false,
     loadError = false,
     unsignedAcknowledged = false,
-    onchange = null,
-    onretry = null,
-    oncontinueunsigned = null,
+    onModeChange = null,
+    onRetry = null,
+    onContinueUnsigned = null,
   } = $props();
 
   let effective = $derived(effectiveSignatureSnapshot({
@@ -41,7 +41,7 @@
 
 {#if loadError || (initialized && (policy || frozenSnapshot))}
   <section
-    class="signature-control rounded-lg border {compact ? 'px-3 py-2' : 'px-4 py-3'}"
+    class="signature-control relative z-10 rounded-lg border {compact ? 'px-3 py-2' : 'px-4 py-3'}"
     style="border-color: var(--border-subtle); background: var(--bg-secondary)"
     data-signature-control=""
     aria-label="Message signature"
@@ -62,7 +62,7 @@
             class="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-xs font-semibold hover:opacity-75 disabled:opacity-50"
             style="color: var(--text-secondary)"
             {disabled}
-            onclick={() => onretry?.()}
+            onclick={() => onRetry?.()}
           >
             <Icon name="refresh-cw" size={13} />
             Retry
@@ -73,7 +73,7 @@
               class="inline-flex min-h-11 items-center rounded-md px-2 text-xs font-semibold hover:opacity-75 disabled:opacity-50"
               style="color: var(--color-accent-700)"
               {disabled}
-              onclick={() => oncontinueunsigned?.()}
+              onclick={() => onContinueUnsigned?.()}
             >Continue unsigned</button>
           {/if}
         </div>
@@ -97,7 +97,7 @@
           class="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-semibold hover:opacity-75 disabled:opacity-50"
           style="color: var(--text-secondary)"
           {disabled}
-          onclick={() => onchange?.('disabled')}
+          onclick={() => onModeChange?.('disabled')}
           aria-label="Remove signature from this message"
         >
           <Icon name="x" size={13} />
@@ -112,7 +112,7 @@
           class="inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-xs font-semibold hover:opacity-75 disabled:opacity-50"
           style="color: var(--color-accent-700)"
           {disabled}
-          onclick={() => onchange?.('enabled')}
+          onclick={() => onModeChange?.('enabled')}
           aria-label="Restore the account signature"
         >
           <Icon name="rotate-ccw" size={13} />
