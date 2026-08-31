@@ -104,6 +104,27 @@ provision and select a disposable one explicitly.
 | E-ink renderer | Relevant renderer tests plus image/layout audit when visual output changes |
 | Documentation or operations only | Check commands, paths, links, and `git diff --check` |
 
+## Validation Economy
+
+Keep release confidence high without turning small follow-ups into recursive
+full-suite loops.
+
+1. During implementation, run only tests affected by the current edit.
+2. Once the candidate is coherent, freeze its scope and request one bounded
+   P0/P1 review. Record P2 polish for a later batch unless it blocks the primary
+   workflow, accessibility, ownership, integrity, or security.
+3. Fix review blockers with focused checks, then run the required migration,
+   generated-fixture, and browser evidence once each when applicable.
+4. Run one final `git diff --check && make check` after code freeze. If that
+   gate finds a release blocker, fix it, rerun its focused test, then rerun the
+   consolidated gate once.
+5. After the final code gate, permit documentation-only closeout without
+   restarting broad tests. Do not repeat disposable-database, browser, or full
+   suite evidence unless the related code changes again.
+
+This protocol does not weaken production preflight, backup, migration, health,
+or rollback requirements.
+
 If a full check cannot run, record exactly what ran, what did not, and why in
 the journal and final handoff.
 

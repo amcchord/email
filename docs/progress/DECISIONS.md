@@ -796,3 +796,22 @@ add a new entry that explicitly supersedes the old one.
   affects only future selection. Compose, reader, and Flow all insert one
   sanitized snapshot with one Undo step. Inline semicolon expansion, variables,
   sharing, analytics, and per-account signatures remain separate milestones.
+
+## D-041 — Release validation is focused during iteration and consolidated once after freeze
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Run affected focused tests while code is changing, one bounded
+  P0/P1 review when the candidate is coherent, and one consolidated release
+  gate after code freeze. Specialized migration, generated-fixture, and browser
+  evidence run once when applicable. Documentation-only closeout does not
+  restart broad testing; P2 polish is batched unless it blocks the primary
+  workflow, accessibility, ownership, integrity, or security.
+- Reason: Repeating every suite and browser journey after each small finding
+  consumes hours without proportionally improving release confidence, delays
+  delivery, and encourages the team to treat cosmetic polish like a data-loss
+  or cross-user security risk.
+- Consequence: A final-gate blocker receives its focused regression check and
+  one consolidated rerun after correction. Production preflight, validated
+  backups, migration checks, health, logs, and rollback boundaries remain
+  mandatory. The repository-wide operating rule is recorded in `AGENTS.md`.
