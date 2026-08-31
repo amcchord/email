@@ -4,15 +4,20 @@ Last updated: 2026-08-30
 
 ## Active Objective
 
-Operate the deployed Focused/Split Inbox as one truthful projection over the
-authoritative conversation row while the terminal track physically qualifies
-the deployed, independently gated Web Serial installer and OTA control plane on
-exact E1001/E1002 hardware. Keep real mail/calendar QA read-only except for
-generated `.example.test` fixtures and preserve every independent terminal
-write gate.
+Operate Universal Send & Archive, Focused/Split Inbox, and the terminal track
+as durable, truthful workflows. Continue physical qualification of the
+independently gated Web Serial installer and OTA control plane on exact
+E1001/E1002 hardware. Keep real mail/calendar QA read-only except for generated
+`.example.test` fixtures and preserve every independent terminal write gate.
 
 ## Baseline
 
+- Universal Send & Archive application/runtime is
+  `c7171466d075fc74f12ccb47fb2ee2d27ec830a6`. Full Compose and inline replies
+  expose the same Send options and `Cmd/Ctrl+Shift+Enter` contract, while new
+  messages fail closed to ordinary Send. The server archives the exact owned
+  conversation only after provider-confirmed delivery; Undo, cancellation,
+  delivery failure, and a later-deleted source remain safe.
 - The deployed Focused/Split Inbox application/runtime is
   `dea8117f5b5348d8c4d3f78e0e6af08273a6367d`. One coherent endpoint ranks,
   counts, and pages both visible sections over the authoritative owned-account
@@ -142,6 +147,19 @@ live state.
 - Next: attach dedicated hardware and complete physical A/B migration,
   interrupted-write, rollback, recovery, and USB-rescue evidence before
   installing any eligible descriptor or changing rollout from zero.
+
+## Recent Universal Send & Archive Release
+
+- Compose and reader replies now share one accessible Send options modal with
+  immediate Send & Archive, scheduled archive-after-delivery, and
+  `Cmd/Ctrl+Shift+Enter`; ordinary Send and new-message behavior are unchanged.
+- The exact source and full reply provenance are validated at admission. One
+  durable outbound stages one idempotent conversation-scoped mail action only
+  after provider delivery confirmation. Undo/cancel/failure never archive.
+- Final verification passed 715 backend tests with 56 expected skips, all 422
+  frontend tests, a 588-module production build, generated `.example.test`
+  provider/self-test and browser QA, and independent release review. Full
+  evidence is in `UNIVERSAL_SEND_ARCHIVE_RELEASE_2026-08-30.md`.
 
 ## Recent Focused/Split Inbox Release
 

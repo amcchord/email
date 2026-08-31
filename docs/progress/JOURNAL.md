@@ -3,6 +3,49 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-30 — Universal Send & Archive
+
+### Scope
+
+Extend the existing durable post-delivery archive intent from Flow to full
+Compose and inline replies without changing ordinary Send, new-message
+behavior, Gmail provider code, terminal work, or the database schema.
+
+### Completed
+
+- Added exact-source-gated Send & Archive, scheduled archive-after-delivery,
+  `Cmd/Ctrl+Shift+Enter`, persistent scheduled status, truthful copy, modal
+  focus/Escape handling, and one-shot recovery semantics.
+- Made the post-delivery action conversation-scoped, deterministic, and safe
+  when Gmail history removes the original source before scheduled delivery.
+  Undo/cancel restores the original durable draft identity instead of creating
+  a conflicting second reply.
+- Extended the localhost-only `.example.test` fixture with current conversation
+  APIs, exact provenance checks, archive audit counters, and undo/cancel/
+  confirmed-delivery self-test coverage.
+
+### Verification
+
+- `make check`: 715 backend passed with 56 expected skips; 422 frontend passed;
+  production build transformed 588 modules.
+- Generated provider self-test proved zero archives for Undo/cancel, one archive
+  only after generated delivery, zero external network calls, and no unexpected
+  mutations. Browser QA verified new-message fail-closed behavior, reply modal
+  focus/Escape, visible Send & Archive/scheduled intent, and generated Undo.
+- Independent review found no P0 and its conversation scope, deleted-source,
+  inline error, and stale assertion findings were closed before the final gate.
+
+### Production Actions
+
+- Pending the authorized fast-forward deployment of exact application commit
+  `c7171466d075fc74f12ccb47fb2ee2d27ec830a6`; no migration is required and
+  Alembic remains `c6d7e8f9a0b1`.
+
+### Next
+
+Ship this frozen milestone, perform one short health/read-only postflight, and
+move further polish into Personal Snippets instead of reopening this release.
+
 ## 2026-08-30 — At a Glance browser transport, owner controls, and design registry
 
 ### Scope

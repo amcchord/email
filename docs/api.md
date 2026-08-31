@@ -1091,12 +1091,20 @@ and inactive accounts fail before persistence. A pure-ASGI guard rejects a
 declared or streamed request body above 50 MiB with 413 before FastAPI parses
 the message JSON.
 
-Flow may set `archive_source_after_send=true` only with an exact validated
-`source_email_id`. The outbound worker durably stages one deterministic archive
-mail action after provider delivery is confirmed and before publishing terminal
-`sent` truth. Reconciliation repeats that same idempotent action if a process
-stops between those commits, so a scheduled reply does not lose Flow's
-archive-after-send preference after reload.
+Flow, full Compose replies, and inline reader replies may set
+`archive_source_after_send=true` only with an exact validated
+`source_email_id`. New messages and ordinary Send omit the flag. The outbound
+worker durably stages one deterministic, conversation-scoped archive action
+after provider delivery is confirmed and before publishing terminal `sent`
+truth. Reconciliation repeats that same idempotent action if a process stops
+between those commits. Undo, scheduled cancellation, and delivery failure leave
+the conversation in place; if sync removed the exact source before delivery,
+the confirmed send completes and the archive becomes a safe no-op.
+
+Outbound responses expose `archive_source_after_send` as a safe boolean only
+while the retained intent still has an exact positive source identity. This
+allows scheduled-send management to describe the pending follow-up without
+returning the outbound payload or message content.
 
 Admission is serialized transactionally per user. At most 30 active sends may
 consume one account's capacity and 60 may consume one user's capacity; the

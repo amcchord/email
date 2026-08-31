@@ -736,3 +736,20 @@ add a new entry that explicitly supersedes the old one.
   E1001 and E1002 evidence and signs offline; E1004 and OTA eligibility stay
   false. Physical interruption, DTR/RTS, ROM recovery, RET1 provisioning, and
   first authenticated check-in remain mandatory before any enablement.
+
+## D-038 — Send & Archive is one durable post-delivery operation
+
+- Date: 2026-08-30
+- Status: accepted
+- Decision: Full Compose and inline replies may request Send & Archive only
+  from an exact admission-validated source message. The server owns one
+  immutable outbound intent and stages one deterministic conversation-scoped
+  archive action only after provider delivery is confirmed.
+- Reason: A client-side send followed by archive can hide mail that failed to
+  send, lose the archive across reload, duplicate work after an ambiguous
+  response, or archive only one message while promising the conversation.
+- Consequence: New messages fail closed to ordinary Send; Undo, cancellation,
+  and delivery failure leave the conversation in place; provider-confirmed
+  reconciliation retries the same archive identity; and a source removed by
+  later sync turns the archive into a terminal no-op instead of trapping the
+  delivered message in reconciliation.
