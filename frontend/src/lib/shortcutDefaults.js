@@ -28,6 +28,7 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'nav.inbox',    key: 'g i', label: 'Go to Inbox',             context: 'global', category: 'Navigation' },
   { id: 'nav.calendar', key: 'g l', label: 'Go to Calendar',          context: 'global', category: 'Navigation' },
   { id: 'nav.glance',   key: 'g g', label: 'Go to At a Glance',       context: 'global', category: 'Navigation' },
+  { id: 'nav.contacts', key: 'g p', label: 'Go to Contacts',          context: 'global', category: 'Navigation', keywords: ['people', 'correspondents', 'relationships'] },
   { id: 'nav.todos',    key: 'g t', label: 'Go to Todos',             context: 'global', category: 'Navigation' },
   { id: 'nav.stats',    key: 'g s', label: 'Go to Stats',             context: 'global', category: 'Navigation' },
   { id: 'nav.insights', key: 'g a', label: 'Go to AI Insights',       context: 'global', category: 'Navigation' },
@@ -101,6 +102,14 @@ export const SHORTCUT_DEFAULTS = [
   { id: 'compose.deleteDraft', key: 'Ctrl+Shift+,', label: 'Discard draft', context: 'compose', category: 'Compose' },
   { id: 'compose.cc',      key: 'Ctrl+Shift+c', label: 'Toggle Cc',   context: 'compose', category: 'Compose' },
   { id: 'compose.bcc',     key: 'Ctrl+Shift+b', label: 'Toggle Bcc',  context: 'compose', category: 'Compose' },
+
+  // ── Contacts ────────────────────────────────────────────────────
+  { id: 'contacts.next',   key: 'j',      label: 'Next contact',      context: 'contacts', category: 'Contacts' },
+  { id: 'contacts.prev',   key: 'k',      label: 'Previous contact',  context: 'contacts', category: 'Contacts' },
+  { id: 'contacts.open',   key: 'Enter',  label: 'Open contact',      context: 'contacts', category: 'Contacts' },
+  { id: 'contacts.email',  key: 'c',      label: 'Email contact',     context: 'contacts', category: 'Contacts' },
+  { id: 'contacts.search', key: '/',      label: 'Search contacts',   context: 'contacts', category: 'Contacts' },
+  { id: 'contacts.back',   key: 'Escape', label: 'Back to contacts', context: 'contacts', category: 'Contacts' },
 
   // ── Todos ────────────────────────────────────────────────────────
   { id: 'todos.new',    key: 'n',     label: 'New todo',        context: 'todos', category: 'Todos' },

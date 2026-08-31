@@ -20,6 +20,9 @@ export const currentPage = writable('flow');
 export const currentMailbox = writable('INBOX');
 export const selectedEmailId = writable(null);
 export const selectedThreadId = writable(null);
+// One-shot, account-authoritative handoff from Contacts to Inbox. It is
+// intentionally session memory only and is cleared on every auth transition.
+export const contactConversationIntent = writable(null);
 
 // Email state
 export const emails = writable([]);
@@ -296,6 +299,7 @@ function resetAuthenticatedSessionState() {
   currentMailbox.set('INBOX');
   selectedEmailId.set(null);
   selectedThreadId.set(null);
+  contactConversationIntent.set(null);
 
   emails.set([]);
   emailsLoading.set(false);

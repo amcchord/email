@@ -7,7 +7,7 @@
     currentMailbox, selectedEmailId, selectedAccountId,
     searchQuery, showToast, pageSize, viewMode, smartFilter,
     hideIgnored, sidebarCollapsed, createAuthenticatedSessionGuard,
-    accounts, labels as labelsStore,
+    accounts, contactConversationIntent, labels as labelsStore,
   } from '../lib/stores.js';
   import { registerActions } from '../lib/shortcutStore.js';
   import { lastEvent } from '../lib/realtime.js';
@@ -76,6 +76,7 @@
   } from '../lib/snooze.js';
   import { focusEmailRow, focusEmailRowOrFallback } from '../lib/emailRowFocus.js';
   import { formatSnoozeWake } from '../lib/remindLater.js';
+  import { normalizeContactConversationNavigationIntent } from '../lib/contactProfiles.js';
 
   let selectedEmail = $state(null);
   let selectedThread = $state(null);
@@ -103,6 +104,29 @@
   );
   let moveAvailable = $derived(
     !$searchQuery && !$smartFilter && $currentMailbox === 'INBOX'
+  );
+  let selectedListConversation = $derived(
+    $emails.find(email => Number(email.id) === Number($selectedEmailId)) || null
+  );
+  let selectedReaderUsesThread = $derived(
+    Array.isArray(selectedThread?.emails) && selectedThread.emails.length > 0
+  );
+  let selectedReaderConversation = $derived(
+    isConversationSummary(selectedListConversation)
+      ? selectedListConversation
+      : (selectedReaderUsesThread && selectedEmail
+        ? {
+            ...selectedEmail,
+            id: Number(selectedEmail.id),
+            account_id: Number(selectedEmail.account_id),
+            anchor_email_id: Number(selectedEmail.id),
+            conversation_key: `${Number(selectedEmail.account_id)}:${String(selectedThread?.thread_id || `message:${selectedEmail.id}`)}`,
+            member_count: selectedThread.emails.length,
+            matched_count: 1,
+            unread_count: selectedThread.emails.filter(message => !message.is_read).length,
+            conversation_scope: false,
+          }
+        : null)
   );
 
   const listRequests = createLatestRequestGuard();
@@ -699,34 +723,72 @@
     emailLoading = true;
     selectedEmail = null;
     selectedThread = null;
+    let exactContactIntent = null;
     try {
+      const pendingContactIntent = get(contactConversationIntent);
+      if (pendingContactIntent !== null) {
+        exactContactIntent = normalizeContactConversationNavigationIntent(pendingContactIntent);
+        if (exactContactIntent.anchor_email_id !== Number(id)) exactContactIntent = null;
+      }
+      if (
+        exactContactIntent
+        && Number(get(selectedAccountId)) !== exactContactIntent.account_id
+      ) {
+        throw new Error('The contact conversation account no longer matches the active account.');
+      }
+
       const summary = get(emails).find(email => email.id === id);
       const conversation = isConversationSummary(summary);
       const threadId = String(summary?.gmail_thread_id || '').trim();
-      const result = conversation && threadId
-        ? await api.getThread(threadId, 'asc', summary.account_id)
-        : await api.getEmail(id);
+      const result = exactContactIntent?.thread_id
+        ? await api.getThread(exactContactIntent.thread_id, 'asc', exactContactIntent.account_id)
+        : (exactContactIntent
+          ? await api.getEmail(id)
+          : (conversation && threadId
+            ? await api.getThread(threadId, 'asc', summary.account_id)
+            : await api.getEmail(id)));
       if (!isCurrentEmailRequest(requestId, id)) return;
-      selectedThread = conversation
-        ? (threadId ? result : { thread_id: '', emails: [result] })
-        : null;
-      const detail = conversation
-        ? (selectedThread.emails || []).find(message => Number(message.id) === Number(summary.anchor_email_id))
-          || selectedThread.emails?.[selectedThread.emails.length - 1]
-          || null
-        : result;
-      selectedEmail = summary?.snooze_id && detail
-        ? {
-            ...detail,
-            snooze_id: summary.snooze_id,
-            snooze_wake_at: summary.snooze_wake_at,
-            snooze_time_zone: summary.snooze_time_zone,
-            snooze_condition: summary.snooze_condition,
-            snooze_origin: summary.snooze_origin,
-            snooze_state: summary.snooze_state,
-          }
-        : detail;
-      if (conversation ? Number(summary.unread_count) > 0 : !detail?.is_read) {
+
+      if (exactContactIntent?.thread_id) {
+        const messages = Array.isArray(result?.emails) ? result.emails : [];
+        if (
+          messages.length === 0
+          || messages.some(message => Number(message?.account_id) !== exactContactIntent.account_id)
+        ) {
+          throw new Error('The contact conversation response did not match its account.');
+        }
+        const anchor = messages.find(message => Number(message.id) === exactContactIntent.anchor_email_id);
+        if (!anchor) throw new Error('The contact conversation did not contain its exact anchor message.');
+        selectedThread = result;
+        selectedEmail = anchor;
+      } else if (exactContactIntent) {
+        if (Number(result?.account_id) !== exactContactIntent.account_id || Number(result?.id) !== exactContactIntent.anchor_email_id) {
+          throw new Error('The contact message response did not match its account and anchor.');
+        }
+        selectedThread = null;
+        selectedEmail = result;
+      } else {
+        selectedThread = conversation
+          ? (threadId ? result : { thread_id: '', emails: [result] })
+          : null;
+        const detail = conversation
+          ? (selectedThread.emails || []).find(message => Number(message.id) === Number(summary.anchor_email_id))
+            || selectedThread.emails?.[selectedThread.emails.length - 1]
+            || null
+          : result;
+        selectedEmail = summary?.snooze_id && detail
+          ? {
+              ...detail,
+              snooze_id: summary.snooze_id,
+              snooze_wake_at: summary.snooze_wake_at,
+              snooze_time_zone: summary.snooze_time_zone,
+              snooze_condition: summary.snooze_condition,
+              snooze_origin: summary.snooze_origin,
+              snooze_state: summary.snooze_state,
+            }
+          : detail;
+      }
+      if (exactContactIntent ? !selectedEmail?.is_read : (conversation ? Number(summary.unread_count) > 0 : !selectedEmail?.is_read)) {
         // Rendering the message must never wait for a mailbox mutation. The
         // durable action path owns retries and exposes any terminal failure.
         void handleAction('mark_read', [id], { announce: false, offerUndo: false });
@@ -734,6 +796,14 @@
     } catch (err) {
       if (isCurrentEmailRequest(requestId, id)) showToast(err.message, 'error');
     } finally {
+      if (exactContactIntent) {
+        const pending = get(contactConversationIntent);
+        if (
+          Number(pending?.account_id) === exactContactIntent.account_id
+          && Number(pending?.anchor_email_id) === exactContactIntent.anchor_email_id
+          && (pending?.thread_id ?? null) === exactContactIntent.thread_id
+        ) contactConversationIntent.set(null);
+      }
       if (inboxSessionIsCurrent() && emailRequests.isCurrent(requestId)) emailLoading = false;
     }
   }
@@ -1771,9 +1841,9 @@
           <div class="w-10 h-1 rounded-full transition-colors group-hover:bg-accent-500" style="background: var(--border-color)"></div>
         </div>
         <div class="email-preview-pane flex-1 min-h-0 overflow-hidden">
-          {#if isConversationSummary($emails.find(email => email.id === $selectedEmailId))}
+          {#if selectedReaderUsesThread}
             <ConversationView
-              conversation={$emails.find(email => email.id === $selectedEmailId)}
+              conversation={selectedReaderConversation}
               thread={selectedThread}
               loading={emailLoading}
               onAction={handleAction}
@@ -1838,9 +1908,9 @@
         <div class="h-10 w-1 rounded-full transition-colors group-hover:bg-accent-500" style="background: var(--border-color)"></div>
       </div>
       <div class="email-preview-pane flex-1 min-w-0 overflow-hidden">
-        {#if isConversationSummary($emails.find(email => email.id === $selectedEmailId))}
+        {#if selectedReaderUsesThread}
           <ConversationView
-            conversation={$emails.find(email => email.id === $selectedEmailId)}
+            conversation={selectedReaderConversation}
             thread={selectedThread}
             loading={emailLoading}
             onAction={handleAction}

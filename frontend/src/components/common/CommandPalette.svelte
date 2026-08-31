@@ -32,6 +32,7 @@
       inbox: 'inbox',
       compose: 'compose',
       calendar: 'calendar',
+      contacts: 'contacts',
       todos: 'todos',
       chat: 'chat',
       'ai-insights': 'ai-insights',

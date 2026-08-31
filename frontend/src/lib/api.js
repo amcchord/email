@@ -427,6 +427,12 @@ export const api = {
     return request('GET', `/compose/recipients?${params.toString()}`, null, { signal });
   },
 
+  // Private, bounded contact projections from already-synchronized mail metadata.
+  queryContacts: (payload, { signal } = {}) =>
+    request('POST', '/contacts/query', payload, { signal }),
+  getContactProfile: (payload, { signal } = {}) =>
+    request('POST', '/contacts/profile', payload, { signal }),
+
   // Private reusable writing snippets
   listPersonalSnippets: () => request('GET', '/compose/snippets'),
   createPersonalSnippet: (payload) => request('POST', '/compose/snippets', payload),

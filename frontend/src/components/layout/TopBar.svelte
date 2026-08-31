@@ -40,6 +40,7 @@
   ];
 
   const secondaryTabs = [
+    { id: 'contacts', label: 'Contacts', icon: 'users' },
     { id: 'ai-insights', label: 'AI Insights', icon: 'activity' },
     { id: 'chat', label: 'Chat', icon: 'message-square' },
     { id: 'subscriptions', label: 'Subscriptions', icon: 'bell-off' },
