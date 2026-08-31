@@ -51,13 +51,29 @@ concurrent terminal baseline.
 
 ### Production Actions
 
-- None yet. Production remains on exact Signatures closeout `0a0ba1a` with
-  application/runtime `2232074` and Alembic `f9a0b1c2d3e4`.
+- Pushed the six reviewable release commits to
+  `origin/codex/contact-profiles` and fast-forwarded GitHub `main` plus
+  production to exact application/runtime
+  `f84678ce0536c15560ccc9ddc4db857c1b8578ff`.
+- The release was migration-free and dependency-free. Production kept the old
+  frontend until the new API router was live, replaced only `mailapp`, then
+  published the 612-module frontend. Workers, cron, TUI, Caddy, PostgreSQL, and
+  Redis were not restarted; no database backup or migration was required.
+- One old Uvicorn connection retained the known 90-second graceful-stop window,
+  after which systemd killed the old process and started the replacement. The
+  new API has `NRestarts=0`, no warning-or-higher entries after application
+  startup, and public/local health is `ok`; all seven checked services are
+  active and Alembic remains `f9a0b1c2d3e4 (head)`.
+- Both anonymous Contacts POST routes return 401. Signed-in production browser
+  QA confirmed More → Contacts, account/search/relationship controls, a loaded
+  list, and zero console warnings/errors without selecting a real contact,
+  opening real mail, composing, or causing any mailbox/calendar mutation.
 
 ### Next
 
-Commit and deploy the migration-free API/frontend release, then perform
-read-only production health, auth-boundary, log, and browser postflight.
+Continue relationship context only through a separately audited scope. Durable
+aliases, notes, merges, provider contacts, or complete-history counters require
+an owned schema/sync milestone; do not widen this bounded projection in place.
 
 ## 2026-08-31 — First-class per-account signatures
 

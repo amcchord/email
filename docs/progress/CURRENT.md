@@ -6,9 +6,9 @@ Last updated: 2026-08-31
 
 Operate first-class per-account signatures, delivery-confirmed automatic
 follow-up reminders, safe inline snippet expansion, account-scoped recipient
-autocomplete, and Personal Snippets as durable writing workflows. Ship the
-frozen migration-free first-class Contacts projection without widening account,
-provider-data, or message-content boundaries.
+autocomplete, Personal Snippets, and the migration-free first-class Contacts
+projection as durable writing and relationship workflows without widening
+account, provider-data, or message-content boundaries.
 Operate Universal Send & Archive, Focused/Split Inbox, and the terminal track
 as durable, truthful workflows. Continue physical
 qualification of the independently gated Web Serial installer and OTA control
@@ -18,6 +18,13 @@ write gate.
 
 ## Baseline
 
+- The deployed first-class Contacts application/runtime is
+  `f84678ce0536c15560ccc9ddc4db857c1b8578ff`. Contacts is the first More item
+  and a responsive exact-account list/profile workspace over the newest 4,000
+  eligible synchronized metadata rows. POST-only private/no-store APIs expose
+  only observed relationship metadata and opaque identities; exact Compose and
+  Inbox handoffs remain session-authoritative. No Contacts permission,
+  provider call, schema, worker, or mail/calendar mutation was added.
 - The deployed per-account Signatures application/runtime is
   `22320744f037bbdf18ed9893cb188ffe36f9b981`. Settings → Writing owns one
   default-off revisioned rich/plain policy per exact account. Compose, reader,
@@ -155,21 +162,6 @@ live state.
 
 ## Active Work Items
 
-### P1 — First-class contact profiles and relationship context
-
-- State: ready to deploy; backend, first-class route, responsive list/profile
-  UI, exact Compose/Inbox handoffs, generated safety fixture, independent SHIP
-  review, browser acceptance, and the consolidated gate are complete. Alembic
-  remains `f9a0b1c2d3e4`.
-- Scope: one private contact surface derived from an exact account's newest
-  4,000 eligible synchronized metadata rows, with normalized identities,
-  observed relationship context, keyboard actions, and safe loading, empty,
-  error, retry, desktop, and mobile states.
-- Acceptance: contacts never cross accounts or users, expose no message
-  content or Bcc-only identity, require no Contacts permission/provider call,
-  and open the exact conversation or one-recipient Compose intent.
-- Next: commit, push, deploy, and close the read-only production evidence.
-
 ### P1 — Physical E1001/E1002 browser-install qualification
 
 - State: candidate.8, the schema-2 HIL evidence harness, exact browser package
@@ -205,6 +197,25 @@ live state.
 - Next: attach dedicated hardware and complete physical A/B migration,
   interrupted-write, rollback, recovery, and USB-rescue evidence before
   installing any eligible descriptor or changing rollout from zero.
+
+## Recent First-class Contacts Release
+
+- Contacts is the first More item, command-palette target, and `G P`
+  destination. Desktop list/detail and mobile list→profile/Back flows expose
+  exact account, search, relationship filters, observed dates/counts, corpus
+  coverage, loading, empty, failure, Retry, Compose, and recent-thread actions.
+- The server projects one account's newest 4,000 eligible synchronized metadata
+  rows, excluding Draft, Spam, Trash, Bcc-only, malformed, and every owned
+  address. It uses opaque account/user keys and never returns message content.
+- Browser acceptance passed anchored More, desktop, 390×844, delayed account
+  isolation, empty/error/retry, and exact chronological thread opening with
+  zero diagnostics or generated mutations. Independent review fixed one
+  sender-metadata poison path and returned SHIP.
+- The consolidated gate passed 770 backend tests with 75 expected skips, all
+  509 frontend tests, and a 612-module build. Production is exact/clean at the
+  runtime, all seven services/health are healthy, anonymous Contacts access is
+  401, and signed-in route QA opened no profile or mail. Full evidence is in
+  `CONTACT_PROFILES_RELEASE_2026-08-31.md`.
 
 ## Recent First-class Per-account Signatures Release
 

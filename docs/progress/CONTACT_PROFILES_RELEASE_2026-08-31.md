@@ -143,13 +143,23 @@ Generated screenshots are retained outside the repository at:
 
 ## Deployment and rollback
 
-- Deployment requires a frontend production build and replacement of the API
-  process for router registration. Mail workers, cron, Caddy, PostgreSQL, and
-  Redis require no change.
+- Exact deployed application/runtime:
+  `f84678ce0536c15560ccc9ddc4db857c1b8578ff`.
+- Production kept the prior frontend live while replacing the API for router
+  registration, then published a 612-module production build. Mail workers,
+  cron, TUI, Caddy, PostgreSQL, and Redis were not restarted.
 - No database backup or migration is required because the release is
   migration-free and read-only.
+- All seven checked services and public/local health are healthy; replacement
+  `mailapp` has zero restarts and no warning-or-higher entry after application
+  startup. Alembic remains `f9a0b1c2d3e4 (head)` and production Git is exact
+  and clean.
+- Both anonymous Contacts POST routes return 401. Signed-in read-only browser
+  postflight confirmed More → Contacts, the account/search/relationship
+  controls, a loaded list, and zero browser diagnostics without selecting a
+  real person or opening, composing, or mutating real mail/calendar data.
 - Rollback is a Git fast-forward/revert to the prior Signatures closeout,
   rebuild of the prior frontend, and API replacement. No data rollback exists
   or is needed.
-- Exact runtime, production postflight, and final docs-closeout SHAs are added
-  after deployment.
+- The following docs-only closeout fast-forward does not require another build,
+  restart, migration, or broad test rerun under D-041.
