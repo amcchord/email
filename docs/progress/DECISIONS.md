@@ -855,3 +855,27 @@ add a new entry that explicitly supersedes the old one.
   error, Escape, movement, identity change, and stale response paths preserve
   the literal. Rich and plain surfaces share keyboard containment and one-step
   Undo; an unsupported compatibility editor keeps the existing explicit picker.
+
+## D-044 — Automatic follow-up is a delivery-confirmed, reply-aware reminder
+
+- Date: 2026-08-31
+- Status: accepted
+- Decision: Resolve an explicit or per-account default follow-up policy exactly
+  once at immutable outbound admission, persist a content-free companion intent
+  in the same transaction, and schedule one `if_no_reply` automatic Snooze only
+  after provider-confirmed delivery maps to one exact synchronized Sent row.
+  Never remove a synchronized Inbox conversation for an automatic reminder;
+  serialize every Snooze creator, mutator, and worker by the same conversation
+  advisory lock, and let manual reminders or newer manual placement win.
+- Reason: Scheduling from an HTTP acceptance, planned delivery time, or
+  unconfirmed provider attempt can create a reminder for mail that was undone,
+  cancelled, failed, retried, or never sent. Tracking pixels and read receipts
+  widen privacy boundaries without proving that a recipient will reply. A
+  partially committed Snooze/mail-action operation can also release ordering
+  authority before the visible reminder state is final.
+- Consequence: Default is off; account policy revisions and per-send overrides
+  round-trip through durable drafts. Delivery timestamp, business-day/DST
+  calculation, reply detection, and retries are server-owned and recoverable
+  from PostgreSQL without message content. Explicit self-only or Bcc-only
+  enablement fails admission, identifier disagreement fails closed, and schema
+  rollback becomes data-lossy once e8 reminder truth exists.

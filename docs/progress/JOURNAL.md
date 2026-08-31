@@ -3,6 +3,59 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-31 — Automatic follow-up reminders
+
+### Scope
+
+Add default-off per-account follow-up policy and one delivery-confirmed,
+reply-aware reminder path across Compose, reader, Flow, durable drafts,
+scheduled delivery, Snoozed, and Settings → Writing. Keep real mail/calendar QA
+read-only and preserve the concurrent terminal/AI work.
+
+### Completed
+
+- Added revisioned account policy, content-free outbound companion intent,
+  exact synchronized-Sent reconciliation, local-time/business-day calculation,
+  and automatic `if_no_reply` Snooze origin under additive revision
+  `e8f9a0b1c2d3`.
+- Added shared account-default/per-send controls and exact durable round-trip in
+  every writing surface, plus Follow-up labeling and Inbox-safe automatic
+  reminder projection.
+- Unified Snooze conversation locking and caller-owned mail-action transactions
+  so manual placement wins without a nested-commit ordering gap.
+
+### Verification
+
+- Focused checks and 9 disposable-PostgreSQL lifecycle tests passed, including
+  the two-session nested-stage boundary. Exact d7/e8 migration round trip and
+  generated-provider self-test passed.
+- Generated desktop and 390×844 browser QA passed default-off policy, saved
+  revision, Compose default explanation, responsive containment, zero browser
+  diagnostics, zero external calls, and zero unexpected mutations.
+- Independent final review returned SHIP with no P0/P1. The one consolidated
+  gate passed 746 backend tests with 75 expected skips, all 482 frontend tests,
+  and a 604-module build.
+
+### Production Actions
+
+- Deployed exact runtime `bf5f7bb67440f294873c0e18cdd982554343859c`
+  after validating protected pre-e8 backup
+  `/var/backups/mailapp/maildb-pre-follow-up-20260831T0522Z.dump` (SHA-256
+  `96464d3027b865ba76be4c356cb0fa24d09eaa1fd2eee6527c8f691b303a08ba`).
+- Upgraded exactly `d7e8f9a0b1c2 → e8f9a0b1c2d3`, replaced API and both
+  workers, then published the 604-module frontend. All seven services and
+  health are healthy; replacement processes have zero restarts and no
+  post-start warning-or-higher entries.
+- Anonymous policy access is 401; aggregate saved-policy, intent, and automatic
+  Snooze counts are all zero. Signed-in production Settings QA was read-only,
+  found every Save disabled, and produced no browser warning/error.
+
+### Next
+
+Continue writing acceleration with first-class per-account signatures, keeping
+signature identity separate from reusable snippets and preserving this bounded
+release cadence.
+
 ## 2026-08-31 — Inline semicolon snippet expansion
 
 ### Scope

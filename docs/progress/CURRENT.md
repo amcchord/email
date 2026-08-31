@@ -4,9 +4,11 @@ Last updated: 2026-08-31
 
 ## Active Objective
 
-Operate safe inline snippet expansion, account-scoped recipient autocomplete,
-and Personal Snippets as durable writing workflows. Continue writing
-acceleration with bounded variables and separate per-account signatures.
+Operate delivery-confirmed automatic follow-up reminders, safe inline snippet
+expansion, account-scoped recipient autocomplete, and Personal Snippets as
+durable writing workflows. Continue writing acceleration with first-class
+per-account signatures, keeping signature identity separate from reusable
+snippets.
 Operate Universal Send & Archive, Focused/Split Inbox, and the terminal track
 as durable, truthful workflows. Continue physical
 qualification of the independently gated Web Serial installer and OTA control
@@ -16,6 +18,13 @@ write gate.
 
 ## Baseline
 
+- The deployed Automatic Follow-up Reminders application/runtime is
+  `bf5f7bb67440f294873c0e18cdd982554343859c`. Per-account defaults remain off
+  until explicitly saved; Compose, reader, and Flow share exact durable
+  overrides; and one content-free companion intent creates an Inbox-safe,
+  reply-aware automatic Snooze only after provider-confirmed delivery maps to
+  one synchronized Sent row. Production began with zero saved policies,
+  intents, or automatic Snoozes.
 - The deployed Inline Snippet Expansion application/runtime is
   `e7292f0ee9eb5ba469a898faa63f7f8fbab000dc`. Typing a boundary-safe
   `;shortcut` in Compose, reader reply, or Flow opens one accessible,
@@ -111,10 +120,10 @@ write gate.
 - The deployed secure-enrollment application/runtime commit is
   `8ff01848a2be2818dfd9eb88b84be9aab4befb0a`; the following closeout is docs
   only. Production and GitHub were exact and clean at the runtime boundary.
-- Production Alembic is `d7e8f9a0b1c2 (head)`, the additive Personal Snippets
-  child of terminal OTA revision `c6d7e8f9a0b1`. The new owner-scoped table
-  requires no backfill and began empty. Both OTA tables also remained empty at
-  their release; all four existing terminals remain legacy.
+- Production Alembic is `e8f9a0b1c2d3 (head)`, the additive Automatic
+  Follow-up child of Personal Snippets revision `d7e8f9a0b1c2`. The two new
+  owner-scoped tables require no backfill and began empty. Both OTA tables also
+  remained empty at their release; all four existing terminals remain legacy.
 - All seven checked production services are active, public health is `ok`, and
   the replacement API process has zero automatic restarts and no post-start
   warning-or-higher entries. Production has no secure-enrollment or OTA
@@ -138,6 +147,21 @@ This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
 
 ## Active Work Items
+
+### P1 — First-class per-account signatures
+
+- State: not started; Automatic Follow-up Reminders now provides the shared
+  account-policy and writing-surface baseline without conflating signatures
+  with Personal Snippets.
+- Scope: revisioned account-specific rich/plain signatures, exact sender switch
+  behavior, new/reply/forward policy, durable draft materialization, explicit
+  suppression, mobile editing, and generated-only browser acceptance.
+- Acceptance: a signature never duplicates on reload or sender change, never
+  rewrites authored content, round-trips through durable drafts, sanitizes at
+  insertion/render boundaries, and remains recoverable across ambiguous save
+  or concurrent settings edits.
+- Next: audit current compose/reply identity and editing hooks, coordinate the
+  direct e8 child migration, then implement one bounded end-to-end milestone.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 
