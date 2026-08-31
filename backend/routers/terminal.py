@@ -12,16 +12,20 @@ check-in via `X-Device-MAC`. Per the docs, missing `X-*` headers are treated as
 from __future__ import annotations
 
 import logging
+import hashlib
+import json
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
+from backend.config import get_settings
 from backend.models.terminal import (
     TerminalBatterySample,
     TerminalDevice,
@@ -45,6 +49,19 @@ from backend.services.terminal.renderer import (
     render_dashboard_bmp,
     render_day_ahead_bmp,
 )
+from backend.services.terminal.legacy_ota import (
+    LegacyOtaUnavailable,
+    artifact_bytes as legacy_ota_artifact_bytes,
+    load_current_release as load_current_legacy_ota_release,
+    load_release as load_legacy_ota_release,
+    offer_record as legacy_ota_offer_record,
+    record_event as record_legacy_ota_event,
+)
+from backend.services.terminal.ota_control import (
+    OtaControlError,
+    apply_ota_telemetry,
+    parse_ota_telemetry,
+)
 from backend.services.terminal.variants import (
     Variant,
     aligned_next_checkin_sec,
@@ -55,6 +72,7 @@ from backend.services.terminal.web_display import build_display_html, render_web
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/terminal", tags=["terminal"])
+app_settings = get_settings()
 
 
 # ── Header parsing helpers ──────────────────────────────────────────
@@ -175,6 +193,11 @@ async def _upsert_device(
         )
         db.add(device)
 
+    if variant.key == "bw":
+        device.hardware_model = "E1001"
+    elif variant.key == "spectra6_800x480":
+        device.hardware_model = "E1002"
+
     await _apply_device_telemetry(
         db,
         device=device,
@@ -235,6 +258,11 @@ async def _apply_device_telemetry(
     fw = (h.get("x-fw-version") or "").strip()
     if fw:
         device.last_fw_version = fw[:64]
+    if h.get("x-firmware-build-id"):
+        try:
+            apply_ota_telemetry(device, parse_ota_telemetry(h, now=now))
+        except OtaControlError:
+            logger.warning("Ignoring invalid legacy OTA telemetry for device_id=%s", device.id)
     if image_etag:
         device.last_image_etag = image_etag[:128]
 
@@ -366,7 +394,45 @@ async def schedule(
     body, image_etag = await _render_for_device(v, device=device, settings=settings)
     bytes_total = len(body)
 
-    schedule_etag = '"sched-' + image_etag.strip('"').removeprefix("img-") + '"'
+    firmware_offer = None
+    model = (
+        "E1001"
+        if v.key == "bw"
+        else "E1002"
+        if v.key == "spectra6_800x480"
+        else None
+    )
+    if device is not None and model is not None:
+        try:
+            release = await run_in_threadpool(
+                load_current_legacy_ota_release,
+                app_settings.terminal_firmware_storage_path,
+                model,
+                str(device.public_id),
+            )
+            if (
+                release is not None
+                and device.last_ota_telemetry_at is not None
+                and device.last_ota_telemetry_at
+                >= datetime.now(timezone.utc) - timedelta(minutes=5)
+                and (device.last_ota_battery_mv or 0) >= 4000
+                and (device.last_ota_battery_pct or 0) >= 80
+            ):
+                firmware_offer = legacy_ota_offer_record(
+                    release,
+                    schedule_code=code,
+                    device_public_id=str(device.public_id),
+                    running_version=(request.headers.get("x-fw-version") or "").strip(),
+                )
+        except LegacyOtaUnavailable:
+            logger.exception("Ignoring invalid legacy OTA channel for model=%s", model)
+
+    schedule_identity = image_etag.strip('"').removeprefix("img-")
+    if firmware_offer is not None:
+        schedule_identity += "-ota-" + hashlib.sha256(
+            json.dumps(firmware_offer, separators=(",", ":")).encode("ascii")
+        ).hexdigest()
+    schedule_etag = '"sched-' + schedule_identity + '"'
 
     inm = (request.headers.get("if-none-match") or "").strip()
     if inm and inm == schedule_etag:
@@ -407,11 +473,139 @@ async def schedule(
             f"Hello {device.name}" if device and device.name else "Welcome new device"
         ),
     }
+    if firmware_offer is not None:
+        payload["firmware"] = firmware_offer
 
     response.headers["ETag"] = schedule_etag
     response.headers["Cache-Control"] = "private, no-cache"
     response.headers["Content-Type"] = "application/json; charset=utf-8"
     return payload
+
+
+def _legacy_ota_model(request: Request) -> str | None:
+    agent = (request.headers.get("user-agent") or "").lower()
+    if agent.startswith("reterminale1001/"):
+        return "E1001"
+    if agent.startswith("reterminale1002/"):
+        return "E1002"
+    return None
+
+
+async def _resolve_legacy_ota_device(
+    db: AsyncSession,
+    *,
+    settings: TerminalSettings,
+    request: Request,
+    model: str,
+) -> TerminalDevice:
+    mac = _normalize_mac(request.headers.get("x-device-mac"))
+    if mac is None:
+        raise HTTPException(status_code=404, detail="Terminal firmware not found")
+    device = await db.scalar(
+        select(TerminalDevice).where(
+            TerminalDevice.user_id == settings.user_id,
+            TerminalDevice.mac == mac,
+            TerminalDevice.enrollment_state == "legacy",
+            TerminalDevice.hardware_model == model,
+        )
+    )
+    if device is None:
+        raise HTTPException(status_code=404, detail="Terminal firmware not found")
+    return device
+
+
+@router.get("/{code}/firmware/{release_id}/{kind}")
+async def legacy_ota_artifact(
+    code: str,
+    release_id: str,
+    kind: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    settings = await _resolve_settings(db, code)
+    model = _legacy_ota_model(request)
+    if model is None:
+        raise HTTPException(status_code=404, detail="Terminal firmware not found")
+    device = await _resolve_legacy_ota_device(
+        db, settings=settings, request=request, model=model
+    )
+    try:
+        current = await run_in_threadpool(
+            load_current_legacy_ota_release,
+            app_settings.terminal_firmware_storage_path,
+            model,
+            str(device.public_id),
+        )
+        if current is None or current.release_id != release_id:
+            raise LegacyOtaUnavailable("release is not active for this terminal")
+        release = await run_in_threadpool(
+            load_legacy_ota_release,
+            app_settings.terminal_firmware_storage_path,
+            model,
+            release_id,
+        )
+        raw, media_type = legacy_ota_artifact_bytes(release, kind)
+    except LegacyOtaUnavailable as exc:
+        raise HTTPException(status_code=404, detail="Terminal firmware not found") from exc
+    return Response(
+        content=raw,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "private, no-store",
+            "Content-Length": str(len(raw)),
+            "ETag": f'"sha256:{hashlib.sha256(raw).hexdigest()}"',
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.post("/{code}/firmware/events")
+async def legacy_ota_event_sink(
+    code: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    settings = await _resolve_settings(db, code)
+    model = _legacy_ota_model(request)
+    if model is None:
+        raise HTTPException(status_code=404, detail="Terminal OTA attempt not found")
+    device = await _resolve_legacy_ota_device(
+        db, settings=settings, request=request, model=model
+    )
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > 2048:
+            raise HTTPException(status_code=413, detail="Terminal OTA event is too large")
+        chunks.append(chunk)
+    try:
+        release = await run_in_threadpool(
+            load_current_legacy_ota_release,
+            app_settings.terminal_firmware_storage_path,
+            model,
+            str(device.public_id),
+        )
+        if release is None:
+            raise LegacyOtaUnavailable("no release is active for this terminal")
+        state, idempotent = await run_in_threadpool(
+            record_legacy_ota_event,
+            app_settings.terminal_firmware_storage_path,
+            release,
+            schedule_code=code,
+            device_public_id=str(device.public_id),
+            raw=b"".join(chunks),
+        )
+    except LegacyOtaUnavailable as exc:
+        raise HTTPException(status_code=409, detail="Terminal OTA event rejected") from exc
+    return Response(
+        content=json.dumps(
+            {"schema_version": 1, "state": state, "idempotent": idempotent},
+            separators=(",", ":"),
+        ),
+        media_type="application/json",
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.get("/{code}/image.bmp")
