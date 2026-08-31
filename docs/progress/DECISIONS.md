@@ -971,3 +971,24 @@ add a new entry that explicitly supersedes the old one.
   fail closed, and real-mail production QA remains metadata-only. Thumbnails,
   OCR, AI summaries, bulk ZIP, compose reuse, provider-wide reindexing, and
   writable file organization require separately reviewed contracts.
+
+## D-049 — E1001/E1002 release bootloaders use DIO and packaging enforces it
+
+- Date: 2026-08-31
+- Status: accepted
+- Decision: Build every E1001/E1002 release bootloader with DIO, declare DIO in
+  the immutable release manifest, and reject malformed or non-DIO bootloader
+  headers before packaging. Treat a flash-mode change as a new firmware
+  candidate and repeat exact-SHA build/reproducibility evidence rather than
+  replacing previously published candidate bytes.
+- Reason: Candidate.8 compiled and passed reproducibility under the board
+  default QIO mode but immediately ROM-watchdog-looped on a physical 32 MB
+  E1002. Writing the same four segment payload under DIO recovered the device,
+  and exact candidate.9 then completed trusted fetch, display refresh, check-in,
+  and sleep. Software-only reproducibility did not expose this board-level
+  compatibility failure.
+- Consequence: DIO is now part of signed release identity and a package cannot
+  silently regress to the board default. Candidate.8 remains immutable but is
+  not the physical promotion candidate. The one E1002 run is bounded evidence,
+  not completion of the 31-case E1001/E1002 HIL matrix; enrollment and OTA stay
+  locked until all independent model/revision/interruption/recovery gates pass.

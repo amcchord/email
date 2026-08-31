@@ -7,11 +7,12 @@ OTA remain separate gates in [`firmware-management.md`](firmware-management.md).
 
 ## Current release posture
 
-- Private firmware `main` is `14f7046ae0253504f25972e9bc6ad952c1fa649f`
-  (`0.2.0-candidate.8`). Exact-SHA GitHub Actions run `33349001516` passed
+- Private firmware `main` is `52ba6c58ca7f17741d0d74c225f8d942b6119241`
+  (`0.2.0-candidate.9`). Exact-SHA GitHub Actions run `33412815120` passed
   release tooling, keyed RET1 and OTA builds, all models, reproducibility,
   manifest verification, and immutable candidate upload. The same mainline now
-  includes the offline schema-2 HIL-bound promotion tool.
+  includes the offline schema-2 HIL-bound promotion tool and rejects invalid or
+  non-DIO E1001/E1002 bootloader headers during packaging.
 - Generic firmware artifacts remain unkeyed and enrollment-disabled. No release
   signing key, enrollment private key, credential, Wi-Fi value, or device image
   is committed to either repository.
@@ -24,7 +25,10 @@ OTA remain separate gates in [`firmware-management.md`](firmware-management.md).
   identity, qualified release/model pair, or HIL tuple exists, so the Wi-Fi
   fields are absent and the Connect action is disabled without requesting a
   port.
-- Physical E1001 and E1002 HIL is still mandatory. E1004 remains blocked.
+- One attached E1002 has completed a bounded command-line DIO install,
+  configured HTTPS fetch/render/check-in, and sleep cycle. The complete
+  revision-bound E1001/E1002 HIL record is still mandatory; E1004 remains
+  blocked.
 
 Software completeness is not physical qualification. Do not set an enablement
 flag, stage an online key, qualify a release/model, or expose the transport UI
@@ -64,7 +68,7 @@ protected per-device attestation key, and their ROM downloader remains open.
    explicit E1001/E1002 release/model HIL allowlist.
 2. The gated transport adapter obtains one explicit user-selected serial port and
    exchanges exact bounded `@RET1` status, hello, and hello-ack frames. Exact
-   candidate.4 status v1 remains accepted; candidate.8 status v2 adds physical-
+   candidate.4 status v1 remains accepted; candidate.9 status v2 adds physical-
    cable observations of partition layout, running slot, boot state, and source
    build ID without changing the v1 hello/hello-ack transcript. The
    browser verifies canonical encoding, P-256 points, transcript/session hash,

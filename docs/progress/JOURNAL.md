@@ -3,6 +3,65 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-31 — Physical E1002 candidate.9 DIO milestone
+
+### Scope
+
+Repurpose one user-authorized USB-C-attached SeeedStudio E1002 for At a Glance,
+preserve credentials outside Git/evidence, correct any physical release
+blocker as a new immutable firmware candidate, and keep browser enrollment and
+OTA policy independently locked.
+
+### Completed
+
+- Identified the attached ESP32-S3 revision 0.2 with 8 MB PSRAM and 32 MB flash.
+  The factory partition table was incompatible with the At a Glance `ab-v1`
+  layout; the stock SenseCraft application was therefore replaced rather than
+  treated as a preserve-layout update.
+- Candidate.8's inherited QIO boot header produced an immediate ROM watchdog
+  loop. Rewriting the same exact four preserve-config segments under DIO
+  recovered the unit. Candidate.9 now pins DIO in PlatformIO and the release
+  manifest, and its packager rejects malformed or non-DIO bootloader headers.
+- Flashed exact candidate.9, retained the device-only file configuration,
+  joined the configured network, synchronized UTC, fetched the scoped schedule
+  and a 192,118-byte E1002 image over trusted HTTPS, rendered a bounded partial
+  refresh, checked in as Terminal 0a80, and entered timed deep sleep.
+- Removed the local credential-bearing configuration/filesystem artifacts and
+  the temporary factory partition-table capture. No credential or terminal URL
+  was committed or written to progress evidence.
+
+### Verification
+
+- Physical serial evidence reported ROM `mode:DIO`, firmware
+  `0.2.0-candidate.9`, exact build
+  `52ba6c58ca7f17741d0d74c225f8d942b6119241`, valid `ab-v1`, stable `ota_0`,
+  retained file configuration, trusted HTTPS, 90% battery, strong signal, a 1%
+  partial refresh, and timed deep sleep.
+- The live signed-in At a Glance surface showed the matching E1002 profile,
+  fresh check-in, 90% battery, boot 9, and candidate.9 firmware. Browser
+  enrollment and OTA remained visibly locked.
+- Fifteen focused firmware release-tool tests and a clean exact E1002 build
+  passed. GitHub Actions run `33412815120` passed keyed RET1/OTA builds, every
+  model, reproducibility, manifest verification, and immutable bundle upload.
+
+### Production Actions
+
+- Advanced private `reterminal-color` feature branch and `main` from candidate.8
+  to exact candidate.9 commit
+  `52ba6c58ca7f17741d0d74c225f8d942b6119241` only after physical recovery and
+  the exact-SHA release gate passed.
+- The device now uses the existing legacy owner-scoped schedule route and is
+  visible in production At a Glance; its first check-in performed the expected
+  legacy auto-registration without a direct database operation. No Email
+  application code, migration, service, Caddy configuration, key, signed
+  catalog, HIL allowlist, enrollment enablement, or OTA rollout was changed.
+
+### Next
+
+Keep this E1002 result as bounded regression evidence. Complete the remaining
+revision-bound E1001/E1002 interruption, enrollment, rollback, and recovery
+matrix before qualifying any exact tuple or enabling browser/OTA writes.
+
 ## 2026-08-31 — First-class Attachments workspace
 
 ### Scope

@@ -158,13 +158,15 @@ write gate.
   warning-or-higher entries. Production has no secure-enrollment or OTA
   enablement, online key, approved catalog, qualified release/model pair,
   nonzero rollout, or device update offer.
-- Private firmware `main` is exact at candidate.8
-  `14f7046ae0253504f25972e9bc6ad952c1fa649f`. Exact-SHA run `33349001516`
+- Private firmware `main` is exact at candidate.9
+  `52ba6c58ca7f17741d0d74c225f8d942b6119241`. Exact-SHA run `33412815120`
   passed release tooling, keyed RET1 and OTA1 coordinator builds, every model,
   reproducibility, signed-manifest verification, and immutable candidate
-  upload. A valid configured-device hello may extend the initial reset window
-  once to a fixed 60-second-from-start ceiling; invalid or repeated hellos
-  cannot keep the device awake.
+  upload. Candidate.9 pins DIO and rejects invalid/non-DIO bootloader headers
+  during packaging after candidate.8's inherited QIO header watchdog-looped on
+  one physical E1002. That terminal then booted the exact DIO build, retained
+  configuration, fetched/rendered over trusted HTTPS, checked in as Terminal
+  0a80, and deep-slept at 90% battery.
 - The offline promotion/signing workflow is integrated on that same private
   firmware `main`. It requires complete schema-2, revision-bound E1001 and E1002
   HIL records across 31 cases, preserves candidate bytes, emits the application
@@ -179,12 +181,13 @@ live state.
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 
-- State: candidate.8, the schema-2 HIL evidence harness, exact browser package
+- State: candidate.9, the schema-2 HIL evidence harness, exact browser package
   preflight, real pinned Web Serial/RET1 same-port transport, recovery workflow,
   offline HIL-bound signing tool, and both OTA1 parsers are complete; production
-  remains locked. No E1001/E1002 was attached during this release, and no
-  chooser, device write, enrollment key, qualified catalog, or OTA offer was
-  enabled.
+  remains locked. One physical E1002 completed a bounded command-line DIO
+  installation, trusted-HTTPS render/check-in, and sleep cycle. No E1001 has
+  been exercised, the 31-case record is incomplete, and no browser chooser,
+  enrollment key, qualified catalog, or OTA offer was enabled.
 - Scope: physical RET1 enrollment, interrupted serial/config write, three-slot
   selection, same-owner pending continuity, rollback grace, revocation,
   preserve-config, trusted-time/CA failure, A/B partition migration, inactive
@@ -194,15 +197,16 @@ live state.
   enrollment, flash, or update cannot silently strand a terminal, disclose
   credentials, or replace the known-good slot. Only qualified exact
   release/model/hardware-revision tuples may enter either allowlist.
-- Next: attach dedicated E1001/E1002 devices and execute the 31-case HIL record
-  with bounded source evidence before enabling either browser or OTA transport
-  for a real device.
+- Next: retain the candidate.9 E1002 record, attach a dedicated E1001, and run
+  the remaining interruption, enrollment, rollback, and recovery cases on both
+  models before enabling either browser or OTA transport.
 
 ### P2 — Durable device OTA control plane
 
 - State: application runtime `9253eb4` and Alembic `c6d7e8f9a0b1` are deployed;
   all production gates remain closed and both new tables are empty. Firmware
-  candidate.8 is on private `main` after its exact CI gate passed.
+  candidate.9 is on private `main` after its exact CI gate and one bounded E1002
+  DIO installation/render/sleep cycle passed.
 - Scope: one additive event-ledger migration descending from b5, authenticated
   device offer/artifact/event endpoints,
   idempotent attempt state, power gates, rollout cohorts, and rescue controls.
@@ -233,6 +237,28 @@ live state.
   protected backup, production migration, API replacement, frontend build, and
   signed-in metadata-only postflight all passed. Full evidence is in
   `ATTACHMENTS_WORKSPACE_RELEASE_2026-08-31.md`.
+
+## Recent Physical E1002 Candidate.9 Milestone
+
+- The attached 32 MB ESP32-S3 E1002 exposed a real boot-mode regression:
+  candidate.8's inherited QIO image watchdog-looped immediately, while the same
+  preserve-config segment set booted under DIO. Candidate.9 now pins DIO in the
+  build and signed manifest and makes the release packager reject non-DIO or
+  malformed bootloader headers.
+- Exact candidate.9 reported stable `ota_0`, valid `ab-v1`, its exact build ID,
+  retained file configuration, strong Wi-Fi, trusted UTC/HTTPS, a 192,118-byte
+  E1002 image fetch, a bounded partial refresh, 90% battery, and timed deep
+  sleep. At a Glance showed the matching fresh firmware/battery/boot telemetry.
+- Private firmware `main` and the feature branch are exact at
+  `52ba6c58ca7f17741d0d74c225f8d942b6119241`; Actions run `33412815120` passed
+  all-model builds, reproducibility, manifest verification, and immutable
+  upload. Credential-bearing local artifacts and the temporary partition-table
+  capture were removed.
+- This replaces the stock application and restoring it later requires Seeed's
+  factory image. It does not complete E1001 qualification, interrupted-write,
+  enrollment, rollback, or OTA HIL; every production write gate stays closed.
+  Full evidence is in
+  `AT_A_GLANCE_E1002_CANDIDATE9_HIL_MILESTONE_2026-08-31.md`.
 
 ## Recent Saved Views / Custom Splits Release
 
@@ -583,9 +609,10 @@ live state.
 
 ## Near-Term Terminal Queue
 
-- Run the candidate.8 physical E1001/E1002 RET1, trusted TLS, A/B partition
+- Continue candidate.9 physical E1001/E1002 RET1, trusted TLS, A/B partition
   migration, interruption, pending-image validation, rollback, preserve-config,
-  and ROM recovery HIL. E1004 remains blocked and single-slot.
+  and ROM recovery HIL from the bounded E1002 DIO milestone. E1004 remains
+  blocked and single-slot.
 - After complete HIL, use the offline promotion tool with a protected signing
   key, pin only its public key and positive catalog generation, and qualify the
   exact printed revisions before changing the browser gate.
