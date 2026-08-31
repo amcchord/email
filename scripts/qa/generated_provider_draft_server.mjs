@@ -20,6 +20,7 @@ export const GENERATED_PROVIDER_DRAFT_SCENARIOS = Object.freeze([
   'offline',
   'recipient-delay',
   'recipient-held-session',
+  'snippet-held-session',
   'recipient-fails',
 ]);
 
@@ -483,6 +484,9 @@ function newCounters() {
     snippet_update_replays: 0,
     snippet_conflicts: 0,
     snippet_not_found: 0,
+    snippet_list_held_requests: 0,
+    snippet_list_stale_session_responses: 0,
+    snippet_list_releases: 0,
     recipient_lookup_requests: 0,
     recipient_lookup_successes: 0,
     recipient_lookup_failures: 0,
@@ -535,6 +539,7 @@ export function createGeneratedProviderDraftFixture({
   let firstLostResponseUsed = false;
   let firstHeldResponseUsed = false;
   let firstRecipientHeldResponseUsed = false;
+  let firstSnippetHeldResponseUsed = false;
   const drafts = new Map();
   const outbounds = new Map();
   const outboundIdempotency = new Map();
@@ -959,14 +964,42 @@ export function createGeneratedProviderDraftFixture({
   }
 
   function handleSnippetList(request, response, pathname) {
+    const requestUserId = currentUser.id;
     counters.snippet_list_requests += 1;
     const records = ownedSnippets();
-    recordEvent('snippet_listed', request, pathname, { count: records.length });
-    return writeJson(response, {
+    const payload = {
       snippets: records.map(publicSnippet),
       total: records.length,
       limit: MAX_PERSONAL_SNIPPETS,
-    });
+    };
+    const eventMetadata = {
+      count: records.length,
+      request_user_id: requestUserId,
+    };
+    if (
+      scenario === 'snippet-held-session'
+      && requestUserId === USERS['generated-a'].id
+      && !firstSnippetHeldResponseUsed
+    ) {
+      firstSnippetHeldResponseUsed = true;
+      counters.snippet_list_held_requests += 1;
+      const held = {
+        kind: 'snippet',
+        response,
+        request_user_id: requestUserId,
+        payload,
+        event_metadata: eventMetadata,
+      };
+      heldResponses.push(held);
+      request.on('close', () => {
+        const index = heldResponses.indexOf(held);
+        if (index >= 0) heldResponses.splice(index, 1);
+      });
+      recordEvent('snippet_list_held', request, pathname, eventMetadata);
+      return;
+    }
+    recordEvent('snippet_listed', request, pathname, eventMetadata);
+    return writeJson(response, payload);
   }
 
   async function handleSnippetCreate(request, response, pathname) {
@@ -2116,6 +2149,21 @@ export function createGeneratedProviderDraftFixture({
     counters.qa_control_mutations += 1;
     const pending = heldResponses.splice(0);
     for (const held of pending) {
+      if (held.kind === 'snippet') {
+        if (currentUser?.id !== held.request_user_id) {
+          counters.stale_session_responses_released += 1;
+          counters.snippet_list_stale_session_responses += 1;
+        }
+        counters.snippet_list_releases += 1;
+        recordEvent(
+          'snippet_list_released',
+          request,
+          '/api/compose/snippets',
+          held.event_metadata,
+        );
+        writeJson(held.response, held.payload);
+        continue;
+      }
       if (held.kind === 'recipient') {
         if (currentUser?.id !== held.request_user_id) {
           counters.stale_session_responses_released += 1;
@@ -2178,6 +2226,7 @@ export function createGeneratedProviderDraftFixture({
     firstLostResponseUsed = false;
     firstHeldResponseUsed = false;
     firstRecipientHeldResponseUsed = false;
+    firstSnippetHeldResponseUsed = false;
     drafts.clear();
     outbounds.clear();
     outboundIdempotency.clear();

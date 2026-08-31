@@ -6,6 +6,7 @@
   import Image from '@tiptap/extension-image';
   import Placeholder from '@tiptap/extension-placeholder';
   import Underline from '@tiptap/extension-underline';
+  import { findInlineSnippetTrigger } from '../../lib/inlineSnippetExpansion.js';
   import { isSafeEmbeddedResourceUrl } from '../../lib/remoteContent.js';
   import { sanitizeComposeHtml } from '../../lib/sanitize.js';
 
@@ -29,12 +30,80 @@
     autofocus = false,
     ariaLabel = 'Message body',
     surface = 'message',
+    inlineSnippets = false,
+    inlineSnippetA11y = null,
+    onInlineSnippetChange = null,
+    onInlineSnippetKeydown = null,
   } = $props();
 
   let editorElement = $state(null);
   let editor = $state(null);
   let lastSetContent = $state(untrack(() => content || ''));
   let savedInsertionPoint = null;
+
+  function publishInlineSnippetTrigger(ed = editor) {
+    if (!inlineSnippets || !ed || ed.view?.composing || !ed.state.selection.empty) {
+      onInlineSnippetChange?.(null);
+      return null;
+    }
+    if (ed.isActive('link') || ed.isActive('code') || ed.isActive('codeBlock')) {
+      onInlineSnippetChange?.(null);
+      return null;
+    }
+    const selectionFrom = ed.state.selection.$from;
+    const textBefore = selectionFrom.parent.textBetween(
+      0,
+      selectionFrom.parentOffset,
+      '\n',
+      leaf => leaf.type.name === 'hardBreak' ? '\n' : '\ufffc',
+    );
+    const parsed = findInlineSnippetTrigger(textBefore, textBefore.length);
+    if (!parsed) {
+      onInlineSnippetChange?.(null);
+      return null;
+    }
+    const to = ed.state.selection.from;
+    const from = to - parsed.token.length;
+    if (from < selectionFrom.start()) {
+      onInlineSnippetChange?.(null);
+      return null;
+    }
+    const coordinates = ed.view.coordsAtPos(to);
+    const trigger = {
+      ...parsed,
+      kind: 'rich',
+      from,
+      to,
+      anchor: {
+        left: coordinates.left,
+        top: coordinates.top,
+        bottom: coordinates.bottom,
+      },
+    };
+    onInlineSnippetChange?.(trigger);
+    return trigger;
+  }
+
+  function replaceInlineSnippet(trigger, html) {
+    if (!editor || trigger?.kind !== 'rich' || editor.view?.composing) return false;
+    const current = publishInlineSnippetTrigger(editor);
+    if (
+      !current
+      || current.from !== trigger.from
+      || current.to !== trigger.to
+      || current.token !== trigger.token
+      || editor.state.doc.textBetween(trigger.from, trigger.to, '', '') !== trigger.token
+    ) return false;
+    const safeHtml = sanitizeComposeHtml(String(html || ''));
+    if (!safeHtml) return false;
+    onInlineSnippetChange?.(null);
+    return editor
+      .chain()
+      .focus()
+      .deleteRange({ from: trigger.from, to: trigger.to })
+      .insertContent(safeHtml)
+      .run();
+  }
 
   function rememberSelection() {
     if (!editor) return false;
@@ -88,10 +157,12 @@
       editorProps: {
         attributes: {
           class: 'prose prose-sm dark:prose-invert max-w-none min-h-[300px] outline-none px-6 py-4',
-          role: 'textbox',
+          role: inlineSnippets ? 'combobox' : 'textbox',
           'aria-label': ariaLabel,
           'aria-multiline': 'true',
+          ...(inlineSnippets ? { 'aria-autocomplete': 'list' } : {}),
         },
+        handleKeyDown: (_view, event) => Boolean(onInlineSnippetKeydown?.(event)),
       },
       onUpdate: ({ editor: ed }) => {
         const html = ed.getHTML();
@@ -100,7 +171,11 @@
         // for an external replacement, which would reset the caret.
         lastSetContent = html;
         onUpdate?.(html);
+        publishInlineSnippetTrigger(ed);
       },
+      onSelectionUpdate: ({ editor: ed }) => publishInlineSnippetTrigger(ed),
+      onFocus: ({ editor: ed }) => publishInlineSnippetTrigger(ed),
+      onBlur: () => onInlineSnippetChange?.(null),
     });
 
     if (autofocus) {
@@ -116,7 +191,9 @@
       insertHtml: insertHtmlAtCaret,
       rememberSelection,
       focus: () => editor?.commands.focus(),
+      replaceInlineSnippet,
     });
+    publishInlineSnippetTrigger(editor);
   });
 
   // Sync content prop changes into TipTap after mount
@@ -127,9 +204,27 @@
     if (nextContent === untrack(() => lastSetContent) || nextContent === currentContent) return;
     lastSetContent = nextContent;
     editor.commands.setContent(nextContent, { emitUpdate: false });
+    publishInlineSnippetTrigger(editor);
+  });
+
+  $effect(() => {
+    const state = inlineSnippetA11y;
+    const root = editor?.view?.dom;
+    if (!root) return;
+    if (state?.expanded) {
+      root.setAttribute('aria-expanded', 'true');
+      root.setAttribute('aria-controls', state.controls || '');
+      if (state.activeDescendant) root.setAttribute('aria-activedescendant', state.activeDescendant);
+      else root.removeAttribute('aria-activedescendant');
+    } else {
+      root.setAttribute('aria-expanded', 'false');
+      root.removeAttribute('aria-controls');
+      root.removeAttribute('aria-activedescendant');
+    }
   });
 
   onDestroy(() => {
+    onInlineSnippetChange?.(null);
     if (editor) {
       editor.destroy();
     }

@@ -273,6 +273,74 @@ try {
   assertExpectedFlowSafety(recipientSnapshot);
   results.recipient_stale_session = recipientSnapshot.counters;
 
+  // Hold the first User A snippet list across an A-to-B auth transition. The
+  // released payload remains the captured A contract, while a subsequent list
+  // sees only B's snippets. Audit output contains counts, never snippet bodies.
+  await reset('snippet-held-session');
+  const heldSnippetPromise = fetch(
+    `${baseUrl}/api/compose/snippets`,
+  ).then(async response => ({ status: response.status, body: await response.json() }));
+  await waitFor(async () => {
+    const current = await audit();
+    return current.counters.snippet_list_held_requests === 1;
+  }, 'User A snippet list response was not held');
+  await post('/api/auth/login', {
+    username: 'generated-b',
+    password: 'generated-only',
+  });
+  const releasedSnippets = await post('/api/qa/release-held');
+  assert.equal(releasedSnippets.released, 1);
+  const heldSnippetResult = await heldSnippetPromise;
+  assert.equal(heldSnippetResult.status, 200);
+  assert.equal(heldSnippetResult.body.total, 2);
+  assert.equal(heldSnippetResult.body.limit, 250);
+  assert.deepEqual(
+    heldSnippetResult.body.snippets.map(item => item.shortcut),
+    ['follow-up', 'intro'],
+  );
+  assert.ok(!heldSnippetResult.body.snippets.some(item => item.shortcut === 'response'));
+  const activeUserBSnippets = await get('/api/compose/snippets');
+  assert.equal(activeUserBSnippets.total, 1);
+  assert.equal(activeUserBSnippets.snippets[0].shortcut, 'response');
+
+  let snippetSessionSnapshot = await audit();
+  assert.equal(snippetSessionSnapshot.current_user_id, 9102);
+  assert.equal(snippetSessionSnapshot.counters.snippet_list_requests, 2);
+  assert.equal(snippetSessionSnapshot.counters.snippet_list_held_requests, 1);
+  assert.equal(snippetSessionSnapshot.counters.snippet_list_stale_session_responses, 1);
+  assert.equal(snippetSessionSnapshot.counters.snippet_list_releases, 1);
+  assert.equal(snippetSessionSnapshot.counters.stale_session_responses_released, 1);
+  assertExpectedFlowSafety(snippetSessionSnapshot);
+  const serializedSnippetSessionAudit = JSON.stringify(snippetSessionSnapshot);
+  assert.doesNotMatch(serializedSnippetSessionAudit, /Hello from the generated snippet fixture/);
+  assert.doesNotMatch(serializedSnippetSessionAudit, /Following up with generated-only content/);
+  assert.doesNotMatch(serializedSnippetSessionAudit, /This response belongs only to generated user B/);
+  assert.doesNotMatch(serializedSnippetSessionAudit, /"(?:name|shortcut|body_html|body_text)":/);
+  results.snippet_stale_session = snippetSessionSnapshot.counters;
+
+  // Reset re-arms the one-shot hold and terminates any pending response. The
+  // next clean state must contain neither held state nor its prior counters.
+  await reset('snippet-held-session');
+  const resetHeldSnippetPromise = fetch(
+    `${baseUrl}/api/compose/snippets`,
+  ).then(async response => ({ status: response.status, body: await response.json() }));
+  await waitFor(async () => {
+    const current = await audit();
+    return current.counters.snippet_list_held_requests === 1;
+  }, 'Snippet list hold was not re-armed after reset');
+  await reset('clean');
+  const resetHeldSnippetResult = await resetHeldSnippetPromise;
+  assert.equal(resetHeldSnippetResult.status, 409);
+  assert.equal(resetHeldSnippetResult.body.detail.code, 'qa_reset');
+  snippetSessionSnapshot = await audit();
+  assert.equal(snippetSessionSnapshot.scenario, 'clean');
+  assert.equal(snippetSessionSnapshot.counters.snippet_list_requests, 0);
+  assert.equal(snippetSessionSnapshot.counters.snippet_list_held_requests, 0);
+  assert.equal(snippetSessionSnapshot.counters.snippet_list_stale_session_responses, 0);
+  assert.equal(snippetSessionSnapshot.counters.snippet_list_releases, 0);
+  assert.equal(snippetSessionSnapshot.counters.stale_session_responses_released, 0);
+  assertExpectedFlowSafety(snippetSessionSnapshot);
+
   // Personal Snippets are seeded per generated user, owner-scoped, revisioned,
   // replay-safe, and delete-idempotent. Their audit surface contains only
   // identifiers and revision metadata, never snippet content.

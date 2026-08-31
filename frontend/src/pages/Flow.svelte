@@ -2708,6 +2708,7 @@
                   autofocus={true}
                   ariaLabel="Reply body"
                   surface="flow-reply"
+                  inlineSnippets={true}
                 />
               {/key}
             </div>

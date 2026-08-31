@@ -42,6 +42,7 @@
   import DraftStatus from './DraftStatus.svelte';
   import EmailHtmlFrame from './EmailHtmlFrame.svelte';
   import SendSplitButton from '../common/SendSplitButton.svelte';
+  import InlineSnippetMenu from './InlineSnippetMenu.svelte';
   import SnippetPicker from './SnippetPicker.svelte';
   import { safeLabelColor, visibleUserLabels } from '../../lib/labelWorkflows.js';
   import {
@@ -50,6 +51,10 @@
     withArchiveAfterSend,
   } from '../../lib/sendArchive.js';
   import { insertSnippetText } from '../../lib/personalSnippets.js';
+  import {
+    findInlineSnippetTrigger,
+    replaceInlineSnippetText,
+  } from '../../lib/inlineSnippetExpansion.js';
 
   let {
     email = null,
@@ -79,6 +84,12 @@
   let inlineReplyTextarea = $state(null);
   let snippetPickerOpen = $state(false);
   let snippetSelection = null;
+  let inlineSnippetMenuHandle = $state(null);
+  let inlineSnippetTrigger = $state(null);
+  let inlineSnippetA11y = $state({ expanded: false, controls: null, activeDescendant: null });
+  let inlineSnippetActivation = 0;
+  let inlineSnippetComposing = false;
+  let dismissedInlineSnippetSignature = null;
   let primaryReplyButton = $state(null);
   let openingManagedDraft = $state(false);
   let draftOpenMessage = $state('');
@@ -1081,6 +1092,7 @@
   }
 
   function handleInlineReplyKeydown(event) {
+    if (inlineSnippetMenuHandle?.handleKeydown?.(event)) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       void closeInlineReply();
@@ -1094,6 +1106,126 @@
       }
     }
   }
+
+  function setReaderInlineSnippetTrigger(next) {
+    if (!next) {
+      inlineSnippetTrigger = null;
+      return;
+    }
+    const signature = `${next.from}:${next.to}:${next.token}`;
+    if (signature === dismissedInlineSnippetSignature) {
+      inlineSnippetTrigger = null;
+      return;
+    }
+    dismissedInlineSnippetSignature = null;
+    const activation = inlineSnippetTrigger?.from === next.from
+      ? inlineSnippetTrigger.activation
+      : ++inlineSnippetActivation;
+    inlineSnippetTrigger = { ...next, activation };
+  }
+
+  function dismissReaderInlineSnippet() {
+    dismissedInlineSnippetSignature = inlineSnippetTrigger
+      ? `${inlineSnippetTrigger.from}:${inlineSnippetTrigger.to}:${inlineSnippetTrigger.token}`
+      : null;
+    inlineSnippetTrigger = null;
+  }
+
+  function readerInlineSnippetTrigger(editor = inlineReplyTextarea) {
+    if (
+      !editor
+      || typeof document.execCommand !== 'function'
+      || inlineSnippetComposing
+      || editor.selectionStart !== editor.selectionEnd
+      || !inlineReplyOpen
+      || editor.disabled
+      || durableReplyError
+      || !activeReplyEnvelopeResult.available
+    ) return null;
+    const parsed = findInlineSnippetTrigger(inlineReplyBody, editor.selectionStart);
+    if (!parsed) return null;
+    const rectangle = editor.getBoundingClientRect();
+    return {
+      ...parsed,
+      kind: 'textarea',
+      anchor: {
+        left: rectangle.left + Math.min(24, rectangle.width / 8),
+        top: rectangle.bottom - 8,
+        bottom: rectangle.bottom,
+      },
+    };
+  }
+
+  function publishReaderInlineSnippetTrigger(editor = inlineReplyTextarea) {
+    setReaderInlineSnippetTrigger(readerInlineSnippetTrigger(editor));
+  }
+
+  function handleInlineReplyInput(event) {
+    advanceInlineReplyGeneration();
+    persistInlineReply();
+    if (event.isComposing) setReaderInlineSnippetTrigger(null);
+    else publishReaderInlineSnippetTrigger(event.currentTarget);
+  }
+
+  function replaceReaderInlineSnippet(snippet) {
+    const editor = inlineReplyTextarea;
+    const trigger = inlineSnippetTrigger;
+    const current = readerInlineSnippetTrigger(editor);
+    if (
+      !editor
+      || !trigger
+      || !current
+      || current.from !== trigger.from
+      || current.to !== trigger.to
+      || current.token !== trigger.token
+      || !sessionIsCurrent()
+    ) return false;
+    const replacement = replaceInlineSnippetText(
+      inlineReplyBody,
+      trigger,
+      snippet?.body_text,
+    );
+    if (!replacement) return false;
+    editor.focus({ preventScroll: true });
+    editor.setSelectionRange(trigger.from, trigger.to);
+    const insertedWithNativeUndo = document.execCommand?.(
+      'insertText',
+      false,
+      replacement.inserted,
+    ) === true;
+    // Keep the existing picker as the compatibility path rather than silently
+    // degrading the inline shortcut to a non-undoable programmatic mutation.
+    if (!insertedWithNativeUndo) return false;
+    setReaderInlineSnippetTrigger(null);
+    editor.setSelectionRange(replacement.caret, replacement.caret);
+    return true;
+  }
+
+  function readerInlineSnippetA11yChanged(state) {
+    inlineSnippetA11y = state || { expanded: false, controls: null, activeDescendant: null };
+  }
+
+  function handleInlineSnippetCompositionStart() {
+    inlineSnippetComposing = true;
+    setReaderInlineSnippetTrigger(null);
+  }
+
+  function handleInlineSnippetCompositionEnd() {
+    inlineSnippetComposing = false;
+    publishReaderInlineSnippetTrigger();
+  }
+
+  $effect(() => {
+    if (
+      !inlineReplyOpen
+      || durableReplyOpening
+      || durableReplyError
+      || !activeReplyEnvelopeResult.available
+      || durableReplyState.discardInProgress
+      || durableReplyState.sendInProgress
+      || durableReplyState.status === 'conflict'
+    ) setReaderInlineSnippetTrigger(null);
+  });
 
   function capturePersonalSnippetSelection() {
     const editor = inlineReplyTextarea;
@@ -1797,19 +1929,39 @@
             </span>
           </div>
         {/if}
-        <textarea
-          bind:this={inlineReplyTextarea}
-          bind:value={inlineReplyBody}
-          oninput={() => { advanceInlineReplyGeneration(); persistInlineReply(); }}
-          onkeydown={handleInlineReplyKeydown}
-          placeholder="Write your reply..."
-          aria-label="Reply message"
-          aria-describedby={durableReplyError ? 'inline-reply-save-error' : undefined}
-          disabled={!activeReplyEnvelopeResult.available || durableReplyOpening || durableReplyState.discardInProgress || durableReplyState.sendInProgress || durableReplyState.status === 'conflict'}
-          class="w-full rounded-lg border p-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-accent-500/40"
-          style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary); min-height: 100px; max-height: 200px"
-          rows="4"
-        ></textarea>
+        <div class="relative">
+          <textarea
+            bind:this={inlineReplyTextarea}
+            bind:value={inlineReplyBody}
+            oninput={handleInlineReplyInput}
+            onkeydown={handleInlineReplyKeydown}
+            onkeyup={() => publishReaderInlineSnippetTrigger()}
+            onclick={() => publishReaderInlineSnippetTrigger()}
+            onblur={() => setReaderInlineSnippetTrigger(null)}
+            oncompositionstart={handleInlineSnippetCompositionStart}
+            oncompositionend={handleInlineSnippetCompositionEnd}
+            placeholder="Write your reply..."
+            role="combobox"
+            aria-autocomplete="list"
+            aria-label="Reply message"
+            aria-describedby={durableReplyError ? 'inline-reply-save-error' : undefined}
+            aria-expanded={inlineSnippetA11y.expanded}
+            aria-controls={inlineSnippetA11y.expanded ? inlineSnippetA11y.controls : undefined}
+            aria-activedescendant={inlineSnippetA11y.expanded ? inlineSnippetA11y.activeDescendant : undefined}
+            disabled={!activeReplyEnvelopeResult.available || durableReplyOpening || durableReplyState.discardInProgress || durableReplyState.sendInProgress || durableReplyState.status === 'conflict'}
+            class="w-full rounded-lg border p-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-accent-500/40"
+            style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary); min-height: 100px; max-height: 200px"
+            rows="4"
+          ></textarea>
+          <InlineSnippetMenu
+            bind:this={inlineSnippetMenuHandle}
+            active={inlineSnippetTrigger}
+            menuId="inline-snippets-reader"
+            onchoose={replaceReaderInlineSnippet}
+            ondismiss={dismissReaderInlineSnippet}
+            ona11ychange={readerInlineSnippetA11yChanged}
+          />
+        </div>
         <div class="reply-actions flex items-center gap-2 mt-2">
           <SnippetPicker
             bind:open={snippetPickerOpen}

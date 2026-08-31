@@ -1035,6 +1035,7 @@
           autofocus={toRecipients.length > 0}
           ariaLabel="Message body"
           surface="compose"
+          inlineSnippets={true}
         />
       {/key}
     </div>

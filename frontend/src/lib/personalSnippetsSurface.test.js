@@ -3,8 +3,9 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 
-const [picker, manager, admin, compose, reader, flow, rich, deferred, shortcuts] = await Promise.all([
+const [picker, inlineMenu, manager, admin, compose, reader, flow, rich, deferred, shortcuts] = await Promise.all([
   readFile(new URL('../components/email/SnippetPicker.svelte', import.meta.url), 'utf8'),
+  readFile(new URL('../components/email/InlineSnippetMenu.svelte', import.meta.url), 'utf8'),
   readFile(new URL('./admin/WritingPreferences.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../pages/Admin.svelte', import.meta.url), 'utf8'),
   readFile(new URL('../pages/Compose.svelte', import.meta.url), 'utf8'),
@@ -61,4 +62,33 @@ test('all three writing surfaces use the shared picker and exact editor bridges'
   assert.match(shortcuts, /id: 'compose\.snippets', key: 'Ctrl\+;'/);
   assert.match(shortcuts, /id: 'inbox\.snippets', key: 'Ctrl\+;'/);
   assert.match(shortcuts, /id: 'flow\.snippets',\s+key: 'Ctrl\+;'/);
+});
+
+
+test('inline semicolon expansion shares one keyboard-owned exact-range contract', () => {
+  assert.match(picker, /type ; in the message/);
+  assert.match(inlineMenu, /role="listbox"/);
+  assert.match(inlineMenu, /event\.metaKey \|\| event\.ctrlKey \|\| event\.altKey/);
+  assert.match(inlineMenu, /event\.key === 'Escape'/);
+  assert.match(inlineMenu, /event\.key === 'Enter' \|\| event\.key === 'Tab'/);
+  assert.match(inlineMenu, /isAuthenticatedSessionCurrent\(session\)/);
+  assert.match(deferred, /inlineSnippets = false/);
+  assert.match(deferred, /replaceFallbackInlineSnippet/);
+  assert.match(deferred, /document\.execCommand\('insertHTML'/);
+  assert.match(deferred, /if \(!inserted\) return false/);
+  assert.doesNotMatch(deferred, /range\.deleteContents\(\)/);
+  assert.match(deferred, /<InlineSnippetMenu/);
+  assert.match(rich, /ed\.isActive\('link'\) \|\| ed\.isActive\('code'\) \|\| ed\.isActive\('codeBlock'\)/);
+  assert.match(rich, /leaf => leaf\.type\.name === 'hardBreak' \? '\\n' : '\\ufffc'/);
+  assert.match(rich, /deleteRange\(\{ from: trigger\.from, to: trigger\.to \}\)[\s\S]*insertContent\(safeHtml\)/);
+  assert.match(rich, /handleKeyDown: \(_view, event\) => Boolean\(onInlineSnippetKeydown\?\.\(event\)\)/);
+  assert.match(compose, /surface="compose"[\s\S]*inlineSnippets=\{true\}/);
+  assert.match(flow, /surface="flow-reply"[\s\S]*inlineSnippets=\{true\}/);
+  assert.match(reader, /<InlineSnippetMenu[\s\S]*menuId="inline-snippets-reader"/);
+  assert.match(reader, /replaceInlineSnippetText/);
+  assert.match(reader, /document\.execCommand\?\.\([\s\S]*'insertText'/);
+  assert.match(reader, /if \(!insertedWithNativeUndo\) return false/);
+  assert.doesNotMatch(reader, /setRangeText\(/);
+  assert.match(reader, /inlineSnippetMenuHandle\?\.handleKeydown\?\.\(event\)/);
+  assert.doesNotMatch(manager, /inlineSnippets=\{true\}/);
 });

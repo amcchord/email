@@ -196,7 +196,7 @@
       <header class="flex items-center gap-3 border-b px-4 py-3" style="border-color: var(--border-color)">
         <div class="min-w-0 flex-1">
           <h2 id="snippet-picker-title" class="text-sm font-semibold" style="color: var(--text-primary)">Insert snippet</h2>
-          <p class="text-xs" style="color: var(--text-tertiary)">Search by name, shortcut, or content</p>
+          <p class="text-xs" style="color: var(--text-tertiary)">Search here, or type ; in the message</p>
         </div>
         <button
           type="button"

@@ -1,5 +1,7 @@
 <script>
   import { onDestroy, onMount, untrack } from 'svelte';
+  import InlineSnippetMenu from './InlineSnippetMenu.svelte';
+  import { findInlineSnippetTrigger } from '../../lib/inlineSnippetExpansion.js';
   import { sanitizeComposeHtml } from '../../lib/sanitize.js';
   import { getCachedRichEditor, loadRichEditor } from '../../lib/lazyEditor.js';
 
@@ -12,6 +14,7 @@
     autofocus = false,
     ariaLabel = 'Message body',
     surface = 'message',
+    inlineSnippets = false,
   } = $props();
 
   const cachedEditor = getCachedRichEditor();
@@ -25,6 +28,142 @@
   let generation = 0;
   let transferFocus = $state(false);
   let fallbackInsertionRange = null;
+  let fallbackComposing = false;
+  let richHandle = $state.raw(null);
+  let inlineMenuHandle = $state(null);
+  let inlineTrigger = $state(null);
+  let inlineA11y = $state({ expanded: false, controls: null, activeDescendant: null });
+  let inlineActivation = 0;
+  let dismissedInlineSignature = null;
+
+  function inlineSignature(trigger) {
+    if (!trigger) return null;
+    if (trigger.kind === 'rich') return `${trigger.kind}:${trigger.from}:${trigger.to}:${trigger.token}`;
+    return `${trigger.kind}:${trigger.startOffset}:${trigger.endOffset}:${trigger.token}`;
+  }
+
+  function sameInlineOrigin(left, right) {
+    if (!left || !right || left.kind !== right.kind) return false;
+    if (left.kind === 'rich') return left.from === right.from;
+    return left.node === right.node && left.startOffset === right.startOffset;
+  }
+
+  function setInlineTrigger(next) {
+    if (!inlineSnippets || !next) {
+      inlineTrigger = null;
+      return;
+    }
+    const signature = inlineSignature(next);
+    if (signature === dismissedInlineSignature) {
+      inlineTrigger = null;
+      return;
+    }
+    dismissedInlineSignature = null;
+    const activation = sameInlineOrigin(inlineTrigger, next)
+      ? inlineTrigger.activation
+      : ++inlineActivation;
+    inlineTrigger = { ...next, activation };
+  }
+
+  function dismissInlineTrigger() {
+    dismissedInlineSignature = inlineSignature(inlineTrigger);
+    inlineTrigger = null;
+  }
+
+  function handleInlineSnippetKeydown(event) {
+    return inlineMenuHandle?.handleKeydown?.(event) ?? false;
+  }
+
+  function inlineSnippetA11yChanged(state) {
+    inlineA11y = state || { expanded: false, controls: null, activeDescendant: null };
+  }
+
+  function fallbackInlineTrigger(node) {
+    if (
+      !inlineSnippets
+      || fallbackComposing
+      || !node
+      || typeof document.execCommand !== 'function'
+    ) return null;
+    const selection = window.getSelection?.();
+    if (!selection?.isCollapsed || selection.rangeCount === 0) return null;
+    const focusNode = selection.focusNode;
+    const focusOffset = selection.focusOffset;
+    if (!focusNode || focusNode.nodeType !== Node.TEXT_NODE || !node.contains(focusNode)) return null;
+    const blockedParent = focusNode.parentElement?.closest?.('a, code, pre');
+    if (blockedParent && node.contains(blockedParent)) return null;
+    const parsed = findInlineSnippetTrigger(focusNode.data, focusOffset);
+    if (!parsed) return null;
+    const range = document.createRange();
+    range.setStart(focusNode, parsed.to);
+    range.collapse(true);
+    const rectangle = range.getBoundingClientRect();
+    return {
+      ...parsed,
+      kind: 'fallback',
+      node: focusNode,
+      startOffset: parsed.from,
+      endOffset: parsed.to,
+      anchor: {
+        left: rectangle.left,
+        top: rectangle.top,
+        bottom: rectangle.bottom || rectangle.top + 20,
+      },
+    };
+  }
+
+  function publishFallbackInlineTrigger(node = fallbackElement) {
+    setInlineTrigger(fallbackInlineTrigger(node));
+  }
+
+  function replaceFallbackInlineSnippet(trigger, html) {
+    const node = fallbackElement;
+    const current = fallbackInlineTrigger(node);
+    if (
+      !node
+      || trigger?.kind !== 'fallback'
+      || !current
+      || current.node !== trigger.node
+      || current.startOffset !== trigger.startOffset
+      || current.endOffset !== trigger.endOffset
+      || current.token !== trigger.token
+    ) return false;
+    const safeHtml = sanitizeComposeHtml(String(html || ''));
+    if (!safeHtml) return false;
+    const range = document.createRange();
+    range.setStart(trigger.node, trigger.startOffset);
+    range.setEnd(trigger.node, trigger.endOffset);
+    const selection = window.getSelection?.();
+    if (!selection) return false;
+    node.focus({ preventScroll: true });
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const inserted = document.execCommand('insertHTML', false, safeHtml);
+    // Inline expansion requires a native undo transaction. The existing
+    // snippet picker remains available when this compatibility path cannot
+    // provide one.
+    if (!inserted) return false;
+    const sanitized = sanitizeComposeHtml(node.innerHTML);
+    if (sanitized !== node.innerHTML) {
+      node.innerHTML = sanitized;
+      moveCaretToEnd(node);
+    }
+    fallbackDirty = true;
+    latestContent = sanitized;
+    onUpdate?.(sanitized);
+    setInlineTrigger(null);
+    return true;
+  }
+
+  function chooseInlineSnippet(snippet) {
+    const trigger = inlineTrigger;
+    if (!trigger) return false;
+    const inserted = trigger.kind === 'rich'
+      ? richHandle?.replaceInlineSnippet?.(trigger, snippet?.body_html)
+      : replaceFallbackInlineSnippet(trigger, snippet?.body_html);
+    if (inserted) setInlineTrigger(null);
+    return Boolean(inserted);
+  }
 
   function focusIsLost() {
     const active = document.activeElement;
@@ -119,6 +258,22 @@
     fallbackDirty = true;
     latestContent = sanitized;
     onUpdate?.(sanitized);
+    if (event.isComposing) setInlineTrigger(null);
+    else publishFallbackInlineTrigger(node);
+  }
+
+  function handleFallbackKeydown(event) {
+    if (handleInlineSnippetKeydown(event)) return;
+  }
+
+  function handleFallbackCompositionStart() {
+    fallbackComposing = true;
+    setInlineTrigger(null);
+  }
+
+  function handleFallbackCompositionEnd() {
+    fallbackComposing = false;
+    publishFallbackInlineTrigger();
   }
 
   function handleRichUpdate(html) {
@@ -128,6 +283,7 @@
   }
 
   function handleRichReady(handle) {
+    richHandle = handle || null;
     onReady?.(handle || { mode: 'rich' });
   }
 
@@ -161,6 +317,7 @@
   });
 
   onDestroy(() => {
+    setInlineTrigger(null);
     mounted = false;
     generation += 1;
   });
@@ -211,24 +368,50 @@
       autofocus={autofocus && (transferFocus || focusIsLost())}
       {ariaLabel}
       {surface}
+      {inlineSnippets}
+      inlineSnippetA11y={inlineA11y}
+      onInlineSnippetChange={setInlineTrigger}
+      onInlineSnippetKeydown={handleInlineSnippetKeydown}
     />
   {:else}
     <div class="basic-toolbar" aria-hidden="true">
       <span>Basic editor</span>
       <span>{status === 'error' ? 'Rich formatting offline' : 'Formatting is loading'}</span>
     </div>
+    <!-- svelte-ignore a11y_aria_activedescendant_has_tabindex (contenteditable is natively focusable) -->
     <div
       class="fallback-editor"
       class:external-scroll={externalScroll}
-      role="textbox"
+      role={inlineSnippets ? 'combobox' : 'textbox'}
+      aria-autocomplete={inlineSnippets ? 'list' : undefined}
       aria-multiline="true"
       aria-label={ariaLabel}
+      aria-expanded={inlineA11y.expanded}
+      aria-controls={inlineA11y.expanded ? inlineA11y.controls : undefined}
+      aria-activedescendant={inlineA11y.expanded ? inlineA11y.activeDescendant : undefined}
       data-placeholder={placeholder}
       contenteditable="true"
       spellcheck="true"
       oninput={handleFallbackInput}
+      onkeydown={handleFallbackKeydown}
+      onkeyup={() => publishFallbackInlineTrigger()}
+      onclick={() => publishFallbackInlineTrigger()}
+      onblur={() => setInlineTrigger(null)}
+      oncompositionstart={handleFallbackCompositionStart}
+      oncompositionend={handleFallbackCompositionEnd}
       use:initializeFallback
     ></div>
+  {/if}
+
+  {#if inlineSnippets}
+    <InlineSnippetMenu
+      bind:this={inlineMenuHandle}
+      active={inlineTrigger}
+      menuId={`inline-snippets-${surface}`}
+      onchoose={chooseInlineSnippet}
+      ondismiss={dismissInlineTrigger}
+      ona11ychange={inlineSnippetA11yChanged}
+    />
   {/if}
 </div>
 
