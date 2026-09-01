@@ -23,9 +23,9 @@ test('list and table expose one aggregate conversation row with conversation bul
     assert.match(component, /email\.member_count/);
     assert.match(component, /email\.star_state === 'some'/);
     assert.match(component, /label\.coverage === 'some'/);
-    assert.match(component, /conversations selected/);
     assert.match(component, /!email\.conversation_scope && email\.thread_digest_type/);
   }
+  assert.match(source('../components/email/InboxBulkActionBar.svelte'), /selected .*conversation/);
 });
 
 test('conversation reader is chronological, account-safe, and keeps message controls touch sized', () => {

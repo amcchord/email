@@ -4,22 +4,31 @@ Last updated: 2026-08-31
 
 ## Active Objective
 
-Operate the newly deployed user-trainable Focused/Other rules without weakening
-the deterministic split, exact counts, or account ownership, and select the
-next bounded modern-client workflow gap from observed use rather than reopening
-the finished release for minor polish. Keep Share Availability as an explicit
-truthful synchronized snapshot rather than a hold, event, booking link, or
-claim of live availability. Keep the deployed Attachments, Saved Views, first-class
-Contacts, writing, Universal Send
-& Archive, Focused/Split Inbox, and terminal track operating as durable,
-truthful workflows. Continue
-physical qualification of the independently gated Web Serial installer and OTA control
-plane on exact E1001/E1002 hardware. Keep real mail/calendar QA read-only except
-for generated `.example.test` fixtures and preserve every independent terminal
-write gate.
+Pause feature development at the goal-period release boundary and collect
+user-testing feedback on the shipped modern mail-client workflows. Do not
+reopen broad CI or production release work for isolated P2 polish. Reproduce
+and rank observed issues first, then batch a coherent P0/P1 follow-up with
+proportional focused checks and one post-freeze gate. Keep real mail and
+Calendar QA read-only except for generated `.example.test` fixtures, and keep
+every terminal enrollment, artifact, hardware, and rollout gate closed during
+the pause.
 
 ## Baseline
 
+- The complete goal-period product summary, milestone index, verification
+  record, intentional limits, and user-testing guide are in
+  `GOAL_PERIOD_RELEASE_NOTES_2026-08-30_TO_2026-08-31.md`. The running
+  application/runtime remains
+  `c7b9960653f48c0a7ab47f79a295d6fedd19695a`; this release-note closeout is
+  documentation-only and must not rebuild, migrate, or restart production.
+- The deployed touch-first Inbox triage application/runtime is
+  `c7b9960653f48c0a7ab47f79a295d6fedd19695a`. Ordinary authoritative Inbox
+  conversation rows now support strict preference-driven primary-touch
+  Archive/Snooze/read/star/no-action gestures, visible mobile alternatives,
+  and one session-local dataset-scoped selection model across list/table
+  rendering, refreshes, keyboard commands, and an accessible bulk bar. Swipe
+  actions reuse existing durable action/Undo paths; Snooze remains zero-write
+  until an explicit time. No real-mail QA mutation or migration was added.
 - The deployed user-trainable Focused/Other application/runtime is
   `060d4bca9db4b18ac4926679d2bbafe3f7b16736`. Split Inbox now supports explicit
   exact-account conversation, sender, and exact-domain corrections with visible
@@ -171,10 +180,12 @@ write gate.
   backfill or provider mutation. Existing Saved View, signature, follow-up,
   attachment, and OTA state is unchanged.
 - All seven checked production services are active, public health is `ok`, and
-  replacement API PID 2184456 has zero automatic restarts and no warning-or-
-  higher entries after becoming active at 19:26:06 UTC. Production has no
-  secure-enrollment or OTA enablement, online key, approved catalog, qualified
-  release/model pair, nonzero rollout, or device update offer.
+  replacement API PID 2188272 has zero automatic restarts and no warning-or-
+  higher entries after becoming active at 20:41:38 UTC. Production has no
+  secure-enrollment or generic A/B OTA-control-plane enablement, online key,
+  approved catalog, qualified release/model pair, or nonzero rollout. The
+  separately bounded legacy per-device signed OTA path was exercised only for
+  the two explicitly attached devices described below.
 - Private firmware `main` is exact at candidate.9
   `52ba6c58ca7f17741d0d74c225f8d942b6119241`. Exact-SHA run `33412815120`
   passed release tooling, keyed RET1 and OTA1 coordinator builds, every model,
@@ -184,6 +195,16 @@ write gate.
   one physical E1002. That terminal then booted the exact DIO build, retained
   configuration, fetched/rendered over trusted HTTPS, checked in as Terminal
   0a80, and deep-slept at 90% battery.
+- Deployed Email runtime `91c903c` adds a fail-closed signed OTA offer to the
+  legacy `/config.json` path. The explicitly attached E1001 and E1002 each
+  moved from candidate.15 to exact feature-branch candidate.16
+  `3e75d1048e4388ae0e81e78e3c028e20111fd019`, wrote inactive `ota_1`, retained
+  configuration, rebooted on candidate.16, and resumed schedule/render
+  operation. That branch's superseded CI run was cancelled and candidate.16 is
+  not private firmware `main`; server lifecycle history conservatively reports
+  recovery-required because the legacy bootloader exposed the new slot as
+  stable rather than pending-verify. Uninstalled follow-up `e45f3d9` addresses
+  only that classification and remains unreleased.
 - The offline promotion/signing workflow is integrated on that same private
   firmware `main`. It requires complete schema-2, revision-bound E1001 and E1002
   HIL records across 31 cases, preserves candidate bytes, emits the application
@@ -194,17 +215,42 @@ write gate.
 This is a point-in-time snapshot. Run `make remote-status` before relying on
 live state.
 
-## Active Work Items
+## Recent Touch-first Inbox Triage Release
+
+- Cross-device swipe settings default to left Archive and right Snooze and
+  allow only Archive, Snooze, Toggle read, Toggle star, or No action. The
+  controller accepts only primary touch/coarse-pointer horizontal intent on an
+  authoritative ordinary Inbox dataset; protected mailboxes and every stale,
+  cancelled, short, vertical, multi-touch, or interactive-target path are
+  zero-write.
+- List and table views share one parent-owned session-local selection model,
+  Shift ranges, Select loaded, Clear, `X`, long press, visible 44-pixel row
+  actions, and a sticky responsive bulk surface. Account/mailbox/session
+  changes clear selection and authoritative refreshes prune vanished rows.
+- The single consolidated gate passed 841 backend tests with 75 expected skips,
+  554 frontend tests, and the 634-module build. Generated-only browser QA at
+  desktop and 390×844 recorded one preference write, zero mail/Snooze writes,
+  zero external capabilities, and no browser errors. Signed-in production QA
+  remained read-only.
+- GitHub and production runtime are exact at
+  `c7b9960653f48c0a7ab47f79a295d6fedd19695a`; Alembic remains
+  `c1d2e3f4a5b6 (head)`. Full evidence is in
+  `TOUCH_FIRST_TRIAGE_RELEASE_2026-08-31.md`.
+
+## Paused Follow-ons
 
 ### P1 — Physical E1001/E1002 browser-install qualification
 
-- State: candidate.9, the schema-2 HIL evidence harness, exact browser package
+- State: paused for the user-testing freeze. Candidate.9, the schema-2 HIL
+  evidence harness, exact browser package
   preflight, real pinned Web Serial/RET1 same-port transport, recovery workflow,
   offline HIL-bound signing tool, and both OTA1 parsers are complete; production
   remains locked. One physical E1002 completed a bounded command-line DIO
-  installation, trusted-HTTPS render/check-in, and sleep cycle. No E1001 has
-  been exercised, the 31-case record is incomplete, and no browser chooser,
-  enrollment key, qualified catalog, or OTA offer was enabled.
+  installation, trusted-HTTPS render/check-in, and sleep cycle; one E1001 and
+  that E1002 later completed bounded signed legacy candidate.15→candidate.16
+  updates. The 31-case secure enrollment/browser/A/B record is still
+  incomplete, and no browser chooser, enrollment key, qualified catalog, or
+  generic rollout was enabled.
 - Scope: physical RET1 enrollment, interrupted serial/config write, three-slot
   selection, same-owner pending continuity, rollback grace, revocation,
   preserve-config, trusted-time/CA failure, A/B partition migration, inactive
@@ -220,10 +266,13 @@ live state.
 
 ### P2 — Durable device OTA control plane
 
-- State: application runtime `9253eb4` and Alembic `c6d7e8f9a0b1` are deployed;
+- State: paused for the user-testing freeze. Application runtime `9253eb4` and
+  Alembic `c6d7e8f9a0b1` are deployed;
   all production gates remain closed and both new tables are empty. Firmware
   candidate.9 is on private `main` after its exact CI gate and one bounded E1002
-  DIO installation/render/sleep cycle passed.
+  DIO installation/render/sleep cycle passed. The later two-device candidate.16
+  proof used the separate legacy signed path and does not qualify the A/B
+  control-plane ledger or rollout.
 - Scope: one additive event-ledger migration descending from b5, authenticated
   device offer/artifact/event endpoints,
   idempotent attempt state, power gates, rollout cohorts, and rescue controls.
@@ -645,11 +694,13 @@ live state.
 - Full evidence and rollback boundaries are in
   `SECURE_TERMINAL_ENROLLMENT_FOUNDATION_RELEASE_2026-08-30.md`.
 
-## Near-Term Terminal Queue
+## Paused Terminal Queue
 
-- Continue candidate.9 physical E1001/E1002 RET1, trusted TLS, A/B partition
-  migration, interruption, pending-image validation, rollback, preserve-config,
-  and ROM recovery HIL from the bounded E1002 DIO milestone. E1004 remains
+- Retain the candidate.9 E1002 DIO record and the bounded E1001/E1002 legacy
+  candidate.16 OTA evidence. During the pause, do not widen either into a
+  browser or generic rollout claim. A later coherent HIL batch must still cover
+  RET1, trusted TLS, A/B partition migration, interruption, pending-image
+  validation, rollback, preserve-config, and ROM recovery. E1004 remains
   blocked and single-slot.
 - After complete HIL, use the offline promotion tool with a protected signing
   key, pin only its public key and positive catalog generation, and qualify the

@@ -39,6 +39,7 @@ free-form questions about your inbox without touching the web UI.
 - [Web session-only Saved Views](#web-session-only-saved-views)
 - [Web session-only attachment workspace](#web-session-only-attachment-workspace)
 - [Web session-only attachment preview and download](#web-session-only-attachment-preview-and-download)
+- [Web session-only Inbox triage preferences](#web-session-only-inbox-triage-preferences)
 - [Web session-only durable mail actions](#web-session-only-durable-mail-actions)
 - [Web session-only durable Snooze reminders](#web-session-only-durable-snooze-reminders)
 - [Web session-only automatic follow-up reminders](#web-session-only-automatic-follow-up-reminders)
@@ -1027,6 +1028,40 @@ Stable error responses are:
 Public API tokens cannot call these routes. Attachment bytes are cached only at
 private, canonical ID-derived paths; filenames and Gmail/cache identifiers are
 not accepted as lookup keys.
+
+## Web session-only Inbox triage preferences
+
+These endpoints use the authenticated web session. They are not part of the
+token-authenticated `/api/v1` surface.
+
+### `GET /api/auth/ui-preferences`
+
+Returns the current user's cross-device UI preferences with server defaults
+filled in:
+
+```json
+{
+  "thread_order": "newest_first",
+  "theme": "amber",
+  "color_scheme": "light",
+  "swipe_left_action": "archive",
+  "swipe_right_action": "snooze"
+}
+```
+
+### `PUT /api/auth/ui-preferences`
+
+Partially updates the same user-owned preference object. Swipe actions accept
+only `archive`, `snooze`, `toggle_read`, `toggle_star`, or `none`; invalid
+values fail with `422` without modifying the stored preferences. Omitted fields
+retain their current values.
+
+The web Inbox applies swipe preferences only to authoritative ordinary Inbox
+conversation rows on a primary touch/coarse pointer. Trash, Spam, Move, and
+other destructive/provider-routing actions are intentionally not valid swipe
+choices. A snooze gesture opens the existing picker and performs no write until
+the user explicitly chooses a return time. The client disables gestures when
+the preference read or current Inbox dataset is not authoritative.
 
 ## Web session-only durable mail actions
 

@@ -3,6 +3,165 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-31 — At a Glance terminal settings cleanup
+
+### Scope
+
+Replace the dense terminal administration page with a task-oriented layout,
+then publish the exact validated release to GitHub and production.
+
+### Completed
+
+- Reorganized At a Glance settings into Devices, Browser displays, General
+  settings, and Advanced, with a compact health summary and clearer device
+  cards as the default workflow.
+- Moved installer, enrollment-policy, OTA diagnostics, and legacy schedule
+  details into collapsed Advanced disclosures without changing their safety
+  gates or API contracts.
+- Preserved the pre-existing unrelated edits in the control checkout and
+  replayed only the two-file frontend change onto the current `origin/main`.
+
+### Verification
+
+- The exact release tree passed all 555 frontend tests and a 634-module
+  production build.
+- Signed-in production QA confirmed the default device workflow, browser
+  displays, general settings, collapsed Advanced groups, and the responsive
+  390x844 layout. No terminal, OTA, enrollment, display-link, or settings
+  mutation was performed during QA.
+- Public health returned `ok`, all application services remained active, and
+  no warning-level service logs appeared during the deployment window.
+
+### Production Actions
+
+- Pushed runtime commit `eafffa5ed691973ade7a5f3cf2b32020bb8fc7f0` to
+  GitHub `main`, fast-forwarded the clean production checkout from `800a57f`,
+  and rebuilt the static frontend as `mailapp`.
+- No dependency install, migration, backup, service restart/reload, provider
+  operation, data mutation, or terminal action was required. The closeout
+  journal commit is documentation-only and requires no additional build.
+
+### Next
+
+Collect ordinary user feedback on the simplified At a Glance workflow and
+batch any non-blocking polish into a later bounded release.
+
+## 2026-08-31 — Goal-period release freeze and user-testing handoff
+
+### Scope
+
+Stop the recursive feature/audit cycle, preserve the exact shipped runtime,
+publish one authoritative release narrative for the full modern-client goal
+period, and pause for ordinary user testing.
+
+### Completed
+
+- Added
+  `GOAL_PERIOD_RELEASE_NOTES_2026-08-30_TO_2026-08-31.md`, covering the exact
+  source/runtime/schema boundaries, user-facing mail, writing, organization,
+  account, privacy, Calendar, and At a Glance changes; the complete milestone
+  index; schema evolution; verification; intentional limits; and a bounded
+  user-testing guide.
+- Changed `CURRENT.md` from feature selection to an explicit release freeze.
+  Terminal hardware qualification and OTA rollout remain paused and locked;
+  P2 polish is batched instead of triggering another broad validation loop.
+- Reconciled the terminal track's final bounded evidence without reopening its
+  loop: one attached E1001 and one E1002 each completed an exact signed legacy
+  candidate.15→candidate.16 update into `ota_1`, retained configuration, and
+  resumed schedule/render operation. Candidate.16 remains a feature-branch
+  build with a cancelled superseded CI run; follow-up lifecycle-classification
+  commit `e45f3d9` remains uninstalled and unreleased.
+- Reconciled the pre-closeout state before editing: local branch, GitHub
+  `main`, and the clean production checkout were exact at `ee48d59`; all seven
+  services were active and public health returned `ok`.
+
+### Verification
+
+- Documentation-bounded review checked Markdown links/paths, exact release and
+  migration identifiers, diff whitespace, and secret scope. No runtime,
+  dependency, schema, provider, mailbox, Calendar, or terminal code changed,
+  so broad backend/frontend/CI suites were intentionally not rerun.
+- The latest application gate remains 841 backend tests with 75 expected
+  skips, all 554 frontend tests, the 634-module build, generated browser
+  acceptance, and signed-in read-only production QA from the touch-first
+  release.
+
+### Production Actions
+
+- Fast-forwarded only the release documentation after confirming the runtime
+  diff was empty. No build, dependency install, migration, backup, service
+  restart/reload, provider operation, mail/Calendar mutation, or terminal
+  action was required.
+- Final postflight retained the exact application/runtime
+  `c7b9960653f48c0a7ab47f79a295d6fedd19695a`, Alembic
+  `c1d2e3f4a5b6 (head)`, active services, and public health `ok`.
+
+### Next
+
+Pause. Collect workflow-impacting user feedback, reproduce it once, and open
+one bounded follow-up release only after a coherent P0/P1 batch is defined.
+
+## 2026-08-31 — Touch-first resilient Inbox triage
+
+### Scope
+
+Add modern touch gestures and one coherent selection/bulk workflow without
+creating a second mail-action contract or mutating real mail during QA.
+
+### Completed
+
+- Added strict cross-device left/right swipe preferences with Archive/Snooze
+  defaults and only Archive, Snooze, Toggle read, Toggle star, or No action as
+  valid values. Partial updates preserve unrelated UI preferences and invalid
+  values fail before storage.
+- Added a primary-touch/coarse-pointer gesture controller with horizontal
+  intent, vertical-native scrolling, exact once-only completion, stale
+  generation and action-disabled guards, and zero-write short/cancelled/
+  multi-touch/interactive paths.
+- Added one parent-owned dataset-scoped selection model across list/table
+  rendering, same-dataset refreshes, checkboxes, Shift range, long press,
+  visible mobile row actions, `X`, Select loaded, Clear, and a sticky accessible
+  bulk bar. Preserved Spam/Not spam, Trash/Restore, Label, and Move behavior.
+- Added loopback-only two-account `.example.test` API/browser fixtures and
+  focused backend, gesture, selection, surface, and source-contract coverage.
+
+### Verification
+
+- The single consolidated post-freeze gate passed 841 backend tests with 75
+  expected skips, all 554 frontend tests, and a 634-module build. A final fresh
+  build after the P1 fixes also passed with 634 modules.
+- The generated fixture self-test passed exact Archive/Undo, lost-response
+  reconciliation, explicit-time-only Snooze, protected/dataset/session guards,
+  and zero provider/Gmail/send/calendar/AI/worker/terminal/external operations.
+- In-app browser QA passed desktop preferences, cancel/save, list/table range
+  selection, responsive bulk actions, mobile fallbacks, and a zero-write
+  Snooze picker at 390×844. Its audit recorded exactly one generated preference
+  write, zero mail-action/Snooze writes, and no browser errors. Evidence is in
+  the external `Email-release-evidence/touch-first-triage-2026-08-31` folder.
+- Signed-in production QA was read-only: authoritative rows and mobile action
+  fallbacks loaded with zero selection/bulk state, no message open, and no
+  preference or mail mutation. Diff, secret-scope, source compile, and
+  `git diff --check` review passed.
+
+### Production Actions
+
+- Pushed runtime `c7b9960653f48c0a7ab47f79a295d6fedd19695a` to GitHub and
+  fast-forwarded the clean production checkout from terminal runtime `91c903c`.
+  Restarted only `mailapp`, then built 634 frontend modules. No migration,
+  dependency install, database backup, worker restart, Caddy reload, or terminal
+  mutation was required.
+- The prior API process exceeded its 90-second graceful-stop window and systemd
+  terminated that draining process. Replacement PID 2188272 is active with
+  zero restarts and no warning-or-higher entries after 20:41:38 UTC. All seven
+  services and public health are healthy; Alembic remains
+  `c1d2e3f4a5b6 (head)`.
+
+### Next
+
+Observe actual touch/selection use and continue to the next bounded
+modern-client gap. Treat P2 polish as a later focused slice rather than
+reopening this release's broad gate.
+
 ## 2026-08-31 — User-trainable Focused/Other rules
 
 ### Scope

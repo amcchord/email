@@ -17,6 +17,7 @@
     createInitialDirectOpenGuard,
     createLatestRequestGuard,
     normalizeInboxDatasetSnapshot,
+    selectedBooleanState,
   } from '../lib/inboxDataset.js';
   import {
     actionPastTense,
@@ -55,8 +56,10 @@
   import { inboxRuleUndoOperation } from '../lib/inboxPlacementRules.js';
   import EmailList from '../components/email/EmailList.svelte';
   import EmailTable from '../components/email/EmailTable.svelte';
+  import InboxBulkActionBar from '../components/email/InboxBulkActionBar.svelte';
   import InboxRuleManager from '../components/email/InboxRuleManager.svelte';
   import InboxRulePicker from '../components/email/InboxRulePicker.svelte';
+  import SwipeActionSettings from '../components/email/SwipeActionSettings.svelte';
   import EmailView from '../components/email/EmailView.svelte';
   import ConversationView from '../components/email/ConversationView.svelte';
   import LabelPicker from '../components/email/LabelPicker.svelte';
@@ -87,6 +90,12 @@
     attachmentParentAnchorForAccount,
     normalizeAttachmentParentIntent,
   } from '../lib/attachmentLibrary.js';
+  import { createInboxSelectionModel } from '../lib/inboxSelection.js';
+  import {
+    DEFAULT_SWIPE_TRIAGE_PREFERENCES,
+    SWIPE_TRIAGE_ACTION_DETAILS,
+    normalizeSwipeTriagePreferences,
+  } from '../lib/swipeTriage.js';
 
   let selectedEmail = $state(null);
   let selectedThread = $state(null);
@@ -102,6 +111,9 @@
   let datasetErrorMessage = $state('');
   let actionReconciliationRequired = $state(false);
   let selectionEpoch = $state(0);
+  const triageSelectionModel = createInboxSelectionModel();
+  let triageSelectionSnapshot = $state(triageSelectionModel.snapshot());
+  let triageSelectedIds = $derived(new Set(triageSelectionSnapshot.selectedIds));
   let narrowViewport = $state(window.matchMedia('(max-width: 767px)').matches);
   let useTableLayout = $derived($viewMode === 'table' && !narrowViewport);
   let uncertainActions = $state(new Map());
@@ -167,6 +179,21 @@
   let inboxRuleManagerRefreshToken = $state(0);
   let inboxRuleAnnouncement = $state('');
   let inboxRuleMutationGeneration = 0;
+  let swipePreferences = $state(DEFAULT_SWIPE_TRIAGE_PREFERENCES);
+  let swipeSettingsOpen = $state(false);
+  let swipePreferencesLoading = $state(true);
+  let swipePreferencesAvailable = $state(false);
+  let bulkTriageBusy = $state(false);
+  let swipeEnabled = $derived(
+    moveAvailable
+      && datasetAuthoritative
+      && !datasetUpdating
+      && swipePreferencesAvailable
+  );
+  let swipeGeneration = $derived(`${selectionEpoch}:${committedDatasetKey || 'pending'}:${swipeEnabled ? 'ready' : 'locked'}`);
+  let triageSelectedEmails = $derived($emails.filter(email => triageSelectedIds.has(email.id)));
+  let triageSelectedSpamState = $derived(selectedBooleanState($emails, triageSelectedIds, 'is_spam'));
+  let triageSelectedTrashState = $derived(selectedBooleanState($emails, triageSelectedIds, 'is_trash'));
 
   function registerEmailViewTransitionGuard(guard) {
     emailViewTransitionGuard = typeof guard === 'function' ? guard : null;
@@ -215,6 +242,7 @@
   onMount(() => {
     sessionGuard = createAuthenticatedSessionGuard();
     mounted = sessionGuard.isCurrent();
+    void loadSwipePreferences();
     const narrowViewportQuery = window.matchMedia('(max-width: 767px)');
     const updateNarrowViewport = () => {
       narrowViewport = narrowViewportQuery.matches;
@@ -302,6 +330,26 @@
         isEnabled: () => Boolean(focusSectionTotals && get(emails).length > 0),
         disabledReason: 'Split Inbox is not active',
       },
+      'inbox.toggleSelection': {
+        run: () => toggleTriageSelection(actionTargetId()),
+        isEnabled: selectedActionEnabled,
+        disabledReason: selectedActionUnavailable,
+      },
+      'inbox.selectLoaded': {
+        run: selectLoadedTriageRows,
+        isEnabled: () => datasetAuthoritative && get(emails).length > 0,
+        disabledReason: 'No loaded conversations are available',
+      },
+      'inbox.clearSelection': {
+        run: clearTriageSelection,
+        isEnabled: () => triageSelectionSnapshot.size > 0,
+        disabledReason: 'No conversations are selected',
+      },
+      'inbox.swipeSettings': {
+        run: () => { swipeSettingsOpen = true; },
+        isEnabled: () => moveAvailable,
+        disabledReason: 'Swipe actions are available in the standard Inbox',
+      },
       'inbox.teachSplit': {
         run: openFocusedInboxRulePicker,
         isEnabled: () => Boolean(ruleActionsAvailable() && currentInboxRuleTarget()),
@@ -368,6 +416,7 @@
     emailViewTransitionGuard = null;
     snoozeTarget = null;
     snoozeBusyIds = new Set();
+    clearTriageSelection();
     selectedEmailId.set(null);
     selectedEmail = null;
     selectedThread = null;
@@ -378,6 +427,7 @@
     inboxRuleTarget = null;
     inboxRuleManagerOpen = false;
     inboxRuleAnnouncement = '';
+    swipeSettingsOpen = false;
     emailLoading = false;
     loadingMore = false;
     focusSectionTotals = null;
@@ -645,6 +695,139 @@
     emailLoading = false;
   }
 
+  function publishTriageSelection(snapshot = triageSelectionModel.snapshot()) {
+    triageSelectionSnapshot = snapshot;
+  }
+
+  function clearTriageSelection() {
+    publishTriageSelection(triageSelectionModel.clear());
+  }
+
+  function toggleTriageSelection(emailId, { range = false } = {}) {
+    if (!datasetAuthoritative || emailId === null || emailId === undefined) return;
+    const loadedIds = get(emails).map(email => email.id);
+    publishTriageSelection(range
+      ? triageSelectionModel.selectRange(emailId, loadedIds)
+      : triageSelectionModel.toggle(emailId));
+  }
+
+  function selectLoadedTriageRows() {
+    if (!datasetAuthoritative) return;
+    const ids = get(emails).map(email => email.id);
+    publishTriageSelection(triageSelectionModel.selectLoaded(ids));
+  }
+
+  function reconcileTriageSelection(datasetKey, authoritativeEmails) {
+    triageSelectionModel.setScope({
+      sessionKey: sessionGuard?.userId,
+      datasetKey,
+    });
+    publishTriageSelection(triageSelectionModel.prune(
+      authoritativeEmails.map(email => email.id),
+      { authoritative: true },
+    ));
+  }
+
+  function scopeTriageSelection(datasetKey) {
+    const changed = triageSelectionModel.setScope({
+      sessionKey: sessionGuard?.userId,
+      datasetKey,
+    });
+    if (changed) publishTriageSelection();
+  }
+
+  function removeFromTriageSelection(ids) {
+    const removed = new Set(ids);
+    const remaining = triageSelectionSnapshot.selectedIds.filter(id => !removed.has(id));
+    triageSelectionModel.clear();
+    publishTriageSelection(triageSelectionModel.selectLoaded(remaining));
+  }
+
+  async function loadSwipePreferences() {
+    swipePreferencesLoading = true;
+    try {
+      const preferences = await api.getUIPreferences();
+      if (!inboxSessionIsCurrent()) return;
+      swipePreferences = normalizeSwipeTriagePreferences({
+        left: preferences?.swipe_left_action,
+        right: preferences?.swipe_right_action,
+      });
+      swipePreferencesAvailable = true;
+    } catch (error) {
+      swipePreferencesAvailable = false;
+      if (inboxSessionIsCurrent()) {
+        showToast(error.message || 'Swipe preferences could not be loaded', 'error');
+      }
+    } finally {
+      if (inboxSessionIsCurrent()) swipePreferencesLoading = false;
+    }
+  }
+
+  async function saveSwipePreferences(next) {
+    try {
+      const saved = await api.updateUIPreferences({
+        swipe_left_action: next.left,
+        swipe_right_action: next.right,
+      });
+      if (!inboxSessionIsCurrent()) return false;
+      swipePreferences = normalizeSwipeTriagePreferences({
+        left: saved?.swipe_left_action,
+        right: saved?.swipe_right_action,
+      });
+      swipePreferencesAvailable = true;
+      showToast('Swipe actions saved', 'success');
+      return true;
+    } catch (error) {
+      if (inboxSessionIsCurrent()) {
+        showToast(error.message || 'Swipe actions could not be saved', 'error');
+      }
+      throw error;
+    }
+  }
+
+  async function runSwipeTriageAction(action, emailId) {
+    if (!swipeEnabled) return false;
+    const email = get(emails).find(candidate => Number(candidate.id) === Number(emailId));
+    if (!email) return false;
+    if (action === 'snooze') {
+      await openSnoozePicker(email);
+      return Boolean(snoozeTarget);
+    }
+    const mailAction = action === 'toggle_read'
+      ? (email.is_read ? 'mark_unread' : 'mark_read')
+      : action === 'toggle_star'
+        ? (email.is_starred ? 'unstar' : 'star')
+        : action;
+    if (!['archive', 'mark_read', 'mark_unread', 'star', 'unstar'].includes(mailAction)) return false;
+    const accepted = await handleAction(mailAction, [email.id]);
+    if (accepted) removeFromTriageSelection([email.id]);
+    return accepted;
+  }
+
+  async function runBulkTriageAction({ action }) {
+    if (bulkTriageBusy || !datasetAuthoritative || triageSelectedEmails.length === 0) return;
+    if (action === 'label' || action === 'move') {
+      openLabelPicker(action === 'move' ? 'move' : 'apply', triageSelectedEmails, clearTriageSelection);
+      return;
+    }
+    if (action === 'archive' && triageSelectedEmails.some(email => email.is_spam || email.is_trash)) {
+      showToast('Restore spam or trash results before archiving them', 'info');
+      return;
+    }
+    const ids = triageSelectedEmails.map(email => email.id);
+    const mailAction = action === 'toggle_star'
+      ? (triageSelectedEmails.every(email => email.is_starred) ? 'unstar' : 'star')
+      : action;
+    if (!['archive', 'mark_read', 'mark_unread', 'star', 'unstar', 'spam', 'unspam', 'trash', 'untrash'].includes(mailAction)) return;
+    bulkTriageBusy = true;
+    try {
+      const accepted = await handleAction(mailAction, ids);
+      if (accepted) clearTriageSelection();
+    } finally {
+      bulkTriageBusy = false;
+    }
+  }
+
   function inboxSessionIsCurrent() {
     return mounted && Boolean(sessionGuard?.isCurrent());
   }
@@ -688,6 +871,7 @@
       restoreCommittedDatasetControls();
       return false;
     }
+    if (!append) scopeTriageSelection(snapshot.key);
     const actionReconciliationVersionAtStart = actionReconciliationVersion;
     const requestId = listRequests.begin();
     if (append) {
@@ -804,6 +988,7 @@
         });
       } else {
         emails.set(result.emails);
+        reconcileTriageSelection(snapshot.key, result.emails);
         committedDatasetKey = snapshot.key;
         committedDatasetSnapshot = snapshot;
         if (actionReconciliationVersionAtStart === actionReconciliationVersion) {
@@ -2031,6 +2216,18 @@
     checkingPending={checkingUncertainActions}
     onCheckPending={reconcileUncertainActions}
   />
+  {#if moveAvailable && swipePreferencesAvailable && !$selectedEmailId && triageSelectionSnapshot.size === 0}
+    <div class="flex min-h-11 items-center gap-2 border-b px-3 md:hidden" style="border-color: var(--border-color); background: var(--bg-secondary)">
+      <span class="text-[11px]" style="color: var(--text-secondary)">Swipe left: {SWIPE_TRIAGE_ACTION_DETAILS[swipePreferences.left].label} · right: {SWIPE_TRIAGE_ACTION_DETAILS[swipePreferences.right].label}</span>
+      <button
+        type="button"
+        class="ml-auto inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2 text-xs font-semibold"
+        style="color: var(--color-accent-600)"
+        data-shortcut="inbox.swipeSettings"
+        onclick={() => { swipeSettingsOpen = true; }}
+      ><Icon name="sliders" size={15} />Customize</button>
+    </div>
+  {/if}
   {#if !$searchQuery && $currentMailbox === 'DRAFTS'}
     <WorkingDrafts />
   {/if}
@@ -2052,8 +2249,12 @@
           actionsDisabled={!datasetAuthoritative}
           sectionTotals={focusSectionTotals}
           {selectionEpoch}
+          selectedIds={triageSelectedIds}
           onSelect={handleSelect}
           onFocus={handleRowFocus}
+          onToggleSelection={toggleTriageSelection}
+          onSelectLoaded={selectLoadedTriageRows}
+          onClearSelection={clearTriageSelection}
           onAction={handleAction}
           onLabel={openLabelPicker}
           allowMove={moveAvailable}
@@ -2121,8 +2322,11 @@
         actionsDisabled={!datasetAuthoritative}
         sectionTotals={focusSectionTotals}
         {selectionEpoch}
+        selectedIds={triageSelectedIds}
         onSelect={handleSelect}
         onFocus={handleRowFocus}
+        onToggleSelection={toggleTriageSelection}
+        onClearSelection={clearTriageSelection}
         onAction={handleAction}
         onLabel={openLabelPicker}
         allowMove={moveAvailable}
@@ -2130,6 +2334,11 @@
         onTeachSplit={openInboxRulePicker}
         onManageSplitRules={openInboxRuleManager}
         onLoadMore={handleLoadMore}
+        {swipeEnabled}
+        {swipePreferences}
+        {swipeGeneration}
+        onSwipeAction={runSwipeTriageAction}
+        onLongPress={(emailId) => toggleTriageSelection(emailId)}
       />
     </div>
     {#if $selectedEmailId}
@@ -2171,7 +2380,28 @@
     {/if}
   {/if}
   </div>
+  <InboxBulkActionBar
+    selectedCount={triageSelectionSnapshot.size}
+    busy={bulkTriageBusy}
+    disabled={!datasetAuthoritative}
+    showLabels={true}
+    showMove={moveAvailable}
+    showSnooze={false}
+    showSwipeSettings={moveAvailable}
+    spamMode={triageSelectedSpamState === true ? 'unspam' : (triageSelectedSpamState === false ? 'spam' : 'mixed')}
+    trashMode={triageSelectedTrashState === true ? 'untrash' : (triageSelectedTrashState === false ? 'trash' : 'mixed')}
+    onaction={runBulkTriageAction}
+    onclear={clearTriageSelection}
+    onsettings={() => { swipeSettingsOpen = true; }}
+  />
   <p class="sr-only" aria-live="polite">{inboxRuleAnnouncement}</p>
+  <SwipeActionSettings
+    bind:open={swipeSettingsOpen}
+    preferences={swipePreferences}
+    disabled={swipePreferencesLoading}
+    onsave={saveSwipePreferences}
+    onfocusfallback={focusInboxSelection}
+  />
   <InboxRulePicker
     bind:open={inboxRulePickerOpen}
     email={inboxRuleTarget}

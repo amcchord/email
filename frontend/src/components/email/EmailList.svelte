@@ -1,14 +1,16 @@
 <script>
-  import { onMount } from 'svelte';
   import { slide } from 'svelte/transition';
   import { accountColorMap, accounts, labels as labelsStore, selectedAccountId } from '../../lib/stores.js';
   import Icon from '../common/Icon.svelte';
   import { cleanEmailText, categoryLabel, typeLabel } from '../../lib/emailText.js';
   import { focusEmailRow, shouldFocusAdjacentRow } from '../../lib/emailRowFocus.js';
-  import { selectedBooleanState } from '../../lib/inboxDataset.js';
   import { formatSnoozeWake } from '../../lib/remindLater.js';
   import { safeLabelColor, visibleUserLabels } from '../../lib/labelWorkflows.js';
   import { placementProvenanceLabel } from '../../lib/focusedInbox.js';
+  import {
+    SWIPE_TRIAGE_ACTION_DETAILS,
+    createSwipeTriageController,
+  } from '../../lib/swipeTriage.js';
 
   let {
     emails = [],
@@ -23,8 +25,11 @@
     actionsDisabled = false,
     sectionTotals = null,
     selectionEpoch = 0,
+    selectedIds = new Set(),
     onSelect = null,
     onFocus = null,
+    onToggleSelection = null,
+    onClearSelection = null,
     onAction = null,
     onLabel = null,
     allowMove = false,
@@ -32,30 +37,22 @@
     onTeachSplit = null,
     onManageSplitRules = null,
     onLoadMore = null,
+    swipeEnabled = false,
+    swipePreferences = null,
+    swipeGeneration = null,
+    onSwipeAction = null,
+    onLongPress = null,
   } = $props();
 
   let showAccountDot = $derived($selectedAccountId === null);
 
-  let selectedIds = $state(new Set());
-  let bulkActionPending = $state(false);
   let expandedThreads = $state(new Set());
   let sentinelEl = $state(null);
   let listEl = $state(null);
   let observer = null;
   let previousSelectedId = null;
   let previousEmailIds = new Set();
-  let selectedSpamState = $derived(selectedBooleanState(emails, selectedIds, 'is_spam'));
-  let selectedTrashState = $derived(selectedBooleanState(emails, selectedIds, 'is_trash'));
-  let selectedInProtectedMailbox = $derived(
-    emails.some(email => selectedIds.has(email.id) && (email.is_spam || email.is_trash))
-  );
   let conversationResults = $derived(emails.some(email => email?.conversation_scope));
-
-  $effect(() => {
-    void selectionEpoch;
-    void actionsDisabled;
-    selectedIds = new Set();
-  });
 
   $effect(() => {
     const currentEmailIds = new Set(emails.map(email => email.id));
@@ -132,13 +129,7 @@
   function toggleSelect(id, event) {
     event.stopPropagation();
     if (actionsDisabled) return;
-    const next = new Set(selectedIds);
-    if (next.has(id)) {
-      next.delete(id);
-    } else {
-      next.add(id);
-    }
-    selectedIds = next;
+    onToggleSelection?.(id, { range: Boolean(event.shiftKey) });
   }
 
   function activateRow(event, callback) {
@@ -148,21 +139,141 @@
     }
   }
 
-  async function handleBulkAction(action) {
-    if (actionsDisabled || bulkActionPending || selectedIds.size === 0 || !onAction) return;
-    bulkActionPending = true;
-    try {
-      const accepted = await onAction(action, Array.from(selectedIds));
-      if (accepted) selectedIds = new Set();
-    } finally {
-      bulkActionPending = false;
-    }
-  }
+  function swipeRow(node, initialContext) {
+    let context = initialContext;
+    let longPressTimer = null;
+    let suppressClick = false;
+    let suppressClickTimer = null;
+    const shell = node.parentElement;
+    const controller = createSwipeTriageController({
+      preferences: context.preferences,
+      getDisabled: () => actionsDisabled || !context.enabled,
+      getGeneration: () => context.generation,
+      onCommit: ({ action }) => {
+        suppressNextClick();
+        onSwipeAction?.(action, context.id);
+      },
+    });
 
-  function openBulkLabels(mode) {
-    if (actionsDisabled || bulkActionPending || selectedIds.size === 0 || !onLabel) return;
-    const selected = emails.filter(email => selectedIds.has(email.id));
-    onLabel(mode, selected, () => { selectedIds = new Set(); });
+    function suppressNextClick() {
+      suppressClick = true;
+      if (suppressClickTimer !== null) window.clearTimeout(suppressClickTimer);
+      suppressClickTimer = window.setTimeout(() => {
+        suppressClick = false;
+        suppressClickTimer = null;
+      }, 650);
+    }
+
+    function controllerEvent(event) {
+      const surface = event.target?.closest?.('[data-swipe-surface]');
+      return {
+        pointerId: event.pointerId,
+        pointerType: event.pointerType,
+        isPrimary: event.isPrimary,
+        button: event.button,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        target: surface && node.contains(surface) ? null : event.target,
+        preventDefault: () => event.preventDefault(),
+      };
+    }
+
+    function clearLongPress() {
+      if (longPressTimer !== null) window.clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+
+    function render(state) {
+      const active = state.phase === 'swiping';
+      node.style.transition = active ? 'none' : 'transform 170ms ease';
+      node.style.transform = `translate3d(${state.transformX || 0}px, 0, 0)`;
+      shell.dataset.swipeState = state.armed ? 'armed' : (active ? 'tracking' : 'idle');
+      shell.dataset.swipeAction = active ? state.action : 'none';
+      shell.dataset.swipeDirection = active ? state.direction : '';
+      shell.dataset.swipeLabel = active
+        ? (SWIPE_TRIAGE_ACTION_DETAILS[state.action]?.label || '')
+        : '';
+      shell.style.setProperty('--swipe-progress', String(active ? state.reveal : 0));
+    }
+
+    function handlePointerDown(event) {
+      const accepted = controller.pointerDown(controllerEvent(event));
+      if (!accepted) return;
+      render(controller.getState());
+      try { node.setPointerCapture(event.pointerId); } catch {}
+      clearLongPress();
+      longPressTimer = window.setTimeout(() => {
+        const state = controller.getState();
+        if (!state.tracking || state.phase !== 'pending') return;
+        suppressNextClick();
+        controller.cancel('long-press-selection');
+        render(controller.getState());
+        onLongPress?.(context.id);
+      }, 520);
+    }
+
+    function handlePointerMove(event) {
+      const state = controller.pointerMove(controllerEvent(event));
+      if (state.phase !== 'pending') clearLongPress();
+      render(state);
+    }
+
+    function handlePointerUp(event) {
+      clearLongPress();
+      const wasSwiping = controller.getState().phase === 'swiping';
+      const commit = controller.pointerUp(controllerEvent(event));
+      if (wasSwiping || commit) suppressNextClick();
+      render(controller.getState());
+    }
+
+    function handlePointerCancel(event) {
+      clearLongPress();
+      render(controller.pointerCancel(controllerEvent(event)));
+    }
+
+    function handleLostPointerCapture(event) {
+      clearLongPress();
+      render(controller.lostPointerCapture(controllerEvent(event)));
+    }
+
+    function handleClick(event) {
+      if (!suppressClick) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      suppressClick = false;
+      if (suppressClickTimer !== null) window.clearTimeout(suppressClickTimer);
+      suppressClickTimer = null;
+    }
+
+    node.addEventListener('pointerdown', handlePointerDown);
+    node.addEventListener('pointermove', handlePointerMove);
+    node.addEventListener('pointerup', handlePointerUp);
+    node.addEventListener('pointercancel', handlePointerCancel);
+    node.addEventListener('lostpointercapture', handleLostPointerCapture);
+    node.addEventListener('click', handleClick, true);
+    render(controller.getState());
+
+    return {
+      update(nextContext) {
+        context = nextContext;
+        render(controller.updateContext({
+          disabled: actionsDisabled || !context.enabled,
+          generation: context.generation,
+          preferences: context.preferences,
+        }));
+      },
+      destroy() {
+        clearLongPress();
+        if (suppressClickTimer !== null) window.clearTimeout(suppressClickTimer);
+        controller.cancel('destroyed');
+        node.removeEventListener('pointerdown', handlePointerDown);
+        node.removeEventListener('pointermove', handlePointerMove);
+        node.removeEventListener('pointerup', handlePointerUp);
+        node.removeEventListener('pointercancel', handlePointerCancel);
+        node.removeEventListener('lostpointercapture', handleLostPointerCapture);
+        node.removeEventListener('click', handleClick, true);
+      },
+    };
   }
 
   const categoryColors = {
@@ -281,37 +392,6 @@
 </script>
 
 <div class="flex flex-col h-full">
-  <!-- Toolbar -->
-  {#if selectedIds.size > 0}
-    <div class="flex flex-col items-stretch gap-1 px-3 py-2 border-b shrink-0 sm:flex-row sm:items-center sm:gap-2" style="border-color: var(--border-color); background: var(--bg-tertiary)" aria-busy={bulkActionPending}>
-      <span class="text-xs font-medium shrink-0" style="color: var(--text-secondary)">{selectedIds.size} {conversationResults ? (selectedIds.size === 1 ? 'conversation selected' : 'conversations selected') : 'selected'}</span>
-      <div class="grid grid-cols-3 gap-1 sm:ml-auto sm:flex sm:min-w-0 sm:flex-1 sm:flex-wrap sm:justify-end">
-        <button onclick={() => handleBulkAction('mark_read')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Read</button>
-        <button onclick={() => handleBulkAction('mark_unread')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Unread</button>
-        <button onclick={() => handleBulkAction('archive')} disabled={actionsDisabled || bulkActionPending || selectedInProtectedMailbox} title={selectedInProtectedMailbox ? 'Restore spam or trash results before archiving' : 'Archive selected email'} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Archive</button>
-        <button onclick={() => openBulkLabels('apply')} disabled={actionsDisabled || bulkActionPending || !onLabel} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)" data-shortcut="inbox.label">Label</button>
-        {#if allowMove}
-          <button onclick={() => openBulkLabels('move')} disabled={actionsDisabled || bulkActionPending || !onLabel} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)" data-shortcut="inbox.move">Move</button>
-        {/if}
-        <button onclick={() => handleBulkAction('star')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Star</button>
-        {#if selectedSpamState === true}
-          <button onclick={() => handleBulkAction('unspam')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Not Spam</button>
-        {:else if selectedSpamState === false}
-          <button onclick={() => handleBulkAction('spam')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded text-red-500 disabled:opacity-50">Spam</button>
-        {:else}
-          <button disabled title="Selected results have mixed spam states" class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Spam varies</button>
-        {/if}
-        {#if selectedTrashState === true}
-          <button onclick={() => handleBulkAction('untrash')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded font-medium disabled:opacity-50" style="color: var(--color-accent-600)">Restore</button>
-        {:else if selectedTrashState === false}
-          <button onclick={() => handleBulkAction('trash')} disabled={actionsDisabled || bulkActionPending} class="min-h-11 px-3 text-xs rounded text-red-500 disabled:opacity-50">Trash</button>
-        {:else}
-          <button disabled title="Selected results have mixed trash states" class="min-h-11 px-3 text-xs rounded disabled:opacity-50" style="color: var(--text-secondary)">Trash varies</button>
-        {/if}
-      </div>
-    </div>
-  {/if}
-
   <!-- Email list -->
   <div class="flex-1 overflow-y-auto" bind:this={listEl}>
     {#if loading && emails.length === 0}
@@ -498,7 +578,21 @@
           <!-- ========== NORMAL EMAIL ROW ========== -->
           {@const userLabelState = visibleUserLabels(email, $labelsStore, $accounts, 1)}
           <div
-            class="flex items-start gap-1 px-2 py-2 border-b transition-fast"
+            class="triage-row-shell"
+            data-triage-row-id={email.id}
+            data-swipe-state="idle"
+            data-swipe-action="none"
+            role="row"
+            aria-selected={selectedIds.has(email.id)}
+          >
+          <div
+            use:swipeRow={{
+              id: email.id,
+              enabled: swipeEnabled,
+              preferences: swipePreferences,
+              generation: swipeGeneration,
+            }}
+            class="triage-row-content relative flex items-start gap-1 px-2 py-2 border-b transition-fast"
             class:font-medium={!email.is_read}
             style="border-color: var(--border-subtle); background: {selectedId === email.id ? 'var(--bg-hover)' : 'var(--bg-secondary)'};"
           >
@@ -524,7 +618,7 @@
             <button
               onclick={(e) => { e.stopPropagation(); onAction && onAction(email.is_starred ? 'unstar' : 'star', [email.id]); }}
               disabled={actionsDisabled}
-              class="min-w-11 min-h-11 rounded-md inline-flex items-center justify-center shrink-0 transition-fast disabled:opacity-50"
+              class="hidden min-w-11 min-h-11 rounded-md items-center justify-center shrink-0 transition-fast disabled:opacity-50 sm:inline-flex"
               style="color: {email.is_starred ? 'var(--color-accent-500)' : 'var(--text-tertiary)'}"
               aria-label="{email.star_state === 'some' ? 'Some messages starred; unstar conversation' : (email.is_starred ? 'Unstar' : 'Star')} {cleanEmailText(email.subject) || (email.conversation_scope ? 'conversation' : 'email')}"
             >
@@ -536,7 +630,7 @@
                 type="button"
                 onclick={(event) => { event.stopPropagation(); onSnooze(email); }}
                 disabled={actionsDisabled}
-                class="min-w-11 min-h-11 rounded-md inline-flex items-center justify-center shrink-0 transition-fast disabled:opacity-50"
+                class="hidden min-w-11 min-h-11 rounded-md items-center justify-center shrink-0 transition-fast disabled:opacity-50 sm:inline-flex"
                 style="color: {email.snooze_id ? 'var(--color-accent-600)' : 'var(--text-tertiary)'}"
                 aria-label={email.snooze_id ? `Change reminder for ${cleanEmailText(email.subject) || 'email'}` : `Snooze ${cleanEmailText(email.subject) || 'email'}`}
                 title={email.snooze_id ? 'Change reminder' : 'Snooze'}
@@ -565,6 +659,7 @@
               onfocus={() => onFocus && onFocus(email.id)}
               aria-label="Open {email.conversation_scope ? 'conversation' : 'email'}: {cleanEmailText(email.subject) || 'No subject'}"
               data-email-row-id={email.id}
+              data-swipe-surface
             >
               <span class="flex items-center gap-2 mb-0.5">
                 {#if showAccountDot && email.account_email && $accountColorMap[email.account_email]}
@@ -628,6 +723,15 @@
                 {/if}
               </span>
             </button>
+            <button
+              type="button"
+              class="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md disabled:opacity-50 sm:hidden"
+              style="color: var(--text-tertiary)"
+              disabled={actionsDisabled}
+              aria-label="Actions for {cleanEmailText(email.subject) || 'No subject'}"
+              title="Select for actions"
+              onclick={(event) => { event.stopPropagation(); onLongPress?.(email.id); }}
+            ><Icon name="more-horizontal" size={18} /></button>
             {#if sectionTotals && placementProvenanceLabel(email)}
               <button
                 type="button"
@@ -639,6 +743,7 @@
                 onclick={(event) => { event.stopPropagation(); onTeachSplit?.(email); }}
               >{placementProvenanceLabel(email)}</button>
             {/if}
+          </div>
           </div>
         {/if}
       {/each}
@@ -681,3 +786,55 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .triage-row-shell {
+    --swipe-progress: 0;
+    position: relative;
+    overflow: hidden;
+    background: var(--bg-tertiary);
+  }
+
+  .triage-row-shell::before {
+    content: attr(data-swipe-label);
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 0 1.25rem;
+    background: var(--color-accent-600);
+    color: white;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    opacity: var(--swipe-progress);
+  }
+
+  :global(.triage-row-shell[data-swipe-direction='left'])::before {
+    justify-content: flex-end;
+  }
+
+  :global(.triage-row-shell[data-swipe-action='snooze'])::before {
+    background: rgb(217 119 6);
+  }
+
+  :global(.triage-row-shell[data-swipe-action='toggle_read'])::before {
+    background: rgb(37 99 235);
+  }
+
+  :global(.triage-row-shell[data-swipe-action='toggle_star'])::before {
+    background: rgb(202 138 4);
+  }
+
+  .triage-row-content {
+    position: relative;
+    z-index: 1;
+    touch-action: pan-y;
+    will-change: transform;
+  }
+
+  :global(.triage-row-shell[data-swipe-state='armed'])::before {
+    filter: saturate(1.15);
+  }
+</style>

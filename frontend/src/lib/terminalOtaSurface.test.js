@@ -20,6 +20,19 @@ test('terminal Settings owns the OTA control plane while everyday At a Glance st
   assert.match(component, /never creates an update offer, downloads a firmware artifact, requests a serial port, or writes a device/);
 });
 
+test('terminal Settings defaults to routine device work and progressively discloses advanced controls', async () => {
+  const admin = await source('../pages/Admin.svelte');
+
+  assert.match(admin, /let terminalSection = \$state\('devices'\)/);
+  assert.match(admin, /Devices[\s\S]*Browser displays[\s\S]*General settings[\s\S]*Advanced/);
+  assert.match(admin, /Displays &amp; devices/);
+  assert.match(admin, /Advanced terminal tools/);
+  assert.match(admin, /<details[\s\S]*Install or re-enroll a terminal[\s\S]*<FirmwareInstaller \/>/);
+  assert.match(admin, /<details[\s\S]*OTA diagnostics &amp; attempt history[\s\S]*<TerminalOtaManager/);
+  assert.match(admin, /terminalSection === 'devices'[\s\S]*xl:grid-cols-2/);
+  assert.match(admin, /activeTab === 'terminals' \? 'max-w-6xl' : 'max-w-4xl'/);
+});
+
 test('owner OTA surface makes revision, HIL, rollout, history, detail, and cancel boundaries explicit', async () => {
   const [component, otaApi] = await Promise.all([
     source('./admin/TerminalOtaManager.svelte'),
