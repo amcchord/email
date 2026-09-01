@@ -835,6 +835,23 @@
   let copyHint = $state('');
   let tzInput = $state('');
   let tzSaving = $state(false);
+  let terminalSection = $state('devices');
+
+  const TERMINAL_SECTIONS = [
+    { id: 'devices', label: 'Devices', description: 'Manage content, refresh rate, and health' },
+    { id: 'displays', label: 'Browser displays', description: 'Open or share ready-to-use screens' },
+    { id: 'settings', label: 'General settings', description: 'Timezone and Home Assistant' },
+    { id: 'advanced', label: 'Advanced', description: 'Install, enroll, and diagnose firmware' },
+  ];
+
+  let terminalRecentCount = $derived(terminals.filter(device => {
+    const lastSeen = new Date(device.last_seen_at || '').getTime();
+    return Number.isFinite(lastSeen) && Date.now() - lastSeen < 15 * 60 * 1000;
+  }).length);
+  let terminalAttentionCount = $derived(terminals.filter(device => (
+    ['charge_now', 'stale'].includes(device.battery_health?.status)
+  )).length);
+  let browserDisplayCount = $derived((terminalSettings?.web_displays || []).length);
 
   // Common IANA zones surfaced as quick picks. Users can type any other valid
   // zone (server validates against the system zoneinfo db) into the input.
@@ -1211,7 +1228,7 @@
 </script>
 
 <div class="h-full overflow-y-auto" style="background: var(--bg-primary)">
-  <div class="admin-content max-w-4xl mx-auto p-6">
+  <div class="admin-content mx-auto p-6 {activeTab === 'terminals' ? 'max-w-6xl' : 'max-w-4xl'}">
     <!-- Tabs -->
     <div class="flex gap-1 mb-6 border-b overflow-x-auto" style="border-color: var(--border-color)" aria-label="Settings sections">
       {#each tabs as tab}
@@ -1588,27 +1605,120 @@
 
     {:else if activeTab === 'terminals'}
       <!-- At a Glance browser displays, firmware URLs, and terminal controls -->
-      <div class="space-y-6">
-        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
-          <h3 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">At a Glance</h3>
-          <p class="text-xs" style="color: var(--text-tertiary)">
-            Put your day, dashboard, or clock on a browser display or a SeeedStudio reTerminal (E1001 / E1002 / E1004).
-            Browser displays use ready-to-open links. Legacy e-ink devices share one firmware URL and are labeled by their reported MAC; securely enrolled devices use a revocable per-device URL.
-            See <code style="color: var(--text-secondary)">docs/terminal/</code> for the terminal protocol.
-          </p>
-        </div>
+      <div class="space-y-5">
+        <header class="overflow-hidden rounded-2xl border" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          <div class="p-5 sm:p-6">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em]" style="color: var(--color-accent-600)">At a Glance</p>
+            <h3 class="mt-1 text-xl font-semibold tracking-tight" style="color: var(--text-primary)">Displays &amp; devices</h3>
+            <p class="mt-2 max-w-3xl text-sm leading-6" style="color: var(--text-secondary)">
+              Manage the screens you use every day. Device setup, enrollment policy, and firmware diagnostics are kept in Advanced.
+              Legacy devices remain labeled by their reported MAC.
+            </p>
 
-        <FirmwareInstaller />
-        <TerminalEnrollment bind:this={terminalEnrollmentPanel} />
-        {#if terminalsLoaded}
-          <TerminalOtaManager devices={terminals} onDeviceUpdated={replaceTerminalFromOta} />
+            <div class="mt-5 grid grid-cols-3 gap-2 sm:max-w-xl" aria-label="At a Glance summary">
+              <div class="rounded-xl border px-3 py-2.5" style="background: var(--bg-primary); border-color: var(--border-color)">
+                <div class="text-lg font-semibold" style="color: var(--text-primary)">{terminalsLoaded ? terminals.length : '—'}</div>
+                <div class="text-[11px]" style="color: var(--text-tertiary)">Devices</div>
+              </div>
+              <div class="rounded-xl border px-3 py-2.5" style="background: var(--bg-primary); border-color: var(--border-color)">
+                <div class="text-lg font-semibold" style="color: var(--text-primary)">{terminalsLoaded ? terminalRecentCount : '—'}</div>
+                <div class="text-[11px]" style="color: var(--text-tertiary)">Seen recently</div>
+              </div>
+              <div class="rounded-xl border px-3 py-2.5" style="background: var(--bg-primary); border-color: var(--border-color)">
+                <div class="text-lg font-semibold" style="color: {terminalAttentionCount > 0 ? 'var(--status-warning-text)' : 'var(--text-primary)'}">{terminalsLoaded ? terminalAttentionCount : '—'}</div>
+                <div class="text-[11px]" style="color: var(--text-tertiary)">Need attention</div>
+              </div>
+            </div>
+          </div>
+
+          <nav class="grid grid-cols-2 border-t lg:grid-cols-4" style="border-color: var(--border-color)" aria-label="At a Glance management">
+            {#each TERMINAL_SECTIONS as section}
+              {@const selected = terminalSection === section.id}
+              <button
+                type="button"
+                onclick={() => terminalSection = section.id}
+                aria-pressed={selected}
+                class="min-h-16 border-r border-b px-4 py-3 text-left transition-colors last:border-r-0 lg:border-b-0"
+                style="background: {selected ? 'var(--color-accent-50)' : 'var(--bg-secondary)'}; border-color: var(--border-color); color: {selected ? 'var(--color-accent-700)' : 'var(--text-secondary)'}"
+              >
+                <span class="flex items-center justify-between gap-2 text-xs font-semibold">
+                  {section.label}
+                  {#if section.id === 'devices' && terminalsLoaded}
+                    <span class="rounded-full px-2 py-0.5 text-[10px]" style="background: var(--bg-primary); color: var(--text-tertiary)">{terminals.length}</span>
+                  {:else if section.id === 'displays' && terminalSettingsLoaded}
+                    <span class="rounded-full px-2 py-0.5 text-[10px]" style="background: var(--bg-primary); color: var(--text-tertiary)">{browserDisplayCount}</span>
+                  {/if}
+                </span>
+                <span class="mt-0.5 hidden text-[10px] leading-4 sm:block" style="color: var(--text-tertiary)">{section.description}</span>
+              </button>
+            {/each}
+          </nav>
+        </header>
+
+        {#if terminalSection === 'advanced'}
+          <div class="rounded-xl border p-4 sm:p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+            <h4 class="text-sm font-semibold" style="color: var(--text-primary)">Advanced terminal tools</h4>
+            <p class="mt-1 max-w-3xl text-xs leading-5" style="color: var(--text-tertiary)">
+              These controls are for physical installation, secure enrollment, and OTA recovery. Locked safety gates are expected until a release is fully qualified.
+            </p>
+          </div>
+
+          <details class="group rounded-xl border" style="background: var(--bg-secondary); border-color: var(--border-color)">
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 focus-visible:outline-2 focus-visible:outline-offset-2">
+              <span>
+                <span class="block text-sm font-semibold" style="color: var(--text-primary)">Install or re-enroll a terminal</span>
+                <span class="mt-0.5 block text-[11px]" style="color: var(--text-tertiary)">Verify a signed package and use the browser's physical cable workflow.</span>
+              </span>
+              <span class="text-xs font-semibold" style="color: var(--color-accent-600)"><span class="group-open:hidden">Open</span><span class="hidden group-open:inline">Close</span></span>
+            </summary>
+            <div class="border-t p-3 sm:p-4" style="border-color: var(--border-color)">
+              <FirmwareInstaller />
+            </div>
+          </details>
+
+          <details class="group rounded-xl border" style="background: var(--bg-secondary); border-color: var(--border-color)">
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 focus-visible:outline-2 focus-visible:outline-offset-2">
+              <span>
+                <span class="block text-sm font-semibold" style="color: var(--text-primary)">Enrollment policy details</span>
+                <span class="mt-0.5 block text-[11px]" style="color: var(--text-tertiary)">Review RET1 guarantees, qualification, and the current server gates.</span>
+              </span>
+              <span class="text-xs font-semibold" style="color: var(--color-accent-600)"><span class="group-open:hidden">Open</span><span class="hidden group-open:inline">Close</span></span>
+            </summary>
+            <div class="border-t p-3 sm:p-4" style="border-color: var(--border-color)">
+              <TerminalEnrollment bind:this={terminalEnrollmentPanel} />
+            </div>
+          </details>
+
+          {#if terminalsLoaded}
+            <details class="group rounded-xl border" style="background: var(--bg-secondary); border-color: var(--border-color)">
+              <summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 focus-visible:outline-2 focus-visible:outline-offset-2">
+                <span>
+                  <span class="block text-sm font-semibold" style="color: var(--text-primary)">OTA diagnostics &amp; attempt history</span>
+                  <span class="mt-0.5 block text-[11px]" style="color: var(--text-tertiary)">Inspect read-only OTA status, revision claims, and prior attempts.</span>
+                </span>
+                <span class="text-xs font-semibold" style="color: var(--color-accent-600)"><span class="group-open:hidden">Open</span><span class="hidden group-open:inline">Close</span></span>
+              </summary>
+              <div class="border-t p-3 sm:p-4" style="border-color: var(--border-color)">
+                <TerminalOtaManager devices={terminals} onDeviceUpdated={replaceTerminalFromOta} />
+              </div>
+            </details>
+          {/if}
         {/if}
 
-        {#if !terminalSettingsLoaded}
+        {#if terminalSection !== 'devices' && !terminalSettingsLoaded}
           <div class="rounded-xl border p-5 text-xs" style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-tertiary)">Loading...</div>
         {:else if terminalSettings}
-          <!-- Schedule URLs (one card per panel variant) -->
-          <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          {#if terminalSection === 'advanced'}
+            <!-- Schedule URLs (one card per panel variant) -->
+            <details class="group rounded-xl border" style="background: var(--bg-secondary); border-color: var(--border-color)">
+              <summary class="flex cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 focus-visible:outline-2 focus-visible:outline-offset-2">
+                <span>
+                  <span class="block text-sm font-semibold" style="color: var(--text-primary)">Legacy firmware schedule URLs</span>
+                  <span class="mt-0.5 block text-[11px]" style="color: var(--text-tertiary)">Manual configuration links for terminals that use the shared legacy code.</span>
+                </span>
+                <span class="text-xs font-semibold" style="color: var(--color-accent-600)"><span class="group-open:hidden">Open</span><span class="hidden group-open:inline">Close</span></span>
+              </summary>
+              <div class="border-t p-5" style="border-color: var(--border-color)">
             <div class="flex items-center justify-between mb-3">
               <div>
                 <h4 class="text-sm font-semibold" style="color: var(--text-primary)">Firmware schedule URLs</h4>
@@ -1636,13 +1746,16 @@
                 </div>
               {/each}
             </div>
-          </div>
+              </div>
+            </details>
+          {/if}
 
-          <!-- Browser displays -->
-          <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          {#if terminalSection === 'displays'}
+            <!-- Browser displays -->
+            <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
             <h4 class="text-sm font-semibold" style="color: var(--text-primary)">Browser displays</h4>
             <p class="text-[11px] mt-0.5 mb-3" style="color: var(--text-tertiary)">
-              Open one of these links on a TV, wall display, tablet, or dedicated browser. Each page fits its listed aspect ratio and refreshes automatically.
+              Open a screen on a TV, wall display, tablet, or dedicated browser. Each view fits its listed aspect ratio and refreshes automatically.
             </p>
 
             {#if (terminalSettings.web_displays || []).length > 0}
@@ -1655,7 +1768,7 @@
                       <div class="text-xs font-semibold" style="color: var(--text-primary)">{display.label}</div>
                       <div class="text-[11px] capitalize" style="color: var(--text-tertiary)">{display.orientation} · {display.aspect_ratio}</div>
                     </div>
-                    <code class="block w-full px-2 py-1.5 rounded-md text-[11px] break-all border" style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary)">{displayUrl}</code>
+                    <code class="block w-full truncate rounded-md border px-2 py-1.5 text-[11px]" title={displayUrl} style="background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary)">{displayUrl}</code>
                     <div class="flex flex-wrap gap-2 mt-2">
                       <a
                         href={displayUrl}
@@ -1691,10 +1804,13 @@
             {:else}
               <p class="text-xs" style="color: var(--text-tertiary)">No browser display views are available yet.</p>
             {/if}
-          </div>
+            </div>
+          {/if}
 
-          <!-- Timezone -->
-          <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+          {#if terminalSection === 'settings'}
+            <div class="grid grid-cols-1 gap-5 lg:grid-cols-2 lg:items-start">
+            <!-- Timezone -->
+            <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
             <h4 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Clock timezone</h4>
             <p class="text-xs mb-3" style="color: var(--text-tertiary)">
               IANA timezone used to render the clock on every panel. Pick a preset or type any zone the server's tzdata knows
@@ -1727,8 +1843,8 @@
             {/if}
           </div>
 
-          <!-- Home Assistant -->
-          <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+            <!-- Home Assistant -->
+            <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
             <h4 class="text-sm font-semibold mb-1" style="color: var(--text-primary)">Home Assistant</h4>
             <p class="text-xs mb-4" style="color: var(--text-tertiary)">
               Optional. Future content types (calendar, sensors, dashboards) will pull from this Home Assistant instance.
@@ -1785,11 +1901,14 @@
                 {/if}
               {/if}
             </div>
-          </div>
+            </div>
+            </div>
+          {/if}
         {/if}
 
-        <!-- Devices (one card per device) -->
-        <div class="rounded-xl border p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
+        {#if terminalSection === 'devices'}
+          <!-- Devices (one card per device) -->
+          <div class="rounded-xl border p-4 sm:p-5" style="background: var(--bg-secondary); border-color: var(--border-color)">
           <div class="flex items-center justify-between mb-3">
             <div>
               <h4 class="text-sm font-semibold" style="color: var(--text-primary)">Checked-in devices</h4>
@@ -1804,10 +1923,10 @@
             <div class="text-xs" style="color: var(--text-tertiary)">Loading...</div>
           {:else if terminals.length === 0}
             <div class="rounded-lg border p-4 text-xs" style="background: var(--bg-primary); border-color: var(--border-color); color: var(--text-tertiary)">
-              No devices have checked in yet. Configure your reTerminal firmware to point at one of the URLs above; it will register automatically on its first wake.
+              No devices have checked in yet. Open Advanced to install a terminal or copy a legacy firmware URL.
             </div>
           {:else}
-            <div class="space-y-3">
+            <div class="grid grid-cols-1 gap-3 xl:grid-cols-2">
               {#each terminals as d (d.id)}
                 {@const saving = !!terminalRowSaving[d.id]}
                 {@const isEink = d.content_type === 'eink_dashboard'}
@@ -1958,7 +2077,8 @@
               {/each}
             </div>
           {/if}
-        </div>
+          </div>
+        {/if}
       </div>
 
       <!-- E-Ink device preview modal -->
