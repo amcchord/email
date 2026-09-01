@@ -3,6 +3,49 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-31 — At a Glance terminal settings cleanup
+
+### Scope
+
+Replace the dense terminal administration page with a task-oriented layout,
+then publish the exact validated release to GitHub and production.
+
+### Completed
+
+- Reorganized At a Glance settings into Devices, Browser displays, General
+  settings, and Advanced, with a compact health summary and clearer device
+  cards as the default workflow.
+- Moved installer, enrollment-policy, OTA diagnostics, and legacy schedule
+  details into collapsed Advanced disclosures without changing their safety
+  gates or API contracts.
+- Preserved the pre-existing unrelated edits in the control checkout and
+  replayed only the two-file frontend change onto the current `origin/main`.
+
+### Verification
+
+- The exact release tree passed all 555 frontend tests and a 634-module
+  production build.
+- Signed-in production QA confirmed the default device workflow, browser
+  displays, general settings, collapsed Advanced groups, and the responsive
+  390x844 layout. No terminal, OTA, enrollment, display-link, or settings
+  mutation was performed during QA.
+- Public health returned `ok`, all application services remained active, and
+  no warning-level service logs appeared during the deployment window.
+
+### Production Actions
+
+- Pushed runtime commit `eafffa5ed691973ade7a5f3cf2b32020bb8fc7f0` to
+  GitHub `main`, fast-forwarded the clean production checkout from `800a57f`,
+  and rebuilt the static frontend as `mailapp`.
+- No dependency install, migration, backup, service restart/reload, provider
+  operation, data mutation, or terminal action was required. The closeout
+  journal commit is documentation-only and requires no additional build.
+
+### Next
+
+Collect ordinary user feedback on the simplified At a Glance workflow and
+batch any non-blocking polish into a later bounded release.
+
 ## 2026-08-31 — Goal-period release freeze and user-testing handoff
 
 ### Scope
