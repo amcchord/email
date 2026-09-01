@@ -71,8 +71,7 @@ def test_catalog_rejects_unknown_and_unsupported_combinations():
         resolve_view("mailbox", profile=landscape)
     with pytest.raises(CatalogError, match="does not support"):
         resolve_view("home", profile=portrait)
-    with pytest.raises(CatalogError, match="does not support"):
-        resolve_view("day_ahead", profile=landscape)
+    assert resolve_view("day_ahead", profile=landscape).key == "day_ahead"
 
     day_ahead = resolve_view("day_ahead", profile=portrait)
     with pytest.raises(CatalogError, match="not available"):
@@ -97,7 +96,7 @@ def test_web_display_options_cover_every_supported_combination():
     ]
     options = web_display_options(records)
 
-    assert len(options) == 5
+    assert len(options) == 6
     assert len({option["key"] for option in options}) == len(options)
     assert {
         (option["view"], option["design"], option["profile"])
@@ -105,6 +104,7 @@ def test_web_display_options_cover_every_supported_combination():
     } == {
         ("home", "editorial", "landscape_16_9"),
         ("home", "swiss", "landscape_16_9"),
+        ("day_ahead", "editorial", "landscape_16_9"),
         ("day_ahead", "editorial", "portrait_9_16"),
         ("clock", None, "landscape_16_9"),
         ("clock", None, "portrait_9_16"),

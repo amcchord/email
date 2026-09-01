@@ -42,10 +42,11 @@ async def _render_day_ahead(
     settings: TerminalSettings,
     _view: ViewDefinition,
     _design: DesignDefinition | None,
-    _profile: DisplayProfile,
+    profile: DisplayProfile,
 ) -> Image.Image:
+    variant = SPECTRA6_1200 if profile.orientation == "portrait" else SPECTRA6_800
     body, _ = await render_day_ahead_bmp(
-        SPECTRA6_1200,
+        variant,
         device=None,
         settings=settings,
     )

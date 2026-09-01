@@ -23,7 +23,10 @@ from backend.services.dashboard_snippet import get_current_snippet_dict
 from backend.services.eink.ha_client import empty_ha_shape, fetch_and_shape
 from backend.services.eink.pillow import render_eink_image
 from backend.services.eink.pillow.palette import registered_palette_designs
-from backend.services.eink.pillow.registry import registered_designs_by_content
+from backend.services.eink.pillow.registry import (
+    registered_designs_by_content,
+    registered_profiles_by_content_design,
+)
 from backend.services.terminal.bmp import (
     encode_bw,
     encode_gray16,
@@ -205,11 +208,11 @@ def render_clock_image(
 # Home Assistant, so cache the encoded body briefly per (code, variant) to
 # avoid doing that work twice for the same poll. TTL is far below the hourly
 # cadence so real data changes still surface promptly.
-_DAY_CACHE: "dict[tuple[str, str], tuple[bytes, str, float]]" = {}
+_DAY_CACHE: "dict[tuple[str, str, str], tuple[bytes, str, float]]" = {}
 _DAY_CACHE_TTL = 30.0
 
 
-def _day_cache_get(key: tuple[str, str]) -> Optional[tuple[bytes, str]]:
+def _day_cache_get(key: tuple[str, str, str]) -> Optional[tuple[bytes, str]]:
     entry = _DAY_CACHE.get(key)
     if not entry:
         return None
@@ -220,7 +223,7 @@ def _day_cache_get(key: tuple[str, str]) -> Optional[tuple[bytes, str]]:
     return body, etag
 
 
-def _day_cache_put(key: tuple[str, str], body: bytes, etag: str) -> None:
+def _day_cache_put(key: tuple[str, str, str], body: bytes, etag: str) -> None:
     if len(_DAY_CACHE) > 64:
         _DAY_CACHE.clear()
     _DAY_CACHE[key] = (body, etag, time.time() + _DAY_CACHE_TTL)
@@ -231,30 +234,45 @@ async def render_day_ahead_bmp(
     *,
     device: Optional[TerminalDevice],
     settings: TerminalSettings,
+    palette_override: Optional[str] = None,
 ) -> tuple[bytes, str]:
-    """Assemble the DayShape and encode the portrait Day Ahead frame.
-
-    Portrait-native at 1200x1600; the intended target is the E1004
-    Spectra-6 panel. If some other variant requests it, the NEAREST resize
-    letterboxes/squashes -- acceptable per the spec's fallback note.
-    """
+    """Assemble DayShape and encode its exact registered panel layout."""
     from backend.services.eink.day_client import assemble_day_shape
     from backend.services.eink.pillow.day_ahead import render_day_ahead_image
 
-    cache_key = (settings.code or str(settings.user_id), variant.key)
+    palette = (palette_override or _palette_for_variant(variant)).strip().lower()
+    if palette not in {"six", "bw"}:
+        raise ValueError(f"unsupported Day Ahead palette {palette!r}")
+    cache_key = (
+        settings.code or str(settings.user_id),
+        variant.key,
+        palette,
+    )
     cached = _day_cache_get(cache_key)
     if cached is not None:
         return cached
 
     day = await assemble_day_shape(settings)
-    palette = _palette_for_variant(variant)
     tz_name = (settings.timezone or "UTC").strip() or "UTC"
+    profile_key = (
+        "portrait_9_16"
+        if (variant.width, variant.height) == (1200, 1600)
+        else "landscape_16_9"
+    )
 
     img = await asyncio.to_thread(
-        render_day_ahead_image, "editorial", palette, day, tz_name=tz_name
+        render_day_ahead_image,
+        "editorial",
+        palette,
+        day,
+        tz_name=tz_name,
+        profile_key=profile_key,
     )
     if img.size != (variant.width, variant.height):
-        img = img.resize((variant.width, variant.height), Image.NEAREST)
+        raise ValueError(
+            "No exact Day Ahead renderer for "
+            f"{variant.width}x{variant.height} ({variant.key})"
+        )
 
     # Dither OFF -- same rationale as the HA dashboard: the design is built
     # from flat palette colours + drawn dot-grid halftones, and FS dither
@@ -282,6 +300,7 @@ _VALID_DESIGNS = set(DESIGNS)
 
 validate_catalog_design_implementations(
     design_implementations=registered_designs_by_content(),
+    profile_implementations=registered_profiles_by_content_design(),
     palette_designs=registered_palette_designs(),
 )
 

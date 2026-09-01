@@ -82,6 +82,7 @@ async def test_experience_returns_only_catalog_metadata_and_owned_summaries(
     } == {
         ("home", "editorial", "landscape_16_9"),
         ("home", "swiss", "landscape_16_9"),
+        ("day_ahead", "editorial", "landscape_16_9"),
         ("day_ahead", "editorial", "portrait_9_16"),
         ("clock", None, "landscape_16_9"),
         ("clock", None, "portrait_9_16"),

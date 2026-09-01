@@ -1963,7 +1963,7 @@
 
       <!-- E-Ink device preview modal -->
       {#if previewDevice}
-        {@const isPortraitPreview = (previewDevice.content_type || '') === 'day_ahead'}
+        {@const isPortraitPreview = previewDevice.variant === 'spectra6_1200x1600'}
         <div
           class="fixed inset-0 z-50 flex items-center justify-center p-4"
           style="background: rgba(0,0,0,0.55)"

@@ -1941,8 +1941,10 @@ the public URL cannot override them. It accepts only:
 |-------|--------|---------|
 | `refresh` | 30–3600 seconds (values are clamped) | 300 |
 
-Current layout contracts keep the Home Dashboard on 16:9 and Day Ahead on
-9:16; the Clock supports both. PNG responses are marked private and must be
+Current layout contracts keep the Home Dashboard on 16:9, provide Day Ahead
+as exact registered 16:9 and 9:16 compositions, and support both profiles for
+the Clock. The 16:9 Day Ahead adapter is the native 800×480 E1002 layout; it is
+not a resized portrait frame. PNG responses are marked private and must be
 revalidated by clients.
 
 The authenticated Settings UI uses the normal browser-session API:

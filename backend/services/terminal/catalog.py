@@ -97,7 +97,7 @@ VIEWS: dict[str, ViewDefinition] = {
         label="Day Ahead",
         content_type="day_ahead",
         design_keys=("editorial",),
-        profile_keys=("portrait_9_16",),
+        profile_keys=("landscape_16_9", "portrait_9_16"),
         default_design="editorial",
     ),
     "clock": ViewDefinition(
@@ -137,6 +137,7 @@ def _declared_designs_by_content() -> dict[str, frozenset[str]]:
 def validate_catalog_design_implementations(
     *,
     design_implementations: Mapping[str, Collection[str]],
+    profile_implementations: Mapping[tuple[str, str], Collection[str]],
     palette_designs: Collection[str],
 ) -> None:
     """Require exact catalog, Pillow renderer, and palette registration.
@@ -164,6 +165,22 @@ def validate_catalog_design_implementations(
         raise CatalogImplementationError(
             "At a Glance Pillow registry does not match catalog view/design "
             f"pairs: catalog={declared_pairs!r}, renderers={implemented_pairs!r}"
+        )
+
+    declared_profiles = {
+        (view.content_type, design_key): frozenset(view.profile_keys)
+        for view in VIEWS.values()
+        for design_key in view.design_keys
+    }
+    implemented_profiles = {
+        pair: frozenset(profiles)
+        for pair, profiles in profile_implementations.items()
+    }
+    if implemented_profiles != declared_profiles:
+        raise CatalogImplementationError(
+            "At a Glance Pillow profile registry does not match catalog "
+            f"combinations: catalog={declared_profiles!r}, "
+            f"renderers={implemented_profiles!r}"
         )
 
 

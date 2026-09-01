@@ -1,8 +1,9 @@
-"""Top-level entry point for the portrait "Day Ahead" e-ink renderer.
+"""Top-level entry point for the profile-aware "Day Ahead" e-ink renderer.
 
 Sibling of ``render.py`` (the 800x480 HA dashboard dispatcher). The shared
 registry owns canvas geometry and exact content/design dispatch; this entry
-point retains the portrait-specific public API.
+point keeps portrait as its compatibility default while supporting exact
+registered landscape output for the E1002.
 """
 from __future__ import annotations
 
@@ -19,15 +20,20 @@ def render_day_ahead_image(
     day_shape: dict,
     *,
     tz_name: Optional[str] = None,
+    profile_key: str = "portrait_9_16",
 ) -> Image.Image:
-    """Render the Day Ahead screen to a 1200x1600 RGB Pillow image.
+    """Render the Day Ahead screen at an exact registered display profile.
 
     `design`  : exact registered design key (currently 'editorial').
     `palette` : exact registered palette key ('six' | 'bw').
     `day_shape`: the dict from `day_client.assemble_day_shape`.
     `tz_name` : IANA timezone (passed through for any tz-aware formatting).
     """
-    renderer = get_design_renderer("day_ahead", design)
+    renderer = get_design_renderer(
+        "day_ahead",
+        design,
+        profile_key=profile_key,
+    )
     palette_name = (palette or "").strip().lower()
     P = get_palette(renderer.design_key, palette_name)
     img = Image.new("RGB", renderer.canvas_size, color=P.bg)

@@ -1,4 +1,4 @@
-"""Tests for the portrait "Day Ahead" e-ink display.
+"""Tests for the portrait and E1002 landscape Day Ahead displays.
 
 Covers the pure pieces (no DB / no Home Assistant):
 - the TRMNL pixel-font loader stays on native bitmap sizes,
@@ -15,13 +15,17 @@ from __future__ import annotations
 import io
 from datetime import datetime, timezone
 
+import pytest
 from PIL import Image
 
+from backend.models.terminal import TerminalSettings
 from backend.services.eink import day_client as dc
 from backend.services.eink.pillow import dayahead_editorial as de
 from backend.services.eink.pillow import fonts
 from backend.services.eink.pillow.day_ahead import render_day_ahead_image
 from backend.services.terminal.bmp import encode_spectra6
+from backend.services.terminal.renderer import _DAY_CACHE, render_day_ahead_bmp
+from backend.services.terminal.variants import SPECTRA6_800
 
 
 def M(h, m=0):
@@ -248,6 +252,50 @@ def _allday_heavy_day():
     return day
 
 
+def _landscape_stress_day():
+    """Worst-case labels and counts for the bounded 800x480 composition."""
+
+    day = _busy_day()
+    day["date"] = {
+        "weekday": "WEDNESDAY",
+        "monthDay": "SEPTEMBER 30",
+        "year": "2026",
+        "dow3": "WED",
+    }
+    day["events"][0]["title"] = (
+        "Quarterly operating review and long-range planning session"
+    )
+    day["events"][0]["loc"] = "Executive conference room with a long name"
+    day["events"][1]["title"] = "International design systems working session"
+    day["priorities"]["items"][0]["title"] = (
+        "Prepare the exceptionally detailed operating review packet"
+    )
+    day["priorities"]["items"][0]["detail"] = (
+        "11 AM · conference room · twelve attendees"
+    )
+    day["weather"]["now"] = {
+        "temp": -12,
+        "code": "rain",
+        "label": "Thunderstorms likely through the afternoon",
+    }
+    day["weather"]["hi"] = 105
+    day["weather"]["lo"] = -18
+    day["mail"] = {
+        "needsReply": {"count": 999, "top": []},
+        "awaiting": 888,
+        "unread": 9999,
+    }
+    day["house"]["advisory"] = (
+        "Several windows and the detached garage door are still open"
+    )
+    day["tomorrow"]["first"] = {
+        "start": "10:30",
+        "title": "A very long first appointment title for tomorrow",
+        "loc": "",
+    }
+    return day
+
+
 def _unique_colours(body: bytes) -> int:
     dec = Image.open(io.BytesIO(body)).convert("RGB")
     return len(dec.getcolors(maxcolors=100000))
@@ -262,6 +310,28 @@ def test_render_size_and_palette_conformance():
         assert _unique_colours(body) <= 6
 
 
+def test_e1002_landscape_render_size_and_palette_conformance():
+    for day in (
+        _busy_day(),
+        _calm_day(),
+        _empty_day(),
+        _allday_heavy_day(),
+        _landscape_stress_day(),
+    ):
+        img = render_day_ahead_image(
+            "editorial",
+            "six",
+            day,
+            tz_name=day["tz"],
+            profile_key="landscape_16_9",
+        )
+        assert img.size == (800, 480)
+        body = encode_spectra6(img, width=800, height=480, dither=False)
+        assert len(body) == 192118
+        assert Image.open(io.BytesIO(body)).size == (800, 480)
+        assert _unique_colours(body) <= 6
+
+
 def test_render_is_deterministic_for_stable_etag():
     # Same DayShape -> byte-identical BMP -> identical ETag within the hour.
     day = _busy_day()
@@ -271,6 +341,32 @@ def test_render_is_deterministic_for_stable_etag():
                         width=1200, height=1600, dither=False)
     assert a == b
 
+    landscape_a = encode_spectra6(
+        render_day_ahead_image(
+            "editorial",
+            "six",
+            day,
+            tz_name=day["tz"],
+            profile_key="landscape_16_9",
+        ),
+        width=800,
+        height=480,
+        dither=False,
+    )
+    landscape_b = encode_spectra6(
+        render_day_ahead_image(
+            "editorial",
+            "six",
+            day,
+            tz_name=day["tz"],
+            profile_key="landscape_16_9",
+        ),
+        width=800,
+        height=480,
+        dither=False,
+    )
+    assert landscape_a == landscape_b
+
 
 def test_bw_palette_renders_clean():
     day = _busy_day()
@@ -279,3 +375,46 @@ def test_bw_palette_renders_clean():
     assert len(body) == 960118
     # B&W collapses every accent to ink -> at most 2 colours on the panel.
     assert _unique_colours(body) <= 2
+
+    landscape = render_day_ahead_image(
+        "editorial",
+        "bw",
+        day,
+        tz_name=day["tz"],
+        profile_key="landscape_16_9",
+    )
+    landscape_body = encode_spectra6(
+        landscape,
+        width=800,
+        height=480,
+        dither=False,
+    )
+    assert len(landscape_body) == 192118
+    assert _unique_colours(landscape_body) <= 2
+
+
+@pytest.mark.asyncio
+async def test_e1002_device_path_uses_native_landscape_renderer(monkeypatch):
+    day = _busy_day()
+
+    async def assemble(_settings):
+        return day
+
+    monkeypatch.setattr(dc, "assemble_day_shape", assemble)
+    _DAY_CACHE.clear()
+    settings = TerminalSettings(
+        user_id=7,
+        code="unit-day-ahead-e1002",
+        timezone=day["tz"],
+    )
+
+    body, etag = await render_day_ahead_bmp(
+        SPECTRA6_800,
+        device=None,
+        settings=settings,
+    )
+
+    assert len(body) == SPECTRA6_800.bytes_total == 192118
+    assert Image.open(io.BytesIO(body)).size == (800, 480)
+    assert _unique_colours(body) <= 6
+    assert etag.startswith('"img-') and etag.endswith('"')

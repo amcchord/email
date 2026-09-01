@@ -73,7 +73,11 @@ def render_eink_image(
     `ha_shape`: HAShape dict; None falls through to the calm/quiet state.
     `tz_name` : IANA timezone for the clock in the masthead/header.
     """
-    renderer = get_design_renderer("eink_dashboard", design)
+    renderer = get_design_renderer(
+        "eink_dashboard",
+        design,
+        profile_key="landscape_16_9",
+    )
     design = renderer.design_key
     palette_name = (palette or "").strip().lower()
     P = get_palette(design, palette_name)

@@ -824,16 +824,22 @@ async def preview_device_png(
 
     settings = await _get_or_create_settings(db, user)
 
-    # The Day Ahead design is portrait-native (1200x1600); everything else
-    # previews at the landscape 800x480 panel. Honor the ?palette= override
-    # (the UI's "show as B&W" toggle) without waiting for a real BW check-in.
+    # Preview every Day Ahead layout at the checked-in device's real geometry.
+    # Honor the ?palette= override without changing that geometry.
     is_day_ahead = (device.content_type or "") == "day_ahead"
     bw = bool(palette and palette.lower() == "bw")
     if is_day_ahead:
-        variant = VARIANTS.get("bw") if bw else VARIANTS.get("spectra6_1200x1600")
-        variant = variant or next(iter(VARIANTS.values()))
+        variant = VARIANTS.get(device.variant or "") if device.variant else None
+        variant = (
+            variant
+            or VARIANTS.get("spectra6_800x480")
+            or next(iter(VARIANTS.values()))
+        )
         body, _etag = await render_day_ahead_bmp(
-            variant, device=device, settings=settings
+            variant,
+            device=device,
+            settings=settings,
+            palette_override="bw" if bw else ("six" if palette else None),
         )
     else:
         variant = VARIANTS.get(device.variant or "") if device.variant else None
