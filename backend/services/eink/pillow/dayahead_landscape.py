@@ -410,6 +410,7 @@ def _draw_schedule(
         f"LATER TODAY · {len(upcoming)}",
         P,
     )
+    y += 6
 
     if allday:
         all_font = _tr(12, bold=True)
@@ -439,7 +440,7 @@ def _draw_schedule(
         )
         return
 
-    row_h = 46
+    row_h = 50
     time_right = LEFT_X0 + 71
     body_x = LEFT_X0 + 94
     time_font = _serif(24, "bold")
@@ -453,7 +454,7 @@ def _draw_schedule(
         if index:
             hr(draw, LEFT_X0, LEFT_X1, row_top, thickness=1, fill=P.rule)
         color = _accent(P, KIND_ACCENT.get(event.get("kind"), "ink"))
-        time_base = row_top + 6 + font_metrics(time_font).ascent
+        time_base = row_top + 7 + font_metrics(time_font).ascent
         draw_text_bl_right(
             draw,
             (time_right, time_base),
@@ -463,7 +464,7 @@ def _draw_schedule(
         )
         draw_text_bl(
             draw,
-            (time_right - text_width(mer_font, event.get("startMer") or ""), row_top + 42),
+            (time_right - text_width(mer_font, event.get("startMer") or ""), row_top + 45),
             event.get("startMer") or "",
             mer_font,
             P.ink,
@@ -471,7 +472,7 @@ def _draw_schedule(
         diamond(draw, body_x - 13, time_base - 8, 10, color)
         draw_text_clipped_bl(
             draw,
-            (body_x, row_top + 5 + font_metrics(title_font).ascent),
+            (body_x, row_top + 7 + font_metrics(title_font).ascent),
             event.get("title") or "Untitled",
             title_font,
             P.ink,
@@ -487,7 +488,7 @@ def _draw_schedule(
         )
         draw_text_clipped_bl(
             draw,
-            (body_x, row_top + 25 + font_metrics(meta_font).ascent),
+            (body_x, row_top + 29 + font_metrics(meta_font).ascent),
             meta,
             meta_font,
             P.ink,
