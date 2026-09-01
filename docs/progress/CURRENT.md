@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-08-31
+Last updated: 2026-09-01
 
 ## Active Objective
 
@@ -15,6 +15,14 @@ the pause.
 
 ## Baseline
 
+- The deployed Gmail tombstone sync recovery application/runtime is
+  `e579e5c324bd79d3e07b6679ce9b9ef3907057a2`. A provider-confirmed per-message
+  404 now resolves as an exact-account local tombstone inside the existing
+  sync transaction; rate limits, 5xx responses, malformed results, and true
+  omissions still pin the checkpoint without mutation. All four connected
+  accounts completed normal incremental sync with cleared errors by 21:18 UTC
+  on 2026-09-01. The API and both workers are active with zero automatic
+  restarts, public health is `ok`, and Alembic remains `c1d2e3f4a5b6 (head)`.
 - The complete goal-period product summary, milestone index, verification
   record, intentional limits, and user-testing guide are in
   `GOAL_PERIOD_RELEASE_NOTES_2026-08-30_TO_2026-08-31.md`. The running

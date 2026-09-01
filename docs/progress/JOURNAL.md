@@ -3,6 +3,65 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-09-01 — Gmail tombstone sync recovery
+
+### Scope
+
+Resolve persistent production Gmail batch-completeness failures without
+weakening complete-unit checkpoints, then commit, deploy, and verify normal
+account convergence.
+
+### Completed
+
+- Traced the repeated missing-result counts to stable per-message Gmail 404
+  callbacks. The batch layer discarded those terminal responses together with
+  transient failures, so affected checkpoints could never complete.
+- Added a typed provider-confirmed not-found outcome. Incremental history replay
+  and full scan now resolve that outcome by deleting only the exact account's
+  matching local row inside the existing transaction.
+- Preserved the lossless checkpoint boundary: rate limits, 5xx responses,
+  malformed or duplicate results, unexpected IDs, and true omissions still
+  fail the unit before any tombstone mutation or checkpoint advance.
+- Replaced per-message batch error logging with aggregate status-only logging so
+  provider message identifiers are not repeated in new operational logs.
+
+### Verification
+
+- Focused sync coverage passed 27 tests, including real batch callback mapping,
+  incremental and full-sync tombstone convergence, and incomplete-batch
+  rollback before mutation.
+- The one post-freeze `git diff --check && make check` passed 855 backend tests
+  with 75 expected skips, all 555 frontend tests, and the 634-module production
+  build.
+- Bounded P0/P1 review found no blocker. The change adds no dependency, schema,
+  frontend, Caddy, systemd, permission, OAuth-scope, or provider-write change.
+
+### Production Actions
+
+- Pushed and deployed exact application/runtime
+  `e579e5c324bd79d3e07b6679ce9b9ef3907057a2`, fast-forwarding production from
+  `73396b3699763c33adf0dc2d2753a9b6c3e5eae6`.
+- Restarted only `mailapp`, `mailworker`, and `mailworker-cron`. The prior API
+  again exceeded its graceful-stop window before systemd completed the grouped
+  restart; both workers stopped cleanly and the replacement processes became
+  active together at 21:12:33 UTC with zero automatic restarts.
+- The first cron pass completed three accounts and safely reset one sync state
+  interrupted by the deployment. Its ordinary five-minute cooldown retry then
+  completed the final account. At 21:18 UTC all four sync statuses were
+  `completed`, all errors were clear, all seven checked services were active,
+  public health was `ok`, production Git was exact and clean, and Alembic
+  remained `c1d2e3f4a5b6 (head)`.
+- No migration, dependency install, frontend build, Caddy/systemd change,
+  OAuth change, or Gmail provider mutation was performed. Normal sync removed
+  only local rows that Gmail explicitly reported as nonexistent.
+
+### Next
+
+Observe normal account freshness during user testing. If rollback is needed,
+deploy a reviewed revert of `e579e5c` and restart the same three services; no
+schema rollback is required. Investigate the recurring Uvicorn graceful-stop
+timeout separately from this completed sync recovery.
+
 ## 2026-08-31 — Native E1002 Day Ahead deployment
 
 ### Scope

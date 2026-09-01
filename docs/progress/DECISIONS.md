@@ -1071,3 +1071,23 @@ add a new entry that explicitly supersedes the old one.
   session boundaries and prunes rows that disappear from the authoritative
   result set. Additional swipe actions or persistent selection require a new
   safety and ownership review rather than widening this contract in place.
+
+## D-053 — Provider-confirmed Gmail 404s are resolved sync tombstones
+
+- Date: 2026-09-01
+- Status: accepted
+- Decision: Distinguish an explicit per-message Gmail `404 notFound` callback
+  from an absent batch callback or other provider failure. Carry the 404 as a
+  typed result through complete-batch validation, then delete only the exact
+  account's matching local row inside the existing sync transaction. Preserve
+  every existing complete-unit and compare-and-swap checkpoint boundary.
+- Reason: A permanently deleted Gmail message cannot be fetched on a later
+  retry. Treating its explicit 404 like a missing callback pins the same
+  history checkpoint forever, while broadly accepting partial batches could
+  skip mail after transient, quota, malformed, or provider failures.
+- Consequence: Incremental and full sync can converge across provider deletion
+  races without inventing message content or advancing over unresolved work.
+  Rate limits, 5xx responses, malformed or duplicate results, unexpected IDs,
+  and true omissions continue to fail before mutation or checkpoint advance.
+  Any future terminal provider outcome requires its own explicit typed contract
+  rather than widening the 404 rule.
