@@ -6,6 +6,7 @@ import random
 import re
 import mimetypes
 import httplib2
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from email import encoders
 from email.mime.base import MIMEBase
@@ -40,6 +41,13 @@ BATCH_INTERNAL_SIZE = 20  # messages per batch HTTP request
                           # 50 consistently triggers "Too many concurrent requests".
 BATCH_PAUSE = 0.5         # seconds between sub-batches
 PAGE_PAUSE = 0.5          # seconds between list pages
+
+
+@dataclass(frozen=True)
+class GmailMessageNotFound:
+    """A requested Gmail message that the provider says no longer exists."""
+
+    message_id: str
 
 
 def _decode_attachment_data(data: str, max_bytes: int | None = None) -> bytes:
@@ -78,6 +86,14 @@ def _is_rate_limit_error(error):
         if "quota" in error_str or "rate" in error_str or "limit" in error_str:
             return True
     return False
+
+
+def _is_not_found_error(error):
+    """Return whether one Gmail batch item was authoritatively not found."""
+    return (
+        isinstance(error, HttpError)
+        and getattr(getattr(error, "resp", None), "status", 0) == 404
+    )
 
 
 def _parse_retry_after(error) -> float:
@@ -253,13 +269,18 @@ class GmailService:
             raise RuntimeError("Gmail profile returned an invalid historyId")
         return str(numeric_history_id)
 
-    async def batch_get_messages(self, message_ids: list[str], format_type: str = "full") -> list[dict]:
+    async def batch_get_messages(
+        self,
+        message_ids: list[str],
+        format_type: str = "full",
+    ) -> list[dict | GmailMessageNotFound]:
         """Batch get messages with rate limit handling and Retry-After support.
 
-        When individual items inside a batch are rate-limited, they are
-        omitted rather than retried one-by-one (which would amplify quota
-        usage). Callers must treat missing responses as an incomplete unit
-        and retry without advancing their sync checkpoint.
+        Provider-confirmed 404 responses are returned as typed tombstones so
+        sync can resolve the requested ID as deleted. Rate-limited and other
+        failed items are omitted rather than retried one-by-one (which would
+        amplify quota usage). Callers must treat those missing responses as an
+        incomplete unit and retry without advancing their sync checkpoint.
 
         If rate limiting is severe (>= 50% of items in a sub-batch, or 3+
         consecutive sub-batches with any rate-limited items), raises the
@@ -283,19 +304,25 @@ class GmailService:
             for attempt in range(MAX_RETRIES):
                 batch = service.new_batch_http_request()
                 batch_results = {}
+                not_found_ids = []
                 rate_limited_ids = []
+                other_errors = []
                 last_rate_error = None
 
                 def make_callback(req_id):
                     def callback(request_id, response, exception):
                         nonlocal last_rate_error
                         if exception:
-                            if _is_rate_limit_error(exception):
+                            if _is_not_found_error(exception):
+                                not_found_ids.append(req_id)
+                                batch_results[req_id] = GmailMessageNotFound(req_id)
+                            elif _is_rate_limit_error(exception):
                                 rate_limited_ids.append(req_id)
                                 last_rate_error = exception
+                                batch_results[req_id] = None
                             else:
-                                logger.error(f"Batch get error for {req_id}: {exception}")
-                            batch_results[req_id] = None
+                                other_errors.append(exception)
+                                batch_results[req_id] = None
                         else:
                             batch_results[req_id] = response
                     return callback
@@ -322,6 +349,30 @@ class GmailService:
                     batch_results[mid] for mid in batch_ids
                     if batch_results.get(mid) is not None
                 ])
+
+                if not_found_ids:
+                    logger.info(
+                        "Batch: %s of %s requested messages no longer exist in Gmail",
+                        len(not_found_ids),
+                        len(batch_ids),
+                    )
+
+                if other_errors:
+                    error_kinds = sorted({
+                        (
+                            f"HTTP {getattr(error.resp, 'status', 0)}"
+                            if isinstance(error, HttpError)
+                            else type(error).__name__
+                        )
+                        for error in other_errors
+                    })
+                    logger.warning(
+                        "Batch: %s of %s items failed with unresolved provider "
+                        "errors (%s)",
+                        len(other_errors),
+                        len(batch_ids),
+                        ", ".join(error_kinds),
+                    )
 
                 # If some individual items were rate-limited, check severity
                 if rate_limited_ids:

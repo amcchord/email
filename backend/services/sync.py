@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text, func, update, delete
 from backend.models.email import Email, Attachment, EmailLabel
 from backend.models.account import GoogleAccount, SyncStatus
-from backend.services.gmail import GmailService
+from backend.services.gmail import GmailMessageNotFound, GmailService
 from backend.services.credentials import get_google_credentials
 from backend.utils.security import encrypt_value
 from backend.database import async_session
@@ -131,16 +131,21 @@ def _decode_full_sync_checkpoint(value: str | None) -> FullSyncCheckpoint | None
 
 def _require_complete_message_batch(
     requested_ids: list[str],
-    messages: list[dict],
-) -> list[dict]:
+    messages: list[dict | GmailMessageNotFound],
+) -> list[dict | GmailMessageNotFound]:
     """Return messages in request order, or fail if Gmail returned a partial batch."""
     requested = list(requested_ids)
     requested_set = set(requested)
-    messages_by_id = {
-        str(message.get("id")): message
-        for message in messages
-        if isinstance(message, dict) and message.get("id")
-    }
+    messages_by_id = {}
+    for message in messages:
+        if isinstance(message, GmailMessageNotFound):
+            message_id = message.message_id
+        elif isinstance(message, dict) and message.get("id"):
+            message_id = str(message["id"])
+        else:
+            continue
+        if message_id:
+            messages_by_id[message_id] = message
     returned_ids = set(messages_by_id)
     missing_count = len(requested_set - returned_ids)
     unexpected_count = len(returned_ids - requested_set)
@@ -183,6 +188,18 @@ class EmailSyncService:
         if not account:
             raise ValueError(f"Account {self.account_id} not found")
         return account
+
+    async def _delete_local_message(self, db: AsyncSession, message_id: str):
+        """Delete one exact account-owned local row if it still exists."""
+        result = await db.execute(
+            select(Email).where(
+                Email.gmail_message_id == message_id,
+                Email.account_id == self.account_id,
+            )
+        )
+        email = result.scalar_one_or_none()
+        if email:
+            await db.delete(email)
 
     async def _create_gmail_service(self, db: AsyncSession, account: GoogleAccount) -> GmailService:
         """Create a GmailService with credentials resolved from the DB."""
@@ -325,15 +342,7 @@ class EmailSyncService:
                 messages_to_fetch.add(label_removed["message"]["id"])
 
         for message_id in sorted(messages_to_delete):
-            result = await db.execute(
-                select(Email).where(
-                    Email.gmail_message_id == message_id,
-                    Email.account_id == self.account_id,
-                )
-            )
-            email = result.scalar_one_or_none()
-            if email:
-                await db.delete(email)
+            await self._delete_local_message(db, message_id)
 
         fetch_list = sorted(messages_to_fetch - messages_to_delete)
         if fetch_list:
@@ -342,10 +351,13 @@ class EmailSyncService:
             for message_id, message in zip(fetch_list, messages):
                 try:
                     async with db.begin_nested():
-                        parsed = GmailService.parse_message(message)
-                        email_id, is_new = await self._upsert_email(db, parsed)
-                        if is_new:
-                            new_email_ids.append(email_id)
+                        if isinstance(message, GmailMessageNotFound):
+                            await self._delete_local_message(db, message_id)
+                        else:
+                            parsed = GmailService.parse_message(message)
+                            email_id, is_new = await self._upsert_email(db, parsed)
+                            if is_new:
+                                new_email_ids.append(email_id)
                 except Exception as message_error:
                     logger.warning(
                         "%s could not process message %s: %s",
@@ -556,10 +568,13 @@ class EmailSyncService:
                             for message_id, message in zip(batch_ids, fetched):
                                 try:
                                     async with db.begin_nested():
-                                        parsed = GmailService.parse_message(message)
-                                        email_id, is_new = await self._upsert_email(db, parsed)
-                                        if is_new:
-                                            new_email_ids.append(email_id)
+                                        if isinstance(message, GmailMessageNotFound):
+                                            await self._delete_local_message(db, message_id)
+                                        else:
+                                            parsed = GmailService.parse_message(message)
+                                            email_id, is_new = await self._upsert_email(db, parsed)
+                                            if is_new:
+                                                new_email_ids.append(email_id)
                                 except Exception as message_error:
                                     logger.warning(
                                         "Full sync could not process message %s: %s",

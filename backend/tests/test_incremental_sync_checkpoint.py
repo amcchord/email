@@ -2,10 +2,11 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
+from googleapiclient.errors import HttpError
 
 import backend.services.gmail as gmail_module
 import backend.services.sync as sync_module
-from backend.services.gmail import GmailService
+from backend.services.gmail import GmailMessageNotFound, GmailService
 from backend.services.sync import (
     EmailSyncService,
     FullSyncCheckpointConflict,
@@ -251,11 +252,13 @@ class _FullFlowGmail:
         pages=None,
         history_results=None,
         profile_history_ids=None,
+        batch_results=None,
         list_error=None,
     ):
         self.pages = pages or {None: ([], None, 0)}
         self.history_results = list(history_results or [])
         self.profile_history_ids = list(profile_history_ids or [])
+        self.batch_results = list(batch_results or [])
         self.list_error = list_error
         self.list_page_tokens = []
         self.history_baselines = []
@@ -275,6 +278,8 @@ class _FullFlowGmail:
 
     async def batch_get_messages(self, message_ids):
         self.requested_batches.append(list(message_ids))
+        if self.batch_results:
+            return self.batch_results.pop(0)
         return [_message(message_id) for message_id in message_ids]
 
     async def get_history(self, baseline, max_retries):
@@ -360,6 +365,77 @@ def _replay_checkpoint(baseline: str = "100") -> str:
     ))
 
 
+class _GeneratedBatchRequest:
+    def __init__(self, outcomes):
+        self.outcomes = outcomes
+        self.requests = []
+
+    def add(self, request, *, request_id, callback):
+        self.requests.append((request, request_id, callback))
+
+    def execute(self):
+        for request, request_id, callback in self.requests:
+            outcome = self.outcomes[request["id"]]
+            if isinstance(outcome, Exception):
+                callback(request_id, None, outcome)
+            else:
+                callback(request_id, outcome, None)
+
+
+class _GeneratedBatchApi:
+    def __init__(self, outcomes):
+        self.outcomes = outcomes
+        self.batch = None
+
+    def users(self):
+        return self
+
+    def messages(self):
+        return self
+
+    def get(self, **kwargs):
+        return kwargs
+
+    def new_batch_http_request(self):
+        self.batch = _GeneratedBatchRequest(self.outcomes)
+        return self.batch
+
+
+def _generated_http_error(status: int) -> HttpError:
+    response = SimpleNamespace(status=status, reason="Generated")
+    return HttpError(response, b'{"error":{"message":"generated"}}')
+
+
+@pytest.mark.asyncio
+async def test_batch_get_resolves_404_as_tombstone_but_omits_retryable_errors(
+    monkeypatch,
+):
+    gmail = GmailService(SimpleNamespace(email="generated@example.test"))
+    api = _GeneratedBatchApi({
+        "message-live": _message("message-live"),
+        "message-gone": _generated_http_error(404),
+        "message-retry": _generated_http_error(503),
+    })
+
+    async def acquire(_cost):
+        return None
+
+    monkeypatch.setattr(gmail, "_get_service", lambda: api)
+    monkeypatch.setattr(gmail_module.gmail_rate_limiter, "acquire", acquire)
+    monkeypatch.setattr(gmail_module, "BATCH_PAUSE", 0)
+
+    result = await gmail.batch_get_messages([
+        "message-live",
+        "message-gone",
+        "message-retry",
+    ])
+
+    assert result == [
+        _message("message-live"),
+        GmailMessageNotFound("message-gone"),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_partial_batch_does_not_advance_checkpoint_and_retry_converges(monkeypatch):
     state = _State()
@@ -386,6 +462,47 @@ async def test_partial_batch_does_not_advance_checkpoint_and_retry_converges(mon
         ["message-a", "message-b"],
         ["message-a", "message-b"],
     ]
+
+
+@pytest.mark.asyncio
+async def test_incremental_404_tombstone_deletes_local_row_and_advances_checkpoint(
+    monkeypatch,
+):
+    state = _State()
+    state.emails = {"message-a": 1}
+    state.next_email_id = 2
+    gmail = _FakeGmail([[
+        GmailMessageNotFound("message-a"),
+        _message("message-b"),
+    ]])
+    service = _build_service(monkeypatch, state, gmail)
+
+    new_email_ids = await service.incremental_sync()
+
+    assert new_email_ids == [2]
+    assert state.emails == {"message-b": 2}
+    assert state.upsert_calls == ["message-b"]
+    assert state.sync_status.last_history_id == "102"
+    assert state.sync_status.status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_404_tombstone_waits_for_complete_incremental_batch(monkeypatch):
+    state = _State()
+    state.emails = {"message-a": 1}
+    state.next_email_id = 2
+    gmail = _FakeGmail([[
+        GmailMessageNotFound("message-a"),
+    ]])
+    service = _build_service(monkeypatch, state, gmail)
+
+    with pytest.raises(RuntimeError, match="missing 1"):
+        await service.incremental_sync()
+
+    assert state.emails == {"message-a": 1}
+    assert state.upsert_calls == []
+    assert state.sync_status.last_history_id == "100"
+    assert state.sync_status.status == "error"
 
 
 @pytest.mark.asyncio
@@ -524,6 +641,36 @@ async def test_full_sync_processing_failure_does_not_save_next_page(monkeypatch)
 
     assert state.sync_status.sync_page_token == _scan_checkpoint("current-page")
     assert state.emails == {}
+
+
+@pytest.mark.asyncio
+async def test_full_sync_404_tombstone_deletes_stale_row_and_completes(monkeypatch):
+    state = _State()
+    state.sync_status.sync_page_token = _scan_checkpoint(None)
+    state.emails = {"message-a": 1, "message-b": 2}
+    state.next_email_id = 3
+    gmail = _FullFlowGmail(
+        pages={None: (["message-a", "message-b"], None, 2)},
+        batch_results=[[
+            GmailMessageNotFound("message-a"),
+            _message("message-b"),
+        ]],
+        history_results=[{"history": [], "new_history_id": "120"}],
+    )
+    service = _build_service(monkeypatch, state, gmail)
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(sync_module.asyncio, "sleep", no_sleep)
+
+    assert await service.full_sync() == []
+
+    assert state.emails == {"message-b": 2}
+    assert state.upsert_calls == ["message-b"]
+    assert state.sync_status.last_history_id == "120"
+    assert state.sync_status.sync_page_token is None
+    assert state.sync_status.status == "completed"
 
 
 @pytest.mark.asyncio
