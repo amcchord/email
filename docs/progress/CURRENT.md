@@ -134,10 +134,15 @@ the pause.
   qualified release/model HIL tuple, or enablement; no Wi-Fi inputs render and
   Connect is disabled.
 - The deployed Pillow renderer now uses exact immutable design and palette
-  registries with import-time catalog/device/web completeness checks. Existing
-  Home Editorial/Swiss and Day Ahead Editorial pixels are unchanged; a missing
-  future design implementation fails closed instead of silently rendering as
-  Editorial.
+  registries with import-time catalog/device/web completeness checks. Native
+  E1002 Day Ahead output is live at application/runtime
+  `73396b3699763c33adf0dc2d2753a9b6c3e5eae6`: the 800x480 landscape
+  composition prioritizes the next event, later events, priorities, weather,
+  mail, house state, and tomorrow without resizing the portrait design. The
+  production Linux stress fixture is exactly 800x480, six colors, and 192,118
+  bytes. Existing Home Editorial/Swiss and portrait Day Ahead behavior remain
+  available; a missing future design implementation fails closed instead of
+  silently rendering as Editorial.
 - The deployed Gmail Labels & Move application/runtime commit is
   `a440801c18c8377b50a225af71f3937caa78c7af`. Existing synchronized user labels
   are account-safe, conversation-scoped durable actions across list, table,

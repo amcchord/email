@@ -3,6 +3,60 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-08-31 — Native E1002 Day Ahead deployment
+
+### Scope
+
+Create and deploy a native 800x480 Spectra 6 Day Ahead screen for the E1002,
+including a final spacing refinement for the dense Later Today state.
+
+### Completed
+
+- Added a profile-aware landscape Day Ahead renderer rather than scaling the
+  portrait composition. The screen prioritizes the next event, later events,
+  priorities, weather, mail, house state, and tomorrow within the exact panel.
+- Routed E1002 device delivery and authenticated preview through the real
+  800x480 variant while preserving portrait E1001 behavior and explicit B&W
+  preview overrides.
+- Increased Later Today section breathing room and event-row height after the
+  stress screenshot exposed compressed title/metadata spacing.
+
+### Verification
+
+- The final post-merge `make check` passed 851 backend tests with 75 expected
+  skips, all 555 frontend tests, and the 634-module production build.
+- Focused renderer/registry coverage passed locally. Native busy, calm, and
+  stress screenshots were audited at 800x480 with no scaling or scroll; the
+  encoded stress fixture uses exactly six colors and 192,118 bytes.
+- The production Linux stress fixture independently rendered at 800x480, six
+  colors, and 192,118 bytes with SHA-256
+  `233d3078af260168814b1ddb02790cc550c921d1faee2bd349330b464a835218`.
+  Its glyph rasterization differs from the macOS evidence, as do all existing
+  renderer pixel snapshots on that host, but the production layout and spacing
+  audit passed.
+
+### Production Actions
+
+- Pushed and deployed exact application/runtime
+  `73396b3699763c33adf0dc2d2753a9b6c3e5eae6`, fast-forwarding production from
+  `4c7fff6351766c24f35957b6feffd9271c1ac8a3`.
+- Installed the unchanged locked frontend dependencies, built 634 modules, and
+  restarted only `mailapp`. No migration, dependency-lock change, Caddy or
+  systemd change, worker restart, database write, or mailbox/calendar action
+  was part of the release.
+- The prior API process again exceeded its graceful-stop timeout and was
+  killed by systemd. Replacement PID 2200182 is active with zero restarts; all
+  seven checked services are active, public health is `ok`, Alembic remains
+  `c1d2e3f4a5b6 (head)`, and the only warning-priority journal entries are that
+  stop-timeout lifecycle sequence.
+
+### Next
+
+Observe the next normal E1002 wake for real-device rendering. If rollback is
+needed, deploy a reviewed revert of the E1002 renderer commits through the same
+frontend-build and selective `mailapp` restart path; no schema rollback is
+required.
+
 ## 2026-08-31 — At a Glance terminal settings cleanup
 
 ### Scope
