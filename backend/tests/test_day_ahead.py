@@ -23,6 +23,7 @@ from backend.services.eink import day_client as dc
 from backend.services.eink.pillow import dayahead_editorial as de
 from backend.services.eink.pillow import fonts
 from backend.services.eink.pillow.day_ahead import render_day_ahead_image
+from backend.services.eink.pillow.palette import E_PALETTE_SIX
 from backend.services.terminal.bmp import encode_spectra6
 from backend.services.terminal.renderer import _DAY_CACHE, render_day_ahead_bmp
 from backend.services.terminal.variants import SPECTRA6_800
@@ -330,6 +331,20 @@ def test_e1002_landscape_render_size_and_palette_conformance():
         assert len(body) == 192118
         assert Image.open(io.BytesIO(body)).size == (800, 480)
         assert _unique_colours(body) <= 6
+
+
+def test_e1002_landscape_sky_reaches_top_status_rail():
+    img = render_day_ahead_image(
+        "editorial",
+        "six",
+        _busy_day(),
+        tz_name="America/New_York",
+        profile_key="landscape_16_9",
+    )
+
+    assert E_PALETTE_SIX.blue in {
+        img.getpixel((x, 0)) for x in range(img.width)
+    }
 
 
 def test_render_is_deterministic_for_stable_etag():

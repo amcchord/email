@@ -187,10 +187,11 @@ def _draw_header(
     now_weather = weather.get("now") or {}
     now_min = int(day.get("nowMin", 0))
     _draw_sky_atkinson(image, 0, 0, CANVAS_W, HEADER_BOTTOM, now_min, P)
-    # Keep the 12px status rail on solid paper. The halftone remains a strong
-    # masthead texture below it, while every small glyph stays unambiguous on
-    # the physical panel.
-    fill_box(draw, Box(0, 0, CANVAS_W, 22), P.bg)
+    # Spectra color carries the time-of-day sky all the way to the top edge,
+    # behind the status metadata. Keep the solid rail only in B&W, where the
+    # halftone and small black type would otherwise compete for the same ink.
+    if P.is_bw:
+        fill_box(draw, Box(0, 0, CANVAS_W, 22), P.bg)
 
     eyebrow = _tr(12)
     fm_eye = font_metrics(eyebrow)

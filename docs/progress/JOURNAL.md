@@ -3,6 +3,39 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-09-02 — E1002 Day Ahead top-edge gradient
+
+### Scope
+
+Extend the Spectra 6 Day Ahead sky gradient behind the top status metadata
+without changing the black-and-white composition.
+
+### Completed
+
+- Removed the solid Spectra status rail so the time-of-day sky reaches the
+  physical panel's top edge behind `AS OF` and `THE DAY AHEAD`.
+- Preserved the solid status rail for black-and-white output and added a
+  regression assertion for color at the top row.
+
+### Verification
+
+- Focused Day Ahead and design-registry coverage passed all 36 tests.
+- The final `git diff --check && make check` passed 852 backend tests with 75
+  expected skips, all 555 frontend tests, and the 634-module production build.
+- Busy, calm, and stress fixtures were audited at native 800x480 in the app
+  browser; the status text remained legible and the layout stayed within the
+  panel in each state.
+
+### Production Actions
+
+- None. Production remains on its existing release.
+
+### Next
+
+If deployment is requested, replay the focused renderer change onto the
+current `origin/main`, rerun the proportional release preflight, and deploy
+through the normal reviewed path.
+
 ## 2026-09-01 — Gmail tombstone sync recovery
 
 ### Scope
@@ -61,7 +94,6 @@ Observe normal account freshness during user testing. If rollback is needed,
 deploy a reviewed revert of `e579e5c` and restart the same three services; no
 schema rollback is required. Investigate the recurring Uvicorn graceful-stop
 timeout separately from this completed sync recovery.
-
 ## 2026-08-31 — Native E1002 Day Ahead deployment
 
 ### Scope

@@ -240,7 +240,7 @@ def test_day_ahead_registry_preserves_existing_pixels(palette, expected_sha256):
     [
         (
             "six",
-            "125f214afd4b197777d8bde1f11f5b1ab2386717ab51d425bffd37c150ac1da2",
+            "8d55a84fa131faf76b23201484eb1d22c876b616d898de080d59f32c71202ad5",
         ),
         (
             "bw",
