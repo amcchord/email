@@ -20,21 +20,36 @@ without changing the black-and-white composition.
 ### Verification
 
 - Focused Day Ahead and design-registry coverage passed all 36 tests.
-- The final `git diff --check && make check` passed 852 backend tests with 75
+- The exact rebased release passed `git diff --check && make check`: 856
+  backend tests passed with 75
   expected skips, all 555 frontend tests, and the 634-module production build.
 - Busy, calm, and stress fixtures were audited at native 800x480 in the app
   browser; the status text remained legible and the layout stayed within the
   panel in each state.
+- A production-side fixture rendered and encoded at 800x480 with exactly six
+  panel colors and 192,118 bytes; its top row included blue behind the status
+  metadata.
 
 ### Production Actions
 
-- None. Production remains on its existing release.
+- Pushed and deployed exact application/runtime
+  `c730e63f8597331ba098377e6d530393472cbe8a`, fast-forwarding production from
+  `e579e5c324bd79d3e07b6679ce9b9ef3907057a2` while retaining the current Gmail
+  sync recovery on the rebased mainline.
+- Restarted only `mailapp`. The immediate health request briefly returned 502
+  during startup; the bounded retry returned `ok`, all five application-facing
+  services were active, `mailapp` reported zero automatic restarts, production
+  Git was exact and clean, and no warning-priority `mailapp` entries appeared
+  in the five-minute deployment window.
+- No dependency install, frontend build, migration, database action, worker
+  restart, Caddy/systemd change, OAuth change, or provider mutation was part of
+  the deployment.
 
 ### Next
 
-If deployment is requested, replay the focused renderer change onto the
-current `origin/main`, rerun the proportional release preflight, and deploy
-through the normal reviewed path.
+Observe the next normal E1002 wake for the top-edge treatment. If rollback is
+needed, deploy a reviewed revert of `c730e63` and restart only `mailapp`; no
+schema rollback is required.
 
 ## 2026-09-01 — Gmail tombstone sync recovery
 
