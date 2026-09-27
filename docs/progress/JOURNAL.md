@@ -48,8 +48,23 @@ secrets, email contents, OAuth tokens, or raw private production data.
 
 ### Production actions and next
 
-- Preflight found clean production `c730e63`, all seven services active, and
-  public health `ok`. Deployment and postflight are pending.
+- Pushed and deployed exact runtime
+  `22d6c0320ec7d551e59f2e5df982f8b022ca8a81`, fast-forwarding clean production
+  from `c730e63f8597331ba098377e6d530393472cbe8a` through the prior docs-only
+  closeout. Restarted only `mailapp` and `mailworker-cron`; both were active at
+  22:53:05 UTC with zero automatic restarts. No migrations, dependency install,
+  frontend build, infrastructure changes, or mail/calendar mutations ran.
+- Public health is `ok`, all seven services are active, production Git is
+  exact/clean, and the affected services have no post-start warning/error
+  entries. Forced one normal current-hour snippet regeneration and verified
+  a successful Fable 5.1 quote was persisted and read back (without exposing
+  its contents or credentials).
+- Production integration rendered the actual Home Editorial path using live
+  HA data in Spectra 6 (192,118 bytes) and B&W (48,062 bytes), both 800x480 with
+  valid ETags. Both room temperatures and the daily count were available.
+  Visually checked a private local crop of the live House rail.
+- The task is complete. The physical terminal receives the new page on its
+  next normal refresh; that physical refresh was not directly observed.
 - Rollback is a reviewed revert of this release followed by restarting
   `mailapp` and `mailworker-cron`; no schema rollback is needed.
 

@@ -4,14 +4,6 @@ Last updated: 2026-09-27
 
 ## Active Objective
 
-Deploy the requested Home Editorial update: Primary Bedroom/Living Room
-readings, today's coffee count, and Claude Fable 5.1 hourly copy. Candidate is
-in `worktrees/eink-house-coffee-quotes` on `codex/eink-house-coffee-quotes` from
-`origin/main` (`d1a057f`). Production is clean and healthy at `c730e63`.
-Next: finish the consolidated gate, publish the exact reviewed commit, restart
-only API and cron, and verify live rendering plus a fresh Fable snippet.
-No dependency, migration, frontend, or infrastructure change is planned.
-
 Pause feature development at the goal-period release boundary and collect
 user-testing feedback on the shipped modern mail-client workflows. Do not
 reopen broad CI or production release work for isolated P2 polish. Reproduce
@@ -23,6 +15,20 @@ the pause.
 
 ## Baseline
 
+- Home Editorial runtime `22d6c0320ec7d551e59f2e5df982f8b022ca8a81` is
+  deployed as of 2026-09-27. The House rail shows Primary Bedroom and Living
+  Room temperatures plus today's coffee cups from the HA daily meter. Hourly
+  quotes/observations now use Claude Fable 5.1; a fresh quote was generated,
+  saved, and read back after deployment. Both 800x480 panel formats rendered
+  successfully with live data. Only `mailapp` and `mailworker-cron` restarted;
+  all seven services and public health passed, with zero automatic restarts
+  or post-start warning/error entries in the affected services.
+- Validation limitation: six unchanged Swiss/Day Ahead image goldens fail in
+  the current rasterizer, also reproduced with the original mainline code.
+  All other 885 backend tests, all 555 frontend tests, the build, and all 20
+  layout audits passed. The release journal contains the baseline comparison.
+  Next safe action: observe the next normal physical panel refresh; no further
+  production change is required for this request.
 - The deployed Gmail tombstone sync recovery application/runtime is
   `e579e5c324bd79d3e07b6679ce9b9ef3907057a2`. A provider-confirmed per-message
   404 now resolves as an exact-account local tombstone inside the existing
