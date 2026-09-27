@@ -3,7 +3,7 @@
 The renderer reads ``ha_shape['dashboardSnippet']`` to display a rotating
 "quote of the hour" or "observation of the hour" when nothing is active.
 This service generates one snippet per (local date, local hour) using
-Claude Haiku and persists it in ``dashboard_snippets``. The cron worker
+Claude Fable 5.1 and persists it in ``dashboard_snippets``. The cron worker
 in ``backend/workers/tasks.py`` ticks every hour to keep the row fresh
 for the upcoming hour; the renderer is a strict reader.
 
@@ -25,10 +25,13 @@ from datetime import datetime
 from typing import Any, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import anthropic
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import get_settings
+from backend.services.ai_models import DASHBOARD_SNIPPET_MODEL
 from backend.database import async_session
 from backend.models.dashboard import DashboardSnippet
 from backend.models.terminal import TerminalSettings
@@ -124,43 +127,11 @@ Use the context you are given (time, temperature, weather, season, weekday, date
 The text MUST be at most 200 characters. Write in second person ('You can hear...') or in the neutral observational voice ('The rain has stopped...'). Never mention a specific person or 'we'."""
 
 
-_TOOL_QUOTE = {
-    "name": "save_quote",
-    "description": "Save a short literary quote with an author byline.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "text": {
-                "type": "string",
-                "description": "The quote text. 8-20 words, no surrounding quote marks.",
-            },
-            "byline": {
-                "type": "string",
-                "description": "Author short name (no titles or dates). 'Anonymous' is fine.",
-            },
-        },
-        "required": ["text", "byline"],
-    },
-}
-
-
-_TOOL_OBSERVATION = {
-    "name": "save_observation",
-    "description": "Save a short contextual observation about today/this hour.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "text": {
-                "type": "string",
-                "description": "The observation. 8-22 words, lightly poetic, about the present.",
-            },
-            "byline": {
-                "type": "string",
-                "description": "Optional small label (not a person name). May be empty.",
-            },
-        },
-        "required": ["text"],
-    },
+_SNIPPET_SCHEMA = {
+    "type": "object",
+    "properties": {"text": {"type": "string"}, "byline": {"type": "string"}},
+    "required": ["text", "byline"],
+    "additionalProperties": False,
 }
 
 
@@ -276,21 +247,14 @@ def _season(dt: datetime) -> str:
 async def _maybe_call_claude(
     kind: str, now_local: datetime, ha_shape: Optional[dict[str, Any]],
 ) -> Optional[dict[str, str]]:
-    """Invoke the configured low-cost model via the existing AIService.
+    """Generate the hourly quote/observation with Claude Fable 5.1.
 
     Returns ``None`` if no API key is set or if any failure occurs. The
     cron task swallows None silently so a transient AI outage just
     means "no fresh row this hour"; the renderer's fallback kicks in.
     """
-    from backend.services.ai import AIService
-    from backend.services.ai_models import CHEAP_MODEL, provider_for_model
-
     settings = get_settings()
-    provider = provider_for_model(CHEAP_MODEL)
-    if provider == "openai" and not settings.openai_api_key:
-        logger.info("dashboard_snippet: openai_api_key not configured, skipping")
-        return None
-    if provider == "anthropic" and not settings.claude_api_key:
+    if not settings.claude_api_key:
         logger.info("dashboard_snippet: claude_api_key not configured, skipping")
         return None
 
@@ -298,7 +262,6 @@ async def _maybe_call_claude(
     seed = now_local.strftime("%Y-%m-%dT%H")
     if kind == "quote":
         system = _QUOTE_SYSTEM
-        tool = _TOOL_QUOTE
         user_message = (
             "Context for this slot:\n"
             f"{context}\n\n"
@@ -309,7 +272,6 @@ async def _maybe_call_claude(
         )
     else:
         system = _OBSERVATION_SYSTEM
-        tool = _TOOL_OBSERVATION
         user_message = (
             "Context for this hour:\n"
             f"{context}\n\n"
@@ -319,27 +281,39 @@ async def _maybe_call_claude(
             f"Hour seed (use only as a randomizer, do not echo): {seed}."
         )
 
-    svc = AIService(model=CHEAP_MODEL)
     try:
-        parsed, _tokens = await svc._call_claude_tool(
-            model=CHEAP_MODEL,
-            max_tokens=400,
-            messages=[{"role": "user", "content": user_message}],
-            tool=tool,
-            system=system,
-        )
+        # Fable 5.1 has always-on adaptive thinking and rejects forced tool
+        # calls. JSON outputs keep this short, read-only response structured.
+        async with anthropic.AsyncAnthropic(
+            api_key=settings.claude_api_key, timeout=45.0, max_retries=1,
+        ) as client:
+            response = await client.messages.create(
+                model=DASHBOARD_SNIPPET_MODEL.id,
+                max_tokens=4096,
+                messages=[{"role": "user", "content": user_message}],
+                system=system,
+                output_config={
+                    "effort": DASHBOARD_SNIPPET_MODEL.default_effort,
+                    "format": {"type": "json_schema", "schema": _SNIPPET_SCHEMA},
+                },
+            )
+        if response.stop_reason != "end_turn":
+            return None
+        raw = "".join(block.text for block in response.content if block.type == "text")
+        parsed = json.loads(raw)
     except Exception:
         logger.exception("dashboard_snippet: AI call failed")
         return None
 
     if not isinstance(parsed, dict):
         return None
-
-    text = (parsed.get("text") or "").strip()
-    if not text:
+    text = parsed.get("text")
+    byline = parsed.get("byline")
+    if not isinstance(text, str) or not text.strip() or not isinstance(byline, str):
         return None
-    byline = (parsed.get("byline") or "").strip()
-    return {"text": text, "byline": byline}
+    if kind == "quote" and not byline.strip():
+        return None
+    return {"text": text.strip(), "byline": byline.strip()}
 
 
 # ── Public write entry point ───────────────────────────────────────────

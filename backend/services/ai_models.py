@@ -121,6 +121,17 @@ DEFAULT_AI_PREFERENCES: dict[str, str] = {
 CHEAP_MODEL = "gpt-5.6-luna"
 CHEAP_MODEL_EFFORT = "low"
 
+# A dedicated scheduled workload; it does not alter mail/chat preferences.
+# Fable 5.1 uses JSON outputs, because forced tool choice is unsupported.
+DASHBOARD_SNIPPET_MODEL = ModelSpec(
+    "claude-fable-5-1",
+    "Claude Fable 5.1",
+    "anthropic",
+    ANTHROPIC_EFFORT_LEVELS,
+    "medium",
+    (),
+)
+
 
 # Existing unsubscribe code uses the earlier Computer Use tool protocol. All
 # three requested Claude 5 models support this compatibility version.

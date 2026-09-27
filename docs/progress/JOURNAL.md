@@ -3,6 +3,56 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-09-27 — Home Editorial room temperatures, coffee, and Fable 5.1
+
+### Scope and implementation
+
+- User requested implementation and production deployment. Worked from
+  `origin/main` in `worktrees/eink-house-coffee-quotes` on
+  `codex/eink-house-coffee-quotes`; preserved the control checkout's unrelated
+  uncommitted organization/progress changes.
+- Replaced Home Editorial's four floor rows with Primary Bedroom and Living
+  Room temperatures plus coffee cups today. Selected the actual room sensors
+  and the existing HA daily utility meter, not bridge electronics or lifetime
+  counts. Zero remains zero; unavailable/invalid readings display a dash.
+- Switched both hourly quotes and observations to the dedicated Claude Fable
+  5.1 workload with medium effort and JSON outputs. Forced tool choice is not
+  supported by this model. Kept hourly persistence and curated error fallback;
+  mail/chat AI defaults and other display designs remain unchanged.
+- Bounded P0/P1 diff review covered sensor identity, daily count semantics,
+  missing values, numeric overflow, provider compatibility, retry/fallback,
+  and deployment scope. No remaining release blocker was found.
+
+### Verification
+
+- 77 focused data/generator/solar/flavor/helper tests passed. Updated only the
+  two intentionally changed Editorial image goldens.
+- All 20 renderer layout audits passed (Editorial/Swiss, six-color/B&W, calm,
+  active, stress, zero coffee, and unavailable). Visually inspected native
+  800x480 normal, stress, and missing-data images.
+- Final `git diff --check && make check`: diff passed; backend finished with
+  **885 passed, 75 skipped, 6 failed**. All six failures are pre-existing Swiss
+  and Day Ahead image-hash mismatches; running the original mainline registry
+  with the original Editorial code reproduced all eight old image-golden
+  mismatches. Unchanged Swiss images matched between local and production
+  (Pillow 12.2.0 / FreeType 2.14.3). No unrelated goldens were rewritten.
+- Because `make check` stops after backend failures, ran its remaining
+  `make frontend-test frontend-build` targets separately: all 555 frontend
+  tests and the 634-module production build passed.
+- Live provider preflight returned model `claude-fable-5-1`, `end_turn`, and a
+  valid structured snippet using the production credential kept on the host.
+- Local generated evidence and logs are under ignored
+  `evidence/releases/eink-house-coffee-quotes/`. No credentials, mailbox data,
+  dependency changes, migrations, frontend changes, or infrastructure changes
+  are included.
+
+### Production actions and next
+
+- Preflight found clean production `c730e63`, all seven services active, and
+  public health `ok`. Deployment and postflight are pending.
+- Rollback is a reviewed revert of this release followed by restarting
+  `mailapp` and `mailworker-cron`; no schema rollback is needed.
+
 ## 2026-09-02 — E1002 Day Ahead top-edge gradient
 
 ### Scope

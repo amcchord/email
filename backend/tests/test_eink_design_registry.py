@@ -183,12 +183,12 @@ def test_persisted_unknown_design_does_not_become_editorial():
         (
             "editorial",
             "six",
-            "1ef57003e32d53d7142ed06b14d032b2321a1488011e285888cb23cb8e456043",
+            "2521653c98a9d10d25ae35665cbeb09a2113a3ec1ef85b1a929143da98a3c121",
         ),
         (
             "editorial",
             "bw",
-            "0b609d6423b2accd42bad1f5ad1712db16bc6c364ded42f8212f773f04e5c162",
+            "c2abbd21daaece08c689d8ef15322d5c92a25290be4bcbe2a0fcc45edbaba5e9",
         ),
         (
             "swiss",
@@ -202,7 +202,7 @@ def test_persisted_unknown_design_does_not_become_editorial():
         ),
     ],
 )
-def test_home_registry_preserves_existing_pixels(design, palette, expected_sha256):
+def test_home_registry_pins_current_pixels(design, palette, expected_sha256):
     image = render_eink_image(
         design,
         palette,

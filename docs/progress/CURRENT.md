@@ -1,8 +1,16 @@
 # Current Status
 
-Last updated: 2026-09-01
+Last updated: 2026-09-27
 
 ## Active Objective
+
+Deploy the requested Home Editorial update: Primary Bedroom/Living Room
+readings, today's coffee count, and Claude Fable 5.1 hourly copy. Candidate is
+in `worktrees/eink-house-coffee-quotes` on `codex/eink-house-coffee-quotes` from
+`origin/main` (`d1a057f`). Production is clean and healthy at `c730e63`.
+Next: finish the consolidated gate, publish the exact reviewed commit, restart
+only API and cron, and verify live rendering plus a fresh Fable snippet.
+No dependency, migration, frontend, or infrastructure change is planned.
 
 Pause feature development at the goal-period release boundary and collect
 user-testing feedback on the shipped modern mail-client workflows. Do not

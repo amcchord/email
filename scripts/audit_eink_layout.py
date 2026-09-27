@@ -49,7 +49,9 @@ def _base_state() -> dict:
         {"name": "Allison", "state": "not_home"},
     ]
     base["temps"] = {"first": 70, "second": 71, "third": 72,
-                     "basement": 68, "outdoor": 72}
+                     "basement": 68, "outdoor": 72,
+                     "primaryBedroom": 67, "livingRoom": 72}
+    base["coffee"] = {"cupsToday": 4}
     base["climates"] = {
         "radiantMain": {"name": "Main", "mode": "heat", "current": 68,
                         "target": 70, "action": "heating"},
@@ -108,7 +110,9 @@ def _stress_state(base: dict) -> dict:
         "pressure": 30.12, "visibility": 100,
     }
     out["temps"] = {"first": 102, "second": 101, "third": 99,
-                    "basement": -12, "outdoor": -12}
+                    "basement": -12, "outdoor": -12,
+                    "primaryBedroom": -12, "livingRoom": 102}
+    out["coffee"] = {"cupsToday": 123}
     out["climates"] = {
         "radiantMain": {"name": "Main", "mode": "heat", "current": 100,
                         "target": 110, "action": "heating"},
@@ -234,7 +238,10 @@ def audit() -> int:
     sauna = _sauna_state(base)
     stress = _stress_state(base)
 
-    states = [("calm", base), ("sauna", sauna), ("stress", stress)]
+    zero = copy.deepcopy(base)
+    zero["coffee"] = {"cupsToday": 0}
+    states = [("calm", base), ("sauna", sauna), ("stress", stress),
+              ("zero_coffee", zero), ("unavailable", empty_ha_shape())]
     fails: List[str] = []
 
     for design in ("editorial", "swiss"):

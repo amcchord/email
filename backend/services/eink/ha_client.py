@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -308,6 +309,10 @@ _TEMP_BASEMENT = "sensor.basement_temperature"
 _TEMP_FIRST = "sensor.first_floor_temperature"
 _TEMP_SECOND = "sensor.second_floor_temperature"
 _TEMP_THIRD = "sensor.third_floor_temperature"
+# Room readings, not the bridge electronics or whole-floor aggregates.
+_TEMP_PRIMARY_BEDROOM = "sensor.usl_environmental_temperature_3"
+_TEMP_LIVING_ROOM = "sensor.1st_flr_family_current_temperature"
+_COFFEE_CUPS_TODAY = "sensor.kitchen_coffee_cups_today"
 _TEMP_OUTDOOR = "sensor.weather_station_outdoor_temperature"
 _FEELS_LIKE = "sensor.weather_station_feels_like_temperature"
 _UV_INDEX = "sensor.weather_station_uv_index"
@@ -822,6 +827,25 @@ def shape_ha_state(
         "outdoor": state_num(_TEMP_OUTDOOR),
     }
 
+    def room_temperature(eid: str) -> Optional[float]:
+        value = state_num(eid)
+        if value is None or not math.isfinite(value):
+            return None
+        unit = attr(eid, "unit_of_measurement")
+        if unit == "°C":
+            return value * 9 / 5 + 32
+        return value if unit in (None, "°F") else None
+
+    temps["primaryBedroom"] = room_temperature(_TEMP_PRIMARY_BEDROOM)
+    temps["livingRoom"] = room_temperature(_TEMP_LIVING_ROOM)
+    cups = state_num(_COFFEE_CUPS_TODAY)
+    # Use HA's daily utility meter (which resets at local midnight), never
+    # the similarly named lifetime counter. Unknown is distinct from zero.
+    coffee = {"cupsToday": (
+        int(cups) if cups is not None and math.isfinite(cups)
+        and cups >= 0 and cups.is_integer() else None
+    )}
+
     # ── People ─────────────────────────────────────────────────────
     people = []
     for s in states:
@@ -888,6 +912,7 @@ def shape_ha_state(
         "weather": weather,
         "climates": climates,
         "temps": temps,
+        "coffee": coffee,
         "people": people,
         "garage": garage,
         "openWindows": open_windows,
@@ -932,6 +957,7 @@ def empty_ha_shape(*, fetched_at: Optional[datetime] = None) -> dict[str, Any]:
         },
         "climates": {},
         "temps": {},
+        "coffee": {"cupsToday": None},
         "people": [],
         "garage": {"state": "closed"},
         "openWindows": [],

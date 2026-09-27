@@ -67,10 +67,8 @@ from .draw import (
 )
 from .ha_view import (
     ApplianceView,
-    FloorView,
     HvacSummary,
     build_appliance_view,
-    build_floor_views,
     build_hvac_summary,
 )
 from .helpers import (
@@ -664,7 +662,7 @@ def _draw_right_rail(draw, ctx: RenderContext, ha, box: Box) -> None:
         cur_y += fm.line_height + 6
 
     _section("The House")
-    cur_y = _draw_floor_list(draw, ctx, ha, box.x0, cur_y, box.w)
+    cur_y = _draw_house_readings(draw, ctx, ha, box.x0, cur_y, box.w)
 
     cur_y += 8
     hairline_hr(draw, box.x0, box.x1, cur_y, fill=P.rule); cur_y += 6
@@ -678,63 +676,40 @@ def _draw_right_rail(draw, ctx: RenderContext, ha, box: Box) -> None:
         cur_y = _draw_pool_temp(draw, ctx, box.x0, cur_y, box.w, pool)
 
 
-def _draw_floor_list(draw, ctx: RenderContext, ha, x0, y, w) -> int:
-    """One row per floor: name + sub-state on the left, big temp on the
-    right. Heating renders in red, cooling in blue, idle in ink.
-
-    The temp digits use a shared auto-fit pass so every row's number
-    sits on the same baseline at the same size, no matter which one is
-    widest (a 3-digit temp can't shift just one row).
-    """
+def _draw_house_readings(draw, ctx: RenderContext, ha, x0, y, w) -> int:
+    """Two room temperatures and today's coffee, within the fixed rail."""
     P = ctx.palette
-    floor_views = build_floor_views(ha, [
-        ("third", "Third"),
-        ("second", "Second"),
-        ("first", "First"),
-        ("basement", "Basement"),
-    ])
+    temps = ha.get("temps") or {}
+    cups = (ha.get("coffee") or {}).get("cupsToday")
+    readings = [
+        (("Primary", "Bedroom"), fmt_temp(temps.get("primaryBedroom"))),
+        (("Living Room",), fmt_temp(temps.get("livingRoom"))),
+        (("Coffee", "cups today"), "—" if cups is None else str(cups)),
+    ]
     name_font = fonts.serif(13, weight="semibold")
-    sub_font = fonts.pix_cherry_small(9, bold=True)
-    sub_tracking = em_to_px(9, 0.16)
     fm_n = font_metrics(name_font)
-    fm_s = font_metrics(sub_font)
-    # Pick a single temp size against the widest expected string so all
-    # four rows share one baseline. Reserve ~half the rail width for the
-    # name+sub cluster.
-    widest_temp = max((fmt_temp(v.temp) for v in floor_views),
-                      key=lambda s: text_width(fonts.serif(22, weight='bold'), s),
-                      default="00\u00b0")
-    temp_factory = lambda s: fonts.serif(s, weight="bold")
-    temp_font, _ = pick_fitting_size(
-        temp_factory, widest_temp, max(36, w // 2),
-        (22, 20, 18, 16),
+    value_width = max(36, w - text_width(name_font, "Living Room") - 12)
+    widest = max((value for _, value in readings),
+                 key=lambda value: text_width(fonts.serif(22, weight="bold"), value))
+    value_font, _ = pick_fitting_size(
+        lambda size: fonts.serif(size, weight="bold"), widest,
+        value_width, (22, 20, 18, 16),
     )
-    fm_t = font_metrics(temp_font)
-    row_h = fm_t.ascent + fm_s.line_height + 6
+    fm_v = font_metrics(value_font)
+    row_h = max(2 * fm_n.line_height, fm_v.line_height) + 8
     cur_y = y
-    for idx, view in enumerate(floor_views):
-        active = view.state in ("heating", "cooling")
-        accent = ctx.accent(view.accent_kind) if active else P.muted
-        name_baseline = cur_y + fm_n.ascent
-        draw_text_bl(draw, (x0, name_baseline), view.label, name_font, P.ink)
-        sub_baseline = name_baseline + fm_n.descent + 2 + fm_s.ascent
-        bullet(draw, x0 + 3, sub_baseline - fm_s.ascent // 2 + 1, 3,
-               filled=active, color=accent)
-        if view.state == "heating":
-            sub_label = f"{view.heat_count} heat"
-        elif view.state == "cooling":
-            sub_label = f"{view.cool_count} cool"
-        else:
-            sub_label = "idle"
-        draw_tracked_text_bl(draw, (x0 + 10, sub_baseline),
-                             sub_label, sub_font, accent, sub_tracking)
-        temp_s = fmt_temp(view.temp)
-        temp_color = ctx.accent(view.accent_kind) if active else P.ink
-        temp_baseline = cur_y + fm_t.ascent
-        draw_text_bl_right(draw, (x0 + w, temp_baseline),
-                           temp_s, temp_font, temp_color)
-        if idx != len(floor_views) - 1:
-            dotted_hr(draw, x0, x0 + w, cur_y + row_h - 1, dash=1, gap=3, fill=P.rule)
+    for index, (labels, value) in enumerate(readings):
+        for line, label in enumerate(labels):
+            baseline = cur_y + fm_n.ascent + line * fm_n.line_height
+            draw_text_bl(draw, (x0, baseline), label, name_font,
+                         P.muted if index == 2 and line else P.ink)
+        draw_text_clipped_bl_right(
+            draw, (x0 + w - 2, cur_y + fm_v.ascent), value,
+            value_font, P.ink, max_w=value_width,
+        )
+        if index < len(readings) - 1:
+            dotted_hr(draw, x0, x0 + w, cur_y + row_h - 1,
+                      dash=1, gap=3, fill=P.rule)
         cur_y += row_h
     return cur_y
 
