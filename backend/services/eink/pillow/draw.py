@@ -151,31 +151,54 @@ def fill_box(draw: ImageDraw.ImageDraw, box: Box, fill: RGB) -> None:
     draw.rectangle([(box.x0, box.y0), (box.x1 - 1, box.y1 - 1)], fill=fill)
 
 
-def fill_box_dither(
-    draw: ImageDraw.ImageDraw,
-    box: Box,
+# 4x4 Bayer matrix. Comparing a tone with it gives the classic ordered patterns.
+_BAYER_4 = (
+    (0, 8, 2, 10),
+    (12, 4, 14, 6),
+    (3, 11, 1, 9),
+    (15, 7, 13, 5),
+)
+# The patterns that read as clean, regular textures, in sixteenths of ink: sparse
+# diagonal squares, a square grid, a checkerboard, and the two inverses.
+_DITHER_LEVELS = (0, 2, 4, 8, 12, 14, 16)
+
+
+def pixel_dither(
+    img: Image.Image,
+    origin: Tuple[int, int],
+    tone: Image.Image,
     fill: RGB,
     *,
-    phase: int = 0,
+    cell: int = 2,
 ) -> None:
-    """50/50 checkerboard fill in a single palette colour.
+    """Print an ``L`` tone map (0 = no ink, 255 = solid) as an ordered pixel dither.
 
-    Survives the ``dither=False`` quantizer because every painted pixel
-    is already a palette colour -- no blending happens. The pattern is
-    locked to absolute pixel coordinates so adjacent dithered boxes
-    line up cleanly without seams. ``phase`` flips the parity if a
-    caller wants the inverse pattern.
+    Ink comes in squares of ``cell`` panel pixels on a grid fixed to panel
+    coordinates, so neighbouring areas line up. Tone is sampled once per square and
+    snapped to ``_DITHER_LEVELS``, so a gradient steps through clean patterns. A
+    square is printed whole and inside ``tone``'s rectangle, or not at all, and every
+    painted pixel is exactly ``fill``, so the result passes the ``dither=False``
+    encoders untouched.
     """
-    if box.w <= 0 or box.h <= 0:
-        return
-    for y in range(box.y0, box.y1):
-        x_start = box.x0 + ((box.x0 + y + phase) & 1)
-        if x_start >= box.x1:
-            continue
-        draw.point(
-            [(x, y) for x in range(x_start, box.x1, 2)],
-            fill=fill,
-        )
+    x0, y0 = origin
+    tones = tone.load()
+    mask = Image.new("1", tone.size)
+    paint = ImageDraw.Draw(mask)
+    first_col = math.ceil(x0 / cell)
+    first_row = math.ceil(y0 / cell)
+    for row in range(first_row, (y0 + tone.height) // cell):
+        top = row * cell - y0
+        thresholds = _BAYER_4[row % 4]
+        for col in range(first_col, (x0 + tone.width) // cell):
+            left = col * cell - x0
+            value = tones[left + cell // 2, top + cell // 2]
+            if value == 0:
+                continue
+            wanted = value * 16 / 255
+            level = min(_DITHER_LEVELS, key=lambda candidate: abs(candidate - wanted))
+            if level > thresholds[col % 4]:
+                paint.rectangle([(left, top), (left + cell - 1, top + cell - 1)], fill=1)
+    img.paste(fill, (x0, y0), mask)
 
 
 def stroke_box(
@@ -627,34 +650,6 @@ def draw_tracked_text_center(
     w = tracked_width(font, text, tracking_px)
     x = xy_center[0] - w // 2
     return draw_tracked_text(draw, (x, xy_center[1]), text, font, fill, tracking_px)
-
-
-def draw_outlined_text(
-    draw: ImageDraw.ImageDraw,
-    xy: Tuple[int, int],
-    text: str,
-    font: ImageFont.ImageFont,
-    *,
-    stroke_px: int,
-    stroke_fill: RGB,
-    fill: Optional[RGB] = None,
-) -> int:
-    """Outlined glyph for the Swiss calm-state '00'.
-
-    Pillow natively supports stroke; we use a transparent fill unless an
-    explicit fill is provided (the JSX uses `color: transparent` +
-    `WebkitTextStroke`).
-    """
-    _fill = fill if fill is not None else (255, 255, 255)
-    draw.text(
-        xy,
-        text,
-        font=font,
-        fill=_fill,
-        stroke_width=int(stroke_px),
-        stroke_fill=stroke_fill,
-    )
-    return text_width(font, text)
 
 
 # ── Baseline-anchored text helpers ─────────────────────────────────────

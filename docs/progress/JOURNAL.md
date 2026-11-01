@@ -3,6 +3,20 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-11-01 — Swiss design rebuilt with a pixel dither
+
+- Requested: replace the dated Swiss design with a modern one, work in a halftone
+  treatment (settled on an ordered pixel dither from a reference image, after radial
+  dots), delete the original, and deploy. Branch `claude/eink-swiss-rebuild`.
+- No device used Swiss (production read-only check), and the `swiss` key is unchanged,
+  so saved settings and the catalog stay valid. No terminal was switched to it.
+- New `pillow/swiss.py`: one big number (the time when calm, minutes left when
+  running, an inverted slab when a person is needed), with the weather and the same
+  readings as Home Editorial on the right. `draw.pixel_dither` is a 4x4 Bayer dither
+  in 2 px squares. See D-055. Removed the old renderer, `docs/design/swiss.jsx`, and
+  `fill_box_dither`, `draw_outlined_text`, and `eyebrow_label`, which only it used.
+- Verification and production actions are in the release commit's closeout below.
+
 ## 2026-11-01 — Home Editorial truth fixes, sauna forecast, and Opus 5.5
 
 ### Scope and implementation

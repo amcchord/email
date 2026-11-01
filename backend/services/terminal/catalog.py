@@ -60,7 +60,7 @@ DESIGNS: dict[str, DesignDefinition] = {
     ),
     "swiss": DesignDefinition(
         key="swiss",
-        label="Swiss (modular / mono)",
+        label="Swiss (big number / dither)",
     ),
 }
 

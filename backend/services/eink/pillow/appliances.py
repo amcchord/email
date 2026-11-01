@@ -30,7 +30,7 @@ Adding an appliance
    ``_APPLIANCE_BUILDERS``.
 3. Add an ``ApplianceSpec`` row below.
 4. Add a drawer entry in each design's ``DRAWERS`` dict
-   (``swiss.SWISS_DRAWERS`` / ``editorial.EDITORIAL_DRAWERS``).
+   (``swiss._story_for`` / ``editorial.EDITORIAL_LEAD_DRAWERS``).
 
 That's it -- the registry handles "active" detection and dispatch
 for both designs.
@@ -291,6 +291,18 @@ def pick_active(ha: dict, ctx: RenderContext) -> List[ActiveAppliance]:
         out.append(ActiveAppliance(spec=spec, view=view))
     out.sort(key=lambda a: a.spec.effective_severity(ha))
     return out
+
+
+def pool_near_target(view: ApplianceView, tol: float = 1.0) -> bool:
+    """True when the pool is at target or within ``tol`` degrees of it.
+
+    Designs drop the pool from their lead story once it's effectively done
+    heating; their readings still show the live water temp. Returns False on
+    missing data so we never hide the pool on an incomplete snapshot.
+    """
+    if view.current is None or view.target is None:
+        return False
+    return abs(view.current - view.target) <= tol
 
 
 def build_view_for_kind(ha: dict, kind: str, ctx: RenderContext) -> ApplianceView:

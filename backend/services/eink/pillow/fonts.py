@@ -1,7 +1,7 @@
 """Cached TrueType font loader for the Pillow e-ink renderer.
 
 The JSX designs specify a small type-system (`TY` in editorial.jsx,
-`SW_TY` in swiss.jsx). The Pillow port collapses those into flat
+`SwissType` in layout.py). The Pillow port collapses those into flat
 (family, size) keys -- we resolve each to a specific TTF on disk once
 and then cache `ImageFont.FreeTypeFont` instances per `(path, size)`.
 

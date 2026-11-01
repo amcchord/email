@@ -2,7 +2,7 @@
 
 Renders the 800x480 BMP/PNG that drives the e-ink dashboard. Two
 designs share one data layer: **Editorial** (newspaper-style) and
-**Swiss** (modular grid). Both are pure Pillow.
+**Swiss** (one big number, with an ordered pixel dither). Both are pure Pillow.
 
 ```
 backend/services/eink/
@@ -99,10 +99,9 @@ A repo-wide grep should find:
    `appliances.py` asserts at import time that every spec has a
    matching view builder, so a half-registered appliance can't ship.
 
-4. **Draw it in each design.** Add a row to `SWISS_DRAWERS` in
-   `swiss.py` (`_describe_<kind>_swiss(view, ctx) -> dict`) and a row
-   to `EDITORIAL_LEAD_DRAWERS` plus `EDITORIAL_BRIEFS` in
-   `editorial.py`. Read structured fields off the view (
+4. **Draw it in each design.** Add a branch to `_story_for` plus a row in
+   `_also_row` in `swiss.py`, and a row to `EDITORIAL_LEAD_DRAWERS` plus
+   `EDITORIAL_BRIEFS` in `editorial.py`. Read structured fields off the view (
    `view.finish_label`, `view.status_label`, `view.extras["..."]`) --
    never touch the HA dict here.
 
@@ -124,9 +123,8 @@ active" for both designs; you never have to touch
    brief / lead drawers.
 
 3. Add a `MYDESIGN_DRAWERS` dispatch dict mapping appliance kinds to
-   per-kind drawers, just like `SWISS_HERO_DESCRIBERS` /
-   `EDITORIAL_LEAD_DRAWERS`. Each drawer takes `(ctx, view)` and reads
-   only structured fields.
+   per-kind drawers, just like `EDITORIAL_LEAD_DRAWERS`. Each drawer takes
+   `(ctx, view)` and reads only structured fields.
 
 4. Wire it into `render.py`'s dispatcher.
 
@@ -142,6 +140,27 @@ stay fixed in your new design without you having to remember.
   same HA shapes the renderers consume. Adding a new appliance should
   add a `test_<kind>_finish_label_in_user_zone`-style case so the TZ
   contract is exercised.
+
+## Swiss design
+
+The left column answers one question. Calm, the hero is the time; with something
+running, it is the minutes left (sauna: minutes to ready); when something needs a
+person, it is an inverted slab saying what to do. The time is on the page exactly
+once: when a countdown takes the hero, it moves to the header. The right column is
+always the weather and the same readings as Home Editorial.
+
+**Dither rule:** solid ink is measured; dithered pixels are forecast or ambient. So
+the daylight band and the forecast ranges are dithered with a solid tick for now;
+progress bars are solid for how far they have come and dithered for the distance
+left; and "No data" is printed in dither alone. Type never sits on the dither.
+
+`draw.pixel_dither` is an ordered 4x4 Bayer dither in squares of 2 panel pixels, on a
+grid fixed to panel coordinates. Tone snaps to five clean patterns (sparse diagonal,
+square grid, checkerboard, and the two inverses), so a gradient steps between textures
+rather than turning to noise. A square is printed whole or not at all, and every pixel
+is exactly the fill colour, so it passes the `dither=False` encoders untouched. Swiss
+sets `draw.fontmode = "1"` so its text adds no grey either. `test_swiss.py` holds both
+palettes to that.
 
 ## Home Editorial readings and hourly copy
 

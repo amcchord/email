@@ -880,7 +880,8 @@ def shape_ha_state(
         })
 
     # ── Garage ─────────────────────────────────────────────────────
-    garage = {"state": state_str(_GARAGE_ID) or "closed"}
+    # A missing entity is unknown, not closed.
+    garage = {"state": state_str(_GARAGE_ID) or "unknown"}
 
     # ── Open windows: covers, excluding shades/curtains/garage/skylights ─
     open_windows: list[dict] = []

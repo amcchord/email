@@ -165,38 +165,20 @@ def _stress_state(base: dict) -> dict:
 
 
 def _swiss_cells() -> List[tuple[str, Box, List[Box]]]:
-    """Returns (name, cell_box, allow_outside) for every Swiss region.
-    `allow_outside` lists every rectangle that's legitimately allowed
-    to contain ink immediately outside the cell -- both the declared
-    rule lines AND every other cell's own region (so a heating-inverted
-    sauna cell doesn't trip the audit on the pool cell above it)."""
+    """Returns (name, cell_box, allow_outside) for every Swiss region, where
+    `allow_outside` is the other regions: ink there belongs to them."""
     L = layout.SWISS
-    rules = [
-        L.header_rule_1, L.header_rule_2, L.header_rule_3,
-        L.body_mid_rule, L.hero_divider, L.hero_right_inner_rule,
-        L.bottom_rule_left, L.bottom_rule_right, L.bottom_middle_rule,
-        L.footer_top_rule, L.footer_rule_1, L.footer_rule_2, L.footer_rule_3,
-        L.header_bottom_rule,
-    ]
     all_cells = [
-        ("header_cell_wordmark", L.header_cell_wordmark),
-        ("header_cell_status", L.header_cell_status),
-        ("header_cell_active", L.header_cell_active),
-        ("header_cell_refresh", L.header_cell_refresh),
-        ("hero_left", L.hero_left),
-        ("hero_right_time", L.hero_right_time),
-        ("hero_right_outside", L.hero_right_outside),
-        ("bottom_left", L.bottom_left),
-        ("bottom_middle_top", L.bottom_middle_top),
-        ("bottom_middle_bottom", L.bottom_middle_bottom),
-        ("bottom_right", L.bottom_right),
-        ("footer_cell_src", L.footer_cell_src),
-        ("footer_cell_status", L.footer_cell_status),
-        ("footer_cell_zones", L.footer_cell_zones),
-        ("footer_cell_refresh", L.footer_cell_refresh),
+        ("header", L.masthead),
+        ("hero", L.hero),
+        ("band", L.band),
+        ("lower", L.lower),
+        ("weather", L.weather),
+        ("readings", L.readings),
+        ("footer", L.colophon),
     ]
     cell_boxes = [b for _, b in all_cells]
-    return [(name, box, rules + [b for b in cell_boxes if b is not box])
+    return [(name, box, [b for b in cell_boxes if b is not box])
             for name, box in all_cells]
 
 

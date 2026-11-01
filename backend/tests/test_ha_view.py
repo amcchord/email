@@ -243,7 +243,6 @@ def test_dryer_running_view_phase():
                     "remaining": "2026-05-05T19:00:00+00:00",
                     "powerOn": True}}
     v = build_appliance_view(ha, "dryer", ctx=ctx)
-    assert v.eyebrow_label == "DRYER RUNNING"
     assert v.accent_kind == "info"
     assert v.extras["phase"] == "running"
     assert v.status_label  # title-cased non-empty

@@ -28,7 +28,6 @@
 <script src="ha-data.js"></script>
 <script type="text/babel" src="design-canvas.jsx"></script>
 <script type="text/babel" src="editorial.jsx"></script>
-<script type="text/babel" src="swiss.jsx"></script>
 </head>
 <body>
 <div id="root"></div>
@@ -45,7 +44,6 @@ function App() {
   const DCSection = window.DCSection;
   const DCArtboard= window.DCArtboard;
   const Editorial = window.EditorialDashboard;
-  const Swiss     = window.SwissDashboard;
   const E_PAL     = window.E_PALETTE;
   const SW_PAL    = window.SW_PALETTE;
 
@@ -60,19 +58,6 @@ function App() {
         <DCArtboard id="ed-bw" label="Black & white · E1001" width={800} height={480}>
           <div className="device bw-shell">
             <Editorial ha={ha} palette={E_PAL.bw} />
-          </div>
-        </DCArtboard>
-      </DCSection>
-
-      <DCSection id="swiss" title="B · Swiss / Modular — grid, mono, ISO readouts">
-        <DCArtboard id="sw-6" label="6-color · E1002" width={800} height={480}>
-          <div className="device">
-            <Swiss ha={ha} palette={SW_PAL.six} />
-          </div>
-        </DCArtboard>
-        <DCArtboard id="sw-bw" label="Black & white · E1001" width={800} height={480}>
-          <div className="device bw-shell">
-            <Swiss ha={ha} palette={SW_PAL.bw} />
           </div>
         </DCArtboard>
       </DCSection>

@@ -244,9 +244,7 @@ class ApplianceView:
 
     kind: str
 
-    # Eyebrow text, in both designs' preferred shapes.
-    eyebrow_kicker: str             # editorial: "Laundry · Running"
-    eyebrow_label: str              # swiss: "WASHER RUNNING"
+    eyebrow_kicker: str             # "Laundry · Running"
 
     accent_kind: AccentKind
 
@@ -333,7 +331,7 @@ def _build_sauna_forecast_view(raw: Any, ctx: "RenderContext") -> Optional[dict]
     """Localized labels for ``sauna["forecast"]``; None when it is absent.
 
     keys: ready_reached:bool, ready_label:str? (None when the room won't reach
-    165), ready_in:str, target_reached:bool, target_label:str?, target_in:str,
+    165), ready_in:str, ready_in_minutes:int?, target_reached:bool, target_label:str?, target_in:str,
     fan_state:str, fan_label:str, fan_note:str, ends_before_ready:str?.
     """
     if not isinstance(raw, dict):
@@ -351,6 +349,7 @@ def _build_sauna_forecast_view(raw: Any, ctx: "RenderContext") -> Optional[dict]
         "ready_reached": bool(raw.get("readyReached")),
         "ready_label": _clock(raw["readyAt"], ctx) if raw.get("readyAt") else None,
         "ready_in": _span(raw.get("readyInMinutes")),
+        "ready_in_minutes": raw.get("readyInMinutes"),
         "target_reached": bool(raw.get("targetReached")),
         "target_label": _clock(raw["targetAt"], ctx) if raw.get("targetAt") else None,
         "target_in": _span(raw.get("targetInMinutes")),
@@ -381,7 +380,6 @@ def _build_sauna_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
             "Sauna \u00b7 Ready" if forecast and forecast["ready_reached"]
             else "Sauna \u00b7 Heating"
         ),
-        eyebrow_label="SAUNA HEATING",
         accent_kind="alert",
         current=current,
         target=target,
@@ -416,7 +414,6 @@ def _build_washer_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
     return ApplianceView(
         kind="washer",
         eyebrow_kicker="Laundry \u00b7 Running",
-        eyebrow_label="WASHER RUNNING",
         accent_kind="info",
         finish_at_local=finish_at,
         finish_label=_clock(finish_iso, ctx),
@@ -453,7 +450,6 @@ def _build_dryer_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
     return ApplianceView(
         kind="dryer",
         eyebrow_kicker="Laundry \u00b7 Drying",
-        eyebrow_label="DRYER RUNNING",
         accent_kind="info",
         finish_at_local=finish_at,
         finish_label=_clock(finish_iso, ctx),
@@ -475,7 +471,6 @@ def _build_dryer_done_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
     return ApplianceView(
         kind="dryer-done",
         eyebrow_kicker="Laundry \u00b7 Attention",
-        eyebrow_label="DRYER DONE",
         accent_kind="alert",
         finish_at_local=at_local,
         finish_label=_clock(at_iso, ctx),
@@ -494,7 +489,6 @@ def _build_washer_done_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
     return ApplianceView(
         kind="washer-done",
         eyebrow_kicker="Laundry \u00b7 Attention",
-        eyebrow_label="WASHER DONE",
         accent_kind="alert",
         finish_at_local=at_local,
         finish_label=_clock(at_iso, ctx),
@@ -521,7 +515,6 @@ def _build_dishwasher_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
     return ApplianceView(
         kind="dishwasher",
         eyebrow_kicker="Dishwasher \u00b7 Running",
-        eyebrow_label="DISHWASHER",
         accent_kind="info",
         finish_at_local=finish_at,
         finish_label=_clock(finish_iso, ctx),
@@ -543,7 +536,6 @@ def _build_pool_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
     return ApplianceView(
         kind="pool",
         eyebrow_kicker="Pool \u00b7 Heating",
-        eyebrow_label="POOL HEATING",
         accent_kind="alert",
         current=_safe_float(pool.get("current")),
         target=_safe_float(pool.get("target")),
@@ -576,7 +568,6 @@ def build_appliance_view(ha: dict, kind: str, *, ctx: "RenderContext") -> Applia
         return ApplianceView(
             kind=kind,
             eyebrow_kicker=kind.replace("-", " ").title(),
-            eyebrow_label=kind.upper(),
             accent_kind="info",
         )
     return builder(ha, ctx)

@@ -165,177 +165,56 @@ EDITORIAL = _build_editorial()
 
 @dataclass(frozen=True)
 class SwissLayout(PageLayout):
-    # Header
-    header_bottom_rule: Box
-    header_cell_wordmark: Box
-    header_cell_status: Box
-    header_cell_active: Box
-    header_cell_refresh: Box
-    header_rule_1: Box
-    header_rule_2: Box
-    header_rule_3: Box
+    """Two columns on a shared 24 px margin; no boxes, only whitespace and rules.
 
-    # Body dividers / rows
-    body_top_row: Box
-    body_bottom_row: Box
-    body_mid_rule: Box
-    hero_left: Box
-    hero_right: Box
-    hero_divider: Box
-    hero_right_time: Box
-    hero_right_outside: Box
-    hero_right_inner_rule: Box
-    bottom_left: Box
-    bottom_middle: Box
-    bottom_right: Box
-    bottom_rule_left: Box
-    bottom_rule_right: Box
-    bottom_middle_top: Box     # pool cell
-    bottom_middle_bottom: Box  # sauna cell
-    bottom_middle_rule: Box
-
-    # Footer
-    footer_top_rule: Box
-    footer_cell_src: Box
-    footer_cell_status: Box
-    footer_cell_zones: Box
-    footer_cell_refresh: Box
-    footer_rule_1: Box
-    footer_rule_2: Box
-    footer_rule_3: Box
+    ``masthead`` / ``body`` / ``colophon`` are the header row, everything
+    between, and the footer. The left column stacks hero, band, and lower; the
+    right column stacks the weather and the readings.
+    """
+    hero: Box
+    band: Box
+    lower: Box
+    weather: Box
+    readings: Box
 
 
 class SwissType:
-    """Swiss has much larger cells so the display digits can stay big --
-    the fix there is baseline anchoring, not resizing."""
-    WORDMARK_PX = 13
-    WORDMARK_TRACKING_EM = 0.20
-    HEADER_LABEL_PX = 11
-    HEADER_TRACKING_EM = 0.14
-
-    SECTION_LABEL_PX = 9
-    SECTION_TRACKING_EM = 0.22
-
-    HERO_QUIET_PX = 56
-    HERO_QUIET_GIANT_PX = 160
-    HERO_ACTIVE_HEAD_PX = 30
-    HERO_ACTIVE_BIG_PX = 84
-
-    TIME_BIG_PX = 64
-    OUTSIDE_BIG_PX = 56
-    POOL_SAUNA_BIG_PX = 50
-    FLOOR_TEMP_PX = 18
-    RADIANT_BIG_PX = 18
-
-    FOOTER_LABEL_PX = 10
-    FOOTER_TRACKING_EM = 0.16
-
-    # Auto-fit candidate lists -- largest first; the helper picks the
-    # biggest size that fits the column. The smallest entry must always
-    # fit so the renderer never silently overflows.
-    HERO_BIG_CANDIDATES = (84, 72, 64, 56, 48, 40, 36)
-    HERO_QUIET_CANDIDATES = (56, 48, 40, 32)
-    HERO_QUIET_GIANT_CANDIDATES = (160, 140, 120, 100)
-    HERO_ACTIVE_HEAD_CANDIDATES = (30, 26, 22)
-    TIME_BIG_CANDIDATES = (64, 56, 48, 40, 36, 32, 28)
-    OUTSIDE_BIG_CANDIDATES = (56, 48, 40, 32, 28)
-    POOL_SAUNA_BIG_CANDIDATES = (50, 44, 40, 32, 28)
-    FLOOR_TEMP_CANDIDATES = (18, 16, 14, 12)
-    RADIANT_BIG_CANDIDATES = (18, 16, 14, 12)
+    """Inter sizes in px. The hero picks the largest candidate that fits."""
+    HERO_CANDIDATES = (196, 180, 164, 148, 132, 116, 100, 84, 72)
+    WORD_CANDIDATES = (112, 96, 84, 72, 60, 48)
+    HERO_TRACKING_EM = -0.03
+    HEADER_PX = 17
+    LABEL_PX = 15
+    SMALL_PX = 14
+    VALUE_PX = 28
+    TEMP_PX = 84
 
 
 def _build_swiss() -> SwissLayout:
-    canvas = Box(0, 0, CANVAS_W, CANVAS_H)
-    masthead = Box(0, 0, CANVAS_W, 36)
-    body = Box(0, 36, CANVAS_W, CANVAS_H - 22)
-    colophon = Box(0, CANVAS_H - 22, CANVAS_W, CANVAS_H)
-
-    # Header
-    header_bottom_rule = Box(0, masthead.y1 - 2, CANVAS_W, masthead.y1)
-    header_cells = masthead.inset(bottom=2).split_cols(180, 1.0, 200, 110)
-    h_wm, h_status, h_active, h_refresh = header_cells
-    # Column separators (1-px hairlines between each pair).
-    h_rule_1 = Box(h_wm.x1, masthead.y0, h_wm.x1 + 1, masthead.y1 - 2)
-    h_rule_2 = Box(h_status.x1, masthead.y0, h_status.x1 + 1, masthead.y1 - 2)
-    h_rule_3 = Box(h_active.x1, masthead.y0, h_active.x1 + 1, masthead.y1 - 2)
-
-    # Body: top 170 (hero) + middle rule (2) + bottom (fills).
-    top_row, mid_rule, bottom_row = body.split_rows(170, 2, 1.0)
-
-    # Hero row: 7|5 split with a 2-px vertical rule.
-    col = CANVAS_W / 12.0
-    hero_split_x = int(round(col * 7))
-    hero_left = Box(top_row.x0, top_row.y0, hero_split_x, top_row.y1)
-    hero_divider = Box(hero_split_x, top_row.y0, hero_split_x + 2, top_row.y1)
-    hero_right = Box(hero_split_x + 2, top_row.y0, top_row.x1, top_row.y1)
-    # Right-side stack: time (top), outside (bottom), 1-px hairline between.
-    split_y = hero_right.y0 + hero_right.h // 2
-    hero_right_time = Box(hero_right.x0, hero_right.y0, hero_right.x1, split_y)
-    hero_right_inner_rule = Box(hero_right.x0, split_y, hero_right.x1, split_y + 1)
-    hero_right_outside = Box(hero_right.x0, split_y + 1, hero_right.x1, hero_right.y1)
-
-    # Bottom row: 4|4|4 columns with 2-px vertical dividers.
-    b1_x1 = int(round(col * 4))
-    b2_x1 = int(round(col * 8))
-    bottom_left = Box(bottom_row.x0, bottom_row.y0, b1_x1, bottom_row.y1)
-    b_rule_left = Box(b1_x1, bottom_row.y0, b1_x1 + 2, bottom_row.y1)
-    bottom_middle = Box(b1_x1 + 2, bottom_row.y0, b2_x1, bottom_row.y1)
-    b_rule_right = Box(b2_x1, bottom_row.y0, b2_x1 + 2, bottom_row.y1)
-    bottom_right = Box(b2_x1 + 2, bottom_row.y0, bottom_row.x1, bottom_row.y1)
-
-    # Middle column stacks pool (top half) + sauna (bottom half).
-    mid_split_y = bottom_middle.y0 + bottom_middle.h // 2
-    bottom_middle_top = Box(bottom_middle.x0, bottom_middle.y0, bottom_middle.x1, mid_split_y)
-    bottom_middle_rule = Box(bottom_middle.x0, mid_split_y, bottom_middle.x1, mid_split_y + 1)
-    bottom_middle_bottom = Box(bottom_middle.x0, mid_split_y + 1, bottom_middle.x1, bottom_middle.y1)
-
-    # Footer
-    footer_top_rule = Box(0, colophon.y0, CANVAS_W, colophon.y0 + 2)
-    foot_cells = colophon.inset(top=2).split_cols(120, 1.0, 1.0, 120)
-    f_src, f_status, f_zones, f_refresh = foot_cells
-    f_rule_1 = Box(f_src.x1, colophon.y0 + 2, f_src.x1 + 1, colophon.y1)
-    f_rule_2 = Box(f_status.x1, colophon.y0 + 2, f_status.x1 + 1, colophon.y1)
-    f_rule_3 = Box(f_zones.x1, colophon.y0 + 2, f_zones.x1 + 1, colophon.y1)
-
+    W, H = CANVAS_W, CANVAS_H
+    margin = 24
+    split = 516
+    column = 540
+    footer_y = 446
+    canvas = Box(0, 0, W, H)
+    header = Box(margin, 16, split, 42)
+    hero = Box(margin, 44, split, 268)
+    band = Box(margin, 270, split, 330)
+    lower = Box(margin, 336, split, 438)
+    weather = Box(column, 16, W - margin, 150)
+    readings = Box(column, 156, W - margin, 438)
+    colophon = Box(margin, footer_y, W - margin, H - 8)
     return SwissLayout(
         canvas=canvas,
-        gutter_x=0,
-        masthead=masthead,
-        body=body,
+        gutter_x=margin,
+        masthead=header,
+        body=Box(margin, 44, W - margin, 438),
         colophon=colophon,
-        header_bottom_rule=header_bottom_rule,
-        header_cell_wordmark=h_wm,
-        header_cell_status=h_status,
-        header_cell_active=h_active,
-        header_cell_refresh=h_refresh,
-        header_rule_1=h_rule_1,
-        header_rule_2=h_rule_2,
-        header_rule_3=h_rule_3,
-        body_top_row=top_row,
-        body_bottom_row=bottom_row,
-        body_mid_rule=mid_rule,
-        hero_left=hero_left,
-        hero_right=hero_right,
-        hero_divider=hero_divider,
-        hero_right_time=hero_right_time,
-        hero_right_outside=hero_right_outside,
-        hero_right_inner_rule=hero_right_inner_rule,
-        bottom_left=bottom_left,
-        bottom_middle=bottom_middle,
-        bottom_right=bottom_right,
-        bottom_rule_left=b_rule_left,
-        bottom_rule_right=b_rule_right,
-        bottom_middle_top=bottom_middle_top,
-        bottom_middle_bottom=bottom_middle_bottom,
-        bottom_middle_rule=bottom_middle_rule,
-        footer_top_rule=footer_top_rule,
-        footer_cell_src=f_src,
-        footer_cell_status=f_status,
-        footer_cell_zones=f_zones,
-        footer_cell_refresh=f_refresh,
-        footer_rule_1=f_rule_1,
-        footer_rule_2=f_rule_2,
-        footer_rule_3=f_rule_3,
+        hero=hero,
+        band=band,
+        lower=lower,
+        weather=weather,
+        readings=readings,
     )
 
 
@@ -390,21 +269,14 @@ def _verify() -> None:
     assert e.body_left_rail.x1 == e.body_lead.x0
     assert e.body_lead.x1 == e.body_right_rail.x0
 
-    # Swiss: header cells must tile and not overlap.
+    # Swiss: the left column stacks, and neither column crosses the other.
     s = SWISS
-    header_cells = (
-        s.header_cell_wordmark,
-        s.header_cell_status,
-        s.header_cell_active,
-        s.header_cell_refresh,
-    )
-    for c1, c2 in zip(header_cells, header_cells[1:]):
-        assert c1.x1 <= c2.x0, f"Swiss header cells overlap: {c1} / {c2}"
-
-    for b in (s.bottom_left, s.bottom_middle, s.bottom_right):
-        _assert_inside(b, s.body_bottom_row, "Swiss bottom column")
-    assert s.bottom_left.x1 <= s.bottom_middle.x0
-    assert s.bottom_middle.x1 <= s.bottom_right.x0
+    for upper, below in ((s.masthead, s.hero), (s.hero, s.band), (s.band, s.lower),
+                         (s.lower, s.colophon), (s.weather, s.readings),
+                         (s.readings, s.colophon)):
+        assert upper.y1 <= below.y0, f"Swiss rows overlap: {upper} / {below}"
+    for b in (s.masthead, s.hero, s.band, s.lower):
+        assert b.x1 <= s.weather.x0, f"Swiss columns overlap: {b}"
 
 
 _verify()

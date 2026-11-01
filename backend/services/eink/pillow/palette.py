@@ -1,8 +1,8 @@
 """Color palettes for the Pillow e-ink dashboard.
 
-Ports `E_PALETTE` from docs/design/editorial.jsx and `SW_PALETTE` from
-docs/design/swiss.jsx verbatim. Per HANDOFF.md Sec 2.1, `muted`/`soft` are
-set to pure ink in both palettes so no grey ever lands on the panel; the
+`E_PALETTE` ports docs/design/editorial.jsx verbatim; the Swiss palette shares
+its accents. Per HANDOFF.md Sec 2.1, `muted`/`soft` are set to pure ink in both
+palettes so no grey ever lands on the panel; the
 quantizer would snap it to black anyway.
 """
 from __future__ import annotations
@@ -43,9 +43,8 @@ class Palette:
     def is_bw(self) -> bool:
         """True when this is a 2-color (B&W) palette.
 
-        Used only at the one allowed branch-point (HANDOFF Sec 8): the
-        inverted Pool/Sauna cells in Swiss, where the background needs to
-        differ from the foreground to read as a solid fill.
+        Used where a design needs the background to differ from an accent
+        that collapses to ink in black and white, as Day Ahead's fills do.
         """
         return self.red == self.ink
 
@@ -78,7 +77,7 @@ E_PALETTE_BW = Palette(
 )
 
 
-# ── Swiss palette (ports swiss.jsx SW_PALETTE) ─────────────────────────
+# ── Swiss palette ─────────────────────────
 SW_PALETTE_SIX = Palette(
     bg=_hex("#ffffff"),
     ink=_hex("#0a0a0a"),

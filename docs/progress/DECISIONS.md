@@ -1105,3 +1105,16 @@ add a new entry that explicitly supersedes the old one.
 - Consequence: Two copies of the coefficients exist. A refit must update both or the
   screens will disagree. Reverse this by publishing template sensors from Home
   Assistant and reading them here, which would also let automations use the forecast.
+
+## D-055 — In Swiss, solid ink is measured and dithered pixels are not
+
+- Date: 2026-11-01
+- Status: accepted
+- Decision: Swiss uses an ordered pixel dither only for forecast or ambient information
+  (daylight, forecast ranges, the rest of a heat-up, "No data") and solid ink for
+  measurements. Type never sits on the dither. Hero digits' shadows are the one
+  decorative use.
+- Reason: Without a rule, a dither is texture. With it, a 1-bit panel can show "known"
+  against "expected" at a glance, which it otherwise has no way to do.
+- Consequence: New Swiss elements must choose a side. Reverse by removing the rule from
+  `swiss.py` and the README; `draw.pixel_dither` itself carries no such meaning.

@@ -1,5 +1,9 @@
 # Cambridge · E‑Ink Home Dashboard — Implementation Handoff
 
+> **Note (2026-11-01):** Direction B (Swiss) described below was retired and
+> rebuilt. `swiss.jsx` is gone; the current design is documented in
+> `backend/services/eink/README.md`. Direction A (Editorial) still applies.
+
 > A complete brief for an implementing LLM or engineer. Read top‑to‑bottom.
 > The mockup lives in `Cambridge Dashboard.html`; this document explains what
 > was designed, why, and how to translate it onto the real device.

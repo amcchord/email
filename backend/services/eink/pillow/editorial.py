@@ -27,7 +27,7 @@ from PIL import Image, ImageDraw
 
 from ..sauna_forecast import READY_F, TARGET_F
 from . import flavor, fonts, layout
-from .appliances import ActiveAppliance, pick_active
+from .appliances import ActiveAppliance, pick_active, pool_near_target
 from .draw import (
     Box,
     Run,
@@ -95,19 +95,6 @@ def _reading(value: Any) -> str:
     return "—" if to_float(value) is None else str(safe_round(value))
 
 
-def _pool_near_target(view: ApplianceView, tol: float = 1.0) -> bool:
-    """True when the pool is at target or within ``tol`` degrees of it.
-
-    Used to drop the pool from the editorial center column once it's
-    effectively done heating; the right-rail pool stat still shows the
-    live water temp. Returns False on missing data so we never hide the
-    pool on an incomplete snapshot.
-    """
-    if view.current is None or view.target is None:
-        return False
-    return abs(view.current - view.target) <= tol
-
-
 def render_dashboard(
     img: Image.Image,
     ha: dict,
@@ -124,7 +111,7 @@ def render_dashboard(
     # ha["pool"] directly) still shows the live water temperature.
     active = [
         a for a in active
-        if not (a.kind == "pool" and _pool_near_target(a.view))
+        if not (a.kind == "pool" and pool_near_target(a.view))
     ]
     lead = active[0] if active else None
     rest = active[1:]
