@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-09-27
+Last updated: 2026-11-01
 
 ## Active Objective
 
@@ -15,14 +15,15 @@ the pause.
 
 ## Baseline
 
-- Home Editorial runtime `22d6c0320ec7d551e59f2e5df982f8b022ca8a81` is
-  deployed as of 2026-09-27. The House rail shows Primary Bedroom and Living
-  Room temperatures plus today's coffee cups from the HA daily meter. Hourly
-  quotes/observations now use Claude Fable 5.1; a fresh quote was generated,
-  saved, and read back after deployment. Both 800x480 panel formats rendered
-  successfully with live data. Only `mailapp` and `mailworker-cron` restarted;
-  all seven services and public health passed, with zero automatic restarts
-  or post-start warning/error entries in the affected services.
+- Home Editorial runtime `a998fc9dc1cfc7b7199a85d0a14442751aeab4b2` is
+  deployed as of 2026-11-01. The House rail shows Primary Suite and Nursery
+  temperatures plus today's coffee cups, and the time appears only in the
+  masthead. A Home Assistant failure now renders "No news from the house" with
+  dashes instead of the calm edition and false zeros. The sauna card shows the
+  heat-up forecast, ported from the Home Assistant panel. Hourly
+  quotes/observations use Claude Opus 5.5 at extra-high effort. Only `mailapp`,
+  `mailworker`, and `mailworker-cron` restarted; health and services passed.
+  The forecast has not yet been seen on a real heating session on the panel.
 - Validation limitation: six unchanged Swiss/Day Ahead image goldens fail in
   the current rasterizer, also reproduced with the original mainline code.
   All other 885 backend tests, all 555 frontend tests, the build, and all 20
