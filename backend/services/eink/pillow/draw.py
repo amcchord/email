@@ -163,18 +163,19 @@ _BAYER_4 = (
 _DITHER_LEVELS = (0, 2, 4, 8, 12, 14, 16)
 
 
-def pixel_dither(
+def bayer_dither(
     img: Image.Image,
     origin: Tuple[int, int],
     tone: Image.Image,
     fill: RGB,
 ) -> None:
-    """Print an ``L`` tone map (0 = no ink, 255 = solid) as an ordered 1x pixel dither.
+    """Print an ``L`` tone map (0 = no ink, 255 = solid) as an ordered 1x Bayer dither.
 
-    Each panel pixel is decided on its own against a Bayer matrix fixed to panel
-    coordinates, so neighbouring areas line up. Tone snaps to ``_DITHER_LEVELS``, so a
-    gradient steps through clean patterns. Every painted pixel is exactly ``fill``, so
-    the result passes the ``dither=False`` encoders untouched.
+    For flat tones. Each panel pixel is decided on its own against a matrix fixed to
+    panel coordinates, so neighbouring areas line up, and tone snaps to
+    ``_DITHER_LEVELS``, so every area is a clean, regular pattern. Every painted pixel
+    is exactly ``fill``, so the result passes the ``dither=False`` encoders untouched.
+    Use ``atkinson_dither`` for gradients, which this would turn into hard steps.
     """
     x0, y0 = origin
     level_for = [
@@ -193,6 +194,44 @@ def pixel_dither(
     # A pixel takes ink where its level is above its Bayer threshold.
     mask = ImageChops.subtract(levels, screen).point(lambda v: 255 if v else 0)
     img.paste(fill, (x0, y0), mask)
+
+
+def atkinson_dither(
+    img: Image.Image,
+    origin: Tuple[int, int],
+    tone: Image.Image,
+    fill: RGB,
+) -> None:
+    """Print an ``L`` tone map (0 = no ink, 255 = solid) by Atkinson error diffusion.
+
+    For gradients, which it renders smoothly with no bands. Each pixel passes 1/8 of
+    its error to six forward neighbours and drops the rest, which keeps highlights
+    clean and shadows deep. A pixel with no tone never takes ink, so a shape's edge
+    stays sharp however much error reaches it. Deterministic, so an unchanged gradient
+    keeps a stable image hash, and every painted pixel is exactly ``fill``.
+    """
+    width, height = tone.size
+    source = tone.tobytes()
+    values = [float(v) for v in source]
+    ink = bytearray(width * height)
+    for y in range(height):
+        row = y * width
+        for x in range(width):
+            index = row + x
+            if not source[index]:
+                continue
+            value = values[index]
+            printed = 255.0 if value >= 128 else 0.0
+            if printed:
+                ink[index] = 255
+            share = (value - printed) / 8
+            if share:
+                for dx, dy in ((1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)):
+                    nx, ny = x + dx, y + dy
+                    if 0 <= nx < width and ny < height:
+                        values[ny * width + nx] += share
+    mask = Image.frombytes("L", tone.size, bytes(ink))
+    img.paste(fill, origin, mask)
 
 
 def stroke_box(

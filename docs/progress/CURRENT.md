@@ -24,8 +24,8 @@ the pause.
   quotes/observations use Claude Opus 5.5 at extra-high effort. Only `mailapp`,
   `mailworker`, and `mailworker-cron` restarted; health and services passed.
   The forecast has not yet been seen on a real heating session on the panel.
-- The rebuilt Swiss design is deployed at `156d4fedf88bf0495ade2a0d7bcd00954fd73541`
-  (one big number, 1x ordered pixel dither; see D-055). No terminal has selected it yet,
+- The rebuilt Swiss design is deployed at `5c6e6af33aae6e66c1b3ed864faf94a10655b7bb`
+  (one big number; 1x Atkinson for gradients and Bayer for flat tones; see D-055). No terminal has selected it yet,
   and it has not been judged on a physical panel.
 - Validation limitation: six unchanged Swiss/Day Ahead image goldens fail in
   the current rasterizer, also reproduced with the original mainline code.

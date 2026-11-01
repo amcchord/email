@@ -1114,6 +1114,8 @@ add a new entry that explicitly supersedes the old one.
   (daylight, forecast ranges, the rest of a heat-up, "No data") and solid ink for
   measurements. Type never sits on the dither. Hero digits' shadows are the one
   decorative use.
+- Decision: The dither follows the tone. Gradients use Atkinson error diffusion, which
+  stays smooth; flat levels use a Bayer pattern, which stays regular. Both work at 1x.
 - Reason: Without a rule, a dither is texture. With it, a 1-bit panel can show "known"
   against "expected" at a glance, which it otherwise has no way to do.
 - Consequence: New Swiss elements must choose a side. Reverse by removing the rule from

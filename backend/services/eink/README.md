@@ -2,7 +2,7 @@
 
 Renders the 800x480 BMP/PNG that drives the e-ink dashboard. Two
 designs share one data layer: **Editorial** (newspaper-style) and
-**Swiss** (one big number, with an ordered pixel dither). Both are pure Pillow.
+**Swiss** (one big number, with 1x pixel dithers). Both are pure Pillow.
 
 ```
 backend/services/eink/
@@ -154,12 +154,19 @@ the daylight band and the forecast ranges are dithered with a solid tick for now
 progress bars are solid for how far they have come and dithered for the distance
 left; and "No data" is printed in dither alone. Type never sits on the dither.
 
-`draw.pixel_dither` is an ordered 4x4 Bayer dither at 1x: each panel pixel is decided on
-its own, on a grid fixed to panel coordinates. Tone snaps to five clean patterns (sparse
-diagonal, square grid, checkerboard, and the two inverses), so a gradient steps between
-textures rather than turning to noise. Every pixel is exactly the fill colour, so it
-passes the `dither=False` encoders untouched. Swiss sets `draw.fontmode = "1"` so its
-text adds no grey either. `test_swiss.py` holds both palettes to that.
+The dither follows the tone, and both work at 1x, one decision per panel pixel:
+
+- **Gradients** use `draw.atkinson_dither`, error diffusion that renders them smoothly:
+  the daylight band, the sun, and the attention slab's fade. It is deterministic, and a
+  pixel with no tone never takes ink, so shapes keep sharp edges.
+- **Flat levels** use `draw.bayer_dither`, an ordered 4x4 pattern fixed to panel
+  coordinates: the digits' shadow, forecast ranges, and what's left of a progress bar.
+  Tone snaps to five clean patterns (sparse diagonal, square grid, checkerboard, and the
+  two inverses), so each area is perfectly regular.
+
+Every pixel from either is exactly the fill colour, so both pass the `dither=False`
+encoders untouched. Swiss sets `draw.fontmode = "1"` so its text adds no grey either.
+`test_swiss.py` holds both palettes to that.
 
 ## Home Editorial readings and hourly copy
 

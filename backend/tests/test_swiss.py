@@ -7,7 +7,7 @@ from PIL import Image
 from backend.services.eink import ha_client as hc
 from backend.services.eink.pillow import render_eink_image, swiss
 from backend.services.eink.pillow.appliances import pick_active
-from backend.services.eink.pillow.draw import pixel_dither
+from backend.services.eink.pillow.draw import atkinson_dither, bayer_dither
 from backend.services.eink.pillow.palette import get_palette
 from backend.services.eink.pillow.render_ctx import build_render_context
 
@@ -102,9 +102,15 @@ def test_every_pixel_is_a_palette_ink(palette, data):
     assert colours <= allowed, colours - allowed
 
 
+def _atkinson(tone, origin=(0, 0)):
+    image = Image.new("1", (origin[0] + tone.width, origin[1] + tone.height), 1)
+    atkinson_dither(image, origin, tone, 0)
+    return image
+
+
 def _uniform(tone_value, size=(64, 64), origin=(0, 0)):
     image = Image.new("1", (origin[0] + size[0], origin[1] + size[1]), 1)
-    pixel_dither(image, origin, Image.new("L", size, tone_value), 0)
+    bayer_dither(image, origin, Image.new("L", size, tone_value), 0)
     return image
 
 
@@ -116,11 +122,11 @@ def _ink_fraction(image):
     (0, 0), (32, 2 / 16), (64, 4 / 16), (128, 8 / 16), (191, 12 / 16), (223, 14 / 16),
     (255, 1),
 ])
-def test_dither_snaps_to_exact_clean_levels(tone_value, fraction):
+def test_bayer_snaps_to_exact_clean_levels(tone_value, fraction):
     assert _ink_fraction(_uniform(tone_value, (96, 96))) == fraction
 
 
-def test_dither_works_at_one_panel_pixel():
+def test_bayer_works_at_one_panel_pixel():
     """The midpoint is a checkerboard of single pixels, the finest the panel can show."""
     image = _uniform(128, (32, 32))
     for y in range(32):
@@ -128,7 +134,7 @@ def test_dither_works_at_one_panel_pixel():
             assert (image.getpixel((x, y)) == 0) == ((x + y) % 2 == 0), (x, y)
 
 
-def test_dither_lightest_pattern_is_isolated_single_pixels():
+def test_bayer_lightest_pattern_is_isolated_single_pixels():
     image = _uniform(32, (32, 32))
     for y in range(1, 31):
         for x in range(1, 31):
@@ -138,12 +144,12 @@ def test_dither_lightest_pattern_is_isolated_single_pixels():
                 assert all(neighbours), (x, y)
 
 
-def test_dither_light_and_dark_levels_mirror_in_coverage():
+def test_bayer_light_and_dark_levels_mirror_in_coverage():
     assert _ink_fraction(_uniform(32, (32, 32))) == 1 - _ink_fraction(_uniform(223, (32, 32)))
 
 
 @pytest.mark.parametrize("tone_value", [32, 64, 128, 191, 223])
-def test_dither_is_a_perfect_repeat(tone_value):
+def test_bayer_is_a_perfect_repeat(tone_value):
     image = _uniform(tone_value, (64, 64))
     block = image.crop((0, 0, 4, 4)).tobytes()
     for y in range(0, 64, 4):
@@ -151,18 +157,56 @@ def test_dither_is_a_perfect_repeat(tone_value):
             assert image.crop((x, y, x + 4, y + 4)).tobytes() == block, (x, y)
 
 
-def test_dither_grid_is_fixed_to_panel_coordinates():
+def test_bayer_grid_is_fixed_to_panel_coordinates():
     whole = _uniform(100, (64, 32))
     split = Image.new("1", (64, 32), 1)
-    pixel_dither(split, (0, 0), Image.new("L", (23, 32), 100), 0)
-    pixel_dither(split, (23, 0), Image.new("L", (41, 32), 100), 0)
+    bayer_dither(split, (0, 0), Image.new("L", (23, 32), 100), 0)
+    bayer_dither(split, (23, 0), Image.new("L", (41, 32), 100), 0)
     assert whole.tobytes() == split.tobytes()
 
 
-def test_dither_paints_only_the_fill_colour():
+def test_bayer_paints_only_the_fill_colour():
     image = Image.new("RGB", (32, 32), (255, 255, 255))
-    pixel_dither(image, (0, 0), Image.linear_gradient("L").resize((32, 32)), (200, 40, 30))
+    bayer_dither(image, (0, 0), Image.linear_gradient("L").resize((32, 32)), (200, 40, 30))
     assert {colour for _, colour in image.getcolors()} == {(255, 255, 255), (200, 40, 30)}
+
+
+def test_atkinson_keeps_blank_and_solid_exact():
+    assert _ink_fraction(_atkinson(Image.new("L", (32, 32), 0))) == 0
+    assert _ink_fraction(_atkinson(Image.new("L", (32, 32), 255))) == 1
+
+
+def test_atkinson_renders_a_gradient_without_bands():
+    """Ink rises steadily across a ramp, unlike Bayer's snapped steps."""
+    ramp = Image.linear_gradient("L").rotate(90).resize((256, 64))
+    columns = [_ink_fraction(_atkinson(ramp).crop((x, 0, x + 32, 64))) for x in range(0, 256, 32)]
+    assert sorted(columns, reverse=True) == columns or sorted(columns) == columns
+    assert len(set(columns)) == len(columns), columns
+    bayer = Image.new("1", ramp.size, 1)
+    bayer_dither(bayer, (0, 0), ramp, 0)
+    snapped = {_ink_fraction(bayer.crop((x, 0, x + 32, 64))) for x in range(0, 256, 32)}
+    assert len(snapped) < len(columns)
+
+
+def test_atkinson_never_inks_outside_the_shape():
+    tone = Image.new("L", (40, 40), 0)
+    tone.paste(230, (10, 10, 30, 30))
+    image = _atkinson(tone)
+    assert image.point(lambda v: 0 if v else 255).getbbox()[:2] >= (10, 10)
+    assert image.point(lambda v: 0 if v else 255).getbbox()[2:] <= (30, 30)
+
+
+def test_atkinson_is_deterministic_and_paints_only_the_fill_colour():
+    ramp = Image.linear_gradient("L").resize((48, 48))
+    assert _atkinson(ramp).tobytes() == _atkinson(ramp).tobytes()
+    image = Image.new("RGB", (48, 48), (255, 255, 255))
+    atkinson_dither(image, (0, 0), ramp, (200, 40, 30))
+    assert {colour for _, colour in image.getcolors()} == {(255, 255, 255), (200, 40, 30)}
+
+
+def test_atkinson_prints_at_its_origin():
+    tone = Image.new("L", (8, 8), 255)
+    assert _atkinson(tone, origin=(5, 3)).point(lambda v: 0 if v else 255).getbbox() == (5, 3, 13, 11)
 
 
 def test_calm_hero_is_the_clock_and_time_appears_once(monkeypatch):
