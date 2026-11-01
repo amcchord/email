@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Callable, Iterable, List, Optional, Sequence, Tuple, Union
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 from .palette import RGB
 
@@ -168,36 +168,30 @@ def pixel_dither(
     origin: Tuple[int, int],
     tone: Image.Image,
     fill: RGB,
-    *,
-    cell: int = 2,
 ) -> None:
-    """Print an ``L`` tone map (0 = no ink, 255 = solid) as an ordered pixel dither.
+    """Print an ``L`` tone map (0 = no ink, 255 = solid) as an ordered 1x pixel dither.
 
-    Ink comes in squares of ``cell`` panel pixels on a grid fixed to panel
-    coordinates, so neighbouring areas line up. Tone is sampled once per square and
-    snapped to ``_DITHER_LEVELS``, so a gradient steps through clean patterns. A
-    square is printed whole and inside ``tone``'s rectangle, or not at all, and every
-    painted pixel is exactly ``fill``, so the result passes the ``dither=False``
-    encoders untouched.
+    Each panel pixel is decided on its own against a Bayer matrix fixed to panel
+    coordinates, so neighbouring areas line up. Tone snaps to ``_DITHER_LEVELS``, so a
+    gradient steps through clean patterns. Every painted pixel is exactly ``fill``, so
+    the result passes the ``dither=False`` encoders untouched.
     """
     x0, y0 = origin
-    tones = tone.load()
-    mask = Image.new("1", tone.size)
-    paint = ImageDraw.Draw(mask)
-    first_col = math.ceil(x0 / cell)
-    first_row = math.ceil(y0 / cell)
-    for row in range(first_row, (y0 + tone.height) // cell):
-        top = row * cell - y0
-        thresholds = _BAYER_4[row % 4]
-        for col in range(first_col, (x0 + tone.width) // cell):
-            left = col * cell - x0
-            value = tones[left + cell // 2, top + cell // 2]
-            if value == 0:
-                continue
-            wanted = value * 16 / 255
-            level = min(_DITHER_LEVELS, key=lambda candidate: abs(candidate - wanted))
-            if level > thresholds[col % 4]:
-                paint.rectangle([(left, top), (left + cell - 1, top + cell - 1)], fill=1)
+    level_for = [
+        min(_DITHER_LEVELS, key=lambda level: abs(level - value * 16 / 255))
+        for value in range(256)
+    ]
+    levels = tone.point(level_for)
+    tile = Image.new("L", (4, 4))
+    for row, thresholds in enumerate(_BAYER_4):
+        for col, threshold in enumerate(thresholds):
+            tile.putpixel((col, row), threshold)
+    screen = Image.new("L", tone.size)
+    for y in range(-(y0 % 4), tone.height, 4):
+        for x in range(-(x0 % 4), tone.width, 4):
+            screen.paste(tile, (x, y))
+    # A pixel takes ink where its level is above its Bayer threshold.
+    mask = ImageChops.subtract(levels, screen).point(lambda v: 255 if v else 0)
     img.paste(fill, (x0, y0), mask)
 
 

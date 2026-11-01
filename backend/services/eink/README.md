@@ -154,13 +154,12 @@ the daylight band and the forecast ranges are dithered with a solid tick for now
 progress bars are solid for how far they have come and dithered for the distance
 left; and "No data" is printed in dither alone. Type never sits on the dither.
 
-`draw.pixel_dither` is an ordered 4x4 Bayer dither in squares of 2 panel pixels, on a
-grid fixed to panel coordinates. Tone snaps to five clean patterns (sparse diagonal,
-square grid, checkerboard, and the two inverses), so a gradient steps between textures
-rather than turning to noise. A square is printed whole or not at all, and every pixel
-is exactly the fill colour, so it passes the `dither=False` encoders untouched. Swiss
-sets `draw.fontmode = "1"` so its text adds no grey either. `test_swiss.py` holds both
-palettes to that.
+`draw.pixel_dither` is an ordered 4x4 Bayer dither at 1x: each panel pixel is decided on
+its own, on a grid fixed to panel coordinates. Tone snaps to five clean patterns (sparse
+diagonal, square grid, checkerboard, and the two inverses), so a gradient steps between
+textures rather than turning to noise. Every pixel is exactly the fill colour, so it
+passes the `dither=False` encoders untouched. Swiss sets `draw.fontmode = "1"` so its
+text adds no grey either. `test_swiss.py` holds both palettes to that.
 
 ## Home Editorial readings and hourly copy
 

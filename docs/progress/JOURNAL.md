@@ -28,6 +28,8 @@ secrets, email contents, OAuth tokens, or raw private production data.
   higher entries, and `bw` terminals still fetching `image.bmp`. Live data rendered
   through the deployed code at exact BMP sizes: Swiss in both palettes, Editorial bw.
   Rollback is a reviewed Git revert.
+- Follow-up on request: the dither moved from 2 px squares to true 1x, one decision per
+  panel pixel, and the cell-size option was removed. Not deployed yet; live is `952926b`.
 - Next action: choose Swiss on a terminal to judge the dither on real hardware.
 
 ## 2026-11-01 — Home Editorial truth fixes, sauna forecast, and Opus 5.5

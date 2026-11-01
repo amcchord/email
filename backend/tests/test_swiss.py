@@ -102,9 +102,9 @@ def test_every_pixel_is_a_palette_ink(palette, data):
     assert colours <= allowed, colours - allowed
 
 
-def _uniform(tone_value, size=(64, 64), origin=(0, 0), cell=2):
+def _uniform(tone_value, size=(64, 64), origin=(0, 0)):
     image = Image.new("1", (origin[0] + size[0], origin[1] + size[1]), 1)
-    pixel_dither(image, origin, Image.new("L", size, tone_value), 0, cell=cell)
+    pixel_dither(image, origin, Image.new("L", size, tone_value), 0)
     return image
 
 
@@ -116,50 +116,53 @@ def _ink_fraction(image):
     (0, 0), (32, 2 / 16), (64, 4 / 16), (128, 8 / 16), (191, 12 / 16), (223, 14 / 16),
     (255, 1),
 ])
-@pytest.mark.parametrize("cell", [1, 2, 3])
-def test_dither_snaps_to_exact_clean_levels(tone_value, fraction, cell):
-    assert _ink_fraction(_uniform(tone_value, (96, 96), cell=cell)) == fraction
+def test_dither_snaps_to_exact_clean_levels(tone_value, fraction):
+    assert _ink_fraction(_uniform(tone_value, (96, 96))) == fraction
 
 
-def test_dither_midpoint_is_a_true_checkerboard():
-    image = _uniform(128, (32, 32), cell=2)
-    for y in range(0, 32, 2):
-        for x in range(0, 32, 2):
-            assert (image.getpixel((x, y)) == 0) == ((x // 2 + y // 2) % 2 == 0), (x, y)
+def test_dither_works_at_one_panel_pixel():
+    """The midpoint is a checkerboard of single pixels, the finest the panel can show."""
+    image = _uniform(128, (32, 32))
+    for y in range(32):
+        for x in range(32):
+            assert (image.getpixel((x, y)) == 0) == ((x + y) % 2 == 0), (x, y)
 
 
-def test_dither_light_and_dark_patterns_are_exact_inverses():
-    light = _uniform(32, (32, 32))
-    dark = _uniform(223, (32, 32))
-    # The inverse pattern sits on the complementary Bayer positions, so counts match.
-    assert _ink_fraction(light) == 1 - _ink_fraction(dark)
+def test_dither_lightest_pattern_is_isolated_single_pixels():
+    image = _uniform(32, (32, 32))
+    for y in range(1, 31):
+        for x in range(1, 31):
+            if image.getpixel((x, y)) == 0:
+                neighbours = [image.getpixel((x + dx, y + dy))
+                              for dx in (-1, 0, 1) for dy in (-1, 0, 1) if dx or dy]
+                assert all(neighbours), (x, y)
+
+
+def test_dither_light_and_dark_levels_mirror_in_coverage():
+    assert _ink_fraction(_uniform(32, (32, 32))) == 1 - _ink_fraction(_uniform(223, (32, 32)))
 
 
 @pytest.mark.parametrize("tone_value", [32, 64, 128, 191, 223])
-def test_dither_is_a_perfect_repeat_of_square_cells(tone_value):
-    image = _uniform(tone_value, (64, 64), cell=2)
-    block = image.crop((0, 0, 8, 8)).tobytes()
-    for y in range(0, 64, 8):
-        for x in range(0, 64, 8):
-            assert image.crop((x, y, x + 8, y + 8)).tobytes() == block, (x, y)
-    # Every cell is one colour: nothing smaller than a whole square is printed.
-    for y in range(0, 64, 2):
-        for x in range(0, 64, 2):
-            colours = {image.getpixel((x + i, y + j)) for i in (0, 1) for j in (0, 1)}
-            assert len(colours) == 1, (x, y)
-
-
-def test_dither_never_prints_a_partial_square_at_its_edge():
-    origin, size = (13, 11), (30, 17)
-    image = _uniform(255, size, origin)
-    assert image.point(lambda v: 0 if v else 255).getbbox() == (14, 12, 42, 28)
+def test_dither_is_a_perfect_repeat(tone_value):
+    image = _uniform(tone_value, (64, 64))
+    block = image.crop((0, 0, 4, 4)).tobytes()
+    for y in range(0, 64, 4):
+        for x in range(0, 64, 4):
+            assert image.crop((x, y, x + 4, y + 4)).tobytes() == block, (x, y)
 
 
 def test_dither_grid_is_fixed_to_panel_coordinates():
     whole = _uniform(100, (64, 32))
-    part = _uniform(100, (27, 32), origin=(23, 0))
-    box = (24, 2, 48, 30)
-    assert whole.crop(box).tobytes() == part.crop(box).tobytes()
+    split = Image.new("1", (64, 32), 1)
+    pixel_dither(split, (0, 0), Image.new("L", (23, 32), 100), 0)
+    pixel_dither(split, (23, 0), Image.new("L", (41, 32), 100), 0)
+    assert whole.tobytes() == split.tobytes()
+
+
+def test_dither_paints_only_the_fill_colour():
+    image = Image.new("RGB", (32, 32), (255, 255, 255))
+    pixel_dither(image, (0, 0), Image.linear_gradient("L").resize((32, 32)), (200, 40, 30))
+    assert {colour for _, colour in image.getcolors()} == {(255, 255, 255), (200, 40, 30)}
 
 
 def test_calm_hero_is_the_clock_and_time_appears_once(monkeypatch):
