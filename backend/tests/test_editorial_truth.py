@@ -164,11 +164,12 @@ def test_window_chip_says_what_it_means(monkeypatch, count, label):
     assert label in spy.drawn
 
 
-@pytest.mark.parametrize("headline", [
-    editorial._washer_done_headline, editorial._dryer_done_headline,
+@pytest.mark.parametrize("head", [
+    head for tiers in (flavor._WASHER_DONE, flavor._DRYER_DONE) for _, pool in tiers for head in pool
 ])
-def test_fixed_hero_headlines_fit_their_two_lines(headline):
-    assert len(_wrap_runs_into_lines(headline(P), COLUMN)) == 2
+def test_finished_cycle_headlines_fit_their_two_lines(head):
+    copy = {"head_pre": head[0], "head_italic": head[1]}
+    assert len(_wrap_runs_into_lines(editorial._done_headline(copy, P), COLUMN)) == 2
 
 
 def test_every_appliance_headline_fits_its_two_lines():
@@ -277,15 +278,14 @@ def _sauna_shape(**forecast):
 
 
 @pytest.mark.parametrize(("forecast", "expected"), [
-    ({}, ["Sauna · Heating", "1:34 PM.", "In 1 h 1 min. 3 of 3 elements on; door closed.",
-          "19% RH", "GOAL 185°", "IN 40 min", "10 min Med"]),
+    ({}, ["Sauna · Heating", "1:34 PM.", "19% RH", "GOAL 185°", "IN 40 min", "10 min Med"]),
     ({"fan": {"state": "due"}}, ["Run now", "Run the fan now, 10 min on Medium."]),
     ({"fan": {"state": "running", "minutesLeft": 4}},
      ["Running", "4 min left", "fan has 4 min left."]),
     ({"readyReached": True, "readyAt": (NOW - timedelta(minutes=3)).isoformat(),
       "readyInMinutes": None, "targetReached": True, "targetAt": NOW.isoformat(),
       "targetInMinutes": None},
-     ["Sauna · Ready", "ready.", "Room reached 165° at 12:30 PM.", "REACHED", "READY"]),
+     ["Sauna · Ready", "ready.", "12:30 PM", "REACHED", "READY"]),
     ({"readyAt": None, "readyInMinutes": None, "targetAt": None, "targetInMinutes": None},
      ["165°.", "The room levels off below it at this target.", "ABOVE TARGET"]),
     ({"sessionEndsBeforeReadyAt": (NOW + timedelta(minutes=5)).isoformat()},

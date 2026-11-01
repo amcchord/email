@@ -332,7 +332,9 @@ def _build_sauna_forecast_view(raw: Any, ctx: "RenderContext") -> Optional[dict]
 
     keys: ready_reached:bool, ready_label:str? (None when the room won't reach
     165), ready_in:str, ready_in_minutes:int?, target_reached:bool, target_label:str?, target_in:str,
-    fan_state:str, fan_label:str, fan_note:str, ends_before_ready:str?.
+    fan_state:str, fan_label:str, fan_note:str, ends_before_ready:str?,
+    fan_in_minutes:int?, curve:list[(minute, °F)], history:list[(minute, °F)]
+    (minutes are relative to now; history's are negative).
     """
     if not isinstance(raw, dict):
         return None
@@ -357,6 +359,9 @@ def _build_sauna_forecast_view(raw: Any, ctx: "RenderContext") -> Optional[dict]
         "fan_label": fan_label,
         "fan_note": fan_note,
         "ends_before_ready": _clock(ends, ctx) if ends else None,
+        "fan_in_minutes": raw.get("fanInMinutes"),
+        "curve": list(enumerate(raw.get("roomCurve") or [])),
+        "history": [(row["minutes"], row["value"]) for row in raw.get("roomHistory") or []],
     }
 
 
@@ -397,8 +402,35 @@ def _build_sauna_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
     )
 
 
+def _build_cycle_view(raw: Any, finish_at: Optional[datetime],
+                      ctx: "RenderContext") -> Optional[dict]:
+    """Time-based progress for a laundry cycle; None without its start and finish.
+
+    keys: pct:int, started_label:str, elapsed_label:str, elapsed_minutes:float,
+    segments:list[(status, minutes)] (time spent in each phase so far, oldest first).
+    """
+    if not raw or finish_at is None:
+        return None
+    now = ctx.now_utc.timestamp()
+    finish = finish_at.timestamp()
+    start = raw[0]["t"]
+    if not start < now < finish:
+        return None
+    boundaries = [row["t"] for row in raw[1:]] + [now]
+    segments = [(row["s"], (end - row["t"]) / 60) for row, end in zip(raw, boundaries)]
+    elapsed = (now - start) / 60
+    return {
+        "pct": round(100 * (now - start) / (finish - start)),
+        "started_label": _clock(datetime.fromtimestamp(start, tz=ctx.zone), ctx),
+        "elapsed_label": _span(elapsed),
+        "elapsed_minutes": elapsed,
+        "segments": segments,
+    }
+
+
 def _build_washer_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
-    """extras: cycle_no:int, energy_kwh_month:float, phase:str (lowercase raw status)
+    """extras: cycle_no:int, energy_kwh_month:float, phase:str (lowercase raw status),
+    cycle:dict? (see ``_build_cycle_view``)
     Time fields refer to the cycle's projected finish.
 
     ``status_label`` runs through ``flavor.friendly_washer_status`` so the
@@ -424,6 +456,7 @@ def _build_washer_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
             "cycle_no": safe_int(wsh.get("cycles")),
             "energy_kwh_month": energy / 1000.0,
             "phase": raw_status,
+            "cycle": _build_cycle_view(wsh.get("cycle"), finish_at, ctx),
         },
     )
 
@@ -438,7 +471,8 @@ _DRYER_PHASE_MAP = {
 
 def _build_dryer_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
     """extras: phase:str ("running" / "cooling" / "wrinkle_care" /
-    "pause" / "other"). Time fields refer to the projected finish.
+    "pause" / "other"), cycle:dict? (see ``_build_cycle_view``).
+    Time fields refer to the projected finish.
     LG dryers stay powered on through `cooling` and `wrinkle_care` after
     the cycle proper, so those still count as 'active' here -- you
     shouldn't open the door yet."""
@@ -458,6 +492,7 @@ def _build_dryer_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
         status_label=flavor.friendly_dryer_status(d.get("status")),
         extras={
             "phase": phase,
+            "cycle": _build_cycle_view(d.get("cycle"), finish_at, ctx),
         },
     )
 

@@ -276,6 +276,11 @@ _SAUNA_THERMOSTAT_TEMP = "sensor.saunum_leil_temperature"
 _SAUNA_FAN_TIMER = "timer.sauna_fan_run"
 _SAUNA_FORECAST_OUTDOOR = "sensor.outdoors_temperature"
 _SAUNA_HISTORY_HOURS = 4
+# A long enough look back to find the start of any laundry cycle.
+_CYCLE_HISTORY_HOURS = 6
+# The machine is not in a cycle in these states; an outage doesn't end one.
+_CYCLE_IDLE_STATES = {"power_off", "end", "initial", "off"}
+_CYCLE_NO_READING = {"unavailable", "unknown", ""}
 
 _WASHER_STATUS = "sensor.washer_current_status"
 _WASHER_OP = "select.washer_operation"
@@ -597,6 +602,7 @@ def shape_ha_state(
     open_meteo: Optional[dict[str, Any]] = None,
     solar_periods: Optional[dict[str, Any]] = None,
     sauna_history: Optional[dict[str, list[dict[str, Any]]]] = None,
+    cycle_history: Optional[dict[str, list[dict[str, Any]]]] = None,
 ) -> dict[str, Any]:
     """Reshape `/api/states` into the HAShape consumed by the React designs.
 
@@ -776,6 +782,9 @@ def shape_ha_state(
         "powerOn": state_str(_WASHER_POWER) == "on",
         "cycles": state_num(_WASHER_CYCLES),
         "energyMonth": state_num(_WASHER_ENERGY),
+        "cycle": _cycle_segments(
+            (cycle_history or {}).get(_WASHER_STATUS), state_str(_WASHER_STATUS),
+        ),
     }
 
     # ── Dryer ──────────────────────────────────────────────────────
@@ -793,6 +802,9 @@ def shape_ha_state(
         "remaining": state_str(_DRYER_REMAINING),
         "lastNotification": dryer_last_notif,
         "powerOn": state_str(_DRYER_POWER) == "on",
+        "cycle": _cycle_segments(
+            (cycle_history or {}).get(_DRYER_STATUS), state_str(_DRYER_STATUS),
+        ),
     }
 
     # ── Dishwasher ─────────────────────────────────────────────────
@@ -1123,17 +1135,24 @@ def _shape_sauna_forecast(
     if timer and timer.get("state") == "active":
         timer_end = _epoch((timer.get("attributes") or {}).get("finishes_at"))
     try:
-        return sauna_forecast.forecast_heating(
+        session = sauna_forecast.session_facts(session_input, now)
+        forecast = sauna_forecast.forecast_heating(
             thermostat=thermostat,
             room=room,
             outdoor=outdoor,
             target=_to_float(attrs.get("temperature")),
             elements=elements,
-            session=sauna_forecast.session_facts(session_input, now),
+            session=session,
             session_minutes=session_minutes,
             timer_end=timer_end,
             now=now,
         )
+        started = session.start if session else now
+        forecast["roomHistory"] = [
+            {"minutes": round((row["t"] - now) / 60, 1), "value": row["v"]}
+            for row in past["room"] if started <= row["t"] <= now
+        ]
+        return forecast
     except (ArithmeticError, KeyError, TypeError, ValueError):
         # A bad forecast must never cost the panel its other house data.
         logger.exception("Sauna forecast failed; rendering the card without it")
@@ -1206,6 +1225,77 @@ async def fetch_ha_sauna_history(
         return None
 
 
+async def fetch_ha_cycle_history(
+    url: str,
+    token: str,
+    entities: list[str],
+    *,
+    now: Optional[datetime] = None,
+    timeout: float = 5.0,
+) -> Optional[dict[str, list[dict[str, Any]]]]:
+    """Recent status changes for running laundry machines, or None if unavailable.
+
+    A failure costs the card its time-based progress, and nothing else.
+    """
+    start = (now or datetime.now(timezone.utc)) - timedelta(hours=_CYCLE_HISTORY_HOURS)
+    endpoint = f"{url.rstrip('/')}/api/history/period/{quote(start.isoformat())}"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(
+                endpoint,
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                params={
+                    "filter_entity_id": ",".join(entities),
+                    "significant_changes_only": "0",
+                    "minimal_response": "",
+                    "no_attributes": "",
+                },
+            )
+        response.raise_for_status()
+        out: dict[str, list[dict[str, Any]]] = {}
+        # Only the first row of each minimal list carries its entity id.
+        for rows in response.json():
+            if not rows:
+                continue
+            parsed = []
+            for row in rows:
+                t = _epoch(row.get("last_changed") or row.get("last_updated"))
+                if t is not None:
+                    parsed.append({"t": t, "s": str(row.get("state") or "").lower()})
+            out[rows[0]["entity_id"]] = parsed
+        return out
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError, KeyError) as e:
+        logger.warning("HA cycle history unavailable: %s", e)
+        return None
+
+
+def _cycle_segments(
+    rows: Optional[list[dict[str, Any]]],
+    live_status: Optional[str],
+) -> Optional[list[dict[str, Any]]]:
+    """The running cycle's phases as ``[{"s": status, "t": epoch}, ...]``, oldest first.
+
+    None unless the history shows the machine idle before this cycle: if the look-back
+    can't see the start, a time-based progress figure would be a guess.
+    """
+    live = (live_status or "").lower()
+    if not rows or live in _CYCLE_IDLE_STATES or live in _CYCLE_NO_READING:
+        return None
+    start = None
+    for index, row in enumerate(rows):
+        if row["s"] in _CYCLE_IDLE_STATES:
+            start = index + 1
+    if start is None:
+        return None
+    segments: list[dict[str, Any]] = []
+    for row in rows[start:]:
+        if row["s"] in _CYCLE_NO_READING:
+            continue
+        if not segments or segments[-1]["s"] != row["s"]:
+            segments.append({"s": row["s"], "t": row["t"]})
+    return segments or None
+
+
 async def fetch_and_shape(settings: TerminalSettings) -> Optional[dict[str, Any]]:
     """Fetch HA states + forecasts using a TerminalSettings row and return the
     shaped HAShape.
@@ -1269,14 +1359,27 @@ async def fetch_and_shape(settings: TerminalSettings) -> Optional[dict[str, Any]
             _solar_periods(),
         )
 
-    sauna_history = None
-    if (state_index.get(_SAUNA_ID) or {}).get("state") == "heat":
-        sauna_history = await fetch_ha_sauna_history(url, token)
+    cycling = [
+        entity for entity in (_WASHER_STATUS, _DRYER_STATUS)
+        if str((state_index.get(entity) or {}).get("state") or "").lower()
+        not in _CYCLE_IDLE_STATES | _CYCLE_NO_READING
+    ]
+
+    async def _sauna_history() -> Optional[dict[str, list[dict[str, Any]]]]:
+        if (state_index.get(_SAUNA_ID) or {}).get("state") != "heat":
+            return None
+        return await fetch_ha_sauna_history(url, token)
+
+    async def _cycle_history() -> Optional[dict[str, list[dict[str, Any]]]]:
+        return await fetch_ha_cycle_history(url, token, cycling) if cycling else None
+
+    sauna_history, cycle_history = await asyncio.gather(_sauna_history(), _cycle_history())
 
     return shape_ha_state(
         states,
         fetched_at=datetime.now(timezone.utc),
         sauna_history=sauna_history,
+        cycle_history=cycle_history,
         weather_entity_id=weather_eid,
         forecast_daily=daily,
         forecast_hourly=hourly,

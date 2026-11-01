@@ -9,9 +9,9 @@ introduces:
 
 * Friendlier status verbs (``rinse`` -> "Rinsing", ``wrinkle_care`` ->
   "Wrinkle care", ...).
-* A small pool of playful headline/deck variants per appliance phase,
-  picked deterministically so the panel doesn't flicker between
-  renders but a new cycle reliably picks a fresh variant.
+* A pool of headline/deck variants per appliance phase. Each cycle shuffles
+  its pool, then walks it every ``ROTATION_MINUTES``, so a long phase keeps
+  changing and nothing repeats until the pool has been through.
 * A curated, computed-fact fallback for the idle "Calm Edition" body
   used when the AI-generated hourly snippet hasn't been produced yet
   (e.g. before the first cron tick, or when no Claude key is set).
@@ -19,17 +19,20 @@ introduces:
 Determinism contract
 --------------------
 ``pick_appliance_copy`` MUST return the same variant for the same
-``(kind, phase, cycle_seed)`` tuple across processes -- otherwise the
-washer headline would shuffle every render bucket and the panel would
+``(kind, phase, cycle_seed, rotation slot)`` across processes -- otherwise
+the washer headline would shuffle every render bucket and the panel would
 churn. We use ``hashlib.sha1`` instead of Python's built-in ``hash()``
 which is salted per-interpreter.
+
+Every variant must be true whenever it can be picked: copy may joke, but it
+states only what the appliance reports.
 """
 from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Optional, Sequence, TYPE_CHECKING, TypeVar
 
 from .helpers import title_case
 
@@ -38,11 +41,23 @@ if TYPE_CHECKING:
     from .render_ctx import RenderContext
 
 
+_T = TypeVar("_T")
+
+# How often an appliance's or the calm card's copy moves on.
+ROTATION_MINUTES = 20
+_CALM_ROTATION_MINUTES = 60
+
 __all__ = [
     "WASHER_PHASE_LABELS",
     "DRYER_PHASE_LABELS",
     "DISHWASHER_PROGRESS_PHASES",
+    "ROTATION_MINUTES",
     "pick_appliance_copy",
+    "sauna_forecast_copy",
+    "pool_copy",
+    "done_copy",
+    "calm_copy",
+    "laundry_station",
     "fallback_idle_snippet",
     "FALLBACK_QUOTES",
 ]
@@ -60,6 +75,7 @@ __all__ = [
 # alias to the same friendly label here so a firmware update can't
 # silently drop us back to the bare-default copy.
 WASHER_PHASE_LABELS: dict[str, str] = {
+    "running": "Washing",
     "wash": "Washing",
     "washing": "Washing",
     "rinse": "Rinsing",
@@ -152,9 +168,7 @@ def friendly_dryer_status(raw: Optional[str]) -> str:
 #   tolerated by ``_safe_format`` so a deck can ignore fields it doesn't
 #   care about.
 #
-# The lists are small on purpose: 3-4 variants per phase is plenty for
-# perceived variety without making it impossible to maintain copy
-# coherence with the rest of the design.
+# A variant with ``when`` set only runs in those parts of the day.
 
 
 @dataclass(frozen=True)
@@ -162,6 +176,7 @@ class _Variant:
     head_pre: str
     head_italic: str
     deck: str
+    when: tuple[str, ...] = ()
 
 
 # Default copy is intentionally bare: no filler adverb in the italic
@@ -183,188 +198,87 @@ _WASHER_DEFAULT: _Variant = _Variant(
 
 _WASHER_VARIANTS_RAW: dict[str, list[_Variant]] = {
     "wash": [
-        _Variant(
-            head_pre="Sudsing up",
-            head_italic=" the load.",
-            deck="Cycle #{cycle_no}, headed for the rinse.",
-        ),
-        _Variant(
-            head_pre="Washing in earnest.",
-            head_italic="",
-            deck="Cycle #{cycle_no} \u00b7 finishes around {finish}.",
-        ),
-        _Variant(
-            head_pre="Soaking the soiled.",
-            head_italic="",
-            deck="Cycle #{cycle_no}, {remaining} left to go.",
-        ),
-        _Variant(
-            head_pre="The drum is",
-            head_italic=" earning its keep.",
-            deck="Wash cycle #{cycle_no}; done by {finish}.",
-        ),
+        _Variant("Sudsing up", " the load.", "Cycle #{cycle_no}, headed for the rinse."),
+        _Variant("Washing in earnest.", "", "Cycle #{cycle_no} · finishes around {finish}."),
+        _Variant("The drum is", " earning its keep.", "Wash cycle #{cycle_no}; done by {finish}."),
+        _Variant("Developing story:", " clothes getting cleaner.", "More by {finish}."),
+        _Variant("Round and round", " it goes.", "It stops around {finish}. {remaining} to go."),
+        _Variant("{weekday} laundry,", " well underway.", "Load #{cycle_no} on this machine."),
+        _Variant("Agitation,", " the good kind.", "Cycle #{cycle_no} · rinse is next."),
+        _Variant("The suds", " have the floor.", "{remaining} left · {kwh} kWh this month."),
+        _Variant("Filed from the drum:", " all going well.", "Next dispatch at {finish}."),
+        _Variant("Hard at work on", " the load.", "No need to check on it until {finish}."),
+        _Variant("A {daypart} wash,", " in full swing.", "Done by {finish}, {remaining} from now."),
+        _Variant("Up with the laundry.", "", "Cycle #{cycle_no} · out by {finish}.",
+                 when=("morning",)),
+        _Variant("The night shift", " is washing.", "Out by {finish}, if you're still up.",
+                 when=("late-night",)),
     ],
     "prewash": [
-        _Variant(
-            head_pre="Pre-wash first",
-            head_italic=", then the real wash.",
-            deck="Cycle #{cycle_no} \u00b7 main wash follows.",
-        ),
-        _Variant(
-            head_pre="Loosening the day",
-            head_italic=" off the fabric.",
-            deck="Pre-wash phase \u00b7 done by {finish}.",
-        ),
+        _Variant("Pre-wash first,", " then the real wash.", "Cycle #{cycle_no} · main wash follows."),
+        _Variant("Loosening the day", " off the fabric.", "Pre-wash phase · done by {finish}."),
+        _Variant("Warming up", " for the main wash.", "{remaining} in all · done by {finish}."),
     ],
     "soak": [
-        _Variant(
-            head_pre="Letting it soak.",
-            head_italic="",
-            deck="Cycle #{cycle_no} \u00b7 a slow start.",
-        ),
-        _Variant(
-            head_pre="Steeping the fabric",
-            head_italic=" in warm water.",
-            deck="Soak phase \u00b7 wash to follow.",
-        ),
-        _Variant(
-            head_pre="Pre-soak, slow soak.",
-            head_italic="",
-            deck="Cycle #{cycle_no} \u00b7 done by {finish}.",
-        ),
+        _Variant("Letting it soak.", "", "Cycle #{cycle_no} · a slow start."),
+        _Variant("Steeping the fabric", " in the drum.", "Soak phase · wash to follow."),
+        _Variant("Pre-soak, slow soak.", "", "Cycle #{cycle_no} · done by {finish}."),
+        _Variant("Long soak,", " short memory.", "Yesterday's stains, leaving by {finish}."),
     ],
     "rinse": [
-        _Variant(
-            head_pre="Chasing out",
-            head_italic=" the suds.",
-            deck="Rinse cycle in progress \u00b7 done by {finish}.",
-        ),
-        _Variant(
-            head_pre="Rinsing off",
-            head_italic=" the day.",
-            deck="Cycle #{cycle_no} \u00b7 spin comes next.",
-        ),
-        _Variant(
-            head_pre="Out, suds, out.",
-            head_italic="",
-            deck="Rinsing the load \u00b7 {remaining} left.",
-        ),
-        _Variant(
-            head_pre="Clean water,",
-            head_italic=" fresh start.",
-            deck="Rinse phase \u00b7 wraps around {finish}.",
-        ),
+        _Variant("Chasing out", " the suds.", "Rinse cycle in progress · done by {finish}."),
+        _Variant("Rinsing off", " the day.", "Cycle #{cycle_no} · spin comes next."),
+        _Variant("Out, suds, out.", "", "Rinsing the load · {remaining} left."),
+        _Variant("Clean water,", " fresh start.", "Rinse phase · wraps around {finish}."),
+        _Variant("Second rinse?", " The washer knows.", "It's on the job until about {finish}."),
+        _Variant("The suds", " are leaving town.", "Spin follows · {remaining} to go."),
+        _Variant("Corrections:", " the suds were wrong.", "Rinse under way · finished by {finish}."),
+        _Variant("Halfway clean", " is not an option.", "Cycle #{cycle_no} · {remaining} left."),
     ],
     "rinse_and_spin": [
-        _Variant(
-            head_pre="Rinse and spin",
-            head_italic=" \u2014 the home stretch.",
-            deck="Cycle #{cycle_no} \u00b7 done by {finish}.",
-        ),
-        _Variant(
-            head_pre="Almost done,",
-            head_italic=" almost dry.",
-            deck="Rinse + spin \u00b7 {remaining} remaining.",
-        ),
+        _Variant("Rinse and spin", " — the home stretch.", "Cycle #{cycle_no} · done by {finish}."),
+        _Variant("Almost done,", " almost dry.", "Rinse + spin · {remaining} remaining."),
+        _Variant("Last water,", " then the whirl.", "Out by {finish}."),
     ],
     "spin": [
-        _Variant(
-            head_pre="Spinning it dry.",
-            head_italic="",
-            deck="Final spin \u00b7 finishes {finish}.",
-        ),
-        _Variant(
-            head_pre="Wringing it out.",
-            head_italic="",
-            deck="Spin cycle \u00b7 cycle #{cycle_no} \u00b7 {remaining} left.",
-        ),
-        _Variant(
-            head_pre="The closing act:",
-            head_italic=" centrifuge.",
-            deck="Spinning \u00b7 unload soon.",
-        ),
-        _Variant(
-            head_pre="The drum is dancing",
-            head_italic=" toward done.",
-            deck="Spin phase \u00b7 done by {finish}.",
-        ),
+        _Variant("Spinning it dry.", "", "Final spin · finishes {finish}."),
+        _Variant("Wringing it out.", "", "Spin cycle · cycle #{cycle_no} · {remaining} left."),
+        _Variant("The closing act:", " centrifuge.", "Spinning · unload soon."),
+        _Variant("The drum is dancing", " toward done.", "Spin phase · done by {finish}."),
+        _Variant("Now at", " full tilt.", "Hold on to the walls · {remaining} left."),
+        _Variant("Late edition:", " the spin is on.", "Done by {finish}. Dryer next."),
+        _Variant("Gravity,", " temporarily overruled.", "Spinning · {remaining} to go."),
+        _Variant("Last dance", " for the drum.", "Have the dryer ready by {finish}."),
     ],
     "drain": [
-        _Variant(
-            head_pre="Draining away",
-            head_italic=" the wash water.",
-            deck="Cycle #{cycle_no} \u00b7 finishes around {finish}.",
-        ),
-        _Variant(
-            head_pre="Out with the water,",
-            head_italic=" in with the spin.",
-            deck="Drain phase \u00b7 {remaining} left.",
-        ),
+        _Variant("Draining away", " the wash water.", "Cycle #{cycle_no} · finishes around {finish}."),
+        _Variant("Out with the water,", " in with the spin.", "Drain phase · {remaining} left."),
+        _Variant("Down the drain,", " on purpose.", "Done by {finish}."),
     ],
     "refresh": [
-        _Variant(
-            head_pre="A quick refresh.",
-            head_italic="",
-            deck="Refresh cycle \u00b7 done by {finish}.",
-        ),
-        _Variant(
-            head_pre="A freshen-up",
-            head_italic=" for the load.",
-            deck="Refresh phase \u00b7 {remaining} remaining.",
-        ),
+        _Variant("A quick refresh.", "", "Refresh cycle · done by {finish}."),
+        _Variant("A freshen-up", " for the load.", "Refresh phase · {remaining} remaining."),
+        _Variant("A second wind", " for the wardrobe.", "Refresh · out by {finish}."),
     ],
     "tub_clean": [
-        _Variant(
-            head_pre="Cleaning the cleaner.",
-            head_italic="",
-            deck="Tub-clean cycle in progress.",
-        ),
-        _Variant(
-            head_pre="The washer washes",
-            head_italic=" itself.",
-            deck="Tub clean \u00b7 done by {finish}.",
-        ),
+        _Variant("Cleaning the cleaner.", "", "Tub-clean cycle in progress."),
+        _Variant("The washer washes", " itself.", "Tub clean · done by {finish}."),
+        _Variant("Self-care,", " for a washer.", "Tub clean · {remaining} left."),
     ],
     "detecting": [
-        _Variant(
-            head_pre="Sizing up the load.",
-            head_italic="",
-            deck="Cycle #{cycle_no} \u00b7 starts shortly.",
-        ),
-        _Variant(
-            head_pre="Weighing in,",
-            head_italic=" deciding doses.",
-            deck="Detecting load \u00b7 wash to follow.",
-        ),
+        _Variant("Sizing up the load.", "", "Cycle #{cycle_no} · starts shortly."),
+        _Variant("Weighing in,", " deciding doses.", "Detecting load · wash to follow."),
+        _Variant("First, the weigh-in.", "", "Estimate so far: done by {finish}."),
     ],
     "end": [
-        _Variant(
-            head_pre="Wrapping it up.",
-            head_italic="",
-            deck="Cycle #{cycle_no} \u00b7 finishing at {finish}.",
-        ),
-        _Variant(
-            head_pre="Final moments",
-            head_italic=" of the cycle.",
-            deck="End phase \u00b7 unload soon.",
-        ),
-        _Variant(
-            head_pre="Almost ready",
-            head_italic=" to unload.",
-            deck="Cycle #{cycle_no} \u00b7 done at {finish}.",
-        ),
+        _Variant("Wrapping it up.", "", "Cycle #{cycle_no} · finishing at {finish}."),
+        _Variant("Final moments", " of the cycle.", "End phase · unload soon."),
+        _Variant("Almost ready", " to unload.", "Cycle #{cycle_no} · done at {finish}."),
     ],
     "pause": [
-        _Variant(
-            head_pre="Paused",
-            head_italic=" mid-cycle.",
-            deck="Cycle #{cycle_no} \u00b7 waiting on a tap.",
-        ),
-        _Variant(
-            head_pre="Holding the load.",
-            head_italic="",
-            deck="Pause phase \u00b7 resume to finish.",
-        ),
+        _Variant("Paused", " mid-cycle.", "Cycle #{cycle_no} · waiting on a tap."),
+        _Variant("Holding the load.", "", "Pause phase · resume to finish."),
+        _Variant("Stop the presses,", " and the drum.", "Paused · resume to finish."),
     ],
 }
 
@@ -386,6 +300,8 @@ def _alias_variants(
 # Gerund / noun aliases so this module isn't fragile to ThinQ firmware
 # tense changes.
 _WASHER_PHASE_ALIASES: dict[str, str] = {
+    # What the LG washer in this house actually reports for its main phase.
+    "running": "wash",
     "washing": "wash",
     "rinsing": "rinse",
     "spinning": "spin",
@@ -414,84 +330,40 @@ _DRYER_DEFAULT: _Variant = _Variant(
 
 _DRYER_VARIANTS_RAW: dict[str, list[_Variant]] = {
     "running": [
-        _Variant(
-            head_pre="Tumbling things dry.",
-            head_italic="",
-            deck="Finishes around {finish} \u00b7 {remaining} to go.",
-        ),
-        _Variant(
-            head_pre="Heat, air, motion",
-            head_italic=" \u2014 the trio at work.",
-            deck="Dryer running \u00b7 done by {finish}.",
-        ),
-        _Variant(
-            head_pre="The drum is at it.",
-            head_italic="",
-            deck="Drying in progress \u00b7 {remaining} remaining.",
-        ),
-        _Variant(
-            head_pre="Drying the laundry,",
-            head_italic=" then fold.",
-            deck="Finishes around {finish}.",
-        ),
+        _Variant("Tumbling things dry.", "", "Finishes around {finish} · {remaining} to go."),
+        _Variant("Heat, air, motion", " — the trio at work.", "Dryer running · done by {finish}."),
+        _Variant("The drum is at it.", "", "Drying in progress · {remaining} remaining."),
+        _Variant("Drying the laundry,", " then fold.", "Finishes around {finish}."),
+        _Variant("Damp today,", " dry by {finish}.", "That's the whole forecast. {remaining} left."),
+        _Variant("Weather report:", " warm in the drum.", "Clearing by {finish}."),
+        _Variant("{weekday} laundry", " in the warm stretch.", "{remaining} left · out by {finish}."),
+        _Variant("Socks on", " the move.", "Odd numbers not guaranteed · done by {finish}."),
+        _Variant("Warm and", " getting warmer.", "Fold-ready by {finish}."),
+        _Variant("A {daypart} tumble,", " for the load.", "{remaining} to go."),
+        _Variant("The night shift", " is drying.", "Warm laundry by {finish}.", when=("late-night",)),
     ],
     "cooling": [
-        _Variant(
-            head_pre="Cooling the drum",
-            head_italic=" \u2014 easing off the heat.",
-            deck="Last of the heat \u00b7 wraps {finish}.",
-        ),
-        _Variant(
-            head_pre="Letting it settle,",
-            head_italic=" warm and still.",
-            deck="Cooling phase \u00b7 unload soon.",
-        ),
-        _Variant(
-            head_pre="The heat steps back",
-            head_italic=" for the cool-down.",
-            deck="Cooling down \u00b7 {remaining} left.",
-        ),
+        _Variant("Cooling the drum", " — easing off the heat.", "Last of the heat · wraps {finish}."),
+        _Variant("Letting it settle,", " warm and still.", "Cooling phase · unload soon."),
+        _Variant("The heat steps back", " for the cool-down.", "Cooling down · {remaining} left."),
+        _Variant("Heat's off;", " the tumble isn't.", "Cooling · done by {finish}."),
+        _Variant("Clearing skies", " in the drum.", "Cooling · {remaining} to go."),
     ],
     "wrinkle_care": [
-        _Variant(
-            head_pre="Wrinkle patrol,",
-            head_italic=" still on duty.",
-            deck="Tumbling to keep the folds away.",
-        ),
-        _Variant(
-            head_pre="Smoothing things over",
-            head_italic=" \u2014 literally.",
-            deck="Wrinkle-care phase \u00b7 finishes {finish}.",
-        ),
-        _Variant(
-            head_pre="Anti-wrinkle watch",
-            head_italic=" continues.",
-            deck="Wrinkle care \u00b7 {remaining} left.",
-        ),
+        _Variant("Wrinkle patrol,", " still on duty.", "Tumbling to keep the folds away."),
+        _Variant("Smoothing things over", " — literally.", "Wrinkle-care phase · finishes {finish}."),
+        _Variant("Anti-wrinkle watch", " continues.", "Wrinkle care · {remaining} left."),
+        _Variant("Keeping creases", " at bay.", "Still tumbling \u00b7 done by {finish}."),
+        _Variant("Dry, and on guard", " against wrinkles.", "Wrinkle care \u00b7 {remaining} left."),
     ],
     "pause": [
-        _Variant(
-            head_pre="Paused mid-tumble.",
-            head_italic="",
-            deck="Resume to keep drying.",
-        ),
-        _Variant(
-            head_pre="Holding the heat,",
-            head_italic=" waiting on you.",
-            deck="Pause phase \u00b7 a tap will resume.",
-        ),
+        _Variant("Paused mid-tumble.", "", "Resume to keep drying."),
+        _Variant("Holding the heat,", " waiting on you.", "Pause phase · a tap will resume."),
+        _Variant("Stop the tumble.", "", "Paused · resume to finish."),
     ],
     "end": [
-        _Variant(
-            head_pre="Drum done,",
-            head_italic=" folding next.",
-            deck="Cycle finished at {finish} \u00b7 {relative}.",
-        ),
-        _Variant(
-            head_pre="Finished drying,",
-            head_italic=" ready to unload.",
-            deck="Done at {finish}.",
-        ),
+        _Variant("Drum done,", " folding next.", "Cycle finished at {finish} · {relative}."),
+        _Variant("Finished drying,", " ready to unload.", "Done at {finish}."),
     ],
 }
 
@@ -536,91 +408,47 @@ def _dishwasher_progress_bucket(progress_pct: Optional[int]) -> str:
 
 
 _DISHWASHER_DEFAULT: _Variant = _Variant(
-    head_pre="Dishes underway",
-    head_italic=", patiently.",
+    head_pre="Dishes underway.",
+    head_italic="",
     deck="Finishing {relative} ({finish}).",
 )
 
+# The dishwasher reports a percentage rather than a phase, so this copy describes
+# how far along it is and leaves what it's doing right now to the imagination.
 DISHWASHER_VARIANTS: dict[str, list[_Variant]] = {
     "starting": [
-        _Variant(
-            head_pre="{program} cycle",
-            head_italic=" just began.",
-            deck="Settling in \u00b7 finishes {relative}.",
-        ),
-        _Variant(
-            head_pre="A fresh load",
-            head_italic=" of dishes.",
-            deck="{program} cycle \u00b7 done by {finish}.",
-        ),
-        _Variant(
-            head_pre="Water on, dishes in",
-            head_italic=".",
-            deck="{program} \u00b7 finishing {relative}.",
-        ),
+        _Variant("{program} cycle", " just began.", "Settling in · finishes {relative}."),
+        _Variant("A fresh load", " of dishes.", "{program} cycle · done by {finish}."),
+        _Variant("Dishes in,", " door shut.", "{program} · finishing {relative}."),
+        _Variant("And they're off:", " the plates.", "{program} · clean by {finish}."),
+        _Variant("Dinner's", " last chapter begins.", "{program} · finishing around {finish}.",
+                 when=("evening", "late-night")),
     ],
     "early": [
-        _Variant(
-            head_pre="{program}",
-            head_italic=" in motion.",
-            deck="Underway \u00b7 finishes {relative}.",
-        ),
-        _Variant(
-            head_pre="Soaping the stack",
-            head_italic=", warming up.",
-            deck="{program} cycle \u00b7 finishes at {finish}.",
-        ),
-        _Variant(
-            head_pre="Plates and water",
-            head_italic=", in conversation.",
-            deck="{program} \u00b7 {progress}% along.",
-        ),
+        _Variant("{program}", " in motion.", "Underway · finishes {relative}."),
+        _Variant("Plates and water,", " in conversation.", "{program} · {progress}% along."),
+        _Variant("Early innings", " for the dishes.", "{progress}% done · done by {finish}."),
+        _Variant("The stack", " is under review.", "{program} cycle · finishes at {finish}."),
+        _Variant("Off to a clean", " start.", "{progress}% through {program}."),
     ],
     "mid": [
-        _Variant(
-            head_pre="Halfway through",
-            head_italic=" the dishes.",
-            deck="{program} \u00b7 {progress}% \u00b7 done by {finish}.",
-        ),
-        _Variant(
-            head_pre="Steady scrubbing",
-            head_italic=", unseen.",
-            deck="{program} cycle \u00b7 finishes {relative}.",
-        ),
-        _Variant(
-            head_pre="The middle act",
-            head_italic=" of {program}.",
-            deck="{progress}% complete \u00b7 done by {finish}.",
-        ),
+        _Variant("The middle act", " of {program}.", "{progress}% complete · done by {finish}."),
+        _Variant("Steady scrubbing,", " unseen.", "{program} cycle · finishes {relative}."),
+        _Variant("Around halfway", " through the dishes.", "{program} · {progress}% · done by {finish}."),
+        _Variant("Past the first", " few plates, probably.", "{progress}% · {remaining} left."),
+        _Variant("Mid-cycle report:", " no complaints.", "{program} · clean by {finish}."),
     ],
     "late": [
-        _Variant(
-            head_pre="Final scrub",
-            head_italic=", almost there.",
-            deck="{program} \u00b7 {progress}% \u00b7 done by {finish}.",
-        ),
-        _Variant(
-            head_pre="Rinsing the racks",
-            head_italic=", nearly done.",
-            deck="{program} cycle \u00b7 finishes {relative}.",
-        ),
-        _Variant(
-            head_pre="The last lap",
-            head_italic=" of {program}.",
-            deck="{progress}% complete \u00b7 wraps at {finish}.",
-        ),
+        _Variant("Final stretch", " for the dishes.", "{program} · {progress}% · done by {finish}."),
+        _Variant("Nearly through", " the stack.", "{program} cycle · finishes {relative}."),
+        _Variant("The last lap", " of {program}.", "{progress}% complete · wraps at {finish}."),
+        _Variant("Clean is", " within sight.", "{progress}% · {remaining} left."),
     ],
     "finishing": [
-        _Variant(
-            head_pre="Drying the dishes",
-            head_italic=", the last task.",
-            deck="{program} \u00b7 {progress}% \u00b7 unload soon.",
-        ),
-        _Variant(
-            head_pre="Final dry",
-            head_italic=" in progress.",
-            deck="{program} \u00b7 finishes by {finish}.",
-        ),
+        _Variant("Moments from", " done.", "{program} · {progress}% · unload soon."),
+        _Variant("Clear the counter:", " dishes inbound.", "{program} · finishes by {finish}."),
+        _Variant("Last few minutes", " of {program}.", "{progress}% · out by {finish}."),
+        _Variant("Hot plates", " very soon.", "Mind the steam · done by {finish}."),
     ],
 }
 
@@ -640,6 +468,34 @@ def _stable_index(seed: str, n: int) -> int:
     digest = hashlib.sha1(seed.encode("utf-8")).digest()
     val = int.from_bytes(digest[:8], "big", signed=False)
     return val % n
+
+
+def _daypart(now: datetime) -> str:
+    hour = now.hour
+    if 5 <= hour < 12:
+        return "morning"
+    if 12 <= hour < 17:
+        return "afternoon"
+    if 17 <= hour < 22:
+        return "evening"
+    return "late-night"
+
+
+def _rotation_slot(now: datetime, minutes: int = ROTATION_MINUTES) -> int:
+    return int(now.timestamp() // (minutes * 60))
+
+
+def _rotate(variants: Sequence[_T], seed: str, slot: int) -> _T:
+    """The ``slot``-th item of a shuffle of ``variants`` that is fixed by ``seed``.
+
+    Walking a shuffle rather than hashing each slot means nothing repeats until the
+    whole pool has run, and two adjacent slots can never show the same line.
+    """
+    order = sorted(
+        range(len(variants)),
+        key=lambda i: hashlib.sha1(f"{seed}|{i}".encode("utf-8")).digest(),
+    )
+    return variants[order[slot % len(order)]]
 
 
 def _seed_for_view(view: "ApplianceView", phase: str) -> str:
@@ -696,11 +552,15 @@ def pick_appliance_copy(
     feed them straight into the existing ``Run`` builders without
     additional None-checks.
     """
-    del ctx  # currently unused; reserved so future copy can read tz/time
-
     kind = view.kind
+    now = ctx.now_local
+    daypart = _daypart(now)
 
-    fields = _view_fields(view)
+    fields = {
+        **_view_fields(view),
+        "weekday": now.strftime("%A"),
+        "daypart": daypart,
+    }
 
     if kind == "washer":
         raw_phase = view.extras.get("phase") or "wash"
@@ -723,12 +583,11 @@ def pick_appliance_copy(
             "deck": "",
         }
 
-    if not variants:
+    pool = [v for v in variants or () if not v.when or daypart in v.when]
+    if not pool:
         chosen = default
     else:
-        seed = _seed_for_view(view, phase_key)
-        idx = _stable_index(seed, len(variants))
-        chosen = variants[idx]
+        chosen = _rotate(pool, _seed_for_view(view, phase_key), _rotation_slot(now))
 
     return {
         "head_pre": _safe_format(chosen.head_pre, fields),
@@ -751,9 +610,267 @@ def _view_fields(view: "ApplianceView") -> dict[str, Any]:
         "remaining": view.remaining_label or "\u2014",
         "relative": view.relative_label or "\u2014",
         "cycle_no": cycle_no,
+        "kwh": f"{float(view.extras.get('energy_kwh_month') or 0.0):.1f}",
         "program": program,
         "progress": progress,
         "status": view.status_label or "",
+    }
+
+
+# ── Laundry phase tracks ───────────────────────────────────────────────
+
+
+_WASHER_STATIONS: dict[str, int] = {
+    "detecting": 0, "detergent_amount": 0, "weight_sensing": 0,
+    "prewash": 0, "pre_wash": 0, "prewashing": 0, "soak": 0, "soaking": 0,
+    "running": 0, "wash": 0, "washing": 0,
+    "rinse": 1, "rinsing": 1, "rinse_and_spin": 1, "rinse_spin": 1, "rinsing_and_spinning": 1,
+    "drain": 2, "draining": 2, "spin": 2, "spinning": 2,
+}
+_DRYER_STATIONS: dict[str, int] = {
+    "running": 0, "drying": 0, "dry": 0,
+    "cooling": 1, "cool": 1,
+    "wrinkle_care": 2, "wrinkle_caring": 2,
+}
+
+
+def laundry_station(kind: str, phase: str, past: Sequence[str] = ()) -> Optional[int]:
+    """Which station of the phase track a machine is at, or None if it can't be told.
+
+    A pause or an unrecognized status sits at the last station the cycle's own history
+    (``past``, oldest first) shows it reached, rather than claiming a place on the track.
+    """
+    table = _WASHER_STATIONS if kind == "washer" else _DRYER_STATIONS
+    key = (phase or "").strip().lower()
+    if key in table:
+        return table[key]
+    for status in reversed(past):
+        if status in table:
+            return table[status]
+    return None
+
+
+# ── Sauna, pool and finished-cycle copy ────────────────────────────────
+#
+# Every "ready" line must name the time: that's the fact the card is for. Copy that
+# tells someone to do something (run the fan, unload) keeps saying so in every variant.
+
+_SAUNA_HEADS = (
+    ("Ready around ", "{ready}."), ("Hot by ", "{ready}."), ("Towels at ", "{ready}."),
+    ("Sweat o'clock: ", "{ready}."), ("Pencil it in: ", "{ready}."),
+    ("Sauna by ", "{ready}."), ("The heat arrives ", "{ready}."),
+    ("Stones say ", "{ready}."),
+)
+_SAUNA_NEAR_HEADS = (
+    ("Almost there: ", "{ready}."), ("Find a towel: ", "{ready}."),
+    ("Nearly hot: ", "{ready}."), ("Water bottle time: ", "{ready}."),
+)
+_SAUNA_READY_HEADS = (
+    ("The sauna is ", "ready."), ("Step right in: ", "it's ready."),
+    ("Towel up: ", "it's ready."), ("Good and hot: ", "it's ready."),
+    ("Get in. ", "It's ready."),
+)
+_SAUNA_DECKS = (
+    "In {ready_in}. {status}",
+    "Room at {room}, {to_go}° to go. {status}",
+    "{ready_in} out. The stones are doing the hard part.",
+    "{ready_in} to go. Start the water now; thank yourself later.",
+    "In {ready_in}. Room at {room} and climbing.",
+)
+_SAUNA_READY_DECKS = (
+    "Room reached {ready_f}° at {ready}. {status}",
+    "Hit {ready_f}° at {ready}; holding at {room} now.",
+    "At {room} now. It got here at {ready}. {status}",
+)
+
+
+def sauna_forecast_copy(view: "ApplianceView", forecast: dict, ctx: "RenderContext",
+                        ready_f: int) -> tuple[str, str, str]:
+    """Headline (upright, italic) and deck for a sauna with a heat-up forecast."""
+    heaters = view.extras.get("heaters", 0)
+    door = "open" if view.extras.get("door_open") else "closed"
+    status = f"{heaters} of 3 elements on; door {door}."
+    room = view.extras.get("room_temp")
+    fields = {
+        "ready": forecast["ready_label"] or "—",
+        "ready_in": forecast["ready_in"],
+        "ready_f": ready_f,
+        "room": "—" if room is None else f"{round(room)}°",
+        "to_go": "—" if room is None else max(0, round(ready_f - room)),
+        "status": status,
+    }
+    now = ctx.now_local
+    slot = _rotation_slot(now)
+    seed = f"sauna|{now.strftime('%Y-%m-%d')}"
+    if forecast["ready_reached"]:
+        head = _rotate(_SAUNA_READY_HEADS, seed, slot)
+        deck = _rotate(_SAUNA_READY_DECKS, seed, slot)
+        return (_safe_format(head[0], fields), _safe_format(head[1], fields),
+                _safe_format(deck, fields))
+    if forecast["ready_label"] is None:
+        return ("Won't reach ", f"{ready_f}°.", "The room levels off below it at this target.")
+    minutes = forecast.get("ready_in_minutes")
+    heads = _SAUNA_NEAR_HEADS if minutes is not None and minutes <= 15 else _SAUNA_HEADS
+    head = _rotate(heads, seed, slot)
+    pre, tail = _safe_format(head[0], fields), _safe_format(head[1], fields)
+    if forecast["ends_before_ready"]:
+        return (pre, tail, f"Session ends {forecast['ends_before_ready']}, before it's ready.")
+    if forecast["fan_state"] == "running":
+        return (pre, tail, f"In {forecast['ready_in']}. Evening out the room; "
+                           f"fan has {forecast['fan_note']}.")
+    if forecast["fan_state"] == "due":
+        return (pre, tail, f"In {forecast['ready_in']}. Run the fan now, 10 min on Medium.")
+    return (pre, tail, _safe_format(_rotate(_SAUNA_DECKS, seed, slot), fields))
+
+
+_POOL_HEADS = (
+    ("Climbing to ", "{target}."), ("Heading for ", "{target}."), ("On its way to ", "{target}."),
+    ("Warming toward ", "{target}."), ("Swim-ready at ", "{target}."),
+    ("Pool's goal: ", "{target}."),
+)
+_POOL_DECKS = (
+    "Heat exchanger active, water now {water}. Air {air}. {freeze}",
+    "Water {water}, with {to_go}° to go. Air {air}. {freeze}",
+    "{to_go}° between the water and the goal. {freeze}",
+    "Water {water}, air {air}. Patience is a heat exchanger. {freeze}",
+)
+
+
+def pool_copy(view: "ApplianceView", ctx: "RenderContext") -> tuple[str, str, str]:
+    """Headline (upright, italic) and deck for a heating pool."""
+    def temp(value: Any) -> str:
+        return "—" if value is None else f"{round(value)}°"
+
+    current, target = view.current, view.target
+    fields = {
+        "target": temp(target),
+        "water": temp(current),
+        "air": temp(view.extras.get("air_temp")),
+        "to_go": "—" if current is None or target is None else max(0, round(target - current)),
+        "freeze": ("Freeze guard armed." if view.extras.get("freeze_protect")
+                   else "No freeze risk."),
+    }
+    now = ctx.now_local
+    slot, seed = _rotation_slot(now), f"pool|{now.strftime('%Y-%m-%d')}"
+    head = _rotate(_POOL_HEADS, seed, slot)
+    return (_safe_format(head[0], fields), _safe_format(head[1], fields),
+            _safe_format(_rotate(_POOL_DECKS, seed, slot), fields))
+
+
+# Finished-cycle copy gets firmer as the load sits: (minutes since finishing, pool).
+_WASHER_DONE: tuple[tuple[int, tuple[tuple[str, str], ...]], ...] = (
+    (20, (("Wash complete.", " Move it to the dryer."),
+          ("Clean and waiting.", " To the dryer with it."),
+          ("That's a wrap.", " Now the dryer."),
+          ("Stop the presses:", " dryer's next."))),
+    (45, (("Still in the washer.", " Dryer, please."),
+          ("The wet load waits.", " Move it to the dryer."),
+          ("Clean clothes, idle.", " Over to the dryer."))),
+    (10**6, (("Getting musty?", " Move it to the dryer."),
+             ("A damp reminder:", " the dryer's right there."),
+             ("Second notice:", " move the wet load."))),
+)
+_DRYER_DONE: tuple[tuple[int, tuple[tuple[str, str], ...]], ...] = (
+    (30, (("Drying complete.", " Please unload the dryer."),
+          ("Warm and ready.", " Fold while it lasts."),
+          ("Fresh out of heat.", " Time to unload."),
+          ("All dry.", " Unload the dryer."))),
+    (120, (("Cooling in the drum.", " Unload the dryer."),
+           ("Wrinkles are forming.", " Unload the dryer."),
+           ("The load still waits.", " Time to fold."))),
+    (10**6, (("It's been a while.", " Unload the dryer."),
+             ("Second notice:", " unload the dryer."),
+             ("Long since dry.", " Please fold it."))),
+)
+_WASHER_DONE_DECKS = (
+    "Cycle #{cycle_no} finished {finish} · {relative}.",
+    "Finished {finish}. The dryer awaits.",
+    "Load #{cycle_no}, clean as of {finish}.",
+)
+_DRYER_DONE_DECKS = (
+    "Finished {finish} · {relative}.",
+    "Done since {finish}. Drum's done its work.",
+    "Dry as of {finish}, {relative}.",
+)
+
+
+def done_copy(view: "ApplianceView", ctx: "RenderContext") -> dict[str, str]:
+    """Copy for a finished washer or dryer. The instruction stands in every variant."""
+    now = ctx.now_local
+    finished = view.finish_at_local
+    waited = (now - finished).total_seconds() / 60 if finished else 0
+    tiers = _WASHER_DONE if view.kind == "washer-done" else _DRYER_DONE
+    decks = _WASHER_DONE_DECKS if view.kind == "washer-done" else _DRYER_DONE_DECKS
+    pool = next(pool for limit, pool in tiers if waited < limit)
+    seed = f"{view.kind}|{view.finish_label}"
+    slot = _rotation_slot(now)
+    pre, italic = _rotate(pool, seed, slot)
+    return {
+        "head_pre": pre,
+        "head_italic": italic,
+        "deck": _safe_format(_rotate(decks, seed, slot), _view_fields(view)),
+    }
+
+
+# ── Calm edition ───────────────────────────────────────────────────────
+
+
+# The calm card can show while a pool heats its last degree, or after a finished load
+# has aged off the front page, so most lines claim nothing about what's running.
+_CALM_HEADS = (
+    ("All quiet on the ", "home front."), ("Nothing to report. ", "Enjoy it."),
+    ("No news ", "is good news."), ("The house is ", "at rest."),
+    ("Slow news ", "day at home."), ("Silence ", "from the appliances."),
+    ("All clear ", "on the front page."),
+)
+_CALM_MORNING_HEADS = (("A quiet start ", "to the day."),)
+_CALM_EVENING_HEADS = (("A quiet evening ", "in the house."), ("Good evening. ", "All's quiet."))
+_CALM_NIGHT_HEADS = (("A quiet night ", "in the house."), ("All's quiet. ", "Goodnight."))
+_CALM_DECKS = (
+    "Nothing on the front page needs you.",
+    "No appliance news to report.",
+    "The front page is all yours.",
+    "This space reserved for the next load of laundry.",
+)
+# Only while nothing is heating.
+_CALM_IDLE_HEADS = (
+    ("Every machine ", "is off duty."), ("The machines ", "have turned in."),
+)
+_CALM_IDLE_DECKS = ("Nothing running, nothing demanding.",)
+
+
+def calm_copy(ctx: "RenderContext", ha: dict) -> dict[str, str]:
+    """Kicker, headline and deck for the calm card; the edition follows the clock."""
+    now = ctx.now_local
+    daypart = _daypart(now)
+    edition = {"morning": "MORNING", "afternoon": "AFTERNOON", "evening": "EVENING",
+               "late-night": "LATE"}[daypart]
+    heads = list(_CALM_HEADS)
+    heads += {"morning": _CALM_MORNING_HEADS, "evening": _CALM_EVENING_HEADS,
+              "late-night": _CALM_NIGHT_HEADS}.get(daypart, ())
+    decks = list(_CALM_DECKS)
+    pool = ha.get("pool") or {}
+    if not pool.get("heating"):
+        heads += _CALM_IDLE_HEADS
+        decks += _CALM_IDLE_DECKS
+    cups = (ha.get("coffee") or {}).get("cupsToday")
+    if isinstance(cups, (int, float)) and cups > 0:
+        decks.append(f"{int(cups)} cup{'s' if cups != 1 else ''} of coffee so far. "
+                     "Otherwise, nothing to report.")
+    kw = (ha.get("solar") or {}).get("currentKw")
+    if isinstance(kw, (int, float)) and kw >= 1:
+        decks.append(f"The roof is making {kw:.1f} kW. Nothing's using it for chores.")
+    water = pool.get("current")
+    if isinstance(water, (int, float)) and not pool.get("heating"):
+        decks.append(f"The pool sits at {round(water)}°, with nothing to do.")
+    slot = _rotation_slot(now, _CALM_ROTATION_MINUTES)
+    seed = f"calm|{now.strftime('%Y-%m')}"
+    head_pre, head_italic = _rotate(heads, seed, slot)
+    return {
+        "kicker": f"THE {edition} EDITION",
+        "head_pre": head_pre,
+        "head_italic": head_italic,
+        "deck": _rotate(decks, seed, slot),
     }
 
 

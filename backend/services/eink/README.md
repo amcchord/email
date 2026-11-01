@@ -168,6 +168,28 @@ Every pixel from either is exactly the fill colour, so both pass the `dither=Fal
 encoders untouched. Swiss sets `draw.fontmode = "1"` so its text adds no grey either.
 `test_swiss.py` holds both palettes to that.
 
+## Editorial's single-activity card
+
+When exactly one appliance is active, `editorial._draw_feature` draws it with an
+icon (`icons.py`), a meter (`meters.py`), and rotating copy (`flavor.py`). Two
+active appliances still get co-leads, and three or more a lead with briefs.
+
+- **Icons** show the current phase: the washer's drum changes with wash, rinse,
+  and spin, and the sauna stove has one heat wave per lit element.
+- **Meters** draw only reported values. Laundry progress is elapsed time over
+  elapsed plus remaining, from a status history (`fetch_ha_cycle_history`) that is
+  read only while a machine runs. If that history is missing or can't see the
+  cycle's start, the bar drops out and the phase track and countdown stay. The
+  sauna chart is the room sensor as a solid line and the pinned forecast (D-054)
+  as a dithered one.
+- **Dither** follows the Swiss rule (D-055): solid ink is measured, dither is
+  forecast, flat tones are Bayer, gradients are Atkinson, and type never sits on
+  dither.
+- **Copy** walks a per-cycle shuffle of its pool every `ROTATION_MINUTES`, so
+  nothing repeats until the pool has run. Every variant must be true whenever it
+  can be picked, and instructions such as "move it to the dryer" stay in every
+  variant. `test_editorial_feature.py` checks that all of it fits.
+
 ## Home Editorial readings and hourly copy
 
 The House rail shows Primary Suite and Nursery temperatures, followed by coffee

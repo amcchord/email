@@ -20,17 +20,19 @@ the "how to add a new appliance / new design" guide.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from PIL import Image, ImageDraw
 
 from ..sauna_forecast import READY_F, TARGET_F
-from . import flavor, fonts, layout
+from . import flavor, fonts, icons, layout, meters
 from .appliances import ActiveAppliance, pick_active, pool_near_target
 from .draw import (
     Box,
     Run,
+    _wrap_runs_into_lines,
     bullet,
     diamond,
     dotted_hr,
@@ -66,6 +68,7 @@ from .draw import (
 )
 from .ha_view import (
     ApplianceView,
+    _span,
     build_appliance_view,
 )
 from .helpers import (
@@ -842,9 +845,8 @@ def _draw_lead_column(img: Image.Image, draw, ctx: RenderContext, ha,
     * 0 active: render the calm-edition hero. Slack is distributed so
       the headline sits ~1/3 from the top -- a magazine looks anchored,
       not floating.
-    * 1 active: render the full per-kind hero, then place it at the
-      same 1/3 gravity offset so the fact strip floats nearer the
-      column center instead of hugging the top.
+    * 1 active: render the feature card (icon, headline, instrument meter,
+      facts) at the same 1/3 gravity offset.
     * 2 active: render two equal-weight co-lead stories stacked with a
       double-rule divider. This is the "Dryer + Washer" case where
       both deserve top-billing.
@@ -884,6 +886,8 @@ def _draw_lead_column(img: Image.Image, draw, ctx: RenderContext, ha,
 
     if lead is None:
         y_end = _draw_calm_lead(sdraw, ctx, ha, 0, 0, box.w)
+    elif not rest and lead.kind in _FEATURE_BUILDERS:
+        y_end = _draw_feature(scratch, sdraw, ctx, lead, box.w)
     else:
         y_end = _draw_lead(sdraw, ctx, ha, lead, 0, 0, box.w)
         if rest:
@@ -1088,11 +1092,11 @@ def _co_washer(view: ApplianceView, ctx: RenderContext) -> dict:
 def _co_washer_done(view: ApplianceView, ctx: RenderContext) -> dict:
     P = ctx.palette
     norm, ital = _co_lead_runs_normal_italic()
+    copy = flavor.done_copy(view, ctx)
     return {
-        "head_runs": [Run("Wash complete \u2014 ", norm, P.ink),
-                      Run("move it.", ital, P.ink)],
-        "deck": (f"Cycle #{view.extras.get('cycle_no', 0)} finished "
-                 f"{view.finish_label} \u00b7 {view.relative_label}."),
+        "head_runs": [Run(copy["head_pre"], norm, P.ink),
+                      Run(copy["head_italic"], ital, P.ink)],
+        "deck": copy["deck"],
         "cells": [
             {"k": "Finished", "v": view.finish_label,
              "accent": ctx.accent(view.accent_kind)},
@@ -1123,10 +1127,11 @@ def _co_dryer(view: ApplianceView, ctx: RenderContext) -> dict:
 def _co_dryer_done(view: ApplianceView, ctx: RenderContext) -> dict:
     P = ctx.palette
     norm, ital = _co_lead_runs_normal_italic()
+    copy = flavor.done_copy(view, ctx)
     return {
-        "head_runs": [Run("Drying complete \u2014 ", norm, P.ink),
-                      Run("unload it.", ital, P.ink)],
-        "deck": f"Finished {view.finish_label} \u00b7 {view.relative_label}.",
+        "head_runs": [Run(copy["head_pre"], norm, P.ink),
+                      Run(copy["head_italic"], ital, P.ink)],
+        "deck": copy["deck"],
         "cells": [
             {"k": "Finished", "v": view.finish_label,
              "accent": ctx.accent(view.accent_kind)},
@@ -1142,7 +1147,7 @@ def _co_dishwasher(view: ApplianceView, ctx: RenderContext) -> dict:
     prog = view.progress_pct
     prog_s = f"{prog}%" if prog is not None else "\u2014"
     copy = flavor.pick_appliance_copy(view, ctx)
-    runs = [Run(copy["head_pre"] + " ", norm, P.ink)]
+    runs = [Run(copy["head_pre"], norm, P.ink)]
     if copy["head_italic"]:
         runs.append(Run(copy["head_italic"], ital, P.ink))
     return {
@@ -1162,7 +1167,7 @@ def _co_sauna(view: ApplianceView, ctx: RenderContext) -> dict:
     accent = ctx.accent(view.accent_kind)
     forecast = view.extras.get("forecast")
     if forecast:
-        head, tail, deck = _sauna_forecast_copy(view, forecast)
+        head, tail, deck = flavor.sauna_forecast_copy(view, forecast, ctx, READY_F)
         ready = forecast["ready_label"] or "\u2014"
         return {
             "head_runs": [Run(head, norm, P.ink), Run(tail, ital, accent)],
@@ -1189,10 +1194,10 @@ def _co_sauna(view: ApplianceView, ctx: RenderContext) -> dict:
 def _co_pool(view: ApplianceView, ctx: RenderContext) -> dict:
     P = ctx.palette
     norm, ital = _co_lead_runs_normal_italic()
+    head, tail, _deck = flavor.pool_copy(view, ctx)
     return {
-        "head_runs": [Run("Pool climbing to ", norm, P.ink),
-                      Run(f"{fmt_temp(view.target)}.", ital,
-                          ctx.accent(view.accent_kind))],
+        "head_runs": [Run(head, norm, P.ink),
+                      Run(tail, ital, ctx.accent(view.accent_kind))],
         "deck": (f"Water {fmt_temp(view.current)} \u00b7 "
                  f"air {fmt_temp(view.extras.get('air_temp'))}."),
         "cells": [
@@ -1266,7 +1271,8 @@ def _draw_calm_lead(draw, ctx: RenderContext, ha, x0, y, w) -> int:
     k_tracking = em_to_px(10, 0.30)
     fm_k = font_metrics(kicker_font)
     star_sz = 8
-    kicker_label = "THE CALM EDITION"
+    copy = flavor.calm_copy(ctx, ha)
+    kicker_label = copy["kicker"]
     label_w = tracked_width(kicker_font, kicker_label, k_tracking)
     block_w = star_sz + 8 + label_w + 8 + star_sz
     block_x = x0 + max(0, (w - block_w) // 2)
@@ -1285,24 +1291,24 @@ def _draw_calm_lead(draw, ctx: RenderContext, ha, x0, y, w) -> int:
     line_height = fm_h.line_height + 1
     cur_y = y + fm_k.line_height + 6
     baseline = cur_y + fm_h.ascent
-    # Try to fit "All quiet on the home front." as a single line; fall
-    # back to the two-line version if it doesn't measure.
-    one_line = "All quiet on the "
-    one_line_w = (text_width(head_font, one_line)
-                  + text_width(italic_font, "home front."))
+    # Try to fit the headline on a single line; fall back to two lines if it
+    # doesn't measure.
+    one_line = copy["head_pre"]
+    tail = copy["head_italic"]
+    one_line_w = text_width(head_font, one_line) + text_width(italic_font, tail)
     if one_line_w <= w:
         draw_text_bl(draw, (x0, baseline), one_line, head_font, P.ink)
         draw_text_bl(draw, (x0 + text_width(head_font, one_line), baseline),
-                     "home front.", italic_font, P.ink)
+                     tail, italic_font, P.ink)
     else:
-        draw_text_bl(draw, (x0, baseline), "All quiet on the", head_font, P.ink)
+        draw_text_bl(draw, (x0, baseline), one_line.rstrip(), head_font, P.ink)
         baseline += line_height
-        draw_text_bl(draw, (x0, baseline), "home front.", italic_font, P.ink)
+        draw_text_bl(draw, (x0, baseline), tail, italic_font, P.ink)
     cur_y = baseline + fm_h.descent + 4
     deck_font = fonts.serif(12, italic=True, weight="semibold")
     fm_d = font_metrics(deck_font)
     draw_text_bl(draw, (x0, cur_y + fm_d.ascent),
-                 "Nothing running, nothing demanding.", deck_font, P.muted)
+                 copy["deck"], deck_font, P.muted)
     cur_y += fm_d.line_height + 5
     double_hr(draw, x0, x0 + w, cur_y, fill=P.rule)
     cur_y += 10
@@ -1582,37 +1588,12 @@ def _hero_italic_bold_font():
     return fonts.serif(32, italic=True, weight="bold")
 
 
-def _sauna_forecast_copy(view: ApplianceView, forecast: dict) -> tuple[str, str, str]:
-    """Headline (upright, italic) and deck for a sauna with a heat-up forecast."""
-    heaters = view.extras.get("heaters", 0)
-    door = "open" if view.extras.get("door_open") else "closed"
-    status = f"{heaters} of 3 elements on; door {door}."
-    if forecast["ready_reached"]:
-        return ("The sauna is ", "ready.",
-                f"Room reached {READY_F}\u00b0 at "
-                f"{forecast['ready_label']}. {status}")
-    if forecast["ready_label"] is None:
-        return ("Won't reach ", f"{READY_F}\u00b0.",
-                "The room levels off below it at this target.")
-    head = ("Ready around ", f"{forecast['ready_label']}.")
-    if forecast["ends_before_ready"]:
-        return (*head, f"Session ends {forecast['ends_before_ready']}, "
-                       "before it's ready.")
-    if forecast["fan_state"] == "running":
-        return (*head, f"In {forecast['ready_in']}. Evening out the room; "
-                       f"fan has {forecast['fan_note']}.")
-    if forecast["fan_state"] == "due":
-        return (*head, f"In {forecast['ready_in']}. Run the fan now, "
-                       "10 min on Medium.")
-    return (*head, f"In {forecast['ready_in']}. {status}")
-
-
 def _draw_sauna_forecast_lead(draw, ctx: RenderContext, view: ApplianceView,
                               forecast: dict, x0, y, w) -> int:
     """Heat-up forecast card: when it's ready, both sensors, and the fan plan."""
     P = ctx.palette
     accent = ctx.accent(view.accent_kind)
-    head, tail, deck = _sauna_forecast_copy(view, forecast)
+    head, tail, deck = flavor.sauna_forecast_copy(view, forecast, ctx, READY_F)
     runs = [Run(head, _hero_font(), P.ink),
             Run(tail, _hero_italic_bold_font(), accent)]
     cur_y = _draw_story_shell(draw, P, x0, y, w,
@@ -1708,21 +1689,16 @@ def _draw_washer_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y
     return cur_y
 
 
-# Each explicit line must fit the column: `draw_headline` drops lines past its
-# limit, so an auto-wrapped first line would cost the instruction its ending.
-def _washer_done_headline(P: Palette) -> list[Run]:
-    return [
-        Run("Wash complete.", _hero_font(), P.ink),
-        Run("\n", _hero_font(), P.ink),
-        Run("Move it to the dryer.", _hero_italic_bold_font(), P.ink),
-    ]
+def _done_headline(copy: dict, P: Palette) -> list[Run]:
+    """Two explicit lines: the news, then the instruction.
 
-
-def _dryer_done_headline(P: Palette) -> list[Run]:
+    Each line must fit the column: `draw_headline` drops lines past its limit, so an
+    auto-wrapped first line would cost the instruction its ending.
+    """
     return [
-        Run("Drying complete.", _hero_font(), P.ink),
+        Run(copy["head_pre"], _hero_font(), P.ink),
         Run("\n", _hero_font(), P.ink),
-        Run("Please unload the dryer.", _hero_italic_bold_font(), P.ink),
+        Run(copy["head_italic"].strip(), _hero_italic_bold_font(), P.ink),
     ]
 
 
@@ -1730,13 +1706,10 @@ def _draw_washer_done_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, 
     P = ctx.palette
     view = item.view
     accent = ctx.accent(view.accent_kind)
-    runs = _washer_done_headline(P)
-    deck = (f"Cycle #{view.extras.get('cycle_no', 0)} finished "
-            f"{view.finish_label} \u00b7 {view.relative_label}.")
-    body = "The dryer awaits."
+    copy = flavor.done_copy(view, ctx)
     return _draw_story_shell(draw, P, x0, y, w,
         kicker=view.eyebrow_kicker, accent=accent,
-        badge="UNLOAD", headline_runs=runs, deck=deck, body=body)
+        badge="UNLOAD", headline_runs=_done_headline(copy, P), deck=copy["deck"])
 
 
 _EDITORIAL_DRYER_PHASE_HEADS = {
@@ -1771,12 +1744,10 @@ def _draw_dryer_done_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x
     P = ctx.palette
     view = item.view
     accent = ctx.accent(view.accent_kind)
-    runs = _dryer_done_headline(P)
-    deck = f"Finished {view.finish_label} \u00b7 {view.relative_label}."
-    body = "Drum's done its work. Time to fold."
+    copy = flavor.done_copy(view, ctx)
     return _draw_story_shell(draw, P, x0, y, w,
         kicker=view.eyebrow_kicker, accent=accent,
-        badge="UNLOAD", headline_runs=runs, deck=deck, body=body)
+        badge="UNLOAD", headline_runs=_done_headline(copy, P), deck=copy["deck"])
 
 
 def _draw_dishwasher_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) -> int:
@@ -1786,7 +1757,7 @@ def _draw_dishwasher_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x
     prog = view.progress_pct
     prog_pct = f"{prog}%" if prog is not None else "\u2014"
     copy = flavor.pick_appliance_copy(view, ctx)
-    runs = [Run(copy["head_pre"] + " ", _hero_font(), P.ink)]
+    runs = [Run(copy["head_pre"], _hero_font(), P.ink)]
     if copy["head_italic"]:
         runs.append(Run(copy["head_italic"], _hero_italic_bold_font(), P.ink))
     deck = copy["deck"]
@@ -1814,15 +1785,10 @@ def _draw_pool_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, 
     accent = ctx.accent(view.accent_kind)
     target = view.target
     current = view.current
-    runs = [Run("Climbing to ", _hero_font(), P.ink),
-            Run(fmt_temp(target),
-                fonts.serif(32, italic=True, weight="bold"), accent),
-            Run(".", _hero_font(), P.ink)]
-    freeze = ("Freeze guard armed." if view.extras.get("freeze_protect")
-              else "No freeze risk.")
+    head, tail, deck = flavor.pool_copy(view, ctx)
+    runs = [Run(head, _hero_font(), P.ink),
+            Run(tail, fonts.serif(32, italic=True, weight="bold"), accent)]
     air = view.extras.get("air_temp")
-    deck = (f"Heat exchanger active, water now {fmt_temp(current)}. "
-            f"Air {fmt_temp(air)}. {freeze}")
     cur_y = _draw_story_shell(draw, P, x0, y, w,
         kicker=view.eyebrow_kicker, accent=accent,
         headline_runs=runs, deck=deck)
@@ -1862,6 +1828,316 @@ EDITORIAL_LEAD_DRAWERS = {
     "dryer-done":   _draw_dryer_done_lead,
     "dishwasher":   _draw_dishwasher_lead,
     "pool":         _draw_pool_lead,
+}
+
+
+# ── Feature card (the only thing happening in the house) ───────────────
+
+
+@dataclass(frozen=True)
+class _Feature:
+    """What one appliance contributes to the single-activity card."""
+    kicker: str
+    head_pre: str
+    head_italic: str
+    deck: str
+    # (img, draw, y, w) -> y below the meter.
+    meter: Callable[[Image.Image, Any, int, int], int]
+    cells: list[dict]
+    icon_phase: str = ""
+    badge: Optional[str] = None
+    italic_accent: bool = False
+
+
+_WASHER_STATIONS = ("WASH", "RINSE", "SPIN", "DONE")
+_DRYER_STATIONS = ("DRY", "COOL", "CARE", "DONE")
+_ICON_GAP = 12
+_FEATURE_HEAD_SIZES = (30, 28, 26, 24, 22)
+
+
+def _feature_headline(feature: _Feature, ink, accent, w: int) -> tuple[list[Run], int]:
+    """The largest headline that fits two lines beside the icon, and its line height."""
+    runs: list[Run] = []
+    for size in _FEATURE_HEAD_SIZES:
+        runs = [Run(feature.head_pre, fonts.serif(size, weight="bold"), ink)]
+        if feature.head_italic:
+            runs.append(Run(feature.head_italic, fonts.serif(size, italic=True, weight="bold"),
+                            accent if feature.italic_accent else ink))
+        if len(_wrap_runs_into_lines(runs, w)) <= 2:
+            break
+    return runs, runs[0].font.size + 3
+
+
+def _draw_feature(img: Image.Image, draw, ctx: RenderContext, item: ActiveAppliance, w: int) -> int:
+    """Icon and headline side by side, then the deck, the meter and the facts."""
+    P = ctx.palette
+    view = item.view
+    accent = ctx.accent(view.accent_kind)
+    feature = _FEATURE_BUILDERS[item.kind](view, ctx, accent)
+    icons.draw_icon(img, 0, 0, kind=item.kind, phase=feature.icon_phase, ink=P.ink, fill=accent)
+
+    text_x = icons.ICON_SIZE + _ICON_GAP
+    text_w = w - text_x
+    kfont = fonts.pix_cherry_small(layout.EditorialType.KICKER_PX, bold=True)
+    _draw_diamond_kicker(draw, Box(text_x, 0, w, 18), text=feature.kicker, P=P, accent=accent,
+                         badge=feature.badge)
+    runs, line_height = _feature_headline(feature, P.ink, accent, text_w)
+    head_y = font_metrics(kfont).line_height + 7
+    y = draw_headline(draw, (text_x, head_y, text_w, line_height * 2), runs,
+                      line_height_px=line_height, max_lines=2)
+    y = max(y, icons.ICON_SIZE)
+    if feature.deck:
+        y = draw_paragraph(draw, (0, y + 7, w, 40), feature.deck,
+                           font=fonts.serif(15, italic=True, weight="semibold"),
+                           fill=P.muted, line_height_px=19, max_lines=2)
+    y = feature.meter(img, draw, y + 9, w)
+    if feature.cells:
+        y = _draw_fact_strip(draw, P, 0, y + 9, w, feature.cells)
+    return y
+
+
+def _laundry_meter(view: ApplianceView, accent, *, stations, current: Optional[int]):
+    """Time left and the finish, the cycle's progress, then where it is in its phases."""
+    cycle = view.extras.get("cycle")
+
+    def meter(img, draw, y, w, *, P):
+        label = f"LEFT · {cycle['pct']}%" if cycle else "LEFT"
+        y = meters.draw_meter_stats(draw, P, 0, y, w, value=view.remaining_label, value_label=label,
+                                    accent=accent, right_value=view.finish_label,
+                                    right_label="DONE BY")
+        if cycle:
+            segments = [meters.BarSegment(minutes) for _, minutes in cycle["segments"]]
+            y = meters.draw_progress_bar(img, draw, P, 0, y + 5, w, pct=cycle["pct"],
+                                         accent=accent, segments=segments)
+        return meters.draw_phase_track(img, draw, P, 0, y + 7, w, stations=stations,
+                                       current=current, accent=accent)
+    return meter
+
+
+def _laundry_cells(view: ApplianceView, last: list[dict]) -> list[dict]:
+    cycle = view.extras.get("cycle")
+    if not cycle:
+        return last
+    return [{"k": "Started", "v": cycle["started_label"]},
+            {"k": "Elapsed", "v": cycle["elapsed_label"]}, *last]
+
+
+def _feature_washer(view: ApplianceView, ctx: RenderContext, accent) -> _Feature:
+    P = ctx.palette
+    copy = flavor.pick_appliance_copy(view, ctx)
+    phase = view.extras.get("phase") or ""
+    cycle = view.extras.get("cycle")
+    past = [status for status, _ in cycle["segments"]] if cycle else []
+    current = flavor.laundry_station("washer", phase, past)
+    meter = _laundry_meter(view, accent, stations=_WASHER_STATIONS, current=current)
+    energy = view.extras.get("energy_kwh_month") or 0.0
+    return _Feature(
+        kicker=f"Laundry · {view.status_label or 'Running'}",
+        head_pre=copy["head_pre"], head_italic=copy["head_italic"], deck=copy["deck"],
+        meter=lambda img, draw, y, w: meter(img, draw, y, w, P=P),
+        cells=_laundry_cells(view, [
+            {"k": "Cycle", "v": f"#{view.extras.get('cycle_no', 0)}"},
+            {"k": "Mo. kWh", "v": f"{float(energy):.1f}"},
+        ]),
+        icon_phase=("pause" if "paus" in phase
+                    else {1: "rinse", 2: "spin"}.get(current, "wash")),
+    )
+
+
+def _feature_dryer(view: ApplianceView, ctx: RenderContext, accent) -> _Feature:
+    P = ctx.palette
+    copy = flavor.pick_appliance_copy(view, ctx)
+    phase = view.extras.get("phase") or "running"
+    cycle = view.extras.get("cycle")
+    past = [status for status, _ in cycle["segments"]] if cycle else []
+    current = flavor.laundry_station("dryer", phase, past)
+    meter = _laundry_meter(view, accent, stations=_DRYER_STATIONS, current=current)
+    return _Feature(
+        kicker=f"Laundry · {view.status_label or 'Drying'}",
+        head_pre=copy["head_pre"], head_italic=copy["head_italic"], deck=copy["deck"],
+        meter=lambda img, draw, y, w: meter(img, draw, y, w, P=P),
+        cells=_laundry_cells(view, [
+            {"k": "Phase", "v": view.status_label or title_case(phase.replace("_", " "))},
+        ]),
+        icon_phase=phase,
+    )
+
+
+def _waited_label(view: ApplianceView, ctx: RenderContext) -> str:
+    if view.finish_at_local is None:
+        return "—"
+    minutes = (ctx.now_local - view.finish_at_local).total_seconds() / 60
+    return _span(max(1, minutes))
+
+
+def _feature_done(view: ApplianceView, ctx: RenderContext, accent, *,
+                  stations, cells: list[dict]) -> _Feature:
+    P = ctx.palette
+    copy = flavor.done_copy(view, ctx)
+
+    def meter(img, draw, y, w):
+        y = meters.draw_meter_stats(draw, P, 0, y, w, value=_waited_label(view, ctx),
+                                    value_label="WAITING", accent=accent,
+                                    right_value=view.finish_label, right_label="FINISHED")
+        return meters.draw_phase_track(img, draw, P, 0, y + 7, w, stations=stations,
+                                       current=None, accent=accent, complete=True)
+
+    return _Feature(
+        kicker=view.eyebrow_kicker, head_pre=copy["head_pre"], head_italic=copy["head_italic"],
+        deck=copy["deck"], meter=meter, cells=cells, badge="UNLOAD",
+    )
+
+
+def _feature_washer_done(view: ApplianceView, ctx: RenderContext, accent) -> _Feature:
+    return _feature_done(view, ctx, accent, stations=_WASHER_STATIONS, cells=[
+        {"k": "Cycle", "v": f"#{view.extras.get('cycle_no', 0)}"},
+        {"k": "Next", "v": "Dryer"},
+    ])
+
+
+def _feature_dryer_done(view: ApplianceView, ctx: RenderContext, accent) -> _Feature:
+    return _feature_done(view, ctx, accent, stations=_DRYER_STATIONS, cells=[])
+
+
+def _feature_dishwasher(view: ApplianceView, ctx: RenderContext, accent) -> _Feature:
+    P = ctx.palette
+    copy = flavor.pick_appliance_copy(view, ctx)
+    prog = view.progress_pct
+
+    def meter(img, draw, y, w):
+        value = "—" if prog is None else f"{prog}%"
+        y = meters.draw_meter_stats(draw, P, 0, y, w, value=value, value_label="DONE",
+                                    accent=accent, right_value=view.finish_label,
+                                    right_label="FINISHES")
+        if prog is None:
+            return y
+        y = meters.draw_progress_bar(img, draw, P, 0, y + 5, w, pct=prog, accent=accent,
+                                     ticks=(0, 25, 50, 75, 100))
+        return meters.draw_tick_labels(draw, P, 0, y + 2, w, (
+            (0, "0"), (25, "25"), (50, "50"), (75, "75"), (100, "100"),
+        ))
+
+    door = view.extras.get("door_state") or ""
+    return _Feature(
+        kicker=view.eyebrow_kicker,
+        head_pre=copy["head_pre"], head_italic=copy["head_italic"], deck=copy["deck"],
+        meter=meter,
+        cells=[
+            {"k": "Program", "v": view.program_label or "—"},
+            {"k": "Left", "v": view.remaining_label},
+            {"k": "Door", "v": "Closed" if door == "closed" else (title_case(door) or "—")},
+        ],
+    )
+
+
+def _feature_sauna(view: ApplianceView, ctx: RenderContext, accent) -> _Feature:
+    P = ctx.palette
+    forecast = view.extras.get("forecast")
+    heaters = view.extras.get("heaters", 0)
+    icon_phase = str(heaters)
+    humidity = view.extras.get("room_humidity_pct")
+    rh = None if humidity is None else f"{humidity}% RH"
+    room = view.extras.get("room_temp")
+    if not forecast:
+        target, current = view.target, view.current
+        remaining = view.extras.get("remaining_deg")
+        door = "open" if view.extras.get("door_open") else "closed"
+        deck = (f"Cabin presently {fmt_temp(current)}, with {int(remaining)}° left to climb. "
+                f"{heaters} of three elements lit; door {door}."
+                if remaining is not None else f"Cabin holding at {fmt_temp(current)}.")
+
+        def plain_meter(img, draw, y, w):
+            if current is None:
+                return y
+            high = max(float(target or 175), 175)
+            return meters.draw_scale_meter(img, draw, P, 0, y + 9, w, low=60, high=high,
+                                           now=float(current), target=target, accent=accent,
+                                           step=10)
+
+        return _Feature(
+            kicker=view.eyebrow_kicker, head_pre="The sauna is ", head_italic="warming",
+            deck=deck, meter=plain_meter, badge="LIVE", italic_accent=True, icon_phase=icon_phase,
+            cells=[
+                {"k": "Cabin", "v": fmt_temp(current), "accent": accent},
+                {"k": "Target", "v": fmt_temp(target)},
+                {"k": "Elements", "v": f"{heaters}/3"},
+                {"k": "Room", "v": fmt_temp(room), "sub": rh},
+            ],
+        )
+
+    head, tail, deck = flavor.sauna_forecast_copy(view, forecast, ctx, READY_F)
+
+    def curve_meter(img, draw, y, w):
+        if not forecast["curve"]:
+            return y
+        return meters.draw_heat_curve(
+            img, draw, P, 0, y, w, 108, curve=forecast["curve"], history=forecast["history"],
+            ready_f=READY_F, ready_minutes=forecast["ready_in_minutes"],
+            ready_label=forecast["ready_label"], fan_minutes=forecast["fan_in_minutes"],
+            accent=accent,
+        )
+
+    # A controller-preset session reports 32°F, which isn't a real target.
+    goal = fmt_temp(view.target) if 104 <= (view.target or 0) <= 212 else "PRESET"
+    if forecast["target_reached"]:
+        target_sub = "REACHED"
+    elif forecast["target_label"]:
+        target_sub = f"IN {forecast['target_in']}"
+    else:
+        target_sub = "ABOVE TARGET"
+    return _Feature(
+        kicker=view.eyebrow_kicker, head_pre=head, head_italic=tail, deck=deck,
+        meter=curve_meter, badge="READY" if forecast["ready_reached"] else "LIVE",
+        italic_accent=True, icon_phase=icon_phase,
+        cells=[
+            {"k": "Room", "v": fmt_temp(room), "accent": accent, "sub": rh},
+            {"k": "Thermostat", "v": fmt_temp(view.current), "sub": f"GOAL {goal}"},
+            {"k": f"{TARGET_F}° at", "v": forecast["target_label"] or "—",
+             "sub": target_sub},
+            {"k": "Fan", "v": forecast["fan_label"], "sub": forecast["fan_note"]},
+        ],
+    )
+
+
+def _feature_pool(view: ApplianceView, ctx: RenderContext, accent) -> _Feature:
+    P = ctx.palette
+    head, tail, deck = flavor.pool_copy(view, ctx)
+    current, target = view.current, view.target
+    air = view.extras.get("air_temp")
+
+    def meter(img, draw, y, w):
+        y = meters.draw_meter_stats(draw, P, 0, y, w, value=fmt_temp(current), value_label="WATER",
+                                    accent=accent, right_value=fmt_temp(target), right_label="GOAL")
+        if current is None:
+            return y
+        readings = [float(v) for v in (current, target, air) if v is not None]
+        low = min(50.0, *readings)
+        high = max(90.0, *readings)
+        return meters.draw_scale_meter(
+            img, draw, P, 0, y + 12, w, low=low - low % 5, high=high + (-high) % 5,
+            now=float(current), target=target, accent=accent,
+            marker=air, marker_label="AIR",
+        )
+
+    return _Feature(
+        kicker=view.eyebrow_kicker, head_pre=head, head_italic=tail, deck=deck, meter=meter,
+        italic_accent=True,
+        cells=[
+            {"k": "Air", "v": fmt_temp(air)},
+            {"k": "Pump", "v": "On" if view.extras.get("pump_running") else "Off"},
+            {"k": "Freeze guard", "v": "Armed" if view.extras.get("freeze_protect") else "Off"},
+        ],
+    )
+
+
+_FEATURE_BUILDERS = {
+    "sauna":        _feature_sauna,
+    "washer":       _feature_washer,
+    "washer-done":  _feature_washer_done,
+    "dryer":        _feature_dryer,
+    "dryer-done":   _feature_dryer_done,
+    "dishwasher":   _feature_dishwasher,
+    "pool":         _feature_pool,
 }
 
 

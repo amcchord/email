@@ -109,6 +109,53 @@ def _sauna_state(base: dict) -> dict:
     return out
 
 
+def _single_activity_states(base: dict) -> dict:
+    """One state per Editorial feature card, with the longest realistic readings."""
+    def only(**appliance) -> dict:
+        out = copy.deepcopy(base)
+        out.update(appliance)
+        return out
+
+    now = datetime(2026, 5, 5, 22, 0, tzinfo=timezone.utc).timestamp()
+    washer = {"operation": "cycle", "lastNotification": None, "powerOn": True,
+              "cycles": 999, "energyMonth": 999000}
+    cycle = [{"s": "running", "t": now - 3000}, {"s": "rinsing", "t": now - 1200}]
+    done_at = "2026-05-05T21:30:00+00:00"
+    return {
+        "feature_washer": only(washer={
+            **washer, "status": "rinsing", "remaining": "2026-05-05T23:59:00+00:00", "cycle": cycle,
+        }),
+        "feature_washer_done": only(washer={
+            **washer, "status": "power_off", "remaining": None, "powerOn": False,
+            "lastNotification": {"type": "washing_is_complete", "at": done_at},
+        }),
+        "feature_dryer": only(dryer={
+            "status": "wrinkle_care", "operation": "cycle", "lastNotification": None,
+            "powerOn": True, "remaining": "2026-05-05T23:59:00+00:00", "cycle": cycle,
+        }),
+        "feature_dryer_done": only(dryer={
+            "status": "end", "operation": "cycle", "powerOn": True, "remaining": None,
+            "lastNotification": {"type": "drying_is_complete", "at": done_at},
+        }),
+        "feature_dishwasher": only(dishwasher={
+            "state": "run", "program": "Intensive 70", "progress": 88,
+            "finishTime": "2026-05-05T23:59:00+00:00", "door": "closed",
+        }),
+        "feature_sauna": only(sauna={
+            "mode": "heat", "current": 127, "target": 185, "duration": 60, "heaters": 3,
+            "door": True, "roomTemp": 84, "roomHumidity": 99,
+            "forecast": sauna_forecast.forecast_heating(
+                thermostat=127, room=84, outdoor=45, target=185, elements=3, session=None,
+                session_minutes=60, timer_end=None, now=now,
+            ),
+        }),
+        "feature_pool": only(pool={
+            "operation": "heating", "current": 61, "target": 104, "air": -12, "heating": True,
+            "pumpRunning": True, "schedule": True, "freezeProtect": True,
+        }),
+    }
+
+
 def _stress_state(base: dict) -> dict:
     """Push every numeric field into 3 digits + every label long. The
     audit shouldn't flag overflow on this either."""
@@ -232,7 +279,8 @@ def audit() -> int:
     zero = copy.deepcopy(base)
     zero["coffee"] = {"cupsToday": 0}
     states = [("calm", base), ("sauna", sauna), ("stress", stress),
-              ("zero_coffee", zero), ("unavailable", unavailable_ha_shape())]
+              ("zero_coffee", zero), ("unavailable", unavailable_ha_shape()),
+              *_single_activity_states(base).items()]
     fails: List[str] = []
 
     for design in ("editorial", "swiss"):

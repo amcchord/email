@@ -37,6 +37,8 @@ FAN_RUN_MINUTES = 10
 _FAN_ROOM_LIMIT = 160
 _DEFAULT_OUTDOOR = 45
 _HORIZON_MINUTES = 240
+# How much of the projection the card's chart can use, one reading per minute.
+_CURVE_MINUTES = 180
 
 
 @dataclass(frozen=True)
@@ -261,6 +263,8 @@ def forecast_heating(
         "targetAt": _iso(target_at if target_at is not None else when(target_in)),
         "targetInMinutes": target_in,
         "fan": fan,
+        "fanInMinutes": projection.fan_at,
+        "roomCurve": [round(value, 1) for value in projection.rooms[:_CURVE_MINUTES + 1]],
         "sessionEndsBeforeReadyAt": (
             _iso(session_end)
             if session_end is not None and ready_eta is not None and ready_eta > session_end
