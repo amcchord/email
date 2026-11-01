@@ -33,10 +33,17 @@ secrets, email contents, OAuth tokens, or raw private production data.
   `mailapp` restarted. Health `ok`, and Swiss and Editorial rendered from live data.
 - Follow-up on request: gradients (daylight band, sun, slab fade) moved to Atkinson error
   diffusion via `draw.atkinson_dither`; flat levels stay Bayer (`draw.bayer_dither`,
-  renamed from `pixel_dither`). Not deployed yet; live is `156d4fe`.
+  renamed from `pixel_dither`). Deployed as `5c6e6af`; only `mailapp` restarted. Health
+  `ok`, and Swiss and Editorial rendered from live data through the deployed code.
 - The `156d4fe` restart took 90 seconds: a long-lived client connection held uvicorn's
   shutdown open until systemd's stop timeout forced the kill. The API came back healthy
   with no restart loop. A shorter `--timeout-graceful-shutdown` would bound this.
+- The `5c6e6af` restart also took 91 seconds, and it showed the real cost: the `bw`
+  terminals appear to back off for about 5.5 minutes after one failed check-in. Their
+  fetches stopped at 20:03 and resumed at 20:09 UTC, all 200s, then returned to 6 a
+  minute. The same gap followed `156d4fe` (19:57 to 20:03). So each slow restart leaves
+  those panels stale for about 6 minutes. The backoff is inferred from these logs, not
+  read from firmware.
 - Next action: choose Swiss on a terminal to judge the dither on real hardware.
 
 ## 2026-11-01 — Home Editorial truth fixes, sauna forecast, and Opus 5.5
