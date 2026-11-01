@@ -176,6 +176,94 @@ Also verify the user-facing path changed by the release. Record the deployed
 commit, commands, migration revision (if any), health result, and production
 actions in `docs/progress/JOURNAL.md`.
 
+## API Restart Bound
+
+An open browser tab holds `/api/events/stream`, and uvicorn waits for every open
+response before it exits. The stream never ends by itself: a shutdown does not
+mark the client as disconnected, and the application's lifespan shutdown only
+runs after that wait, so it cannot signal the stream. Without a bound,
+`systemctl restart mailapp` with a tab open takes the full 90-second default
+`TimeoutStopSec` and ends in SIGKILL (seen at 19:57 and 20:04 UTC on 2026-11-01).
+
+While a worker drains, new connections are not refused. The supervisor still
+holds the listening socket, so they wait in its backlog and Caddy returns 502
+when the process exits. The 19:57 restart produced 20 502s on API and terminal
+routes, 13 of them after waiting more than 30 seconds.
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| `--timeout-graceful-shutdown` | 15 | Requests get 15 seconds to finish, then uvicorn cancels what is left. In the Caddy log for 2026-10-16 to 2026-11-01, 161 of about 136,000 requests took longer than 15 seconds: 146 terminal image or schedule fetches and 15 others. |
+| `TimeoutStopSec` | 25 | Backstop for the whole unit: 15 seconds of drain, up to 5 for lifespan shutdown, and 5 of margin. |
+
+Expect these results:
+
+- With a tab open, a restart takes about 15 seconds, and each affected worker logs
+  `ERROR: Cancel N running task(s), timeout graceful shutdown exceeded`. This is
+  expected, not a fault. The tab reconnects by itself.
+- With no tab open, a restart takes a second or two and logs no such error.
+- A request still running after 15 seconds is cancelled and logs
+  `Exception in ASGI application` with a `CancelledError` traceback. Check that
+  the client action was safe to retry.
+
+Both settings live in `scripts/setup/steps/services.py` and the README, which only
+apply to new installs. Production's unit file was installed once and is not updated
+by a deployment, so it needs the change below.
+
+### Apply on production (Mutating)
+
+Only perform this when the user explicitly requests it. Applying has no effect
+until the next restart. The drop-in leaves the installed unit file untouched.
+
+```bash
+ssh root@email.mcchord.net
+install -d /etc/systemd/system/mailapp.service.d
+cat > /etc/systemd/system/mailapp.service.d/graceful-shutdown.conf <<'EOF'
+[Service]
+ExecStart=
+ExecStart=/opt/mail/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000 --workers 2 --timeout-graceful-shutdown 15
+TimeoutStopSec=25
+EOF
+systemd-analyze verify mailapp.service
+systemctl daemon-reload
+systemctl show mailapp -p TimeoutStopUSec -p ExecStart
+```
+
+The first restart afterwards still stops a process started without the flag, so
+with a tab open it runs to the new 25-second limit and logs `stop-sigterm timed
+out`. Only the restart after that one proves the bound.
+
+To roll back, remove the drop-in, then run `systemctl daemon-reload` and restart:
+
+```bash
+rm /etc/systemd/system/mailapp.service.d/graceful-shutdown.conf
+```
+
+### Verify with a connection open (Mutating: restarts the API)
+
+Only an in-flight response holds a worker. An idle TCP connection is closed at
+once and proves nothing, so use a real stream: keep a signed-in tab open at
+`https://email.mcchord.net`, then on the host:
+
+```bash
+ss -Htn state established '( sport = :8000 )' | wc -l
+journalctl --no-pager -u mailapp --since "$(systemctl show mailapp -p ActiveEnterTimestamp --value)" -o cat | grep -c 'GET /api/events/stream'
+systemd-cgls --no-pager -u mailapp.service
+since=$(date -u '+%F %T')
+time systemctl restart mailapp
+journalctl --no-pager -u mailapp --since "$since" -o cat | grep -E 'Cancel [0-9]+ running|stop-sigterm|Finished server process|Failed with result'
+curl -fsS https://email.mcchord.net/api/health
+```
+
+The first two commands must each report at least 1. The bound holds when
+`systemctl restart` returns in about 15 seconds, the log shows `Cancel N running`
+and `Finished server process`, and it shows neither `stop-sigterm` nor `Failed with
+result`.
+
+If the restart takes 25 seconds and logs `stop-sigterm` although uvicorn finished,
+a process other than uvicorn kept the unit open. Both forced stops on 2026-11-01
+killed one extra `python3` beyond the workers and resource tracker, and its origin
+is not yet known. The `systemd-cgls` output above lists it.
+
 ## Incident and Recovery Principles
 
 1. Stop making changes and capture the time, deployed commit, service state,

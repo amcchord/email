@@ -292,7 +292,8 @@ Type=simple
 User=mailapp
 Group=mailapp
 WorkingDirectory=/opt/mail
-ExecStart=/opt/mail/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000 --workers 2
+ExecStart=/opt/mail/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000 --workers 2 --timeout-graceful-shutdown 15
+TimeoutStopSec=25
 Restart=always
 RestartSec=3
 Environment=PATH=/opt/mail/venv/bin:/usr/local/bin:/usr/bin

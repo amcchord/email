@@ -23,7 +23,8 @@ Type=simple
 User=mailapp
 Group=mailapp
 WorkingDirectory={project_root}
-ExecStart={project_root}/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000 --workers 2
+ExecStart={project_root}/venv/bin/uvicorn backend.main:app --host 127.0.0.1 --port 8000 --workers 2 --timeout-graceful-shutdown 15
+TimeoutStopSec=25
 Restart=always
 RestartSec=3
 Environment=PATH={project_root}/venv/bin:/usr/local/bin:/usr/bin
