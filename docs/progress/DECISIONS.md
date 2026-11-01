@@ -1120,3 +1120,19 @@ add a new entry that explicitly supersedes the old one.
   against "expected" at a glance, which it otherwise has no way to do.
 - Consequence: New Swiss elements must choose a side. Reverse by removing the rule from
   `swiss.py` and the README; `draw.pixel_dither` itself carries no such meaning.
+
+## D-056 — An API restart must not fail a terminal check-in
+
+- Date: 2026-11-01
+- Status: accepted
+- Decision: End event streams from a handler wrapped around uvicorn's SIGTERM handler,
+  cap the drain at 15 seconds with `TimeoutStopSec=25`, and hold `/api/*` and
+  `/terminal/*` requests in Caddy for 30 seconds with `lb_try_duration`.
+- Reason: One open tab held restarts to the 90-second SIGKILL, and firmware sleeps 300
+  seconds after any check-in that is not a 200. uvicorn gives open responses no shutdown
+  signal and runs lifespan shutdown only after waiting for them. A shorter drain alone
+  would still return 502s and cut off real requests; socket activation is a larger change.
+- Consequence: During a real API outage, requests wait 30 seconds before their 502. A
+  request still running after 15 seconds gets a 500 and is not retried. If uvicorn stops
+  installing its handler before lifespan startup, streams fall back to the 15-second cap.
+  Reverse by removing the unit drop-in and reverting the Caddyfile and `events.py`.

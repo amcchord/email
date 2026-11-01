@@ -15,6 +15,10 @@ the pause.
 
 ## Baseline
 
+- Production runtime is `0e8ff23738363093c804e5b1ddfd13e5b35f02c2` as of 2026-11-01.
+  API restarts now take a few seconds and hold requests instead of returning 502, so
+  they should not fail a terminal check-in (see D-056). Verified with a real stream
+  open: a 1.06-second restart, all health probes 200, and no terminal gap.
 - Home Editorial runtime `a998fc9dc1cfc7b7199a85d0a14442751aeab4b2` is
   deployed as of 2026-11-01. The House rail shows Primary Suite and Nursery
   temperatures plus today's coffee cups, and the time appears only in the

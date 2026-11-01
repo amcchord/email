@@ -3,6 +3,34 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-11-01 — API restarts no longer fail terminal check-ins
+
+- Requested: stop an open client connection from holding `mailapp` restarts for 90
+  seconds, then roll out and verify. Branch `claude/gifted-wu-cd197a`.
+- Cause: an open `/api/events/stream` held the 19:57 and 20:04 UTC restarts to the
+  90-second SIGKILL. Requests hung in the supervisor's backlog and got 502, 20 of them
+  at 19:57. Firmware sleeps 300 seconds after any check-in that is not a 200, and its
+  read timeout is 20 seconds, which explains the stale terminals.
+- Change: streams end within a second of SIGTERM, the drain is capped at 15 seconds with
+  `TimeoutStopSec=25`, and Caddy holds `/api/*` and `/terminal/*` for 30 seconds. See
+  D-056 and the runbook's "API Restart Behaviour". Commits `cf6af5b` and `b0614ef`,
+  merged as `0e8ff23`.
+- Verification: 1051 backend passed, 75 skipped, and the 4 known Day Ahead pixel-pin
+  failures, which also fail on clean `e7c8cd4`. No frontend change, so no frontend
+  build. Locally, the real router and lifespan under uvicorn 0.46.0 exited in 0.6
+  seconds with 6 streams open.
+- Production: live clean at `5c6e6af`, fast-forwarded to `0e8ff23`, no migration or
+  dependency change. Validated and reloaded Caddy, added the unit drop-in, and restarted
+  `mailapp` twice. Only `mailapp` restarted; rollback is in the runbook.
+- Result: with a signed-in tab's stream open, `systemctl restart` took 1.06 seconds with
+  `Result=success`, and the tab reconnected in about 2 seconds. No cancel lines, warnings,
+  or new 502s. 1,236 health probes through Caddy from 20:20 to 20:33 UTC all returned
+  200, the slowest 2.78 seconds. `variant=bw` terminals held 6 requests a minute, all
+  200, with no gap through either restart. Zero automatic restarts.
+- Not exercised: a real slow request during a restart on production. The extra `python3`
+  process killed in both forced stops did not reappear and is still unidentified.
+- Next: none required. If a restart ever reaches 25 seconds, follow the runbook.
+
 ## 2026-11-01 — Swiss design rebuilt with a pixel dither
 
 - Requested: replace the dated Swiss design with a modern one, work in a halftone

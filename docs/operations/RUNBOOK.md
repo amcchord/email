@@ -179,7 +179,9 @@ actions in `docs/progress/JOURNAL.md`.
 ## API Restart Behaviour
 
 An API restart should take a few seconds and should not fail a terminal check-in.
-Four pieces work together:
+All of this is live as of 2026-11-01, including the production unit drop-in
+`/etc/systemd/system/mailapp.service.d/graceful-shutdown.conf`. Four pieces work
+together:
 
 | Piece | Value | Why |
 | --- | --- | --- |
@@ -222,7 +224,7 @@ steps because neither a deployment nor a Caddy reload changes the installed unit
 `scripts/setup/steps/services.py` and the README only apply to new installs.
 
 1. Fast-forward `/opt/mail` to the reviewed commit, as in Production Deployment.
-2. Validate and reload Caddy, which also closes open streams once:
+2. Validate and reload Caddy:
 
    ```bash
    caddy validate --config /opt/mail/Caddyfile
