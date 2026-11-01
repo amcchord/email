@@ -15,7 +15,20 @@ secrets, email contents, OAuth tokens, or raw private production data.
   readings as Home Editorial on the right. `draw.pixel_dither` is a 4x4 Bayer dither
   in 2 px squares. See D-055. Removed the old renderer, `docs/design/swiss.jsx`, and
   `fill_box_dither`, `draw_outlined_text`, and `eyebrow_label`, which only it used.
-- Verification and production actions are in the release commit's closeout below.
+- Bounded review cleared the live renderers and found one blocker, fixed: any garage
+  state but `open` printed "Garage closed". Only a reported `closed` says closed now,
+  and a missing garage entity shapes as `unknown` (Day Ahead's check is unaffected).
+- Verification: 1051 backend passed, 75 skipped, and the 4 known Day Ahead pixel-pin
+  failures (Swiss now has fresh pins; Editorial's are unchanged). 555 frontend tests,
+  the build, `git diff --check`, and the layout audit passed. `test_swiss.py` holds
+  both palettes to pure inks. Not seen on a physical panel.
+- Production: live clean at `a998fc9`, fast-forwarded to `952926b`, no migration,
+  dependency, or frontend source change. Restarted only `mailapp`, the one process that
+  renders. Health `ok`, five checked services active, zero restarts, no warning-or-
+  higher entries, and `bw` terminals still fetching `image.bmp`. Live data rendered
+  through the deployed code at exact BMP sizes: Swiss in both palettes, Editorial bw.
+  Rollback is a reviewed Git revert.
+- Next action: choose Swiss on a terminal to judge the dither on real hardware.
 
 ## 2026-11-01 — Home Editorial truth fixes, sauna forecast, and Opus 5.5
 
