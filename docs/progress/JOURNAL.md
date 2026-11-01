@@ -3,6 +3,42 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-11-01 — Editorial single-activity card polish
+
+- Requested: an icon and a more detailed progress meter when one activity is on the
+  card, more variety in the text, and a production deploy. Branch
+  `claude/eink-editorial-polish`, commit `a32a48c`.
+- Cause of the repetition: this washer reports its main phase as `running`, which had no
+  copy, so every wash read "Washer at work." The remaining pools also held one line per
+  cycle, and the calm card, sauna, pool and finished cards never changed.
+- Change: a lone appliance gets a pixel icon that follows its phase (`icons.py`) and a
+  meter (`meters.py`): time-based laundry progress with a phase track, the dishwasher's
+  percentage, a pool temperature scale, and a sauna chart of measured and forecast
+  temperature. Laundry progress reads a 6-hour status history, only while a machine
+  runs. Copy rotates every 20 minutes through larger pools, follows the time of day, and
+  firms up as a finished load waits. Also fixed a stray space in dishwasher headlines.
+  See D-057.
+- Review: one bounded P0/P1 pass found no crash paths. Fixed its findings: calm lines that
+  could be false with a pool still heating or an unmoved load, wrinkle-care lines that
+  said to unload, the wrong icon on a paused washer, and "LEFT · 42%". The two history
+  fetches now run in parallel.
+- Verification: 1239 backend passed, 75 skipped, and the 4 known Day Ahead pixel-pin
+  failures. 555 frontend tests and the build passed, with no frontend change. All 48
+  layout audits were clean, now including each single-activity card. The two Editorial
+  pixel pins were re-pinned because the calm card's copy changed.
+- Production: live clean at `0e8ff23`, fast-forwarded to `a32a48c`, no migration or
+  dependency change. Restarted only `mailapp`, which draws the cards. The workers use
+  `fetch_and_shape` only to write hourly snippets, so they keep running the prior code
+  until their next restart, with no effect on them. To roll back, reset the checkout to `0e8ff23` as `mailapp`
+  and restart `mailapp`.
+- Result: `/api/health` 200 locally and publicly, all five services active, no automatic
+  restarts. A live render from real Home Assistant data took 107 ms (bw) and 61 ms (six)
+  and showed the calm card. Washer, dishwasher and pool cards rendered from made-up
+  readings on the deployed code and fonts.
+- Not exercised: any card on a physical panel, or the real cycle-history response with a
+  machine running. If that response is unusable, the card drops only its progress bar.
+- Next: judge the cards on the panel during the next real laundry cycle.
+
 ## 2026-11-01 — API restarts no longer fail terminal check-ins
 
 - Requested: stop an open client connection from holding `mailapp` restarts for 90

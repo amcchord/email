@@ -1136,3 +1136,20 @@ add a new entry that explicitly supersedes the old one.
   request still running after 15 seconds gets a 500 and is not retried. If uvicorn stops
   installing its handler before lifespan startup, streams fall back to the 15-second cap.
   Reverse by removing the unit drop-in and reverting the Caddyfile and `events.py`.
+
+## D-057 — Editorial's feature card shows only reported values
+
+- Date: 2026-11-01
+- Status: accepted
+- Decision: A meter on the single-activity card draws only what the appliance reports or
+  what its history shows. Laundry progress is elapsed time over elapsed plus remaining,
+  and needs a visible start and finish; otherwise the bar drops out. The dishwasher uses
+  its own percentage and claims no phase. Solid ink is measured and dither is forecast,
+  as in D-055. Copy rotates every 20 minutes through a per-cycle shuffle, and each line
+  must be true whenever it can be picked.
+- Reason: A meter on a wall display reads as fact. Typical cycle lengths would have given
+  a fuller bar, but one that could be wrong without showing it.
+- Consequence: A cycle that started before the 6-hour look-back, or a failed history
+  fetch, shows the countdown and phase track without a bar. Running laundry adds one Home
+  Assistant history request per render, in parallel with the sauna's. Reverse by routing
+  `_draw_lead_column` back to `_draw_lead`, and drop `_cycle_segments` with it.
