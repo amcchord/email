@@ -122,13 +122,13 @@ CHEAP_MODEL = "gpt-5.6-luna"
 CHEAP_MODEL_EFFORT = "low"
 
 # A dedicated scheduled workload; it does not alter mail/chat preferences.
-# Fable 5.1 uses JSON outputs, because forced tool choice is unsupported.
+# Opus 5.5 uses JSON outputs, because forced tool choice is unsupported.
 DASHBOARD_SNIPPET_MODEL = ModelSpec(
-    "claude-fable-5-1",
-    "Claude Fable 5.1",
+    "claude-opus-5-5",
+    "Claude Opus 5.5",
     "anthropic",
     ANTHROPIC_EFFORT_LEVELS,
-    "medium",
+    "xhigh",
     (),
 )
 

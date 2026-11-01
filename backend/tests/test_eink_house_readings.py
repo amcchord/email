@@ -12,7 +12,7 @@ def state(entity, value, unit=None):
 def test_room_readings_use_room_sensors_and_daily_coffee_meter():
     shape = hc.shape_ha_state([
         state(hc._TEMP_PRIMARY_BEDROOM, "67.2", "°F"),
-        state(hc._TEMP_LIVING_ROOM, "71.6", "°F"),
+        state(hc._TEMP_NURSERY, "66.8", "°F"),
         state(hc._TEMP_FIRST, "80"),
         state(hc._TEMP_SECOND, "81"),
         state("sensor.living_room_bridge_temperature", "30.2", "°F"),
@@ -20,7 +20,7 @@ def test_room_readings_use_room_sensors_and_daily_coffee_meter():
         state("sensor.kitchen_coffee_cups_total", "1200", "cups"),
     ])
     assert shape["temps"]["primaryBedroom"] == 67.2
-    assert shape["temps"]["livingRoom"] == 71.6
+    assert shape["temps"]["nursery"] == 66.8
     assert shape["coffee"] == {"cupsToday": 4}
     assert shape["temps"]["first"] == 80  # Other designs retain floor data.
 
@@ -49,4 +49,4 @@ def test_missing_daily_meter_never_uses_lifetime_counter():
     assert shape["coffee"]["cupsToday"] is None
     assert hc.empty_ha_shape()["coffee"]["cupsToday"] is None
     assert shape["temps"]["primaryBedroom"] is None
-    assert shape["temps"]["livingRoom"] is None
+    assert shape["temps"]["nursery"] is None

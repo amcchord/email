@@ -318,9 +318,54 @@ def _relative(iso: Any, ctx: "RenderContext") -> str:
 # job rather than a treasure hunt.
 
 
+def _span(minutes: Any) -> str:
+    """``42 min`` / ``1 h 5 min``, as the Home Assistant Sauna panel writes it."""
+    value = _safe_float(minutes)
+    if value is None:
+        return _DASH
+    m = max(1, int(value + 0.5))
+    if m < 60:
+        return f"{m} min"
+    return f"{m // 60} h {m % 60} min" if m % 60 else f"{m // 60} h"
+
+
+def _build_sauna_forecast_view(raw: Any, ctx: "RenderContext") -> Optional[dict]:
+    """Localized labels for ``sauna["forecast"]``; None when it is absent.
+
+    keys: ready_reached:bool, ready_label:str? (None when the room won't reach
+    165), ready_in:str, target_reached:bool, target_label:str?, target_in:str,
+    fan_state:str, fan_label:str, fan_note:str, ends_before_ready:str?.
+    """
+    if not isinstance(raw, dict):
+        return None
+    fan = raw.get("fan") or {}
+    fan_state = fan.get("state") or "optional"
+    fan_label, fan_note = {
+        "running": ("Running", f"{_span(fan.get('minutesLeft'))} left"),
+        "due": ("Run now", "10 min Med"),
+        "planned": (_clock(fan.get("at"), ctx), "10 min Med"),
+        "done": (_clock(fan.get("at"), ctx), "Ran"),
+    }.get(fan_state, ("Optional", "Room even"))
+    ends = raw.get("sessionEndsBeforeReadyAt")
+    return {
+        "ready_reached": bool(raw.get("readyReached")),
+        "ready_label": _clock(raw["readyAt"], ctx) if raw.get("readyAt") else None,
+        "ready_in": _span(raw.get("readyInMinutes")),
+        "target_reached": bool(raw.get("targetReached")),
+        "target_label": _clock(raw["targetAt"], ctx) if raw.get("targetAt") else None,
+        "target_in": _span(raw.get("targetInMinutes")),
+        "fan_state": fan_state,
+        "fan_label": fan_label,
+        "fan_note": fan_note,
+        "ends_before_ready": _clock(ends, ctx) if ends else None,
+    }
+
+
 def _build_sauna_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
     """extras: heaters:int, duration:int, door_open:bool, room_temp:float?,
-    room_humidity:int, remaining_deg:int? (deg to climb), freeze_protect:bool=False
+    room_humidity:int, room_humidity_pct:int?, remaining_deg:int? (deg to
+    climb), freeze_protect:bool=False, forecast:dict? (heat-up forecast labels;
+    see ``_build_sauna_forecast_view``)
     """
     s = ha.get("sauna") or {}
     current = _safe_float(s.get("current"))
@@ -328,9 +373,14 @@ def _build_sauna_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
     remaining_deg: Optional[int] = None
     if target is not None and current is not None:
         remaining_deg = int(max(0, target - current))
+    humidity = _safe_float(s.get("roomHumidity"))
+    forecast = _build_sauna_forecast_view(s.get("forecast"), ctx)
     return ApplianceView(
         kind="sauna",
-        eyebrow_kicker="Sauna \u00b7 Heating",
+        eyebrow_kicker=(
+            "Sauna \u00b7 Ready" if forecast and forecast["ready_reached"]
+            else "Sauna \u00b7 Heating"
+        ),
         eyebrow_label="SAUNA HEATING",
         accent_kind="alert",
         current=current,
@@ -342,7 +392,9 @@ def _build_sauna_view(ha: dict, ctx: "RenderContext") -> ApplianceView:
             "door_open": bool(s.get("door")),
             "room_temp": _safe_float(s.get("roomTemp")),
             "room_humidity": safe_int(s.get("roomHumidity")),
+            "room_humidity_pct": None if humidity is None else round(humidity),
             "remaining_deg": remaining_deg,
+            "forecast": forecast,
         },
     )
 

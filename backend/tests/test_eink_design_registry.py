@@ -183,12 +183,12 @@ def test_persisted_unknown_design_does_not_become_editorial():
         (
             "editorial",
             "six",
-            "2521653c98a9d10d25ae35665cbeb09a2113a3ec1ef85b1a929143da98a3c121",
+            "e691e42034d00fa099a750a7c82f987352a39faa824ddee3513701866fe27144",
         ),
         (
             "editorial",
             "bw",
-            "c2abbd21daaece08c689d8ef15322d5c92a25290be4bcbe2a0fcc45edbaba5e9",
+            "9a9d0770003993af86b46155ff179ba179cdfb6c7c3a64ee615bfc4e3bcd91f2",
         ),
         (
             "swiss",

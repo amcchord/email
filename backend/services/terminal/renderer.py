@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from backend.models.terminal import TerminalDevice, TerminalSettings
 from backend.services.dashboard_snippet import get_current_snippet_dict
-from backend.services.eink.ha_client import empty_ha_shape, fetch_and_shape
+from backend.services.eink.ha_client import fetch_and_shape, unavailable_ha_shape
 from backend.services.eink.pillow import render_eink_image
 from backend.services.eink.pillow.palette import registered_palette_designs
 from backend.services.eink.pillow.registry import (
@@ -335,18 +335,18 @@ async def render_dashboard_bmp(
 ) -> tuple[bytes, str]:
     """Render the e-ink dashboard for `device` and encode it as a panel BMP.
 
-    On any failure fetching HA, falls back to an empty/calm-state shape so
-    the panel still receives a valid frame instead of stalling on the
-    previous one.
+    On any failure fetching HA, falls back to a shape marked unavailable so
+    the panel receives a valid frame that says the house data is missing,
+    instead of stalling on the previous one.
     """
     ha_shape: Optional[dict[str, Any]]
     try:
         ha_shape = await fetch_and_shape(settings)
     except Exception:
-        logger.exception("HA fetch unexpectedly raised; falling back to calm state")
+        logger.exception("HA fetch unexpectedly raised; rendering without house data")
         ha_shape = None
     if ha_shape is None:
-        ha_shape = empty_ha_shape()
+        ha_shape = unavailable_ha_shape()
 
     design = (design_override or _resolve_design(device)).strip().lower()
     if design not in _VALID_DESIGNS:

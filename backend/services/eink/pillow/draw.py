@@ -1256,7 +1256,8 @@ def _wrap_runs_into_lines(
             # Tokenize preserving spaces so we can rejoin cleanly.
             tokens = _tokenize_preserve_spaces(part)
             for tok in tokens:
-                tok_w = text_width(r.font, tok)
+                # Exact widths: summing truncated ones undercounts the line.
+                tok_w = r.font.getlength(tok)
                 if cur_w + tok_w > max_w and cur_w > 0 and tok.strip():
                     lines.append([])
                     cur_w = 0
@@ -1450,17 +1451,15 @@ def draw_paragraph(
     tokens = _tokenize_preserve_spaces(text)
     lines: List[str] = []
     cur = ""
-    cur_w = 0
     for tok in tokens:
-        tw = text_width(font, tok)
-        if cur_w + tw > w and cur.strip():
+        # Measure the whole candidate line: summing truncated per-word widths
+        # undercounts by about a pixel a word and overflows the column.
+        if font.getlength((cur + tok).rstrip()) > w and cur.strip():
             lines.append(cur)
             cur = ""
-            cur_w = 0
             if not tok.strip():
                 continue
         cur += tok
-        cur_w += tw
     if cur.strip():
         lines.append(cur)
     if max_lines is not None:

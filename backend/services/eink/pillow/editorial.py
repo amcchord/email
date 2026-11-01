@@ -8,9 +8,8 @@ Architecture
 This renderer is pure presentation. It never touches raw HA dicts and
 never re-formats a HA timestamp. All state comes from typed views:
 
-* HVAC reads ``FloorView`` / ``ZoneView`` / ``HvacSummary`` from
-  ``ha_view.py``. These reconcile ``mode`` + ``hvac_action`` so a stale
-  HA action can never label a cooling zone as "heating".
+* The House rail reads the room temperatures directly; they are plain
+  presentation values with no state to reconcile.
 * Appliances read ``ApplianceView`` (built by the registry in
   ``appliances.py``). All clock strings are pre-localized to the
   user's IANA zone, so the washer/dishwasher hero can never print UTC.
@@ -26,6 +25,7 @@ from typing import Any, Optional
 
 from PIL import Image, ImageDraw
 
+from ..sauna_forecast import READY_F, TARGET_F
 from . import flavor, fonts, layout
 from .appliances import ActiveAppliance, pick_active
 from .draw import (
@@ -42,7 +42,6 @@ from .draw import (
     draw_fit_text_bl,
     draw_headline,
     draw_paragraph,
-    draw_refresh_glyph,
     draw_star_marker,
     draw_text_bl,
     draw_text_bl_center,
@@ -67,9 +66,7 @@ from .draw import (
 )
 from .ha_view import (
     ApplianceView,
-    HvacSummary,
     build_appliance_view,
-    build_hvac_summary,
 )
 from .helpers import (
     clamp,
@@ -77,7 +74,6 @@ from .helpers import (
     fmt_clock,
     fmt_date,
     fmt_temp,
-    fmt_time,
     fmt_weather,
     forecast_day_date,
     lerp_pct,
@@ -85,12 +81,18 @@ from .helpers import (
     safe_int,
     safe_round,
     title_case,
+    to_float,
 )
 from .palette import Palette
 from .render_ctx import RenderContext, build_render_context
 
 
 # ── Top-level ──────────────────────────────────────────────────────────
+
+
+def _reading(value: Any) -> str:
+    """A whole-number reading, or a dash: unknown must never print as zero."""
+    return "—" if to_float(value) is None else str(safe_round(value))
 
 
 def _pool_near_target(view: ApplianceView, tol: float = 1.0) -> bool:
@@ -129,7 +131,8 @@ def render_dashboard(
 
     L = layout.EDITORIAL
 
-    _draw_masthead(draw, P, ctx.now_local, ha.get("weather") or {})
+    _draw_masthead(draw, P, ctx.now_local, ha.get("weather") or {},
+                   live=not ha.get("unavailable"))
 
     fill_box(draw, L.body_left_rule, P.rule)
     fill_box(draw, L.body_right_rule, P.rule)
@@ -147,7 +150,8 @@ def render_dashboard(
 # ── Masthead ───────────────────────────────────────────────────────────
 
 
-def _draw_masthead(draw: ImageDraw.ImageDraw, P: Palette, now: datetime, weather: dict) -> None:
+def _draw_masthead(draw: ImageDraw.ImageDraw, P: Palette, now: datetime,
+                   weather: dict, *, live: bool = True) -> None:
     """Newspaper flag. Time (left) | CAMBRIDGE wordmark + date (center) |
     weather glyph + temp + label (right), bracketed by a pin rule on top
     and a thick + hairline pair on the bottom.
@@ -201,7 +205,8 @@ def _draw_masthead(draw: ImageDraw.ImageDraw, P: Palette, now: datetime, weather
     draw.text((time_col.x0 + tw + 4, display_row_baseline), ampm,
               font=ampm_font, fill=P.muted, anchor="ls")
     draw_text_bl(draw, (time_col.x0, label_baseline),
-                 "EASTERN \u00b7 LIVE", label_font, P.muted)
+                 f"{now.tzname()} \u00b7 {'LIVE' if live else 'NO DATA'}",
+                 label_font, P.muted)
 
     # ── Wordmark column (center) ───────────────────────────────────
     wm_tracking = em_to_px(TY.WORDMARK_PX, TY.WORDMARK_TRACKING_EM)
@@ -233,19 +238,19 @@ def _draw_masthead(draw: ImageDraw.ImageDraw, P: Palette, now: datetime, weather
         temp = weather.get("temperature")
     temp_s = (f"{safe_round(temp)}\u00b0" if temp is not None else "\u2014")
     glyph_sz = TY.WEATHER_GLYPH_PX
-    temp_max_w = weather_col.w - glyph_sz - 12
+    temp_max_w = weather_col.w - glyph_sz - 20
     temp_fit_font, _temp_fit_size = pick_fitting_size(
         lambda s: fonts.serif(s, weight="bold"),
         temp_s, temp_max_w, TY.TEMP_CANDIDATES,
     )
     temp_w = text_width(temp_fit_font, temp_s)
     glyph_top = content_y0
-    # Weather Icons sits with extra whitespace on the right of its em
-    # square, so we nudge it 4 px left to balance the optical gap to the
-    # temperature digits next to it.
-    glyph_x = weather_col.x1 - temp_w - 10 - glyph_sz - 4
-    _draw_weather_glyph(draw, (glyph_x, glyph_top),
-                        size=glyph_sz, state=weather.get("state") or "", P=P)
+    # The gap keeps a sun's right-hand ray clear of the digits, where it
+    # would otherwise read as a minus sign.
+    glyph_x = weather_col.x1 - temp_w - 18 - glyph_sz - 4
+    if weather.get("state"):
+        _draw_weather_glyph(draw, (glyph_x, glyph_top),
+                            size=glyph_sz, state=weather["state"], P=P)
     # Temp shares the display row baseline with the time, sitting 8 px
     # below the wordmark so the digits land at the icon's optical
     # center.
@@ -435,23 +440,23 @@ def _draw_left_rail(draw, ctx: RenderContext, ha, box: Box) -> None:
 
     _section("Outside")
     cur_y = _draw_rail_stat(draw, P, box.x0, cur_y, box.w,
-        k="Wind", v=f"{safe_round(weather.get('windSpeed'))}",
+        k="Wind", v=_reading(weather.get("windSpeed")),
         u=f"mph {compass(weather.get('windBearing'))}")
     cur_y = _draw_rail_stat(draw, P, box.x0, cur_y, box.w,
-        k="Humidity", v=f"{safe_round(weather.get('humidity'))}", u="%")
-    uv = weather.get("uvIndex")
-    uv_s = f"{safe_round(uv)}" if uv is not None else "\u2014"
+        k="Humidity", v=_reading(weather.get("humidity")), u="%")
     uv_peak = weather.get("uvPeak")
     uv_u = f"peak {safe_round(uv_peak)}" if uv_peak is not None else ""
     cur_y = _draw_rail_stat(draw, P, box.x0, cur_y, box.w,
-        k="UV Index", v=uv_s, u=uv_u)
+        k="UV Index", v=_reading(weather.get("uvIndex")), u=uv_u)
     cur_y = _draw_rail_stat(draw, P, box.x0, cur_y, box.w,
-        k="Visibility", v=f"{safe_round(weather.get('visibility'))}", u="mi")
+        k="Visibility", v=_reading(weather.get("visibility")), u="mi")
 
     cur_y += 8
     hairline_hr(draw, box.x0, box.x1, cur_y, fill=P.rule); cur_y += 6
-    sun = ha.get("sun") or {}
-    sun_label = "Sun \u00b7 " + ("Risen" if sun.get("state") == "above_horizon" else "Set")
+    # The unavailable shape's default sun state isn't an observation.
+    sun = {} if ha.get("unavailable") else (ha.get("sun") or {})
+    sun_label = {"above_horizon": "Sun \u00b7 Risen",
+                 "below_horizon": "Sun \u00b7 Set"}.get(sun.get("state"), "Sun")
     _section(sun_label)
     cur_y = _draw_sun_arc(draw, P, box.x0, cur_y, box.w, ha, zone)
 
@@ -593,7 +598,7 @@ def _draw_forecast_rows(draw, ctx: RenderContext, ha, x0, y, w) -> int:
 
 
 def _draw_sun_arc(draw, P, x0, y, w, ha, zone) -> int:
-    sun = ha.get("sun") or {}
+    sun = {} if ha.get("unavailable") else (ha.get("sun") or {})
     rise = fmt_clock(sun.get("nextRising") or sun.get("nextDawn"), tz=zone)
     set_s = fmt_clock(sun.get("nextSetting") or sun.get("nextDusk"), tz=zone)
     above = sun.get("state") == "above_horizon"
@@ -627,8 +632,9 @@ def _draw_sun_arc(draw, P, x0, y, w, ha, zone) -> int:
     sy = cy_flat - int(rY * math.sin(angle))
     r = 5
     disk_color = P.yellow if P.yellow != P.ink else P.ink
-    draw.ellipse([(sx - r, sy - r), (sx + r, sy + r)],
-                 fill=disk_color, outline=P.ink, width=1)
+    if sun.get("state"):  # Unknown: leave the arc empty rather than place a sun.
+        draw.ellipse([(sx - r, sy - r), (sx + r, sy + r)],
+                     fill=disk_color, outline=P.ink, width=1)
     lf = fonts.serif(12, italic=True, weight="semibold")
     fm = font_metrics(lf)
     baseline = y + H + 4 + fm.ascent
@@ -669,26 +675,26 @@ def _draw_right_rail(draw, ctx: RenderContext, ha, box: Box) -> None:
     _section("Solar \u00b7 Roof")
     cur_y = _draw_solar_section(draw, ctx, ha, box.x0, cur_y, box.w)
 
-    cur_y += 8
-    hairline_hr(draw, box.x0, box.x1, cur_y, fill=P.rule); cur_y += 6
     if pool and pool.get("current") is not None:
+        cur_y += 8
+        hairline_hr(draw, box.x0, box.x1, cur_y, fill=P.rule); cur_y += 6
         _section("Pool")
         cur_y = _draw_pool_temp(draw, ctx, box.x0, cur_y, box.w, pool)
 
 
 def _draw_house_readings(draw, ctx: RenderContext, ha, x0, y, w) -> int:
-    """Two room temperatures and today's coffee, within the fixed rail."""
+    """The two rooms we watch and today's coffee, within the fixed rail."""
     P = ctx.palette
     temps = ha.get("temps") or {}
     cups = (ha.get("coffee") or {}).get("cupsToday")
     readings = [
-        (("Primary", "Bedroom"), fmt_temp(temps.get("primaryBedroom"))),
-        (("Living Room",), fmt_temp(temps.get("livingRoom"))),
+        (("Primary Suite",), fmt_temp(temps.get("primaryBedroom"))),
+        (("Nursery",), fmt_temp(temps.get("nursery"))),
         (("Coffee", "cups today"), "—" if cups is None else str(cups)),
     ]
     name_font = fonts.serif(13, weight="semibold")
     fm_n = font_metrics(name_font)
-    value_width = max(36, w - text_width(name_font, "Living Room") - 12)
+    value_width = max(36, w - text_width(name_font, "Primary Suite") - 12)
     widest = max((value for _, value in readings),
                  key=lambda value: text_width(fonts.serif(22, weight="bold"), value))
     value_font, _ = pick_fitting_size(
@@ -867,6 +873,11 @@ def _draw_lead_column(img: Image.Image, draw, ctx: RenderContext, ha,
     P = ctx.palette
     lead = active[0] if active else None
     rest = active[1:]
+
+    # Case: no house data. Say so rather than announcing a calm house.
+    if ha.get("unavailable"):
+        _draw_no_data_lead(draw, ctx, box)
+        return
 
     # Case: exactly two active items -- render as paired co-leads.
     # This branch paints directly so the divider lands at the midline.
@@ -1161,15 +1172,28 @@ def _co_dishwasher(view: ApplianceView, ctx: RenderContext) -> dict:
 def _co_sauna(view: ApplianceView, ctx: RenderContext) -> dict:
     P = ctx.palette
     norm, ital = _co_lead_runs_normal_italic()
+    accent = ctx.accent(view.accent_kind)
+    forecast = view.extras.get("forecast")
+    if forecast:
+        head, tail, deck = _sauna_forecast_copy(view, forecast)
+        ready = forecast["ready_label"] or "\u2014"
+        return {
+            "head_runs": [Run(head, norm, P.ink), Run(tail, ital, accent)],
+            "deck": deck,
+            "cells": [
+                {"k": "Room", "v": fmt_temp(view.extras.get("room_temp")),
+                 "accent": accent},
+                {"k": "Ready" if not forecast["ready_reached"] else "Reached",
+                 "v": ready},
+            ],
+        }
     return {
         "head_runs": [Run("Cabin warming to ", norm, P.ink),
-                      Run(f"{safe_round(view.target)}\u00b0.", ital,
-                          ctx.accent(view.accent_kind))],
-        "deck": (f"Now {safe_round(view.current)}\u00b0 \u00b7 "
+                      Run(f"{fmt_temp(view.target)}.", ital, accent)],
+        "deck": (f"Now {fmt_temp(view.current)} \u00b7 "
                  f"{view.extras.get('heaters', 0)}/3 elements."),
         "cells": [
-            {"k": "Cabin",  "v": fmt_temp(view.current),
-             "accent": ctx.accent(view.accent_kind)},
+            {"k": "Cabin",  "v": fmt_temp(view.current), "accent": accent},
             {"k": "Target", "v": fmt_temp(view.target)},
         ],
     }
@@ -1180,9 +1204,9 @@ def _co_pool(view: ApplianceView, ctx: RenderContext) -> dict:
     norm, ital = _co_lead_runs_normal_italic()
     return {
         "head_runs": [Run("Pool climbing to ", norm, P.ink),
-                      Run(f"{safe_round(view.target)}\u00b0.", ital,
+                      Run(f"{fmt_temp(view.target)}.", ital,
                           ctx.accent(view.accent_kind))],
-        "deck": (f"Water {safe_round(view.current)}\u00b0 \u00b7 "
+        "deck": (f"Water {fmt_temp(view.current)} \u00b7 "
                  f"air {fmt_temp(view.extras.get('air_temp'))}."),
         "cells": [
             {"k": "Water",  "v": fmt_temp(view.current),
@@ -1219,6 +1243,30 @@ def _co_lead_descriptor(view: ApplianceView, ctx: RenderContext) -> dict:
     placeholder for any kind not yet wired into ``_CO_LEAD_DESCRIBERS``."""
     builder = _CO_LEAD_DESCRIBERS.get(view.kind, _co_unknown)
     return builder(view, ctx)
+
+
+def _draw_no_data_lead(draw, ctx: RenderContext, box: Box) -> None:
+    """Home Assistant gave us nothing: this edition carries no house news."""
+    P = ctx.palette
+    kicker_font = fonts.pix_cherry_small(10, bold=True)
+    fm_k = font_metrics(kicker_font)
+    head_font = fonts.serif(32, weight="bold")
+    fm_h = font_metrics(head_font)
+    y = box.y0 + box.h // 4
+    draw_tracked_text_bl(draw, (box.x0, y + fm_k.ascent), "STOP PRESS",
+                         kicker_font, P.ink, em_to_px(10, 0.30))
+    y += fm_k.line_height + 8
+    draw_text_bl(draw, (box.x0, y + fm_h.ascent), "No news from the house.",
+                 head_font, P.ink)
+    y += fm_h.line_height + 4
+    deck_font = fonts.serif(16, italic=True, weight="semibold")
+    y = draw_paragraph(
+        draw, (box.x0, y, box.w, 48),
+        "Home Assistant isn't answering. Readings on this page are unknown, "
+        "not calm.",
+        font=deck_font, fill=P.ink, line_height_px=22, max_lines=2,
+    )
+    double_hr(draw, box.x0, box.x1, y + 8, fill=P.rule)
 
 
 def _draw_calm_lead(draw, ctx: RenderContext, ha, x0, y, w) -> int:
@@ -1478,9 +1526,7 @@ def _draw_fact_strip(draw, P, x0, y, w, cells) -> int:
     the cell rule.
     """
     cell_w = w // max(1, len(cells))
-    cell_h = 48
     draw.rectangle([(x0, y), (x0 + w - 1, y + 1)], fill=P.rule)
-    bottom = y + 2 + cell_h
     label_font = fonts.pix_cherry_small(9, bold=True)
     tracking = em_to_px(9, 0.18)
     val_factory = lambda s: fonts.serif(s, weight="bold")
@@ -1489,6 +1535,14 @@ def _draw_fact_strip(draw, P, x0, y, w, cells) -> int:
     sub_tracking = em_to_px(9, 0.10)
     fm_l = font_metrics(label_font)
     fm_s = font_metrics(sub_font)
+    # A sub-line needs a taller strip, or it falls below the cell and collides
+    # with whatever follows (or is cropped when nothing does).
+    cell_h = 48
+    if any(c.get("sub") for c in cells):
+        fm_big = font_metrics(val_factory(val_candidates[0]))
+        cell_h = max(cell_h, 4 + fm_l.ascent + fm_l.descent + 4 + fm_big.ascent
+                     + fm_big.descent + 2 + fm_s.ascent + fm_s.descent)
+    bottom = y + 2 + cell_h
     inner_pad = 6  # px reserved at each side of a cell for the value fit.
     for i, c in enumerate(cells):
         cx0 = x0 + i * cell_w
@@ -1541,9 +1595,75 @@ def _hero_italic_bold_font():
     return fonts.serif(32, italic=True, weight="bold")
 
 
+def _sauna_forecast_copy(view: ApplianceView, forecast: dict) -> tuple[str, str, str]:
+    """Headline (upright, italic) and deck for a sauna with a heat-up forecast."""
+    heaters = view.extras.get("heaters", 0)
+    door = "open" if view.extras.get("door_open") else "closed"
+    status = f"{heaters} of 3 elements on; door {door}."
+    if forecast["ready_reached"]:
+        return ("The sauna is ", "ready.",
+                f"Room reached {READY_F}\u00b0 at "
+                f"{forecast['ready_label']}. {status}")
+    if forecast["ready_label"] is None:
+        return ("Won't reach ", f"{READY_F}\u00b0.",
+                "The room levels off below it at this target.")
+    head = ("Ready around ", f"{forecast['ready_label']}.")
+    if forecast["ends_before_ready"]:
+        return (*head, f"Session ends {forecast['ends_before_ready']}, "
+                       "before it's ready.")
+    if forecast["fan_state"] == "running":
+        return (*head, f"In {forecast['ready_in']}. Evening out the room; "
+                       f"fan has {forecast['fan_note']}.")
+    if forecast["fan_state"] == "due":
+        return (*head, f"In {forecast['ready_in']}. Run the fan now, "
+                       "10 min on Medium.")
+    return (*head, f"In {forecast['ready_in']}. {status}")
+
+
+def _draw_sauna_forecast_lead(draw, ctx: RenderContext, view: ApplianceView,
+                              forecast: dict, x0, y, w) -> int:
+    """Heat-up forecast card: when it's ready, both sensors, and the fan plan."""
+    P = ctx.palette
+    accent = ctx.accent(view.accent_kind)
+    head, tail, deck = _sauna_forecast_copy(view, forecast)
+    runs = [Run(head, _hero_font(), P.ink),
+            Run(tail, _hero_italic_bold_font(), accent)]
+    cur_y = _draw_story_shell(draw, P, x0, y, w,
+        kicker=view.eyebrow_kicker, accent=accent,
+        badge="READY" if forecast["ready_reached"] else "LIVE",
+        headline_runs=runs, deck=deck)
+    room = view.extras.get("room_temp")
+    cur_y += 12
+    cur_y = _draw_thermometer(draw, P, x0, cur_y, w,
+        from_v=60, to_v=READY_F, now=room, target=None,
+        accent=accent, hide_target=True)
+    humidity = view.extras.get("room_humidity_pct")
+    # A controller-preset session reports 32°F, which isn't a real target.
+    goal = fmt_temp(view.target) if 104 <= (view.target or 0) <= 212 else "PRESET"
+    if forecast["target_reached"]:
+        target_sub = "REACHED"
+    elif forecast["target_label"]:
+        target_sub = f"IN {forecast['target_in']}"
+    else:
+        target_sub = "ABOVE TARGET"
+    cur_y = _draw_fact_strip(draw, P, x0, cur_y + 6, w, [
+        {"k": "Room", "v": fmt_temp(room), "accent": accent,
+         "sub": None if humidity is None else f"{humidity}% RH"},
+        {"k": "Thermostat", "v": fmt_temp(view.current),
+         "sub": f"GOAL {goal}"},
+        {"k": f"{TARGET_F}\u00b0 at",
+         "v": forecast["target_label"] or "\u2014", "sub": target_sub},
+        {"k": "Fan", "v": forecast["fan_label"], "sub": forecast["fan_note"]},
+    ])
+    return cur_y
+
+
 def _draw_sauna_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) -> int:
     P = ctx.palette
     view = item.view
+    forecast = view.extras.get("forecast")
+    if forecast:
+        return _draw_sauna_forecast_lead(draw, ctx, view, forecast, x0, y, w)
     accent = ctx.accent(view.accent_kind)
     target = view.target
     current = view.current
@@ -1552,15 +1672,15 @@ def _draw_sauna_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y,
         Run("The sauna is ", _hero_font(), P.ink),
         Run("warming", _hero_italic_bold_font(), accent),
         Run("\n", _hero_font(), P.ink),
-        Run(f"to {safe_round(target)}\u00b0.", _hero_font(), P.ink),
+        Run(f"to {fmt_temp(target)}.", _hero_font(), P.ink),
     ]
     if remaining is not None:
         heaters = view.extras.get("heaters", 0)
         door = "open" if view.extras.get("door_open") else "closed"
-        deck = (f"Cabin presently {safe_round(current)}\u00b0, with {int(remaining)}\u00b0 "
+        deck = (f"Cabin presently {fmt_temp(current)}, with {int(remaining)}\u00b0 "
                 f"left to climb. {heaters} of three elements lit; door {door}.")
     else:
-        deck = f"Cabin holding at {safe_round(current)}\u00b0."
+        deck = f"Cabin holding at {fmt_temp(current)}."
     cur_y = _draw_story_shell(draw, P, x0, y, w,
         kicker=view.eyebrow_kicker, accent=accent,
         badge="LIVE", headline_runs=runs, deck=deck)
@@ -1573,7 +1693,8 @@ def _draw_sauna_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y,
         {"k": "Target", "v": fmt_temp(target)},
         {"k": "Elements", "v": f"{view.extras.get('heaters', 0)}/3"},
         {"k": "Room", "v": fmt_temp(view.extras.get("room_temp")),
-         "sub": f"{view.extras.get('room_humidity', 0)}% RH"},
+         "sub": (None if view.extras.get("room_humidity_pct") is None
+                 else f"{view.extras['room_humidity_pct']}% RH")},
     ])
     return cur_y
 
@@ -1600,19 +1721,32 @@ def _draw_washer_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y
     return cur_y
 
 
+# Each explicit line must fit the column: `draw_headline` drops lines past its
+# limit, so an auto-wrapped first line would cost the instruction its ending.
+def _washer_done_headline(P: Palette) -> list[Run]:
+    return [
+        Run("Wash complete.", _hero_font(), P.ink),
+        Run("\n", _hero_font(), P.ink),
+        Run("Move it to the dryer.", _hero_italic_bold_font(), P.ink),
+    ]
+
+
+def _dryer_done_headline(P: Palette) -> list[Run]:
+    return [
+        Run("Drying complete.", _hero_font(), P.ink),
+        Run("\n", _hero_font(), P.ink),
+        Run("Please unload the dryer.", _hero_italic_bold_font(), P.ink),
+    ]
+
+
 def _draw_washer_done_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) -> int:
     P = ctx.palette
     view = item.view
     accent = ctx.accent(view.accent_kind)
-    runs = [
-        Run("Wash complete \u2014 ", _hero_font(), P.ink),
-        Run("please move", _hero_italic_bold_font(), P.ink),
-        Run("\n", _hero_font(), P.ink),
-        Run("to the dryer.", _hero_italic_bold_font(), P.ink),
-    ]
+    runs = _washer_done_headline(P)
     deck = (f"Cycle #{view.extras.get('cycle_no', 0)} finished "
             f"{view.finish_label} \u00b7 {view.relative_label}.")
-    body = "Cabin clean, drum still warm. The dryer awaits."
+    body = "The dryer awaits."
     return _draw_story_shell(draw, P, x0, y, w,
         kicker=view.eyebrow_kicker, accent=accent,
         badge="UNLOAD", headline_runs=runs, deck=deck, body=body)
@@ -1650,12 +1784,7 @@ def _draw_dryer_done_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x
     P = ctx.palette
     view = item.view
     accent = ctx.accent(view.accent_kind)
-    runs = [
-        Run("Drying complete \u2014 ", _hero_font(), P.ink),
-        Run("please unload", _hero_italic_bold_font(), P.ink),
-        Run("\n", _hero_font(), P.ink),
-        Run("the dryer.", _hero_italic_bold_font(), P.ink),
-    ]
+    runs = _dryer_done_headline(P)
     deck = f"Finished {view.finish_label} \u00b7 {view.relative_label}."
     body = "Drum's done its work. Time to fold."
     return _draw_story_shell(draw, P, x0, y, w,
@@ -1699,14 +1828,14 @@ def _draw_pool_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, 
     target = view.target
     current = view.current
     runs = [Run("Climbing to ", _hero_font(), P.ink),
-            Run(f"{safe_round(target)}\u00b0",
+            Run(fmt_temp(target),
                 fonts.serif(32, italic=True, weight="bold"), accent),
             Run(".", _hero_font(), P.ink)]
     freeze = ("Freeze guard armed." if view.extras.get("freeze_protect")
               else "No freeze risk.")
     air = view.extras.get("air_temp")
-    deck = (f"Heat exchanger active, water now {safe_round(current)}\u00b0. "
-            f"Air {safe_round(air)}\u00b0. {freeze}")
+    deck = (f"Heat exchanger active, water now {fmt_temp(current)}. "
+            f"Air {fmt_temp(air)}. {freeze}")
     cur_y = _draw_story_shell(draw, P, x0, y, w,
         kicker=view.eyebrow_kicker, accent=accent,
         headline_runs=runs, deck=deck)
@@ -1773,7 +1902,9 @@ def _draw_brief(draw, ctx: RenderContext, ha, x0, y, w, item: ActiveAppliance, *
     fm_s = font_metrics(sub_font)
     fm_v = font_metrics(val_font)
     title_baseline = y + fm_t.ascent + 2
-    sub_baseline = title_baseline + fm_t.descent + 2 + fm_s.ascent
+    # Fixed leading: the font's full ascent + descent would put the sub-line
+    # on the row's dotted rule.
+    sub_baseline = title_baseline + 15
     val_baseline = y + fm_v.ascent + 4
     text_x = x0 + 14
     text_max_w = max(40, (x0 + w) - text_x - 60)
@@ -1789,6 +1920,16 @@ def _draw_brief(draw, ctx: RenderContext, ha, x0, y, w, item: ActiveAppliance, *
 
 
 def _brief_sauna(view: ApplianceView) -> tuple[str, str, str]:
+    forecast = view.extras.get("forecast")
+    if forecast and forecast["ready_label"]:
+        ready = ("Ready since " if forecast["ready_reached"] else "Ready around ")
+        return (
+            "Sauna heating",
+            f"{ready}{forecast['ready_label']} · "
+            f"{view.extras.get('heaters', 0)} elements",
+            f"{fmt_temp(view.extras.get('room_temp'))} → "
+            f"{READY_F}°",
+        )
     return (
         "Sauna heating",
         f"{view.extras.get('heaters', 0)} elements \u00b7 "
@@ -1869,22 +2010,22 @@ EDITORIAL_BRIEFS = {
 
 def _draw_colophon(draw, ctx: RenderContext, ha) -> None:
     """Bottom strip: three columns -- people on the left, italic quote
-    in the center, status chips on the right.
+    in the center, open windows on the right.
 
-    The right cluster reserves its width first; the quote is then
-    truncated to whatever middle space remains so the two can never
-    collide. If even after dropping the refresh chip the right cluster
-    still doesn't fit, the quote falls back to a shorter form.
+    The time appears only in the masthead, and the rooms we watch are in the
+    House rail, so neither repeats here. The right chip reserves its width
+    first; the quote is then fitted to the middle space remaining so the two
+    can never collide.
     """
     L = layout.EDITORIAL
     P = ctx.palette
-    now = ctx.now_local
     box = L.colophon
     draw.rectangle([(box.x0, box.y0), (box.x1 - 1, box.y0 + 1)], fill=P.rule)
     label_font = fonts.pix_cherry_small(layout.EditorialType.COLOPHON_PX, bold=True)
     tracking = em_to_px(layout.EditorialType.COLOPHON_PX, 0.18)
     fm = font_metrics(label_font)
     baseline = box.y0 + 5 + fm.ascent
+    unavailable = bool(ha.get("unavailable"))
 
     # ── Left column: people ────────────────────────────────────────
     people = ha.get("people") or []
@@ -1897,7 +2038,7 @@ def _draw_colophon(draw, ctx: RenderContext, ha) -> None:
     else:
         bullet(draw, box.x0 + 3, baseline - fm.ascent // 2, 3,
                filled=False, color=ctx.accent("idle"))
-        left_text = "NOBODY HOME"
+        left_text = "HOME UNKNOWN" if unavailable else "NOBODY HOME"
         left_color = P.muted
     left_max_w = (box.cx - box.x0) - 20  # reserve 20-px gap before quote.
     # Truncate the left text to its column.
@@ -1914,57 +2055,23 @@ def _draw_colophon(draw, ctx: RenderContext, ha) -> None:
                              label_font, left_color, tracking)
     left_end_x = box.x0 + 10 + tracked_width(label_font, s_left, tracking)
 
-    # ── Right column: chips ────────────────────────────────────────
-    summary: HvacSummary = build_hvac_summary(ha)
+    # ── Right column: windows ─────────────────────────────────────
     win_count = len(ha.get("openWindows") or [])
-    sep = "  \u00b7  "
-    refresh_label = fmt_time(now).upper()
-    zones_color = ctx.accent(summary.dominant) if summary.is_active else ctx.accent("idle")
-    zones_text = summary.label
+    if unavailable:
+        wins_text = "WINDOWS UNKNOWN"
+    elif win_count:
+        wins_text = f"{win_count} WINDOW{'S' if win_count != 1 else ''} OPEN"
+    else:
+        wins_text = "WINDOWS SHUT"
     wins_color = (ctx.accent("warn") if (win_count and P.yellow != P.ink)
                   else ctx.accent("idle"))
-
     bullet_dia = 7
     gap = 4
-    refresh_sz = 8
-    zones_w = tracked_width(label_font, zones_text, tracking)
-    sep_w = tracked_width(label_font, sep, tracking)
-    wins_text = f"{win_count} WIN"
-    wins_w = tracked_width(label_font, wins_text, tracking)
-    refresh_w = refresh_sz + 4 + tracked_width(label_font, refresh_label, tracking)
-    total_with_refresh = (bullet_dia + gap + zones_w + sep_w
-                          + bullet_dia + gap + wins_w + sep_w + refresh_w)
-    total_no_refresh = (bullet_dia + gap + zones_w + sep_w
-                        + bullet_dia + gap + wins_w)
-    # Right cluster gets at most half of the box minus a 20-px gap
-    # reservation for the quote.
-    right_budget = (box.x1 - box.cx) - 20
-    show_refresh = total_with_refresh <= right_budget
-    total = total_with_refresh if show_refresh else total_no_refresh
-    rx = box.x1 - total
-    bullet(draw, rx + 3, baseline - fm.ascent // 2, 3,
-           filled=summary.is_active, color=zones_color)
-    cur_x = rx + bullet_dia + gap
-    draw_tracked_text_bl(draw, (cur_x, baseline), zones_text,
-                         label_font, zones_color, tracking)
-    cur_x += zones_w
-    draw_tracked_text_bl(draw, (cur_x, baseline), sep, label_font, P.muted, tracking)
-    cur_x += sep_w
-    square_marker(draw, cur_x + 3, baseline - fm.ascent // 2, 3,
+    rx = box.x1 - (bullet_dia + gap + tracked_width(label_font, wins_text, tracking))
+    square_marker(draw, rx + 3, baseline - fm.ascent // 2, 3,
                   filled=bool(win_count), color=wins_color)
-    cur_x += bullet_dia + gap
-    draw_tracked_text_bl(draw, (cur_x, baseline), wins_text,
+    draw_tracked_text_bl(draw, (rx + bullet_dia + gap, baseline), wins_text,
                          label_font, wins_color, tracking)
-    cur_x += wins_w
-    if show_refresh:
-        draw_tracked_text_bl(draw, (cur_x, baseline), sep,
-                             label_font, P.muted, tracking)
-        cur_x += sep_w
-        draw_refresh_glyph(draw, cur_x, baseline,
-                           size=refresh_sz, fill=P.muted)
-        cur_x += refresh_sz + 4
-        draw_tracked_text_bl(draw, (cur_x, baseline), refresh_label,
-                             label_font, P.muted, tracking)
 
     # ── Center column: italic quote (last so it can use the real gap) ──
     quote_font = fonts.serif(12, italic=True, weight="semibold")
@@ -1975,7 +2082,5 @@ def _draw_colophon(draw, ctx: RenderContext, ha) -> None:
     quote_max_w = max(0, rx - 20 - (left_end_x + 12))
     quote = quote_full if text_width(quote_font, quote_full) <= quote_max_w else quote_short
     if text_width(quote_font, quote) <= quote_max_w and quote_max_w > 20:
-        quote_w = text_width(quote_font, quote)
-        center_x = (left_end_x + 12 + rx - 20) // 2
-        draw_text_bl_center(draw, (center_x, quote_baseline),
+        draw_text_bl_center(draw, (box.cx, quote_baseline),
                             quote, quote_font, P.muted)

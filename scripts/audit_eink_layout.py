@@ -30,7 +30,11 @@ if ROOT not in sys.path:
 
 from PIL import Image  # noqa: E402
 
-from backend.services.eink.ha_client import empty_ha_shape  # noqa: E402
+from backend.services.eink import sauna_forecast  # noqa: E402
+from backend.services.eink.ha_client import (  # noqa: E402
+    empty_ha_shape,
+    unavailable_ha_shape,
+)
 from backend.services.eink.pillow import layout, render_eink_image  # noqa: E402
 from backend.services.eink.pillow.draw import Box, assert_box_clean  # noqa: E402
 
@@ -50,7 +54,7 @@ def _base_state() -> dict:
     ]
     base["temps"] = {"first": 70, "second": 71, "third": 72,
                      "basement": 68, "outdoor": 72,
-                     "primaryBedroom": 67, "livingRoom": 72}
+                     "primaryBedroom": 67, "nursery": 72}
     base["coffee"] = {"cupsToday": 4}
     base["climates"] = {
         "radiantMain": {"name": "Main", "mode": "heat", "current": 68,
@@ -85,6 +89,11 @@ def _sauna_state(base: dict) -> dict:
     out["sauna"] = {
         "mode": "heat", "current": 127, "target": 185, "duration": 60,
         "heaters": 3, "door": False, "roomTemp": 84, "roomHumidity": 19,
+        "forecast": sauna_forecast.forecast_heating(
+            thermostat=127, room=84, outdoor=45, target=185, elements=3,
+            session=None, session_minutes=60, timer_end=None,
+            now=datetime(2026, 5, 5, 22, 0, tzinfo=timezone.utc).timestamp(),
+        ),
     }
     out["washer"] = {
         "status": "rinse", "operation": "cycle",
@@ -111,7 +120,7 @@ def _stress_state(base: dict) -> dict:
     }
     out["temps"] = {"first": 102, "second": 101, "third": 99,
                     "basement": -12, "outdoor": -12,
-                    "primaryBedroom": -12, "livingRoom": 102}
+                    "primaryBedroom": -12, "nursery": 102}
     out["coffee"] = {"cupsToday": 123}
     out["climates"] = {
         "radiantMain": {"name": "Main", "mode": "heat", "current": 100,
@@ -241,7 +250,7 @@ def audit() -> int:
     zero = copy.deepcopy(base)
     zero["coffee"] = {"cupsToday": 0}
     states = [("calm", base), ("sauna", sauna), ("stress", stress),
-              ("zero_coffee", zero), ("unavailable", empty_ha_shape())]
+              ("zero_coffee", zero), ("unavailable", unavailable_ha_shape())]
     fails: List[str] = []
 
     for design in ("editorial", "swiss"):

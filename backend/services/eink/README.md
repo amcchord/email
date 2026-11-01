@@ -145,11 +145,23 @@ stay fixed in your new design without you having to remember.
 
 ## Home Editorial readings and hourly copy
 
-The House rail shows Primary Bedroom and Living Room temperatures, followed
-by coffee cups today. `temps.primaryBedroom` uses the room sensor
-`sensor.usl_environmental_temperature_3`; `temps.livingRoom` uses
-`sensor.1st_flr_family_current_temperature`. Celsius readings are normalized
-to Fahrenheit. Floor aggregates remain available to the other designs.
+The House rail shows Primary Suite and Nursery temperatures, followed by coffee
+cups today. `temps.primaryBedroom` uses the room sensor
+`sensor.usl_environmental_temperature_3` (not `_4`, which is the suite's duct
+supply air); `temps.nursery` uses `sensor.nursery_temperature`. Celsius readings
+are normalized to Fahrenheit. Floor aggregates remain available to the other
+designs. The time appears only in the masthead.
+
+When Home Assistant can't be read, `render_dashboard_bmp` passes
+`unavailable_ha_shape()`. Editorial then says so instead of drawing the calm
+edition, and every missing reading is a dash, never a zero.
+
+The sauna card shows the heat-up forecast from `sauna_forecast.py`: a port of the
+model in the Home Assistant Sauna panel, which runs in the browser and publishes
+no sensor. "Ready" is the room sensor at 165°F; "185°" is the controller's
+thermostat. After refitting the panel (`scripts/sauna_forecast_fit.py` in the
+HomeAssistant project), copy the same coefficients into `sauna_forecast.py` and
+regenerate the expected values in `test_sauna_forecast.py`.
 
 `coffee.cupsToday` comes only from `sensor.kitchen_coffee_cups_today`, the Home
 Assistant daily utility meter. HA owns its local-midnight reset; the lifetime
@@ -157,8 +169,7 @@ counter is never substituted. Missing, nonfinite, negative, or fractional
 counts display a dash; zero remains a real zero.
 
 Hourly quotes and observations use the dedicated `DASHBOARD_SNIPPET_MODEL`
-specification (`claude-fable-5-1`, medium effort) in `ai_models.py`, without
+specification (`claude-opus-5-5`, extra-high effort) in `ai_models.py`, without
 changing mail/chat model preferences. The generator uses JSON outputs rather
 than forced tool choice, with a bounded request and the existing curated
 fallback on provider failure, refusal, truncation, or malformed content.
-See [Anthropic's migration guide](https://platform.claude.com/docs/en/models/fable-5-1/migration-guide).

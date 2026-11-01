@@ -3,7 +3,7 @@
 The renderer reads ``ha_shape['dashboardSnippet']`` to display a rotating
 "quote of the hour" or "observation of the hour" when nothing is active.
 This service generates one snippet per (local date, local hour) using
-Claude Fable 5.1 and persists it in ``dashboard_snippets``. The cron worker
+Claude Opus 5.5 and persists it in ``dashboard_snippets``. The cron worker
 in ``backend/workers/tasks.py`` ticks every hour to keep the row fresh
 for the upcoming hour; the renderer is a strict reader.
 
@@ -247,7 +247,7 @@ def _season(dt: datetime) -> str:
 async def _maybe_call_claude(
     kind: str, now_local: datetime, ha_shape: Optional[dict[str, Any]],
 ) -> Optional[dict[str, str]]:
-    """Generate the hourly quote/observation with Claude Fable 5.1.
+    """Generate the hourly quote/observation with Claude Opus 5.5.
 
     Returns ``None`` if no API key is set or if any failure occurs. The
     cron task swallows None silently so a transient AI outage just
@@ -282,14 +282,15 @@ async def _maybe_call_claude(
         )
 
     try:
-        # Fable 5.1 has always-on adaptive thinking and rejects forced tool
+        # Opus 5.5 has always-on adaptive thinking and rejects forced tool
         # calls. JSON outputs keep this short, read-only response structured.
+        # Extra-high effort thinks at length, so the limits leave it room.
         async with anthropic.AsyncAnthropic(
-            api_key=settings.claude_api_key, timeout=45.0, max_retries=1,
+            api_key=settings.claude_api_key, timeout=180.0, max_retries=1,
         ) as client:
             response = await client.messages.create(
                 model=DASHBOARD_SNIPPET_MODEL.id,
-                max_tokens=4096,
+                max_tokens=16000,
                 messages=[{"role": "user", "content": user_message}],
                 system=system,
                 output_config={

@@ -1,4 +1,4 @@
-"""Fable 5.1 request compatibility and safe snippet fallback."""
+"""Opus 5.5 request compatibility and safe snippet fallback."""
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -39,17 +39,18 @@ def fake_claude(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["quote", "observation"])
-async def test_fable_json_output_request_and_parsing(fake_claude, kind):
+async def test_opus_json_output_request_and_parsing(fake_claude, kind):
     result = await snippets._maybe_call_claude(kind, datetime(2026, 9, 27, 18, tzinfo=timezone.utc), {})
     assert result == {"text": "A generated fixture line.", "byline": "Fixture Author"}
     request = fake_claude["request"]
-    assert request["model"] == "claude-fable-5-1"
-    assert request["max_tokens"] == 4096
+    assert request["model"] == "claude-opus-5-5"
+    assert request["output_config"]["effort"] == "xhigh"
+    assert request["max_tokens"] == 16000
     assert request["output_config"]["format"]["type"] == "json_schema"
     assert request["output_config"]["format"]["schema"]["additionalProperties"] is False
     assert "tool_choice" not in request and "tools" not in request
     assert "thinking" not in request
-    assert fake_claude["client"]["timeout"] == 45.0
+    assert fake_claude["client"]["timeout"] == 180.0
 
 
 @pytest.mark.asyncio
