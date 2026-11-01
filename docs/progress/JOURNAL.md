@@ -34,7 +34,9 @@ secrets, email contents, OAuth tokens, or raw private production data.
 - Result: `/api/health` 200 locally and publicly, all five services active, no automatic
   restarts. A live render from real Home Assistant data took 107 ms (bw) and 61 ms (six)
   and showed the calm card. Washer, dishwasher and pool cards rendered from made-up
-  readings on the deployed code and fonts.
+  readings on the deployed code and fonts. In the 8 minutes after the restart, `mailapp`
+  logged 45 `variant=bw` terminal requests, all 200, and no 5xx. The last 5xx in Caddy's
+  access log predates the release by about 2,800 lines.
 - Not exercised: any card on a physical panel, or the real cycle-history response with a
   machine running. If that response is unusable, the card drops only its progress bar.
 - Next: judge the cards on the panel during the next real laundry cycle.
