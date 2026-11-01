@@ -1,4 +1,4 @@
-"""Swiss dashboard: one big number on a strict grid, with an ordered pixel dither.
+"""Swiss dashboard: one big number on a strict grid, with 1x pixel dithers.
 
 The left column answers one question at a time. When the house is calm the hero
 is the time; when something is running it is the minutes left, and when
@@ -11,6 +11,11 @@ Solid ink is what has been measured. Dithered pixels are what is forecast or
 ambient: the coming daylight, the day's temperature range, the part of a heat-up
 still to come. Never put type on the dither; both stay crisp only while they
 stay apart.
+
+The dither follows the tone. A gradient (the daylight band, the sun, the slab's
+fade) uses Atkinson error diffusion, which stays smooth. A flat level (the digits'
+shadow, forecast ranges, what's left of a progress bar) uses a Bayer pattern, which
+stays perfectly regular.
 
 Like ``editorial.py`` this is pure presentation over ``ha_view`` and the
 appliance registry. Unknown readings print as dashes, never zeros.
@@ -29,11 +34,12 @@ from . import fonts, layout
 from .appliances import ActiveAppliance, pick_active, pool_near_target
 from .draw import (
     Box,
+    atkinson_dither,
+    bayer_dither,
     draw_text_bl,
     draw_text_bl_right,
     draw_tracked_text_bl,
     font_metrics,
-    pixel_dither,
     pick_fitting_size,
     text_width,
     tracked_width,
@@ -307,11 +313,11 @@ def _draw_hero(img: Image.Image, draw, ctx: RenderContext, story: Story, box: Bo
     mask_draw.fontmode = "1"
     if story.measured:
         draw_tracked_text_bl(mask_draw, (shadow, shadow + cap_h), story.number, font, 110, tracking)
-        pixel_dither(img, (box.x0, top), mask, story.accent or P.ink)
+        bayer_dither(img, (box.x0, top), mask, story.accent or P.ink)
         draw_tracked_text_bl(draw, (box.x0, baseline), story.number, font, P.ink, tracking)
     else:
         draw_tracked_text_bl(mask_draw, (0, cap_h), story.number, font, 190, tracking)
-        pixel_dither(img, (box.x0, top), mask, P.ink)
+        bayer_dither(img, (box.x0, top), mask, P.ink)
 
     number_w = tracked_width(font, story.number, tracking)
     unit_x = box.x0 + number_w + shadow + 8
@@ -336,7 +342,7 @@ def _draw_attention(img: Image.Image, draw, ctx: RenderContext, story: Story, bo
     slab = Box(box.x0, box.y0 + 6, box.x1, box.y1 - fade - 10)
     draw.rectangle([(slab.x0, slab.y0), (slab.x1 - 1, slab.y1 - 1)], fill=fill)
     tone = Image.linear_gradient("L").rotate(180).resize((box.w, fade))
-    pixel_dither(img, (box.x0, slab.y1), tone, fill)
+    atkinson_dither(img, (box.x0, slab.y1), tone, fill)
 
     x = slab.x0 + 18
     kicker = _bold(layout.SwissType.LABEL_PX)
@@ -379,7 +385,7 @@ def _draw_progress(img: Image.Image, draw, ctx: RenderContext, story: Story, box
     done = round(box.w * p.fraction)
     tone = Image.new("L", (box.w - done, _BAND_H), 96)
     if tone.width > 0:
-        pixel_dither(img, (box.x0 + done, top), tone, p.accent)
+        bayer_dither(img, (box.x0 + done, top), tone, p.accent)
     if done > 0:
         draw.rectangle([(box.x0, top), (box.x0 + done - 1, top + _BAND_H - 1)], fill=p.accent)
     draw.rectangle([(box.x1 - 2, top - 3), (box.x1 - 1, top + _BAND_H + 2)], fill=P.ink)
@@ -416,14 +422,14 @@ def _draw_daylight(img: Image.Image, draw, ctx: RenderContext, ha: dict, box: Bo
         for x in range(box.w):
             minute = x / box.w * day
             if rise <= minute <= set_:
-                level = 40 * (1 - math.sin(math.pi * (minute - rise) / (set_ - rise)))
+                level = 70 * (1 - math.sin(math.pi * (minute - rise) / (set_ - rise)))
             else:
-                # Night deepens away from the horizon.
+                # Night deepens away from the horizon, continuing from dusk's tone.
                 dist = min(abs(minute - rise), abs(minute - set_),
                            day - abs(minute - rise), day - abs(minute - set_))
-                level = 90 + 80 * clamp(dist / 120)
+                level = 70 + 130 * clamp(dist / 120)
             tone_draw.line([(x, 0), (x, height)], fill=int(level))
-    pixel_dither(img, (box.x0, top), tone, P.ink)
+    atkinson_dither(img, (box.x0, top), tone, P.ink)
     now = ctx.now_local.hour * 60 + ctx.now_local.minute
     nx = box.x0 + round(now / day * box.w)
     draw.rectangle([(nx - 1, top - 4), (nx + 1, top + height + 3)], fill=P.ink)
@@ -493,7 +499,7 @@ def _draw_forecast(img: Image.Image, draw, ctx: RenderContext, ha: dict, box: Bo
         bar_h = 14
         bar_y = y + (row_h - bar_h) // 2 + 1
         if x1 > x0:
-            pixel_dither(img, (x0, bar_y), Image.new("L", (x1 - x0, bar_h), 84), P.ink)
+            bayer_dither(img, (x0, bar_y), Image.new("L", (x1 - x0, bar_h), 84), P.ink)
         if label == "Today" and outside is not None:
             nx = bar_x0 + round(clamp((outside - low) / span) * width)
             draw.rectangle([(nx - 1, bar_y - 3), (nx + 1, bar_y + bar_h + 2)], fill=P.ink)
@@ -582,14 +588,14 @@ def _draw_sky(img: Image.Image, ctx: RenderContext, state: str, x: int, y: int, 
     draw = ImageDraw.Draw(img)
 
     if s in ("sunny", "clear"):
-        pixel_dither(img, (x, y), _disc_tone(size), sun_ink)
+        atkinson_dither(img, (x, y), _disc_tone(size), sun_ink)
         return
     if s == "clear-night":
         tone = _disc_tone(size)
         cut = Image.new("L", canvas, 255)
         offset = int(size * 0.34)
         ImageDraw.Draw(cut).ellipse([(offset, -offset // 2), (size + offset, size - offset // 2)], fill=0)
-        pixel_dither(img, (x, y), ImageChops.multiply(tone, cut), P.ink)
+        atkinson_dither(img, (x, y), ImageChops.multiply(tone, cut), P.ink)
         return
 
     # Flat enough that precipitation stays above the condition line.
@@ -599,12 +605,12 @@ def _draw_sky(img: Image.Image, ctx: RenderContext, state: str, x: int, y: int, 
         tone = Image.new("L", canvas, 0)
         tone.paste(_disc_tone(disc), (size - disc, 0))
         halo = _cloud_mask(canvas, (cloud_box[0] - 3, cloud_box[1] - 3, cloud_box[2], cloud_box[3] + 3))
-        pixel_dither(img, (x, y), ImageChops.subtract(tone, halo), sun_ink)
+        atkinson_dither(img, (x, y), ImageChops.subtract(tone, halo), sun_ink)
     mask = _cloud_mask(canvas, cloud_box)
     level = 190 if s in ("cloudy", "mostlycloudy", "rainy", "pouring", "snowy", "snowy-rainy",
                          "lightning", "lightning-rainy", "hail", "exceptional") else 120
     img.paste(P.bg, (x, y), mask)
-    pixel_dither(img, (x, y), mask.point(lambda v: level if v else 0), P.ink)
+    bayer_dither(img, (x, y), mask.point(lambda v: level if v else 0), P.ink)
 
     # Precipitation below the cloud, in solid ink.
     base = y + cloud_box[3] + 5
@@ -715,7 +721,7 @@ def _draw_readings(img: Image.Image, draw, ctx: RenderContext, ha: dict, box: Bo
             filled = round(box.w * clamp(current / peak))
             rest = Image.new("L", (box.w - filled, 5), 70)
             if rest.width > 0:
-                pixel_dither(img, (box.x0 + filled, bar_y), rest, P.ink)
+                bayer_dither(img, (box.x0 + filled, bar_y), rest, P.ink)
             if filled > 0:
                 accent = P.yellow if P.yellow != P.ink else P.ink
                 draw.rectangle([(box.x0, bar_y), (box.x0 + filled - 1, bar_y + 4)], fill=accent)

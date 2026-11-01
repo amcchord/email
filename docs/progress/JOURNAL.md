@@ -31,6 +31,12 @@ secrets, email contents, OAuth tokens, or raw private production data.
 - Follow-up on request: the dither moved from 2 px squares to true 1x, one decision per
   panel pixel, and the cell-size option was removed. Deployed as `156d4fe`; only
   `mailapp` restarted. Health `ok`, and Swiss and Editorial rendered from live data.
+- Follow-up on request: gradients (daylight band, sun, slab fade) moved to Atkinson error
+  diffusion via `draw.atkinson_dither`; flat levels stay Bayer (`draw.bayer_dither`,
+  renamed from `pixel_dither`). Not deployed yet; live is `156d4fe`.
+- The `156d4fe` restart took 90 seconds: a long-lived client connection held uvicorn's
+  shutdown open until systemd's stop timeout forced the kill. The API came back healthy
+  with no restart loop. A shorter `--timeout-graceful-shutdown` would bound this.
 - Next action: choose Swiss on a terminal to judge the dither on real hardware.
 
 ## 2026-11-01 — Home Editorial truth fixes, sauna forecast, and Opus 5.5
