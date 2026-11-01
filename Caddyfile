@@ -11,9 +11,13 @@ email.mcchord.net {
     }
 
     # API proxy to FastAPI
+    # lb_try_duration holds requests through an API restart instead of returning
+    # 502. Terminals sleep 5 minutes after a failed fetch, and their read timeout
+    # is 20 seconds, so a held request must normally be answered sooner than that.
     handle /api/* {
         reverse_proxy localhost:8000 {
             flush_interval -1
+            lb_try_duration 30s
         }
     }
 
@@ -21,6 +25,7 @@ email.mcchord.net {
     handle /terminal/* {
         reverse_proxy localhost:8000 {
             flush_interval -1
+            lb_try_duration 30s
         }
     }
 

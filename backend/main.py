@@ -64,7 +64,8 @@ async def lifespan(app: FastAPI):
         name="attachment-cache-maintenance",
     )
     try:
-        yield
+        with events.end_streams_on_sigterm():
+            yield
     finally:
         attachment_maintenance_stop.set()
         try:

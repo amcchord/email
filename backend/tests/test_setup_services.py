@@ -4,6 +4,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 # Read as text: the installer module imports setup-only UI dependencies.
 INSTALLER = REPO_ROOT / "scripts" / "setup" / "steps" / "services.py"
+CADDYFILE = REPO_ROOT / "Caddyfile"
 RUNBOOK = REPO_ROOT / "docs" / "operations" / "RUNBOOK.md"
 README = REPO_ROOT / "README.md"
 
@@ -28,3 +29,12 @@ def test_documented_mailapp_unit_values_match_the_installer():
 
     assert _bounds(README) == expected
     assert _bounds(RUNBOOK) == expected
+
+
+def test_caddy_holds_api_requests_for_longer_than_a_restart_can_take():
+    _, stop = _bounds(INSTALLER)
+
+    # Both proxies to uvicorn, so a restart cannot fail a terminal's check-in.
+    holds = re.findall(r"lb_try_duration (\d+)s", CADDYFILE.read_text())
+    assert len(holds) == 2
+    assert all(int(hold) > stop for hold in holds)

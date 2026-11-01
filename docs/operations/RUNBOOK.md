@@ -176,46 +176,63 @@ Also verify the user-facing path changed by the release. Record the deployed
 commit, commands, migration revision (if any), health result, and production
 actions in `docs/progress/JOURNAL.md`.
 
-## API Restart Bound
+## API Restart Behaviour
 
-An open browser tab holds `/api/events/stream`, and uvicorn waits for every open
-response before it exits. The stream never ends by itself: a shutdown does not
-mark the client as disconnected, and the application's lifespan shutdown only
-runs after that wait, so it cannot signal the stream. Without a bound,
-`systemctl restart mailapp` with a tab open takes the full 90-second default
-`TimeoutStopSec` and ends in SIGKILL (seen at 19:57 and 20:04 UTC on 2026-11-01).
+An API restart should take a few seconds and should not fail a terminal check-in.
+Four pieces work together:
 
-While a worker drains, new connections are not refused. The supervisor still
-holds the listening socket, so they wait in its backlog and Caddy returns 502
-when the process exits. The 19:57 restart produced 20 502s on API and terminal
-routes, 13 of them after waiting more than 30 seconds.
-
-| Setting | Value | Why |
+| Piece | Value | Why |
 | --- | --- | --- |
-| `--timeout-graceful-shutdown` | 15 | Requests get 15 seconds to finish, then uvicorn cancels what is left. In the Caddy log for 2026-10-16 to 2026-11-01, 161 of about 136,000 requests took longer than 15 seconds: 146 terminal image or schedule fetches and 15 others. |
+| `events.end_streams_on_sigterm` | Streams end within 1 second of SIGTERM | An open tab holds `/api/events/stream`. uvicorn waits for every open response and gives it no shutdown signal, so one tab used to hold a restart until systemd's 90-second SIGKILL (19:57 and 20:04 UTC on 2026-11-01). |
+| `--timeout-graceful-shutdown` | 15 | Other requests get 15 seconds to finish, then uvicorn cancels them. In the Caddy log for 2026-10-16 to 2026-11-01, 161 of about 136,000 requests took longer than 15 seconds: 146 terminal image or schedule fetches and 15 others. |
 | `TimeoutStopSec` | 25 | Backstop for the whole unit: 15 seconds of drain, up to 5 for lifespan shutdown, and 5 of margin. |
+| Caddy `lb_try_duration` | 30s on `/api/*` and `/terminal/*` | Holds requests through the restart instead of returning 502. |
+
+The Caddy hold matters because of how terminals fail. The firmware
+(`reTerminalColor`, `src/main.cpp`) sleeps 300 seconds after any check-in that
+is not a 200, and its read timeout is 20 seconds. One 502 therefore leaves a
+terminal stale for about 5 minutes. Without the hold, new connections during a
+restart wait in the supervisor's backlog, because it keeps the listening socket,
+and then get a 502. The 19:57 restart produced 20 502s on API and terminal routes,
+13 of them after waiting more than 30 seconds.
 
 Expect these results:
 
-- With a tab open, a restart takes about 15 seconds, and each affected worker logs
-  `ERROR: Cancel N running task(s), timeout graceful shutdown exceeded`. This is
-  expected, not a fault. The tab reconnects by itself.
-- With no tab open, a restart takes a second or two and logs no such error.
-- A request still running after 15 seconds is cancelled and logs
-  `Exception in ASGI application` with a `CancelledError` traceback. Check that
-  the client action was safe to retry.
+- With a tab open and nothing slow in flight, a restart takes a few seconds and
+  logs no error. The tab reconnects by itself.
+- With a slow request in flight, the restart takes up to 15 seconds and logs
+  `ERROR: Cancel N running task(s), timeout graceful shutdown exceeded`. Held
+  requests then wait about 18 seconds, which is just inside the terminal read
+  timeout. If lifespan shutdown also uses its full 5 seconds, a terminal can time
+  out and sleep for 5 minutes.
+- A request cancelled at 15 seconds logs `Exception in ASGI application` with a
+  `CancelledError` traceback, and the client gets a 500 that is not retried. Check
+  that the action was safe to repeat.
 
-Both settings live in `scripts/setup/steps/services.py` and the README, which only
-apply to new installs. Production's unit file was installed once and is not updated
-by a deployment, so it needs the change below.
+The hold has limits. Caddy retries a failed connection for any method, but once a
+connection is accepted it retries only GET. A POST that lands in the backlog during
+a drain still gets a 502, though this window is normally under a second. A GET can
+run twice if the process dies while handling it. During a real outage, requests
+wait 30 seconds before their 502.
 
 ### Apply on production (Mutating)
 
-Only perform this when the user explicitly requests it. Applying has no effect
-until the next restart. The drop-in leaves the installed unit file untouched.
+Only perform this when the user explicitly requests it. It needs three separate
+steps because neither a deployment nor a Caddy reload changes the installed unit:
+`scripts/setup/steps/services.py` and the README only apply to new installs.
+
+1. Fast-forward `/opt/mail` to the reviewed commit, as in Production Deployment.
+2. Validate and reload Caddy, which also closes open streams once:
+
+   ```bash
+   caddy validate --config /opt/mail/Caddyfile
+   systemctl reload caddy
+   ```
+
+3. Add the unit drop-in. It takes effect at the next restart and leaves the
+   installed unit file untouched:
 
 ```bash
-ssh root@email.mcchord.net
 install -d /etc/systemd/system/mailapp.service.d
 cat > /etc/systemd/system/mailapp.service.d/graceful-shutdown.conf <<'EOF'
 [Service]
@@ -228,9 +245,9 @@ systemctl daemon-reload
 systemctl show mailapp -p TimeoutStopUSec -p ExecStart
 ```
 
-The first restart afterwards still stops a process started without the flag, so
-with a tab open it runs to the new 25-second limit and logs `stop-sigterm timed
-out`. Only the restart after that one proves the bound.
+4. Close signed-in tabs, then run `systemctl restart mailapp`. This restart stops
+   the old code, so an open tab would hold it to the new 25-second limit, past the
+   terminal read timeout. Only the next restart proves the change.
 
 To roll back, remove the drop-in, then run `systemctl daemon-reload` and restart:
 
@@ -238,26 +255,39 @@ To roll back, remove the drop-in, then run `systemctl daemon-reload` and restart
 rm /etc/systemd/system/mailapp.service.d/graceful-shutdown.conf
 ```
 
+Revert the Caddyfile through Git and reload Caddy.
+
 ### Verify with a connection open (Mutating: restarts the API)
 
 Only an in-flight response holds a worker. An idle TCP connection is closed at
-once and proves nothing, so use a real stream: keep a signed-in tab open at
-`https://email.mcchord.net`, then on the host:
+once and proves nothing, so use a real stream: open a signed-in tab at
+`https://email.mcchord.net`. In a second shell, watch health through the proxy:
 
 ```bash
-ss -Htn state established '( sport = :8000 )' | wc -l
+while sleep 0.5; do curl -s -o /dev/null -w '%{http_code} %{time_total}\n' https://email.mcchord.net/api/health; done
+```
+
+Then on the host:
+
+```bash
 journalctl --no-pager -u mailapp --since "$(systemctl show mailapp -p ActiveEnterTimestamp --value)" -o cat | grep -c 'GET /api/events/stream'
 systemd-cgls --no-pager -u mailapp.service
 since=$(date -u '+%F %T')
 time systemctl restart mailapp
 journalctl --no-pager -u mailapp --since "$since" -o cat | grep -E 'Cancel [0-9]+ running|stop-sigterm|Finished server process|Failed with result'
-curl -fsS https://email.mcchord.net/api/health
+tail -n 2000 /var/log/caddy/mail.log | grep -cE '"status": ?502'
 ```
 
-The first two commands must each report at least 1. The bound holds when
-`systemctl restart` returns in about 15 seconds, the log shows `Cancel N running`
-and `Finished server process`, and it shows neither `stop-sigterm` nor `Failed with
-result`.
+The first command must report at least 1. Run the last command once before the
+restart as well, because it counts recent 502s and only an increase matters. The
+change holds when all of these are true:
+
+- `systemctl restart` returns within a few seconds.
+- The health loop shows only 200s, with a slower response or two during the restart.
+- The log shows `Finished server process`, and no `stop-sigterm` or `Failed with
+  result`. A `Cancel N running` line only means a slow request was in flight.
+- The 502 count did not increase.
+- Terminals keep their normal request rate over the next 10 minutes.
 
 If the restart takes 25 seconds and logs `stop-sigterm` although uvicorn finished,
 a process other than uvicorn kept the unit open. Both forced stops on 2026-11-01
