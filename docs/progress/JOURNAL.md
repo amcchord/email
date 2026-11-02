@@ -3,6 +3,38 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-11-02 — Editorial cards for several activities at once
+
+- Requested: make Editorial richer when two or three things run at once, then commit
+  and deploy. Branch `claude/editorial-shared-cards`, commit `7355458`.
+- Change: two or more activities now share the column as cards built from the
+  single-activity `_Feature`. Each has its icon, kicker, and headline, plus a new
+  `_Gauge`: a reading at each end over a bar that is solid only to a measured value.
+  Two split the column, with the deck where all of it fits and the phase track under
+  laundry. Three take a row each. Past three, two rows plus briefs and "+N more". The
+  sauna gauge shows room temperature against the 165° ready line and names the fan plan,
+  or the session's end when that comes first. The old co-lead and text-hero drawers are
+  gone, and a test now ties the appliance registry to Editorial's cards and briefs. The
+  kicker now drops trailing words rather than reaching its badge. An unknown sauna target
+  now reads as a dash rather than "Preset" (review P1).
+- Verification: 1358 backend passed, 75 skipped, and the 4 known Day Ahead pixel-pin
+  failures; `make check` stops at the tests, so the frontend build did not run (no
+  frontend change). New tests fit every card in its slot across 24 copy slots in both
+  palettes. All 80 layout audits clean, including five new two- and three-activity
+  states. One independent P0/P1 review; its one finding was fixed.
+- Production: live clean at `06b260a`, fast-forwarded to `7355458` at 13:47 UTC, no
+  migration, dependency, or frontend change. Only the API routers render dashboards, so
+  only `mailapp` restarted. To roll back, reset the checkout to `06b260a` as `mailapp`
+  and restart `mailapp`.
+- Result: `/api/health` 200 after 4 seconds and publicly, all five services active,
+  no automatic restarts. Through the deployed code, the five new states plus the
+  three- and four-activity audit states rendered clean in both palettes (63–140 ms).
+  In the first 5 minutes the panels made 15 `schedule.json` and 15 `image.bmp`
+  requests, all 200, with no 5xx. The one traceback was passlib's trapped bcrypt-version
+  warning on a sign-in attempt, also logged 3 times in the prior week.
+- Not exercised: real simultaneous appliances, or the cards on a physical panel.
+- Next: look at the panel the next time two appliances run together.
+
 ## 2026-11-02 — Sauna forecast read from Home Assistant's sensor
 
 - Requested: move the sauna forecast to the Home Assistant side, then commit and deploy.

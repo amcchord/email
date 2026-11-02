@@ -15,10 +15,14 @@ the pause.
 
 ## Baseline
 
-- Production runtime is `06b260a2ecb15d0111537277c032367b6f13474b` as of 2026-11-02
-  12:03 UTC. The sauna forecast now comes from Home Assistant's
-  `sensor.sauna_heat_forecast`, and the screens keep no model (D-058). The sensor is
-  live and reads correctly; the heating path has not yet run on a real session.
+- Production runtime is `735545846bb4f66f9bbe79d00f675934bb5333f2` as of 2026-11-02
+  13:47 UTC. When two or three appliances run at once, Editorial now gives each a
+  card with its icon, headline, and a gauge (two split the column, three take a row
+  each, past three two rows plus briefs). Rendered and audited clean on production;
+  not yet seen with real simultaneous appliances or on a physical panel.
+- The sauna forecast comes from Home Assistant's `sensor.sauna_heat_forecast`, and
+  the screens keep no model (D-058). The sensor is live and reads correctly; the
+  heating path has not yet run on a real session.
 - Editorial's single-activity card has a phase-aware icon, a meter from real readings,
   and rotating copy (see D-057), and its sauna icon is now the house's SaunaLife Cube.
   No card has been seen on a physical panel or with a real running appliance,
