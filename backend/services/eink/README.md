@@ -100,10 +100,11 @@ A repo-wide grep should find:
    matching view builder, so a half-registered appliance can't ship.
 
 4. **Draw it in each design.** Add a branch to `_story_for` plus a row in
-   `_also_row` in `swiss.py`, and a row to `EDITORIAL_LEAD_DRAWERS` plus
-   `EDITORIAL_BRIEFS` in `editorial.py`. Read structured fields off the view (
-   `view.finish_label`, `view.status_label`, `view.extras["..."]`) --
-   never touch the HA dict here.
+   `_also_row` in `swiss.py`, and a row to `_FEATURE_BUILDERS` (a `_Feature`
+   with its `_Gauge`) plus `EDITORIAL_BRIEFS` in `editorial.py`. Read structured
+   fields off the view (`view.finish_label`, `view.status_label`,
+   `view.extras["..."]`) -- never touch the HA dict here. A test fails if a
+   registered kind has no Editorial card or brief.
 
 That's it. The registry handles "which appliances are currently
 active" for both designs; you never have to touch
@@ -123,8 +124,8 @@ active" for both designs; you never have to touch
    brief / lead drawers.
 
 3. Add a `MYDESIGN_DRAWERS` dispatch dict mapping appliance kinds to
-   per-kind drawers, just like `EDITORIAL_LEAD_DRAWERS`. Each drawer takes
-   `(ctx, view)` and reads only structured fields.
+   per-kind drawers, just like Editorial's `_FEATURE_BUILDERS`. Each drawer
+   takes `(ctx, view)` and reads only structured fields.
 
 4. Wire it into `render.py`'s dispatcher.
 
@@ -168,11 +169,19 @@ Every pixel from either is exactly the fill colour, so both pass the `dither=Fal
 encoders untouched. Swiss sets `draw.fontmode = "1"` so its text adds no grey either.
 `test_swiss.py` holds both palettes to that.
 
-## Editorial's single-activity card
+## Editorial's activity cards
 
 When exactly one appliance is active, `editorial._draw_feature` draws it with an
-icon (`icons.py`), a meter (`meters.py`), and rotating copy (`flavor.py`). Two
-active appliances still get co-leads, and three or more a lead with briefs.
+icon (`icons.py`), a meter (`meters.py`), and rotating copy (`flavor.py`).
+
+When several are active, `editorial._draw_shared` gives each a smaller card built
+from the same `_Feature`: the icon, kicker, and headline, plus its `_Gauge`, a
+reading at each end over a bar. Two split the column; each half also has the deck
+when all of it fits beside the icon, and labels the bar's ends or shows the phase
+track below it. Three take a row each, with everything beside the icon. Past
+three, the two most urgent keep rows and the rest are briefs. A gauge follows the
+meter rules below. The sauna's reads the room against its ready line and names
+the fan plan, or the session's end when that comes first.
 
 - **Icons** show the current phase: the washer's drum changes with wash, rinse,
   and spin, and the sauna is the house's SaunaLife Cube, with one heat wave per lit

@@ -30,7 +30,7 @@ Adding an appliance
    ``_APPLIANCE_BUILDERS``.
 3. Add an ``ApplianceSpec`` row below.
 4. Add a drawer entry in each design's ``DRAWERS`` dict
-   (``swiss._story_for`` / ``editorial.EDITORIAL_LEAD_DRAWERS``).
+   (``swiss._story_for`` / ``editorial._FEATURE_BUILDERS``).
 
 That's it -- the registry handles "active" detection and dispatch
 for both designs.

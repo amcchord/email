@@ -180,6 +180,26 @@ def _single_activity_states(base: dict) -> dict:
     }
 
 
+def _shared_states(base: dict, singles: dict) -> dict:
+    """Two and three activities at once, at the time the single states were written for."""
+    def together(*names: str) -> dict:
+        out = copy.deepcopy(base)
+        for name in names:
+            out.update({k: v for k, v in singles[name].items() if v != base.get(k)})
+        out["fetchedAt"] = "2026-05-05T22:00:00+00:00"
+        return out
+
+    return {
+        "pair_washer_dryer": together("feature_washer", "feature_dryer"),
+        "pair_washer_done_pool": together("feature_washer_done", "feature_pool"),
+        "pair_sauna_dishwasher": together("feature_sauna_auto_fan_due", "feature_dishwasher"),
+        "trio_dryer_done_washer_sauna": together("feature_dryer_done", "feature_washer",
+                                                 "feature_sauna_fan_skipped"),
+        "trio_washer_done_dishwasher_pool": together("feature_washer_done", "feature_dishwasher",
+                                                     "feature_pool"),
+    }
+
+
 def _stress_state(base: dict) -> dict:
     """Push every numeric field into 3 digits + every label long. The
     audit shouldn't flag overflow on this either."""
@@ -302,9 +322,10 @@ def audit() -> int:
 
     zero = copy.deepcopy(base)
     zero["coffee"] = {"cupsToday": 0}
+    singles = _single_activity_states(base)
     states = [("calm", base), ("sauna", sauna), ("stress", stress),
               ("zero_coffee", zero), ("unavailable", unavailable_ha_shape()),
-              *_single_activity_states(base).items()]
+              *singles.items(), *_shared_states(base, singles).items()]
     fails: List[str] = []
 
     for design in ("editorial", "swiss"):

@@ -384,26 +384,31 @@ def _draw_diamond_kicker(
     badge: Optional[str] = None,
 ) -> None:
     """Lead-story kicker: diamond bullet + tracked text + optional right
-    badge (e.g. "LIVE", "UNLOAD")."""
+    badge (e.g. "LIVE", "UNLOAD"). Text that would reach the badge or the
+    edge loses words from its end."""
     font = fonts.pix_cherry_small(layout.EditorialType.KICKER_PX, bold=True)
     tracking = em_to_px(layout.EditorialType.KICKER_PX,
                         layout.EditorialType.KICKER_TRACKING_EM)
     fm = font_metrics(font)
     baseline = box.y0 + fm.ascent
     diamond(draw, box.x0 + 3, baseline - fm.ascent // 2, 5, accent)
-    s = text.upper()
-    draw_tracked_text_bl(draw, (box.x0 + 14, baseline), s, font, P.ink, tracking)
+    bw = tracked_width(font, badge, tracking) + 10 if badge else 0
+    room = box.x1 - (bw + 8 if badge else 0) - (box.x0 + 14)
+    words = text.upper().split(" ")
+    while len(words) > 1 and tracked_width(font, " ".join(words), tracking) > room:
+        words.pop()
+    if len(words) > 1 and words[-1] == "·":
+        words.pop()
+    draw_tracked_text_bl(draw, (box.x0 + 14, baseline), " ".join(words), font, P.ink, tracking)
 
     if badge:
-        bf = fonts.pix_cherry_small(layout.EditorialType.KICKER_PX, bold=True)
-        bw = tracked_width(bf, badge, tracking) + 10
         bh = fm.line_height + 2
         bx0 = box.x1 - bw
         by0 = box.y0
         draw.rectangle([(bx0, by0), (box.x1 - 1, by0 + bh - 1)], fill=accent)
         draw_tracked_text_bl(
             draw, (bx0 + 5, by0 + fm.ascent),
-            badge, bf, P.bg, tracking,
+            badge, font, P.bg, tracking,
         )
 
 
@@ -847,84 +852,36 @@ def _draw_lead_column(img: Image.Image, draw, ctx: RenderContext, ha,
       not floating.
     * 1 active: render the feature card (icon, headline, instrument meter,
       facts) at the same 1/3 gravity offset.
-    * 2 active: render two equal-weight co-lead stories stacked with a
-      double-rule divider. This is the "Dryer + Washer" case where
-      both deserve top-billing.
-    * 3+ active: render the highest-severity item as the full hero,
-      then the rest as briefs underneath -- still left-anchored
-      because the content is approaching the column height anyway.
+    * 2+ active: the activities share the column as equal cards, each
+      with its icon, headline, and a gauge (``_draw_shared``).
 
-    Implementation note: cases 0 / 1 / 3+ paint to a scratch image so
-    we can measure the rendered height, then composite at the chosen
-    vertical offset. Pillow can't measure imperative drawing ahead of
-    time, so the two-pass render is the price for clean centering.
+    Implementation note: cases 0 / 1 paint to a scratch image so we can
+    measure the rendered height, then composite at the chosen vertical
+    offset. Pillow can't measure imperative drawing ahead of time, so
+    the two-pass render is the price for clean centering.
     """
     P = ctx.palette
     lead = active[0] if active else None
-    rest = active[1:]
 
     # Case: no house data. Say so rather than announcing a calm house.
     if ha.get("unavailable"):
         _draw_no_data_lead(draw, ctx, box)
         return
 
-    # Case: exactly two active items -- render as paired co-leads.
-    # This branch paints directly so the divider lands at the midline.
-    if lead is not None and len(rest) == 1:
-        _draw_two_co_leads(draw, ctx, ha, [lead, rest[0]], box)
+    # Shared cards fill the column on a fixed grid, so they paint directly.
+    if len(active) > 1:
+        _draw_shared(img, draw, ctx, ha, active, box)
         return
 
-    # All other branches use the scratch-image / measure / center
-    # approach so the lead doesn't hug the top when the column has
-    # significant vertical slack. The scratch is sized to 2x the box
-    # height so an overflowing brief gets fully painted on the scratch
-    # (where we can crop it cleanly) instead of being silently clipped
-    # by Pillow at the scratch edge.
-    bg = P.bg
-    scratch = Image.new("RGB", (box.w, box.h * 2), bg)
+    # The calm lead and the feature card are measured on a scratch image so
+    # they don't hug the top when the column has slack. It is twice the box
+    # height so an overflow is painted in full and cropped cleanly.
+    scratch = Image.new("RGB", (box.w, box.h * 2), P.bg)
     sdraw = ImageDraw.Draw(scratch)
-
     if lead is None:
         y_end = _draw_calm_lead(sdraw, ctx, ha, 0, 0, box.w)
-    elif not rest and lead.kind in _FEATURE_BUILDERS:
-        y_end = _draw_feature(scratch, sdraw, ctx, lead, box.w)
     else:
-        y_end = _draw_lead(sdraw, ctx, ha, lead, 0, 0, box.w)
-        if rest:
-            # Briefs are added one at a time; we stop as soon as the
-            # next brief wouldn't fit. If any were dropped, the kicker
-            # is augmented with a "+ N more" tail so the user knows
-            # there are background tasks not on screen.
-            kfont = fonts.pix_cherry_small(
-                layout.EditorialType.KICKER_PX, bold=True,
-            )
-            fm_k = font_metrics(kfont)
-            brief_row_h = 40
-            divider_h = 10 + 5
-            kicker_h = fm_k.line_height + 8
-            limit_y = box.h
-            # How many briefs fit?
-            available = limit_y - (y_end + divider_h + kicker_h)
-            max_fits = max(0, available // brief_row_h)
-            shown = list(rest[:max_fits])
-            hidden = len(rest) - len(shown)
-            if shown:
-                double_hr(sdraw, 0, box.w, y_end + 10, fill=P.rule, gap=2)
-                y_end += divider_h
-                kicker_text = "Also Active"
-                if hidden > 0:
-                    kicker_text += f"  \u00b7  +{hidden} more"
-                _draw_kicker(
-                    sdraw,
-                    Box(0, y_end + 6, box.w, y_end + 6 + fm_k.line_height),
-                    text=kicker_text, P=P,
-                )
-                y_end += kicker_h
-                for idx, item in enumerate(shown):
-                    y_end = _draw_brief(
-                        sdraw, ctx, ha, 0, y_end, box.w, item,
-                        last=(idx == len(shown) - 1),
-                    )
+        y_end = _draw_feature(scratch, sdraw, ctx, lead, box.w)
 
     # Vertical distribution: leave 1/3 of slack at the top, 2/3 below.
     # This pulls the headline down toward the optical center without
@@ -935,306 +892,6 @@ def _draw_lead_column(img: Image.Image, draw, ctx: RenderContext, ha,
     top_pad = slack // 3
     crop = scratch.crop((0, 0, box.w, rendered_h))
     img.paste(crop, (box.x0, box.y0 + top_pad))
-
-
-def _draw_two_co_leads(draw, ctx: RenderContext, ha,
-                       items: list, box: Box) -> None:
-    """Render two equal-weight stories stacked vertically.
-
-    Used when exactly two appliances are running so they read as
-    co-leads rather than "one big + one tiny". The midline is a thin
-    triple-rule horizontal divider (heavy + hairline + heavy).
-    """
-    P = ctx.palette
-    # Reserve 14px in the middle for the divider stack.
-    div_h = 14
-    top_h = (box.h - div_h) // 2
-    bot_h = box.h - div_h - top_h
-    top_box = Box(box.x0, box.y0, box.x1, box.y0 + top_h)
-    div_y = top_box.y1 + div_h // 2 - 2
-    bot_box = Box(box.x0, top_box.y1 + div_h, box.x1, box.y1)
-
-    _draw_co_lead_story(draw, ctx, items[0], top_box)
-    # Divider: heavy (2px) + 2px gap + hairline.
-    draw.rectangle([(box.x0, div_y), (box.x1 - 1, div_y + 1)], fill=P.rule)
-    draw.rectangle([(box.x0, div_y + 4), (box.x1 - 1, div_y + 4)], fill=P.rule)
-    _draw_co_lead_story(draw, ctx, items[1], bot_box)
-
-
-# ── Co-lead story (data-driven, half-height) ──────────────────────────
-
-
-def _draw_co_lead_story(draw, ctx: RenderContext,
-                        item: ActiveAppliance, box: Box) -> None:
-    """Compact magazine-style story used in the two-co-lead layout.
-
-    Pure presentation -- reads ``item.view`` and dispatches text
-    through ``_co_lead_descriptor`` so each kind contributes its own
-    headline / deck / fact cells without rebuilding a full hero.
-    """
-    P = ctx.palette
-    view = item.view
-    accent = ctx.accent(view.accent_kind)
-
-    descriptor = _co_lead_descriptor(view, ctx)
-
-    # Kicker row with diamond + optional badge.
-    kfont = fonts.pix_cherry_small(layout.EditorialType.KICKER_PX, bold=True)
-    fm_k = font_metrics(kfont)
-    _draw_diamond_kicker(
-        draw, Box(box.x0, box.y0, box.x1, box.y0 + 18),
-        text=view.eyebrow_kicker, P=P, accent=accent,
-        badge=descriptor.get("badge"),
-    )
-    cur_y = box.y0 + fm_k.line_height + 6
-
-    # Headline (22 px serif bold, max 2 lines).
-    head_size = 22
-    head_runs = descriptor["head_runs"]
-    cur_y = draw_headline(
-        draw, (box.x0, cur_y, box.w, head_size * 2 + 8),
-        head_runs, line_height_px=head_size + 4, max_lines=2,
-    )
-
-    # Deck (one line, italic, muted).
-    deck = descriptor.get("deck")
-    if deck:
-        deck_font = fonts.serif(13, italic=True, weight="semibold")
-        cur_y = draw_paragraph(
-            draw, (box.x0, cur_y + 4, box.w, 36),
-            deck, font=deck_font, fill=P.muted, line_height_px=18,
-            max_lines=2,
-        )
-
-    # Fact cells anchored at the bottom of the co-lead box so paired
-    # stories' strips share a Y baseline.
-    cells = descriptor.get("cells") or []
-    if cells:
-        cell_h = 38
-        cells_y = box.y1 - cell_h - 4
-        _draw_compact_fact_strip(draw, P, box.x0, cells_y, box.w, cells)
-
-
-def _draw_compact_fact_strip(draw, P, x0, y, w, cells) -> int:
-    """Two-or-three cell fact strip sized for the co-lead row.
-
-    Same drawing approach as ``_draw_fact_strip`` but with tighter
-    vertical proportions so two strips fit one above the other in the
-    body column.
-    """
-    cell_w = w // max(1, len(cells))
-    cell_h = 34
-    draw.rectangle([(x0, y), (x0 + w - 1, y + 1)], fill=P.rule)
-    bottom = y + 2 + cell_h
-    label_font = fonts.pix_cherry_small(9, bold=True)
-    tracking = em_to_px(9, 0.18)
-    val_factory = lambda s: fonts.serif(s, weight="bold")
-    val_candidates = (18, 17, 16, 14, 12)
-    fm_l = font_metrics(label_font)
-    inner_pad = 6
-    for i, c in enumerate(cells):
-        cx0 = x0 + i * cell_w
-        if i > 0:
-            draw.rectangle([(cx0, y + 2), (cx0, bottom - 1)], fill=P.rule)
-        cell_cx = cx0 + cell_w // 2
-        label = (c.get("k") or "").upper()
-        label_baseline = y + 3 + fm_l.ascent
-        max_label_w = cell_w - inner_pad * 2
-        s_label = label
-        while s_label and tracked_width(label_font, s_label, tracking) > max_label_w:
-            s_label = s_label[:-1]
-        if s_label:
-            draw_tracked_text_bl_center(
-                draw, (cell_cx, label_baseline),
-                s_label, label_font, P.muted, tracking,
-            )
-        val = c.get("v") or "\u2014"
-        color = c.get("accent") or P.ink
-        val_font, _val_size = pick_fitting_size(
-            val_factory, val, max(20, cell_w - inner_pad * 2), val_candidates,
-        )
-        fm_v = font_metrics(val_font)
-        val_baseline = label_baseline + fm_l.descent + 2 + fm_v.ascent
-        draw_text_bl_center(draw, (cell_cx, val_baseline), val, val_font, color)
-    return bottom + 2
-
-
-# Per-kind descriptors for co-lead stories. Each builder returns a
-# dict with `head_runs`, optional `deck`, `cells` (list of {k, v}),
-# and an optional `badge` (e.g. "UNLOAD"). Keeping this table next to
-# EDITORIAL_LEAD_DRAWERS makes it obvious that adding a new appliance
-# means adding *two* rows: one full-hero drawer + one co-lead builder.
-
-
-def _co_lead_runs_normal_italic(size: int = 22):
-    return (fonts.serif(size, weight="bold"),
-            fonts.serif(size, italic=True, weight="bold"))
-
-
-def _co_washer(view: ApplianceView, ctx: RenderContext) -> dict:
-    P = ctx.palette
-    norm, ital = _co_lead_runs_normal_italic()
-    copy = flavor.pick_appliance_copy(view, ctx)
-    runs = [Run(copy["head_pre"], norm, P.ink)]
-    if copy["head_italic"]:
-        runs.append(Run(copy["head_italic"], ital, P.ink))
-    return {
-        "head_runs": runs,
-        "deck": copy["deck"],
-        "cells": [
-            {"k": "Remaining", "v": view.remaining_label,
-             "accent": ctx.accent(view.accent_kind)},
-            {"k": "Done by",   "v": view.finish_label},
-        ],
-    }
-
-
-def _co_washer_done(view: ApplianceView, ctx: RenderContext) -> dict:
-    P = ctx.palette
-    norm, ital = _co_lead_runs_normal_italic()
-    copy = flavor.done_copy(view, ctx)
-    return {
-        "head_runs": [Run(copy["head_pre"], norm, P.ink),
-                      Run(copy["head_italic"], ital, P.ink)],
-        "deck": copy["deck"],
-        "cells": [
-            {"k": "Finished", "v": view.finish_label,
-             "accent": ctx.accent(view.accent_kind)},
-            {"k": "Ago",      "v": view.relative_label or "\u2014"},
-        ],
-        "badge": "UNLOAD",
-    }
-
-
-def _co_dryer(view: ApplianceView, ctx: RenderContext) -> dict:
-    P = ctx.palette
-    norm, ital = _co_lead_runs_normal_italic()
-    copy = flavor.pick_appliance_copy(view, ctx)
-    runs = [Run(copy["head_pre"], norm, P.ink)]
-    if copy["head_italic"]:
-        runs.append(Run(copy["head_italic"], ital, P.ink))
-    return {
-        "head_runs": runs,
-        "deck": copy["deck"],
-        "cells": [
-            {"k": "Remaining", "v": view.remaining_label,
-             "accent": ctx.accent(view.accent_kind)},
-            {"k": "Done by",   "v": view.finish_label},
-        ],
-    }
-
-
-def _co_dryer_done(view: ApplianceView, ctx: RenderContext) -> dict:
-    P = ctx.palette
-    norm, ital = _co_lead_runs_normal_italic()
-    copy = flavor.done_copy(view, ctx)
-    return {
-        "head_runs": [Run(copy["head_pre"], norm, P.ink),
-                      Run(copy["head_italic"], ital, P.ink)],
-        "deck": copy["deck"],
-        "cells": [
-            {"k": "Finished", "v": view.finish_label,
-             "accent": ctx.accent(view.accent_kind)},
-            {"k": "Ago",      "v": view.relative_label or "\u2014"},
-        ],
-        "badge": "UNLOAD",
-    }
-
-
-def _co_dishwasher(view: ApplianceView, ctx: RenderContext) -> dict:
-    P = ctx.palette
-    norm, ital = _co_lead_runs_normal_italic()
-    prog = view.progress_pct
-    prog_s = f"{prog}%" if prog is not None else "\u2014"
-    copy = flavor.pick_appliance_copy(view, ctx)
-    runs = [Run(copy["head_pre"], norm, P.ink)]
-    if copy["head_italic"]:
-        runs.append(Run(copy["head_italic"], ital, P.ink))
-    return {
-        "head_runs": runs,
-        "deck": copy["deck"],
-        "cells": [
-            {"k": "Progress", "v": prog_s,
-             "accent": ctx.accent(view.accent_kind)},
-            {"k": "Finish",   "v": view.finish_label},
-        ],
-    }
-
-
-def _co_sauna(view: ApplianceView, ctx: RenderContext) -> dict:
-    P = ctx.palette
-    norm, ital = _co_lead_runs_normal_italic()
-    accent = ctx.accent(view.accent_kind)
-    forecast = view.extras.get("forecast")
-    if forecast:
-        head, tail, deck = flavor.sauna_forecast_copy(view, forecast, ctx, READY_F)
-        ready = forecast["ready_label"] or "\u2014"
-        return {
-            "head_runs": [Run(head, norm, P.ink), Run(tail, ital, accent)],
-            "deck": deck,
-            "cells": [
-                {"k": "Room", "v": fmt_temp(view.extras.get("room_temp")),
-                 "accent": accent},
-                {"k": "Ready" if not forecast["ready_reached"] else "Reached",
-                 "v": ready},
-            ],
-        }
-    return {
-        "head_runs": [Run("Cabin warming to ", norm, P.ink),
-                      Run(f"{fmt_temp(view.target)}.", ital, accent)],
-        "deck": (f"Now {fmt_temp(view.current)} \u00b7 "
-                 f"{view.extras.get('heaters', 0)}/3 elements."),
-        "cells": [
-            {"k": "Cabin",  "v": fmt_temp(view.current), "accent": accent},
-            {"k": "Target", "v": fmt_temp(view.target)},
-        ],
-    }
-
-
-def _co_pool(view: ApplianceView, ctx: RenderContext) -> dict:
-    P = ctx.palette
-    norm, ital = _co_lead_runs_normal_italic()
-    head, tail, _deck = flavor.pool_copy(view, ctx)
-    return {
-        "head_runs": [Run(head, norm, P.ink),
-                      Run(tail, ital, ctx.accent(view.accent_kind))],
-        "deck": (f"Water {fmt_temp(view.current)} \u00b7 "
-                 f"air {fmt_temp(view.extras.get('air_temp'))}."),
-        "cells": [
-            {"k": "Water",  "v": fmt_temp(view.current),
-             "accent": ctx.accent(view.accent_kind)},
-            {"k": "Target", "v": fmt_temp(view.target)},
-        ],
-    }
-
-
-def _co_unknown(view: ApplianceView, ctx: RenderContext) -> dict:
-    P = ctx.palette
-    norm, _ital = _co_lead_runs_normal_italic()
-    return {
-        "head_runs": [Run(view.kind.replace("-", " ").title() + ".",
-                          norm, P.ink)],
-        "deck": None,
-        "cells": [],
-    }
-
-
-_CO_LEAD_DESCRIBERS = {
-    "sauna":        _co_sauna,
-    "washer":       _co_washer,
-    "washer-done":  _co_washer_done,
-    "dryer":        _co_dryer,
-    "dryer-done":   _co_dryer_done,
-    "dishwasher":   _co_dishwasher,
-    "pool":         _co_pool,
-}
-
-
-def _co_lead_descriptor(view: ApplianceView, ctx: RenderContext) -> dict:
-    """Build the co-lead descriptor for `view`. Falls back to a minimal
-    placeholder for any kind not yet wired into ``_CO_LEAD_DESCRIBERS``."""
-    builder = _CO_LEAD_DESCRIBERS.get(view.kind, _co_unknown)
-    return builder(view, ctx)
 
 
 def _draw_no_data_lead(draw, ctx: RenderContext, box: Box) -> None:
@@ -1435,80 +1092,6 @@ def _wrap_line_count(font, text: str, w: int) -> int:
     return lines
 
 
-def _draw_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) -> int:
-    """Dispatch to the per-kind lead drawer via the EDITORIAL_DRAWERS map.
-    Each drawer consumes ``item.view`` (an ApplianceView) so nothing here
-    or downstream calls ``fmt_clock`` against a raw HA timestamp."""
-    drawer = EDITORIAL_LEAD_DRAWERS.get(item.kind, _draw_unknown_lead)
-    return drawer(draw, ctx, ha, item, x0, y, w)
-
-
-def _draw_story_shell(draw, P, x0, y, w, *, kicker, accent, headline_runs,
-                      deck=None, body=None, badge=None) -> int:
-    """Magazine lead: kicker -> 8px -> headline -> 12px -> deck -> 10px -> body.
-
-    Every text block has a hard `max_lines` cap so a long status label or
-    long program string can never push the fact strip off the body box.
-    The headline auto-shrinks to 2 lines max; the deck wraps to 2 max;
-    the body wraps to 4 max.
-    """
-    kfont = fonts.pix_cherry_small(layout.EditorialType.KICKER_PX, bold=True)
-    fm_k = font_metrics(kfont)
-    _draw_diamond_kicker(draw, Box(x0, y, x0 + w, y + 18),
-                         text=kicker, P=P, accent=accent, badge=badge)
-    cur_y = y + fm_k.line_height + 8
-    cur_y = draw_headline(draw, (x0, cur_y, w, 100), headline_runs,
-                          line_height_px=32, align="left",
-                          max_lines=2)
-    if deck:
-        deck_font = fonts.serif(14, italic=True, weight="semibold")
-        cur_y = draw_paragraph(draw, (x0, cur_y + 6, w, 36),
-            deck, font=deck_font, fill=P.muted, line_height_px=18,
-            max_lines=2)
-    if body:
-        body_font = fonts.serif(13)
-        cur_y = draw_paragraph(draw, (x0, cur_y + 6, w, 80),
-            body, font=body_font, fill=P.ink, line_height_px=18,
-            max_lines=4)
-    return cur_y
-
-
-def _draw_thermometer(draw, P, x0, y, w, *, from_v, to_v, now, target,
-                      accent, units="\u00b0", hide_target=False) -> int:
-    if now is None:
-        return y
-    nowf = float(now)
-    pct = lerp_pct(nowf, from_v, to_v)
-    segs = 32
-    fill_count = round(pct * segs)
-    bar_h = 12
-    bar_y1 = y + bar_h
-    draw.rectangle([(x0, y), (x0 + w - 1, bar_y1 - 1)], outline=P.rule, width=1)
-    seg_w = (w - 2) / segs
-    for i in range(segs):
-        sx0 = x0 + 1 + int(i * seg_w)
-        sx1 = x0 + 1 + int((i + 1) * seg_w)
-        if i < fill_count:
-            draw.rectangle([(sx0, y + 1), (sx1 - 1, bar_y1 - 2)], fill=accent)
-        elif i % 4 == 0:
-            cx = (sx0 + sx1) // 2
-            draw.rectangle([(cx, y + 2), (cx, bar_y1 - 3)], fill=P.muted)
-    if not hide_target and target is not None:
-        tpct = lerp_pct(float(target), from_v, to_v)
-        tx = x0 + int(tpct * (w - 2))
-        draw.rectangle([(tx, y - 3), (tx + 1, bar_y1 + 2)], fill=P.ink)
-    lf = fonts.pix_cherry_small(9, bold=True)
-    tracking = em_to_px(9, 0.10)
-    fm = font_metrics(lf)
-    ly = bar_y1 + 4 + fm.ascent
-    draw_tracked_text_bl(draw, (x0, ly), f"{int(from_v)}{units}", lf, P.muted, tracking)
-    mid = f"NOW {int(round(nowf))}{units}"
-    draw_tracked_text_bl_center(draw, (x0 + w // 2, ly), mid, lf, P.ink, tracking)
-    right = f"{int(to_v)}{units}"
-    draw_tracked_text_bl_right(draw, (x0 + w, ly), right, lf, P.muted, tracking)
-    return ly + fm.descent + 2
-
-
 def _draw_fact_strip(draw, P, x0, y, w, cells) -> int:
     """Newspaper-style fact strip with `len(cells)` columns.
 
@@ -1577,266 +1160,32 @@ def _draw_fact_strip(draw, P, x0, y, w, cells) -> int:
     return bottom + 2
 
 
-# ── Lead variants ──────────────────────────────────────────────────────
-
-
-def _hero_font():
-    return fonts.serif(32, weight="bold")
-
-
-def _hero_italic_bold_font():
-    return fonts.serif(32, italic=True, weight="bold")
-
-
-def _draw_sauna_forecast_lead(draw, ctx: RenderContext, view: ApplianceView,
-                              forecast: dict, x0, y, w) -> int:
-    """Heat-up forecast card: when it's ready, both sensors, and the fan plan."""
-    P = ctx.palette
-    accent = ctx.accent(view.accent_kind)
-    head, tail, deck = flavor.sauna_forecast_copy(view, forecast, ctx, READY_F)
-    runs = [Run(head, _hero_font(), P.ink),
-            Run(tail, _hero_italic_bold_font(), accent)]
-    cur_y = _draw_story_shell(draw, P, x0, y, w,
-        kicker=view.eyebrow_kicker, accent=accent,
-        badge="READY" if forecast["ready_reached"] else "LIVE",
-        headline_runs=runs, deck=deck)
-    room = view.extras.get("room_temp")
-    cur_y += 12
-    cur_y = _draw_thermometer(draw, P, x0, cur_y, w,
-        from_v=60, to_v=READY_F, now=room, target=None,
-        accent=accent, hide_target=True)
-    humidity = view.extras.get("room_humidity_pct")
-    # A controller-preset session reports 32°F, which isn't a real target.
-    goal = fmt_temp(view.target) if 104 <= (view.target or 0) <= 212 else "PRESET"
-    if forecast["target_reached"]:
-        target_sub = "REACHED"
-    elif forecast["target_label"]:
-        target_sub = f"IN {forecast['target_in']}"
-    else:
-        target_sub = "ABOVE TARGET"
-    cur_y = _draw_fact_strip(draw, P, x0, cur_y + 6, w, [
-        {"k": "Room", "v": fmt_temp(room), "accent": accent,
-         "sub": None if humidity is None else f"{humidity}% RH"},
-        {"k": "Thermostat", "v": fmt_temp(view.current),
-         "sub": f"GOAL {goal}"},
-        {"k": f"{TARGET_F}\u00b0 at",
-         "v": forecast["target_label"] or "\u2014", "sub": target_sub},
-        {"k": "Fan", "v": forecast["fan_label"], "sub": forecast["fan_note"]},
-    ])
-    return cur_y
-
-
-def _draw_sauna_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) -> int:
-    P = ctx.palette
-    view = item.view
-    forecast = view.extras.get("forecast")
-    if forecast:
-        return _draw_sauna_forecast_lead(draw, ctx, view, forecast, x0, y, w)
-    accent = ctx.accent(view.accent_kind)
-    target = view.target
-    current = view.current
-    remaining = view.extras.get("remaining_deg")
-    runs = [
-        Run("The sauna is ", _hero_font(), P.ink),
-        Run("warming", _hero_italic_bold_font(), accent),
-        Run("\n", _hero_font(), P.ink),
-        Run(f"to {fmt_temp(target)}.", _hero_font(), P.ink),
-    ]
-    if remaining is not None:
-        heaters = view.extras.get("heaters", 0)
-        door = "open" if view.extras.get("door_open") else "closed"
-        deck = (f"Cabin presently {fmt_temp(current)}, with {int(remaining)}\u00b0 "
-                f"left to climb. {heaters} of three elements lit; door {door}.")
-    else:
-        deck = f"Cabin holding at {fmt_temp(current)}."
-    cur_y = _draw_story_shell(draw, P, x0, y, w,
-        kicker=view.eyebrow_kicker, accent=accent,
-        badge="LIVE", headline_runs=runs, deck=deck)
-    cur_y += 12
-    cur_y = _draw_thermometer(draw, P, x0, cur_y, w,
-        from_v=60, to_v=max(float(target or 175), 175),
-        now=current, target=target, accent=accent)
-    cur_y = _draw_fact_strip(draw, P, x0, cur_y + 6, w, [
-        {"k": "Cabin", "v": fmt_temp(current), "accent": accent},
-        {"k": "Target", "v": fmt_temp(target)},
-        {"k": "Elements", "v": f"{view.extras.get('heaters', 0)}/3"},
-        {"k": "Room", "v": fmt_temp(view.extras.get("room_temp")),
-         "sub": (None if view.extras.get("room_humidity_pct") is None
-                 else f"{view.extras['room_humidity_pct']}% RH")},
-    ])
-    return cur_y
-
-
-def _draw_washer_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) -> int:
-    P = ctx.palette
-    view = item.view
-    accent = ctx.accent(view.accent_kind)
-    copy = flavor.pick_appliance_copy(view, ctx)
-    runs = [Run(copy["head_pre"], _hero_font(), P.ink)]
-    if copy["head_italic"]:
-        runs.append(Run(copy["head_italic"], _hero_italic_bold_font(), P.ink))
-    deck = copy["deck"]
-    cur_y = _draw_story_shell(draw, P, x0, y, w,
-        kicker=view.eyebrow_kicker, accent=accent,
-        headline_runs=runs, deck=deck)
-    energy = view.extras.get("energy_kwh_month") or 0.0
-    cur_y = _draw_fact_strip(draw, P, x0, cur_y + 6, w, [
-        {"k": "Remaining", "v": view.remaining_label, "accent": accent},
-        {"k": "Done by", "v": view.finish_label},
-        {"k": "Cycle", "v": f"#{view.extras.get('cycle_no', 0)}"},
-        {"k": "Mo. kWh", "v": f"{float(energy):.2f}"},
-    ])
-    return cur_y
-
-
-def _done_headline(copy: dict, P: Palette) -> list[Run]:
-    """Two explicit lines: the news, then the instruction.
-
-    Each line must fit the column: `draw_headline` drops lines past its limit, so an
-    auto-wrapped first line would cost the instruction its ending.
-    """
-    return [
-        Run(copy["head_pre"], _hero_font(), P.ink),
-        Run("\n", _hero_font(), P.ink),
-        Run(copy["head_italic"].strip(), _hero_italic_bold_font(), P.ink),
-    ]
-
-
-def _draw_washer_done_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) -> int:
-    P = ctx.palette
-    view = item.view
-    accent = ctx.accent(view.accent_kind)
-    copy = flavor.done_copy(view, ctx)
-    return _draw_story_shell(draw, P, x0, y, w,
-        kicker=view.eyebrow_kicker, accent=accent,
-        badge="UNLOAD", headline_runs=_done_headline(copy, P), deck=copy["deck"])
-
-
-_EDITORIAL_DRYER_PHASE_HEADS = {
-    "cooling":      "Cooling down.",
-    "wrinkle_care": "Wrinkle care.",
-    "pause":        "Paused.",
-}
-
-
-def _draw_dryer_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) -> int:
-    P = ctx.palette
-    view = item.view
-    accent = ctx.accent(view.accent_kind)
-    phase = view.extras.get("phase") or "running"
-    copy = flavor.pick_appliance_copy(view, ctx)
-    runs = [Run(copy["head_pre"], _hero_font(), P.ink)]
-    if copy["head_italic"]:
-        runs.append(Run(copy["head_italic"], _hero_italic_bold_font(), P.ink))
-    deck = copy["deck"]
-    cur_y = _draw_story_shell(draw, P, x0, y, w,
-        kicker=view.eyebrow_kicker, accent=accent,
-        headline_runs=runs, deck=deck)
-    cur_y = _draw_fact_strip(draw, P, x0, cur_y + 6, w, [
-        {"k": "Remaining", "v": view.remaining_label, "accent": accent},
-        {"k": "Done by", "v": view.finish_label},
-        {"k": "Phase", "v": title_case(phase.replace("_", " "))},
-    ])
-    return cur_y
-
-
-def _draw_dryer_done_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) -> int:
-    P = ctx.palette
-    view = item.view
-    accent = ctx.accent(view.accent_kind)
-    copy = flavor.done_copy(view, ctx)
-    return _draw_story_shell(draw, P, x0, y, w,
-        kicker=view.eyebrow_kicker, accent=accent,
-        badge="UNLOAD", headline_runs=_done_headline(copy, P), deck=copy["deck"])
-
-
-def _draw_dishwasher_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) -> int:
-    P = ctx.palette
-    view = item.view
-    accent = ctx.accent(view.accent_kind)
-    prog = view.progress_pct
-    prog_pct = f"{prog}%" if prog is not None else "\u2014"
-    copy = flavor.pick_appliance_copy(view, ctx)
-    runs = [Run(copy["head_pre"], _hero_font(), P.ink)]
-    if copy["head_italic"]:
-        runs.append(Run(copy["head_italic"], _hero_italic_bold_font(), P.ink))
-    deck = copy["deck"]
-    cur_y = _draw_story_shell(draw, P, x0, y, w,
-        kicker=view.eyebrow_kicker, accent=accent,
-        headline_runs=runs, deck=deck)
-    if prog is not None:
-        cur_y += 12
-        cur_y = _draw_thermometer(draw, P, x0, cur_y, w,
-            from_v=0, to_v=100, now=prog, target=None,
-            accent=accent, units="%", hide_target=True)
-    door = view.extras.get("door_state") or ""
-    door_label = "Closed" if door == "closed" else title_case(door)
-    cur_y = _draw_fact_strip(draw, P, x0, cur_y + 6, w, [
-        {"k": "Progress", "v": prog_pct, "accent": accent},
-        {"k": "Finish", "v": view.finish_label},
-        {"k": "Door", "v": door_label or "\u2014"},
-    ])
-    return cur_y
-
-
-def _draw_pool_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) -> int:
-    P = ctx.palette
-    view = item.view
-    accent = ctx.accent(view.accent_kind)
-    target = view.target
-    current = view.current
-    head, tail, deck = flavor.pool_copy(view, ctx)
-    runs = [Run(head, _hero_font(), P.ink),
-            Run(tail, fonts.serif(32, italic=True, weight="bold"), accent)]
-    air = view.extras.get("air_temp")
-    cur_y = _draw_story_shell(draw, P, x0, y, w,
-        kicker=view.eyebrow_kicker, accent=accent,
-        headline_runs=runs, deck=deck)
-    cur_y += 12
-    cur_y = _draw_thermometer(draw, P, x0, cur_y, w,
-        from_v=50, to_v=max(float(target or 90), 90),
-        now=current, target=target, accent=accent)
-    cur_y = _draw_fact_strip(draw, P, x0, cur_y + 6, w, [
-        {"k": "Water", "v": fmt_temp(current), "accent": accent},
-        {"k": "Target", "v": fmt_temp(target)},
-        {"k": "Air", "v": fmt_temp(air)},
-        {"k": "Pump", "v": "On" if view.extras.get("pump_running") else "Off"},
-    ])
-    return cur_y
-
-
-def _draw_unknown_lead(draw, ctx: RenderContext, ha, item: ActiveAppliance, x0, y, w) -> int:
-    """Fallback for an appliance the registry knows about but Editorial
-    has no drawer for. Renders a minimal kicker so layout doesn't break."""
-    view = item.view
-    accent = ctx.accent(view.accent_kind)
-    return _draw_story_shell(draw, ctx.palette, x0, y, w,
-        kicker=view.eyebrow_kicker, accent=accent,
-        headline_runs=[Run(view.kind.replace("-", " ").title() + ".",
-                           _hero_font(), ctx.palette.ink)])
-
-
-# Per-design dispatch table. Adding a new appliance = add a row here +
-# add the corresponding spec to ``appliances.APPLIANCES`` + add a brief
-# variant below in ``EDITORIAL_BRIEFS`` if it can also appear as "also
-# active".
-EDITORIAL_LEAD_DRAWERS = {
-    "sauna":        _draw_sauna_lead,
-    "washer":       _draw_washer_lead,
-    "washer-done":  _draw_washer_done_lead,
-    "dryer":        _draw_dryer_lead,
-    "dryer-done":   _draw_dryer_done_lead,
-    "dishwasher":   _draw_dishwasher_lead,
-    "pool":         _draw_pool_lead,
-}
-
-
 # ── Feature card (the only thing happening in the house) ───────────────
 
 
 @dataclass(frozen=True)
+class _Gauge:
+    """The meter on a shared card: a reading at left, one at right, and a bar.
+
+    The bar is solid to ``pct`` and dithered for what is still to come; with no
+    ``pct`` there is no bar, and a pair draws the phase track from ``stations``
+    instead. ``ticks`` label the bar's ends (or quarters) where a pair has room.
+    """
+    value: str
+    label: str
+    right_value: str = ""
+    right_label: str = ""
+    pct: Optional[float] = None
+    segments: tuple[meters.BarSegment, ...] = ()
+    ticks: tuple[tuple[int, str], ...] = ()
+    stations: tuple[str, ...] = ()
+    station: Optional[int] = None
+    complete: bool = False
+
+
+@dataclass(frozen=True)
 class _Feature:
-    """What one appliance contributes to the single-activity card."""
+    """What one appliance contributes to the single-activity card and shared cards."""
     kicker: str
     head_pre: str
     head_italic: str
@@ -1844,6 +1193,7 @@ class _Feature:
     # (img, draw, y, w) -> y below the meter.
     meter: Callable[[Image.Image, Any, int, int], int]
     cells: list[dict]
+    gauge: _Gauge
     icon_phase: str = ""
     badge: Optional[str] = None
     italic_accent: bool = False
@@ -1914,6 +1264,17 @@ def _laundry_meter(view: ApplianceView, accent, *, stations, current: Optional[i
     return meter
 
 
+def _laundry_gauge(view: ApplianceView, *, stations, current: Optional[int]) -> _Gauge:
+    cycle = view.extras.get("cycle")
+    return _Gauge(
+        value=view.remaining_label, label=f"LEFT · {cycle['pct']}%" if cycle else "LEFT",
+        right_value=view.finish_label, right_label="DONE BY",
+        pct=cycle["pct"] if cycle else None,
+        segments=tuple(meters.BarSegment(m) for _, m in cycle["segments"]) if cycle else (),
+        stations=stations, station=current,
+    )
+
+
 def _laundry_cells(view: ApplianceView, last: list[dict]) -> list[dict]:
     cycle = view.extras.get("cycle")
     if not cycle:
@@ -1939,6 +1300,7 @@ def _feature_washer(view: ApplianceView, ctx: RenderContext, accent) -> _Feature
             {"k": "Cycle", "v": f"#{view.extras.get('cycle_no', 0)}"},
             {"k": "Mo. kWh", "v": f"{float(energy):.1f}"},
         ]),
+        gauge=_laundry_gauge(view, stations=_WASHER_STATIONS, current=current),
         icon_phase=("pause" if "paus" in phase
                     else {1: "rinse", 2: "spin"}.get(current, "wash")),
     )
@@ -1959,6 +1321,7 @@ def _feature_dryer(view: ApplianceView, ctx: RenderContext, accent) -> _Feature:
         cells=_laundry_cells(view, [
             {"k": "Phase", "v": view.status_label or title_case(phase.replace("_", " "))},
         ]),
+        gauge=_laundry_gauge(view, stations=_DRYER_STATIONS, current=current),
         icon_phase=phase,
     )
 
@@ -1985,6 +1348,9 @@ def _feature_done(view: ApplianceView, ctx: RenderContext, accent, *,
     return _Feature(
         kicker=view.eyebrow_kicker, head_pre=copy["head_pre"], head_italic=copy["head_italic"],
         deck=copy["deck"], meter=meter, cells=cells, badge="UNLOAD",
+        gauge=_Gauge(value=_waited_label(view, ctx), label="WAITING",
+                     right_value=view.finish_label, right_label="FINISHED",
+                     stations=stations, complete=True),
     )
 
 
@@ -2027,6 +1393,9 @@ def _feature_dishwasher(view: ApplianceView, ctx: RenderContext, accent) -> _Fea
             {"k": "Left", "v": view.remaining_label},
             {"k": "Door", "v": "Closed" if door == "closed" else (title_case(door) or "—")},
         ],
+        gauge=_Gauge(value="—" if prog is None else f"{prog}%", label="DONE",
+                     right_value=view.finish_label, right_label="FINISHES", pct=prog,
+                     ticks=((0, "0"), (25, "25"), (50, "50"), (75, "75"), (100, "100"))),
     )
 
 
@@ -2054,6 +1423,8 @@ def _feature_sauna(view: ApplianceView, ctx: RenderContext, accent) -> _Feature:
                                            now=float(current), target=target, accent=accent,
                                            step=10)
 
+        # A controller-preset session reports 32°F, which isn't a real target.
+        real_target = target if 104 <= (target or 0) <= 212 else None
         return _Feature(
             kicker=view.eyebrow_kicker, head_pre="The sauna is ", head_italic="warming",
             deck=deck, meter=plain_meter, badge="LIVE", italic_accent=True, icon_phase=icon_phase,
@@ -2063,6 +1434,13 @@ def _feature_sauna(view: ApplianceView, ctx: RenderContext, accent) -> _Feature:
                 {"k": "Elements", "v": f"{heaters}/3"},
                 {"k": "Room", "v": fmt_temp(room), "sub": rh},
             ],
+            gauge=_Gauge(
+                value=fmt_temp(current), label="CABIN",
+                right_value=(fmt_temp(real_target) if real_target
+                             else "—" if target is None else "Preset"),
+                right_label="TARGET", pct=_share(current, 60, real_target),
+                ticks=((0, "60°"), (100, fmt_temp(real_target))) if real_target else (),
+            ),
         )
 
     head, tail, deck = flavor.sauna_forecast_copy(view, forecast, ctx, READY_F)
@@ -2078,13 +1456,20 @@ def _feature_sauna(view: ApplianceView, ctx: RenderContext, accent) -> _Feature:
         )
 
     # A controller-preset session reports 32°F, which isn't a real target.
-    goal = fmt_temp(view.target) if 104 <= (view.target or 0) <= 212 else "PRESET"
+    goal = (fmt_temp(view.target) if 104 <= (view.target or 0) <= 212
+            else "—" if view.target is None else "PRESET")
     if forecast["target_reached"]:
         target_sub = "REACHED"
     elif forecast["target_label"]:
         target_sub = f"IN {forecast['target_in']}"
     else:
         target_sub = "ABOVE TARGET"
+    # A shared card may have no room for the deck, so a session ending first says so here.
+    if forecast["ends_before_ready"]:
+        right_label, right_value = "ENDS", forecast["ends_before_ready"]
+    else:
+        right_label = "FAN RAN" if forecast["fan_state"] == "done" else "FAN"
+        right_value = forecast["fan_label"]
     return _Feature(
         kicker=view.eyebrow_kicker, head_pre=head, head_italic=tail, deck=deck,
         meter=curve_meter, badge="READY" if forecast["ready_reached"] else "LIVE",
@@ -2096,6 +1481,9 @@ def _feature_sauna(view: ApplianceView, ctx: RenderContext, accent) -> _Feature:
              "sub": target_sub},
             {"k": "Fan", "v": forecast["fan_label"], "sub": forecast["fan_note"]},
         ],
+        gauge=_Gauge(value=fmt_temp(room), label="ROOM", right_value=right_value,
+                     right_label=right_label, pct=_share(room, 60, READY_F),
+                     ticks=((0, "60°"), (100, f"READY {READY_F}°"))),
     )
 
 
@@ -2119,6 +1507,7 @@ def _feature_pool(view: ApplianceView, ctx: RenderContext, accent) -> _Feature:
             marker=air, marker_label="AIR",
         )
 
+    low = 50 if current is None else min(50, int(current) - int(current) % 5)
     return _Feature(
         kicker=view.eyebrow_kicker, head_pre=head, head_italic=tail, deck=deck, meter=meter,
         italic_accent=True,
@@ -2127,6 +1516,9 @@ def _feature_pool(view: ApplianceView, ctx: RenderContext, accent) -> _Feature:
             {"k": "Pump", "v": "On" if view.extras.get("pump_running") else "Off"},
             {"k": "Freeze guard", "v": "Armed" if view.extras.get("freeze_protect") else "Off"},
         ],
+        gauge=_Gauge(value=fmt_temp(current), label="WATER", right_value=fmt_temp(target),
+                     right_label="GOAL", pct=_share(current, low, target),
+                     ticks=((0, f"{low}°"), (100, fmt_temp(target)))),
     )
 
 
@@ -2141,22 +1533,159 @@ _FEATURE_BUILDERS = {
 }
 
 
+def _share(value, low: float, high) -> Optional[float]:
+    """How far ``value`` is from ``low`` to ``high``, in percent, or None if unknown."""
+    if value is None or high is None or high <= low:
+        return None
+    return 100 * lerp_pct(float(value), low, float(high))
+
+
+# ── Shared cards (two or three things at once) ─────────────────────────
+
+# Headline sizes: the largest that fits one line, else the largest that fits two.
+_PAIR_HEAD_SIZES = ((26, 24, 22), (24, 22, 20))
+_ROW_HEAD_SIZES = ((22, 21, 20, 19, 18), (18,))
+_PAIR_RULE_H = 14
+_ROW_GAP = 12
+_DECK_PX = 13
+_DECK_LEADING = 17
+
+
+def _tile_headline(feature: _Feature, ink, accent, w: int, sizes) -> tuple[list[Run], int, int]:
+    """The headline runs, their line height, and how many lines they take."""
+    def runs_at(size: int) -> list[Run]:
+        runs = [Run(feature.head_pre, fonts.serif(size, weight="bold"), ink)]
+        if feature.head_italic:
+            runs.append(Run(feature.head_italic, fonts.serif(size, italic=True, weight="bold"),
+                            accent if feature.italic_accent else ink))
+        return runs
+
+    one_line, two_lines = sizes
+    for lines, candidates in ((1, one_line), (2, two_lines)):
+        for size in candidates:
+            runs = runs_at(size)
+            if len(_wrap_runs_into_lines(runs, w)) <= lines:
+                return runs, size + 3, lines
+    return runs, two_lines[-1] + 3, 2
+
+
+def _draw_gauge(img: Image.Image, draw, P: Palette, gauge: _Gauge, x0: int, y: int, w: int, *,
+                accent, bottom: Optional[int] = None) -> int:
+    """Readings over a bar. With a ``bottom`` (half of a pair), the readings are larger,
+    the bar's ends are labelled, and the phase track follows wherever it fits."""
+    roomy = bottom is not None
+    y = meters.draw_reading_line(draw, P, x0, y, w, value=gauge.value, value_label=gauge.label,
+                                 accent=accent, right_value=gauge.right_value,
+                                 right_label=gauge.right_label, value_px=24 if roomy else 20,
+                                 right_px=17 if roomy else 15)
+    if gauge.pct is not None:
+        ticks = tuple(pct for pct, _ in gauge.ticks) if roomy else ()
+        y = meters.draw_progress_bar(img, draw, P, x0, y + 4, w, pct=gauge.pct, accent=accent,
+                                     segments=gauge.segments, ticks=ticks, h=12 if roomy else 10)
+        if ticks:
+            y = meters.draw_tick_labels(draw, P, x0, y + 2, w, gauge.ticks)
+    if roomy and gauge.stations and y + 3 + meters.phase_track_height() <= bottom:
+        y = meters.draw_phase_track(img, draw, P, x0, y + 3, w, stations=gauge.stations,
+                                    current=gauge.station, accent=accent,
+                                    complete=gauge.complete)
+    return y
+
+
+def _draw_tile(img: Image.Image, draw, ctx: RenderContext, item: ActiveAppliance,
+               x0: int, y0: int, w: int, h: int, *, pair: bool) -> int:
+    """One of several activities, ``h`` tall: its icon, kicker, headline, and a gauge.
+
+    Half of a pair adds the deck where it fits beside the icon and runs the gauge
+    full width beneath; a row of three keeps everything beside the icon.
+    """
+    P = ctx.palette
+    view = item.view
+    accent = ctx.accent(view.accent_kind)
+    feature = _FEATURE_BUILDERS[item.kind](view, ctx, accent)
+    icons.draw_icon(img, x0, y0, kind=item.kind, phase=feature.icon_phase, ink=P.ink, fill=accent)
+
+    text_x = x0 + icons.ICON_SIZE + _ICON_GAP
+    text_w = x0 + w - text_x
+    kfont = fonts.pix_cherry_small(layout.EditorialType.KICKER_PX, bold=True)
+    _draw_diamond_kicker(draw, Box(text_x, y0, x0 + w, y0 + 18), text=feature.kicker, P=P,
+                         accent=accent, badge=feature.badge)
+    runs, line_height, lines = _tile_headline(
+        feature, P.ink, accent, text_w, _PAIR_HEAD_SIZES if pair else _ROW_HEAD_SIZES)
+    y = draw_headline(draw, (text_x, y0 + font_metrics(kfont).line_height + 5, text_w,
+                             line_height * lines), runs, line_height_px=line_height,
+                      max_lines=lines)
+    if not pair:
+        return _draw_gauge(img, draw, P, feature.gauge, text_x, y + 5, text_w, accent=accent)
+    # The deck only where all of it fits beside the icon: a cut sentence says less.
+    deck_font = fonts.serif(_DECK_PX, italic=True, weight="semibold")
+    room = (y0 + icons.ICON_SIZE + 4 - (y + 3)) // _DECK_LEADING
+    deck_lines = _wrap_line_count(deck_font, feature.deck, text_w)
+    if feature.deck and deck_lines <= room:
+        y = draw_paragraph(draw, (text_x, y + 3, text_w, deck_lines * _DECK_LEADING),
+                           feature.deck, font=deck_font, fill=P.muted,
+                           line_height_px=_DECK_LEADING, max_lines=deck_lines)
+    # The readings' ascent already clears the icon, so the gauge starts at its foot.
+    y = max(y, y0 + icons.ICON_SIZE)
+    return _draw_gauge(img, draw, P, feature.gauge, x0, y, w, accent=accent, bottom=y0 + h)
+
+
+def _draw_shared(img: Image.Image, draw, ctx: RenderContext, ha, active: list,
+                 box: Box) -> None:
+    """Two or more activities share the column as equal cards, most urgent first.
+
+    Two take half the column each. Three take a row each. Past three, the first
+    two keep rows and the third row lists the rest as briefs.
+    """
+    P = ctx.palette
+    if len(active) == 2:
+        half = (box.h - _PAIR_RULE_H) // 2
+        _draw_tile(img, draw, ctx, active[0], box.x0, box.y0, box.w, half, pair=True)
+        rule_y = box.y0 + half + _PAIR_RULE_H // 2 - 2
+        double_hr(draw, box.x0, box.x1, rule_y, fill=P.rule, gap=2)
+        _draw_tile(img, draw, ctx, active[1], box.x0, box.y1 - half, box.w, half, pair=True)
+        return
+
+    pitch = (box.h + _ROW_GAP) // 3
+    tiles = active if len(active) == 3 else active[:2]
+    for i, item in enumerate(tiles):
+        top = box.y0 + i * pitch
+        if i:
+            hairline_hr(draw, box.x0, box.x1, top - _ROW_GAP // 2 - 1, fill=P.rule)
+        _draw_tile(img, draw, ctx, item, box.x0, top, box.w, pitch - _ROW_GAP, pair=False)
+    briefs = active[len(tiles):]
+    if not briefs:
+        return
+    top = box.y0 + 2 * pitch
+    hairline_hr(draw, box.x0, box.x1, top - _ROW_GAP // 2 - 1, fill=P.rule)
+    kfont = fonts.pix_cherry_small(layout.EditorialType.KICKER_PX, bold=True)
+    kicker_h = font_metrics(kfont).line_height + 8
+    fits = max(1, (box.y1 - top - kicker_h) // _BRIEF_ROW_H)
+    shown, hidden = briefs[:fits], len(briefs) - min(fits, len(briefs))
+    _draw_kicker(draw, Box(box.x0, top, box.x1, top + kicker_h),
+                 text="Also Active" + (f"  ·  +{hidden} more" if hidden else ""), P=P)
+    y = top + kicker_h
+    for idx, item in enumerate(shown):
+        y = _draw_brief(draw, ctx, ha, box.x0, y, box.w, item, last=idx == len(shown) - 1)
+
+
 # ── Brief + Colophon ───────────────────────────────────────────────────
+
+
+_BRIEF_ROW_H = 40
 
 
 def _draw_brief(draw, ctx: RenderContext, ha, x0, y, w, item: ActiveAppliance, *, last) -> int:
     """One-row "also active" entry. Reads the appliance view rather than
     the raw HA dict so timestamps stay in the user's zone.
 
-    The row is intentionally a fixed 40 px so the lead column can
-    pre-compute how many briefs fit below the hero without re-measuring
-    after every draw.
+    The row is intentionally a fixed height so the lead column can
+    pre-compute how many briefs fit without re-measuring after every draw.
     """
     P = ctx.palette
     view = item.view
     builder = EDITORIAL_BRIEFS.get(view.kind, _brief_unknown)
     title, sub, value = builder(view)
-    row_h = 40
+    row_h = _BRIEF_ROW_H
     diamond(draw, x0 + 3, y + 10, 6, ctx.accent(view.accent_kind))
     title_font = fonts.serif(14, weight="semibold")
     sub_font = fonts.serif(12, italic=True, weight="semibold")

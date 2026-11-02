@@ -33,6 +33,7 @@ RGB = Tuple[int, int, int]
 # Sixteenths of ink for "still to come": sparse enough that solid ink stands out.
 _FORECAST_TONE = 2 * 255 // 16
 _LABEL_PX = 9
+_TRACK_R = 6
 
 
 def _label_font():
@@ -62,6 +63,40 @@ def draw_meter_stats(draw: ImageDraw.ImageDraw, P: Palette, x0: int, y: int, w: 
             right_label, label, P.ink, _tracking(),
         )
     return baseline + fm.descent
+
+
+def draw_reading_line(draw: ImageDraw.ImageDraw, P: Palette, x0: int, y: int, w: int, *,
+                      value: str, value_label: str, accent: RGB, right_value: str = "",
+                      right_label: str = "", value_px: int = 20, right_px: int = 15) -> int:
+    """A compact pair of readings on one baseline: value and label, then label and value.
+
+    A label that would run into the other reading is dropped, the right one first.
+    """
+    big = fonts.serif(value_px, weight="bold")
+    small = fonts.serif(right_px, weight="bold")
+    label = _label_font()
+    fm = font_metrics(big)
+    baseline = y + fm.ascent
+    draw_text_bl(draw, (x0, baseline), value, big, accent)
+    left = x0 + text_width(big, value)
+    right = x0 + w - (text_width(small, right_value) if right_value else 0)
+    if right_value:
+        draw_text_bl_right(draw, (x0 + w, baseline), right_value, small, P.ink)
+    value_label_w = tracked_width(label, value_label, _tracking()) if value_label else 0
+    right_label_w = tracked_width(label, right_label, _tracking()) if right_label else 0
+    if right_label and left + 5 + value_label_w + 12 + right_label_w + 5 <= right:
+        draw_tracked_text_bl_right(draw, (right - 5, baseline), right_label, label, P.ink,
+                                   _tracking())
+        right -= right_label_w + 5
+    if value_label and left + 5 + value_label_w + 12 <= right:
+        draw_tracked_text_bl(draw, (left + 5, baseline), value_label, label, P.ink, _tracking())
+    return baseline + fm.descent
+
+
+def phase_track_height() -> int:
+    """How tall ``draw_phase_track`` draws, so a caller can check it has the room."""
+    fm = font_metrics(_label_font())
+    return 3 + 2 * _TRACK_R + 6 + fm.ascent + fm.descent + 3
 
 
 @dataclass(frozen=True)
@@ -130,7 +165,7 @@ def draw_phase_track(img: Image.Image, draw: ImageDraw.ImageDraw, P: Palette,
     The stretch after the current station fades out, since how far along it is
     isn't reported. With ``current`` None (a pause, say) nothing is claimed as done.
     """
-    r = 6
+    r = _TRACK_R
     n = len(stations)
     pad = r + 10
     xs = [x0 + pad + round(i * (w - 2 * pad) / max(1, n - 1)) for i in range(n)]

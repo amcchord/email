@@ -6,13 +6,15 @@ import pytest
 from PIL import Image, ImageDraw
 
 from backend.services.eink import ha_client as hc
-from backend.services.eink.pillow import editorial, flavor, fonts, layout, render_eink_image
+from backend.services.eink.pillow import editorial, flavor, fonts, icons, layout, render_eink_image
 from backend.services.eink.pillow.appliances import pick_active
 from backend.services.eink.pillow.draw import (
     Run,
     _wrap_runs_into_lines,
     draw_paragraph,
+    em_to_px,
     text_width,
+    tracked_width,
 )
 from backend.services.eink.pillow.palette import get_palette
 from backend.services.eink.pillow.render_ctx import build_render_context
@@ -164,12 +166,26 @@ def test_window_chip_says_what_it_means(monkeypatch, count, label):
     assert label in spy.drawn
 
 
+# Every card sets its headline beside the appliance icon.
+BESIDE_ICON = COLUMN - icons.ICON_SIZE - editorial._ICON_GAP
+# The smallest headline each card falls back to: the single card, a pair, a row of three.
+FALLBACK_SIZES = (editorial._FEATURE_HEAD_SIZES[-1], editorial._PAIR_HEAD_SIZES[1][-1],
+                  editorial._ROW_HEAD_SIZES[1][-1])
+
+
+def _fits_two_lines(head_pre: str, head_italic: str, size: int) -> bool:
+    runs = [Run(head_pre, fonts.serif(size, weight="bold"), P.ink),
+            Run(head_italic, fonts.serif(size, italic=True, weight="bold"), P.ink)]
+    return len(_wrap_runs_into_lines(runs, BESIDE_ICON)) <= 2
+
+
+@pytest.mark.parametrize("size", FALLBACK_SIZES)
 @pytest.mark.parametrize("head", [
     head for tiers in (flavor._WASHER_DONE, flavor._DRYER_DONE) for _, pool in tiers for head in pool
 ])
-def test_finished_cycle_headlines_fit_their_two_lines(head):
-    copy = {"head_pre": head[0], "head_italic": head[1]}
-    assert len(_wrap_runs_into_lines(editorial._done_headline(copy, P), COLUMN)) == 2
+def test_finished_cycle_headlines_keep_their_instruction(head, size):
+    """A cut headline would lose its ending, which is the instruction."""
+    assert _fits_two_lines(head[0], head[1], size)
 
 
 def test_every_appliance_headline_fits_its_two_lines():
@@ -180,16 +196,30 @@ def test_every_appliance_headline_fits_its_two_lines():
     for table in tables:
         for variants in table.values():
             for variant in variants:
-                for size in (32, 22):
-                    upright = fonts.serif(size, weight="bold")
-                    italic = fonts.serif(size, italic=True, weight="bold")
-                    runs = [
-                        Run(flavor._safe_format(variant.head_pre, fields) + " ", upright, P.ink),
-                        Run(flavor._safe_format(variant.head_italic, fields), italic, P.ink),
-                    ]
-                    assert len(_wrap_runs_into_lines(runs, COLUMN)) <= 2, variant
+                for size in FALLBACK_SIZES:
+                    pre = flavor._safe_format(variant.head_pre, fields) + " "
+                    italic = flavor._safe_format(variant.head_italic, fields)
+                    assert _fits_two_lines(pre, italic, size), variant
                     checked += 1
     assert checked > 100
+
+
+def test_kicker_drops_whole_words_before_it_reaches_the_badge(monkeypatch):
+    drawn = []
+    monkeypatch.setattr(editorial, "draw_tracked_text_bl",
+                        lambda draw, xy, text, *args: drawn.append(text))
+    img = Image.new("RGB", (400, 30), P.bg)
+    editorial._draw_diamond_kicker(ImageDraw.Draw(img), editorial.Box(0, 0, BESIDE_ICON, 18),
+                                   text="Laundry · prerinse extended with steam", P=P,
+                                   accent=P.ink, badge="UNLOAD")
+    kicker, badge = drawn
+    full = "LAUNDRY · PRERINSE EXTENDED WITH STEAM"
+    assert badge == "UNLOAD"
+    assert full.startswith(kicker + " ") and not kicker.endswith("·")
+    font = fonts.pix_cherry_small(layout.EditorialType.KICKER_PX, bold=True)
+    tracking = em_to_px(layout.EditorialType.KICKER_PX, layout.EditorialType.KICKER_TRACKING_EM)
+    badge_w = tracked_width(font, "UNLOAD", tracking) + 10
+    assert 14 + tracked_width(font, kicker, tracking) <= BESIDE_ICON - badge_w - 8
 
 
 class RecordingDraw:

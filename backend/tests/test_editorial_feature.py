@@ -6,12 +6,12 @@ from pathlib import Path
 
 import httpx
 import pytest
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 
 from backend.services.eink import ha_client as hc
 from backend.services.eink import sauna_forecast as sf
 from backend.services.eink.pillow import editorial, flavor, fonts, icons, meters
-from backend.services.eink.pillow.appliances import pick_active
+from backend.services.eink.pillow.appliances import APPLIANCES, pick_active
 from backend.services.eink.pillow.draw import Run, _wrap_runs_into_lines, text_width
 from backend.services.eink.pillow.ha_view import build_appliance_view
 from backend.services.eink.pillow.layout import EDITORIAL
@@ -120,6 +120,119 @@ def test_only_a_lone_activity_gets_the_feature_card(monkeypatch):
     three = {**_shape(SHAPES["washer"]), **_shape(SHAPES["dishwasher"]), **_shape(SHAPES["sauna"])}
     editorial._draw_lead_column(img, draw, ctx, three, pick_active(three, ctx), box)
     assert calls == [1]
+
+
+# ── Shared cards ──────────────────────────────────────────────────────
+
+BOX = EDITORIAL.body_lead.inset(left=18, right=18)
+PAIR_H = (BOX.h - editorial._PAIR_RULE_H) // 2
+ROW_H = (BOX.h + editorial._ROW_GAP) // 3 - editorial._ROW_GAP
+
+
+def test_every_registered_appliance_has_a_card_and_a_brief():
+    assert {spec.kind for spec in APPLIANCES} == set(editorial._FEATURE_BUILDERS)
+    assert set(editorial.EDITORIAL_BRIEFS) == set(editorial._FEATURE_BUILDERS)
+
+
+@pytest.mark.parametrize("name", SHAPES)
+@pytest.mark.parametrize("pair", [True, False], ids=["pair", "row"])
+@pytest.mark.parametrize("palette", ["bw", "six"])
+def test_every_shared_card_fits_its_share_of_the_column(name, pair, palette):
+    pal = get_palette("editorial", palette)
+    item = pick_active(_shape(SHAPES[name]), ctx_at(palette=pal))[0]
+    h = PAIR_H if pair else ROW_H
+    for slot in range(24):
+        ctx = ctx_at(NOW + timedelta(minutes=slot * flavor.ROTATION_MINUTES), pal)
+        img = Image.new("RGB", (BOX.w, h * 2), pal.bg)
+        y = editorial._draw_tile(img, ImageDraw.Draw(img), ctx, item, 0, 0, BOX.w, h, pair=pair)
+        ink = ImageChops.difference(img, Image.new("RGB", img.size, pal.bg)).getbbox()
+        assert y <= h and ink[3] <= h, (name, slot, y, ink)
+
+
+@pytest.mark.parametrize("name", SHAPES)
+def test_shared_card_headlines_are_never_cut(name):
+    item = pick_active(_shape(SHAPES[name]), ctx_at())[0]
+    for slot in range(24):
+        ctx = ctx_at(NOW + timedelta(minutes=slot * flavor.ROTATION_MINUTES))
+        feature = editorial._FEATURE_BUILDERS[item.kind](item.view, ctx, P.ink)
+        for sizes in (editorial._PAIR_HEAD_SIZES, editorial._ROW_HEAD_SIZES):
+            runs, _, lines = editorial._tile_headline(feature, P.ink, P.ink, BESIDE_ICON, sizes)
+            assert len(_wrap_runs_into_lines(runs, BESIDE_ICON)) <= lines, (name, slot)
+
+
+def _lay_out(monkeypatch, *names):
+    """Where the shared column puts each card, and what it lists as briefs."""
+    tiles, briefs, kickers = [], [], []
+    monkeypatch.setattr(editorial, "_draw_tile", lambda img, draw, ctx, item, x0, y0, w, h, *,
+                        pair: tiles.append((item.kind, y0 - BOX.y0, h, pair)))
+    monkeypatch.setattr(editorial, "_draw_brief", lambda draw, ctx, ha, x0, y, w, item, *,
+                        last: briefs.append(item.kind) or y + editorial._BRIEF_ROW_H)
+    monkeypatch.setattr(editorial, "_draw_kicker", lambda draw, box, *, text, P: kickers.append(text))
+    ha = {k: v for name in names for k, v in _shape(SHAPES[name]).items()}
+    img = Image.new("RGB", (800, 480), P.bg)
+    ctx = ctx_at()
+    editorial._draw_lead_column(img, ImageDraw.Draw(img), ctx, ha, pick_active(ha, ctx), BOX)
+    return tiles, briefs, kickers
+
+
+def test_two_activities_split_the_column(monkeypatch):
+    tiles, briefs, _ = _lay_out(monkeypatch, "washer", "dishwasher")
+    assert tiles == [("washer", 0, PAIR_H, True), ("dishwasher", BOX.h - PAIR_H, PAIR_H, True)]
+    assert briefs == []
+
+
+def test_three_activities_take_a_row_each_most_urgent_first(monkeypatch):
+    tiles, briefs, _ = _lay_out(monkeypatch, "washer", "dishwasher", "sauna")
+    pitch = ROW_H + editorial._ROW_GAP
+    assert tiles == [("sauna", 0, ROW_H, False), ("washer", pitch, ROW_H, False),
+                     ("dishwasher", 2 * pitch, ROW_H, False)]
+    assert briefs == []
+
+
+def test_past_three_the_last_row_lists_the_rest_and_counts_any_left_off(monkeypatch):
+    tiles, briefs, kickers = _lay_out(monkeypatch, "sauna", "washer", "dryer", "dishwasher", "pool")
+    assert [kind for kind, *_ in tiles] == ["sauna", "washer"]
+    assert briefs == ["dryer", "dishwasher"]
+    assert kickers == ["Also Active  ·  +1 more"]
+
+
+def _sauna_card(**attributes):
+    sample = copy.deepcopy(SAUNA_SAMPLES["heating"])
+    sample["attributes"].update(attributes)
+    ha = _shape({"sauna": dict(_sauna(), forecast=sf.from_sensor(sample, [], T))})
+    view = pick_active(ha, ctx_at())[0].view
+    return editorial._FEATURE_BUILDERS["sauna"](view, ctx_at(), P.ink).gauge, view.extras["forecast"]
+
+
+def test_sauna_gauge_measures_the_room_and_names_the_fan():
+    gauge, forecast = _sauna_card()
+    assert (gauge.value, gauge.label) == ("91°", "ROOM")
+    assert (gauge.right_label, gauge.right_value) == ("FAN", forecast["fan_label"])
+    assert gauge.pct == pytest.approx(100 * (91 - 60) / (sf.READY_F - 60))
+
+
+def test_sauna_gauge_says_when_the_fan_ran_or_the_session_ends_first():
+    gauge, forecast = _sauna_card(fan_state="done", fan_at=iso(-10), fan_in_minutes=None)
+    assert (gauge.right_label, gauge.right_value) == ("FAN RAN", forecast["fan_label"])
+    gauge, forecast = _sauna_card(session_ends_before_ready_at=iso(30))
+    assert (gauge.right_label, gauge.right_value) == ("ENDS", forecast["ends_before_ready"])
+
+
+@pytest.mark.parametrize(("target", "shown"), [(32, "Preset"), (None, "—")])
+def test_a_preset_or_unknown_sauna_target_gets_no_bar(target, shown):
+    ha = _shape({"sauna": dict(SHAPES["sauna without forecast"]["sauna"], target=target)})
+    view = pick_active(ha, ctx_at())[0].view
+    gauge = editorial._FEATURE_BUILDERS["sauna"](view, ctx_at(), P.ink).gauge
+    assert gauge.right_value == shown and gauge.pct is None and gauge.ticks == ()
+
+
+@pytest.mark.parametrize(("target", "goal"), [(185, "GOAL 185°"), (32, "GOAL PRESET"),
+                                               (None, "GOAL —")])
+def test_the_thermostat_cell_never_calls_an_unknown_target_a_preset(target, goal):
+    ha = _shape({"sauna": dict(_sauna(), target=target)})
+    view = pick_active(ha, ctx_at())[0].view
+    cells = editorial._FEATURE_BUILDERS["sauna"](view, ctx_at(), P.ink).cells
+    assert next(c["sub"] for c in cells if c["k"] == "Thermostat") == goal
 
 
 # ── Copy rotation ─────────────────────────────────────────────────────
@@ -479,6 +592,25 @@ def test_phase_track_claims_nothing_when_the_phase_is_unknown():
 
     assert solid_circles(None) == 0
     assert solid_circles(1) == 2
+
+
+def test_reading_line_drops_a_crowded_label_the_right_one_first(monkeypatch):
+    drawn = []
+    record = lambda draw, xy, text, *args: drawn.append(text)
+    monkeypatch.setattr(meters, "draw_tracked_text_bl", record)
+    monkeypatch.setattr(meters, "draw_tracked_text_bl_right", record)
+    img, draw = _canvas()
+
+    def labels(w):
+        drawn.clear()
+        meters.draw_reading_line(draw, P, 0, 0, w, value="1h59m", value_label="LEFT · 30%",
+                                 accent=P.ink, right_value="7:59 PM", right_label="DONE BY")
+        return list(drawn)
+
+    seen = [labels(w) for w in range(296, 100, -2)]
+    assert seen[0] == ["DONE BY", "LEFT · 30%"]
+    assert ["LEFT · 30%"] in seen and ["DONE BY"] not in seen
+    assert seen[-1] == []
 
 
 def test_scale_labels_stay_inside_the_scale():
