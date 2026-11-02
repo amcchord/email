@@ -209,8 +209,13 @@ def _sauna_story(view: ApplianceView, ctx: RenderContext) -> Story:
         detail = f"Session ends {forecast['ends_before_ready']}, before it's ready"
     elif forecast["fan_state"] == "running":
         detail = f"Ready around {forecast['ready_label']}. Fan has {forecast['fan_note']}"
+    elif forecast["fan_state"] == "due" and forecast.get("fan_auto"):
+        detail = f"Ready around {forecast['ready_label']}. Fan starts itself soon"
     elif forecast["fan_state"] == "due":
         detail = f"Ready around {forecast['ready_label']}. Run the fan now"
+    elif forecast["fan_state"] == "planned" and forecast.get("fan_auto"):
+        detail = (f"Ready around {forecast['ready_label']}. "
+                  f"Fan starts itself at {forecast['fan_label']}")
     elif forecast["fan_state"] == "planned":
         detail = (f"Ready around {forecast['ready_label']}. "
                   f"Run the fan at {forecast['fan_label']}")

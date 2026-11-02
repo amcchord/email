@@ -1,6 +1,8 @@
 """Editorial's single-activity card: its copy rotation, meters, and their data."""
 import copy
+import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import httpx
 import pytest
@@ -40,14 +42,17 @@ WASHER = dict(operation="c", lastNotification=None, powerOn=True, cycles=154, en
 DRYER = dict(operation="c", lastNotification=None, powerOn=True)
 
 
-def _sauna(**session):
-    forecast = sf.forecast_heating(
-        thermostat=123, room=91, outdoor=45, target=185, elements=3,
-        session=sf.Session(start=T - 2400, **session), session_minutes=180, timer_end=None, now=T,
-    )
-    forecast["roomHistory"] = [{"minutes": -40, "value": 64}, {"minutes": -2, "value": 90}]
-    return dict(mode="heat", current=123, target=185, duration=180, heaters=3, door=False,
-                roomTemp=91, roomHumidity=19, forecast=forecast)
+# Samples of Home Assistant's sensor.sauna_heat_forecast, computed at NOW.
+SAUNA_SAMPLES = json.loads((Path(__file__).parent / "fixtures" / "sauna_heat_forecast.json").read_text())
+
+
+def _sauna(sample="heating"):
+    room = [{"t": T - 2400, "v": 64}, {"t": T - 120, "v": 90}]
+    forecast = sf.from_sensor(copy.deepcopy(SAUNA_SAMPLES[sample]), room, T)
+    attrs = SAUNA_SAMPLES[sample]["attributes"]
+    current, room_now = (186, 168) if attrs["ready_reached"] else (123, 91)
+    return dict(mode="heat", current=current, target=185, duration=180, heaters=3, door=False,
+                roomTemp=room_now, roomHumidity=19, forecast=forecast)
 
 
 SHAPES = {
@@ -69,7 +74,7 @@ SHAPES = {
     "dishwasher without progress": dict(dishwasher=dict(state="run", program="", progress=None,
                                                         finishTime=None, door="")),
     "sauna": dict(sauna=_sauna()),
-    "sauna ready": dict(sauna=_sauna(ready_at=T - 300, target_at=T - 900)),
+    "sauna ready": dict(sauna=_sauna("ready")),
     "sauna without forecast": dict(sauna=dict(mode="heat", current=127, target=185, duration=60,
                                               heaters=2, door=True, roomTemp=84, roomHumidity=19,
                                               forecast=None)),
@@ -417,18 +422,17 @@ def test_shape_passes_history_only_for_the_running_machine():
 
 def test_sauna_forecast_carries_the_curve_and_history_for_the_chart():
     states = [
-        {"entity_id": hc._SAUNA_ID, "state": "heat", "last_changed": iso(-40),
+        {"entity_id": hc._SAUNA_ID, "state": "heat",
          "attributes": {"current_temperature": 123, "temperature": 185, "fan_mode": "off"}},
         {"entity_id": hc._SAUNA_ROOM_TEMP, "state": "91", "attributes": {}},
-        {"entity_id": hc._SAUNA_HEATERS, "state": "3", "attributes": {}},
+        copy.deepcopy(SAUNA_SAMPLES["heating"]),
     ]
-    history = {"climate": [{"t": T - 2400, "s": "heat", "fan": "off"}],
-               "thermostat": [], "room": [{"t": T - 9000, "v": 60}, {"t": T - 600, "v": 80}]}
+    history = [{"t": T - 9000, "v": 60}, {"t": T - 600, "v": 80}]
     forecast = hc.shape_ha_state(states, fetched_at=NOW, sauna_history=history)["sauna"]["forecast"]
     assert forecast["roomCurve"][0] == 91
     assert len(forecast["roomCurve"]) == 181
     assert forecast["roomHistory"] == [{"minutes": -10.0, "value": 80}], "this session only"
-    assert forecast["fanInMinutes"] == 39
+    assert forecast["fanInMinutes"] == 33
 
 
 # ── Meter drawing ─────────────────────────────────────────────────────

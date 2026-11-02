@@ -332,20 +332,26 @@ def _build_sauna_forecast_view(raw: Any, ctx: "RenderContext") -> Optional[dict]
 
     keys: ready_reached:bool, ready_label:str? (None when the room won't reach
     165), ready_in:str, ready_in_minutes:int?, target_reached:bool, target_label:str?, target_in:str,
-    fan_state:str, fan_label:str, fan_note:str, ends_before_ready:str?,
+    fan_state:str? (running, due, planned, done, skipped, optional; None if unknown),
+    fan_auto:bool (Home Assistant's auto fan will start the planned run),
+    fan_label:str, fan_note:str?, ends_before_ready:str?,
     fan_in_minutes:int?, curve:list[(minute, °F)], history:list[(minute, °F)]
     (minutes are relative to now; history's are negative).
     """
     if not isinstance(raw, dict):
         return None
     fan = raw.get("fan") or {}
-    fan_state = fan.get("state") or "optional"
+    fan_state = fan.get("state")
+    fan_auto = bool(fan.get("auto"))
+    run_note = "Auto 10 min" if fan_auto else "10 min Med"
     fan_label, fan_note = {
         "running": ("Running", f"{_span(fan.get('minutesLeft'))} left"),
-        "due": ("Run now", "10 min Med"),
-        "planned": (_clock(fan.get("at"), ctx), "10 min Med"),
+        "due": ("Soon" if fan_auto else "Run now", run_note),
+        "planned": (_clock(fan.get("at"), ctx), run_note),
         "done": (_clock(fan.get("at"), ctx), "Ran"),
-    }.get(fan_state, ("Optional", "Room even"))
+        "skipped": ("Didn't run", "Auto fan"),
+        "optional": ("Optional", "Room even"),
+    }.get(fan_state, (_DASH, None))
     ends = raw.get("sessionEndsBeforeReadyAt")
     return {
         "ready_reached": bool(raw.get("readyReached")),
@@ -356,6 +362,7 @@ def _build_sauna_forecast_view(raw: Any, ctx: "RenderContext") -> Optional[dict]
         "target_label": _clock(raw["targetAt"], ctx) if raw.get("targetAt") else None,
         "target_in": _span(raw.get("targetInMinutes")),
         "fan_state": fan_state,
+        "fan_auto": fan_auto,
         "fan_label": fan_label,
         "fan_note": fan_note,
         "ends_before_ready": _clock(ends, ctx) if ends else None,

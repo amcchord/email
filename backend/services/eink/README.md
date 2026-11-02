@@ -204,12 +204,19 @@ When Home Assistant can't be read, `render_dashboard_bmp` passes
 `unavailable_ha_shape()`. Editorial then says so instead of drawing the calm
 edition, and every missing reading is a dash, never a zero.
 
-The sauna card shows the heat-up forecast from `sauna_forecast.py`: a port of the
-model in the Home Assistant Sauna panel, which runs in the browser and publishes
-no sensor. "Ready" is the room sensor at 165°F; "185°" is the controller's
-thermostat. After refitting the panel (`scripts/sauna_forecast_fit.py` in the
-HomeAssistant project), copy the same coefficients into `sauna_forecast.py` and
-regenerate the expected values in `test_sauna_forecast.py`.
+The sauna card's heat-up forecast comes from Home Assistant's
+`sensor.sauna_heat_forecast`, which runs the same model as its Sauna panel
+(`custom_components/sauna_forecast` in the HomeAssistant project; the attribute
+contract is in its `SAUNA_CONTROLS_RUNBOOK.md`). The screens hold no model, so a
+refit or fan-plan change there needs no change here (D-058). `sauna_forecast.py`
+reads the sensor, drops it once `computed_at` is over 3 minutes old, and moves its
+minutes and curve to render time. "Ready" is the room sensor at 165°F; "185°" is
+the controller's thermostat. When the sensor is missing, stale or reports a
+`reason`, the card shows its live readings without a forecast. The chart's
+measured line is the room sensor's history since the sensor's `session_start`.
+`backend/tests/fixtures/sauna_heat_forecast.json` holds samples from Home
+Assistant's model; regenerate them with `scripts/sauna_forecast_samples.py` only
+if the contract changes.
 
 `coffee.cupsToday` comes only from `sensor.kitchen_coffee_cups_today`, the Home
 Assistant daily utility meter. HA owns its local-midnight reset; the lifetime

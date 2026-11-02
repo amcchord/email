@@ -3,6 +3,29 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-11-02 — Sauna forecast read from Home Assistant's sensor
+
+- Requested: move the sauna forecast to the Home Assistant side. Branch
+  `claude/sauna-forecast-sensor`. The HomeAssistant project's session had already
+  published `sensor.sauna_heat_forecast` (its `4115162`, live at 06:44 local, model
+  `2026-11-02.1`), so this change is the Email half.
+- Cause: the D-054 port dated from November 1. Home Assistant then moved the fan plan to
+  the heater backoff, modelled the post-fan rebound and added the auto fan, so the
+  screens planned the fan about 6 minutes late and could tell people to run a fan the
+  automation would start.
+- Change: `sauna_forecast.py` now only reads the sensor. It drops a reading over 3 minutes
+  old, or one with a `reason`, and moves the minutes and the curve to render time. The
+  history fetch is now one request for the room sensor since the sensor's
+  `session_start`. Fan cells and copy follow the auto fan ("Soon", "Auto 10 min", "Fan
+  starts itself", "Didn't run"). Tests and the layout audit read samples generated from
+  Home Assistant's own model by `scripts/sauna_forecast_samples.py`. See D-058.
+- Verification: 1240 backend passed, 75 skipped, and the 4 known Day Ahead pixel-pin
+  failures. All layout audits clean, including three new sauna fan cases. No frontend
+  change, so no frontend run.
+- Production: none yet. Not exercised: the live sensor through the Email app, or a real
+  session on a panel.
+- Next: commit and deploy on request, then check a live render while the sauna heats.
+
 ## 2026-11-01 — Sauna icon redrawn as the SaunaLife Cube
 
 - Requested: confirm the Editorial release was live, make the sauna icon look like the

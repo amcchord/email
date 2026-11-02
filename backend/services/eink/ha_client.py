@@ -272,9 +272,8 @@ _SAUNA_DOOR = "binary_sensor.saunum_leil_door"
 _SAUNA_LIGHT = "light.saunum_leil_light"
 _SAUNA_ROOM_TEMP = "sensor.usl_environmental_temperature_2"
 _SAUNA_ROOM_HUM = "sensor.usl_environmental_humidity_2"
-_SAUNA_THERMOSTAT_TEMP = "sensor.saunum_leil_temperature"
-_SAUNA_FAN_TIMER = "timer.sauna_fan_run"
-_SAUNA_FORECAST_OUTDOOR = "sensor.outdoors_temperature"
+_SAUNA_FORECAST = sauna_forecast.SENSOR
+# The chart's measured part never needs more than this, however long the session.
 _SAUNA_HISTORY_HOURS = 4
 # A long enough look back to find the start of any laundry cycle.
 _CYCLE_HISTORY_HOURS = 6
@@ -601,7 +600,7 @@ def shape_ha_state(
     forecast_hourly: Optional[list[dict[str, Any]]] = None,
     open_meteo: Optional[dict[str, Any]] = None,
     solar_periods: Optional[dict[str, Any]] = None,
-    sauna_history: Optional[dict[str, list[dict[str, Any]]]] = None,
+    sauna_history: Optional[list[dict[str, float]]] = None,
     cycle_history: Optional[dict[str, list[dict[str, Any]]]] = None,
 ) -> dict[str, Any]:
     """Reshape `/api/states` into the HAShape consumed by the React designs.
@@ -624,9 +623,10 @@ def shape_ha_state(
     seven-day window. Envoy's direct period sensors can incorrectly mirror the
     lifetime total, so history-derived values take precedence.
 
-    `sauna_history` is the optional result of `fetch_ha_sauna_history`. It adds
-    this session's start, fan runs and milestones to the heat-up forecast; the
-    forecast still runs from live readings without it.
+    `sauna_history` is the optional result of `fetch_ha_sauna_history`: this
+    session's room readings, which the heat-up chart draws behind Home
+    Assistant's projection. The forecast itself comes from
+    `sensor.sauna_heat_forecast` and shows without the history.
     """
     fetched_at = fetched_at or datetime.now(timezone.utc)
     idx = {s.get("entity_id"): s for s in states if s.get("entity_id")}
@@ -754,16 +754,14 @@ def shape_ha_state(
             "roomHumidity": state_num(_SAUNA_ROOM_HUM),
         }
         if sc.get("state") == "heat":
-            sauna["forecast"] = _shape_sauna_forecast(
-                sc,
-                room=sauna["roomTemp"],
-                outdoor=state_num(_SAUNA_FORECAST_OUTDOOR),
-                elements=sauna["heaters"],
-                session_minutes=sauna["duration"],
-                timer=get(_SAUNA_FAN_TIMER),
-                history=sauna_history,
-                now=(fetched_at or datetime.now(timezone.utc)).timestamp(),
-            )
+            try:
+                sauna["forecast"] = sauna_forecast.from_sensor(
+                    get(_SAUNA_FORECAST), sauna_history, fetched_at.timestamp(),
+                )
+            except (ArithmeticError, KeyError, TypeError, ValueError):
+                # A malformed sensor must never cost the panel its other house data.
+                logger.exception("Sauna forecast sensor unreadable; rendering the card without it")
+                sauna["forecast"] = None
 
     # ── Washer ─────────────────────────────────────────────────────
     washer_notif_event = get(_WASHER_NOTIF)
@@ -1105,121 +1103,40 @@ def _epoch(value: Any) -> Optional[float]:
         return None
 
 
-def _shape_sauna_forecast(
-    climate: dict[str, Any],
-    *,
-    room: Optional[float],
-    outdoor: Optional[float],
-    elements: Optional[float],
-    session_minutes: Optional[float],
-    timer: Optional[dict[str, Any]],
-    history: Optional[dict[str, list[dict[str, Any]]]],
-    now: float,
-) -> Optional[dict[str, Any]]:
-    """Heat-up forecast for an active session, or None without both sensors."""
-    attrs = climate.get("attributes") or {}
-    thermostat = _to_float(attrs.get("current_temperature"))
-    if thermostat is None or room is None:
-        return None
-    live = {
-        "t": _epoch(climate.get("last_changed")) or now,
-        "s": climate.get("state"),
-        "fan": attrs.get("fan_mode"),
-    }
-    past = history or {"climate": [], "thermostat": [], "room": []}
-    session_input = {
-        **past,
-        "climate": [*past["climate"], {**live, "t": now}] if past["climate"] else [live],
-    }
-    timer_end = None
-    if timer and timer.get("state") == "active":
-        timer_end = _epoch((timer.get("attributes") or {}).get("finishes_at"))
-    try:
-        session = sauna_forecast.session_facts(session_input, now)
-        forecast = sauna_forecast.forecast_heating(
-            thermostat=thermostat,
-            room=room,
-            outdoor=outdoor,
-            target=_to_float(attrs.get("temperature")),
-            elements=elements,
-            session=session,
-            session_minutes=session_minutes,
-            timer_end=timer_end,
-            now=now,
-        )
-        started = session.start if session else now
-        forecast["roomHistory"] = [
-            {"minutes": round((row["t"] - now) / 60, 1), "value": row["v"]}
-            for row in past["room"] if started <= row["t"] <= now
-        ]
-        return forecast
-    except (ArithmeticError, KeyError, TypeError, ValueError):
-        # A bad forecast must never cost the panel its other house data.
-        logger.exception("Sauna forecast failed; rendering the card without it")
-        return None
-
-
 async def fetch_ha_sauna_history(
     url: str,
     token: str,
+    since: datetime,
     *,
     now: Optional[datetime] = None,
     timeout: float = 5.0,
-) -> Optional[dict[str, list[dict[str, Any]]]]:
-    """Recent sauna readings for the heat-up forecast, or None if unavailable.
+) -> Optional[list[dict[str, float]]]:
+    """This session's room readings for the heat-up chart, or None if unavailable.
 
-    The climate entity needs its attributes for the fan mode; the two
-    temperature sensors need only their values. A failure leaves the forecast
-    running from live readings, as in the Home Assistant panel.
+    `since` is the session start from `sensor.sauna_heat_forecast`. A failure
+    only drops the chart's measured part; the forecast still shows.
     """
-    start = (now or datetime.now(timezone.utc)) - timedelta(hours=_SAUNA_HISTORY_HOURS)
+    floor = (now or datetime.now(timezone.utc)) - timedelta(hours=_SAUNA_HISTORY_HOURS)
+    start = max(since, floor)
     endpoint = f"{url.rstrip('/')}/api/history/period/{quote(start.isoformat())}"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    sensors = f"{_SAUNA_THERMOSTAT_TEMP},{_SAUNA_ROOM_TEMP}"
-
-    def stamped(row: dict[str, Any]) -> Optional[float]:
-        return _epoch(row.get("last_updated") or row.get("last_changed"))
-
-    def numbers(rows: list[dict[str, Any]]) -> list[dict[str, float]]:
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(endpoint, headers=headers, params={
+                "filter_entity_id": _SAUNA_ROOM_TEMP,
+                "significant_changes_only": "0",
+                "minimal_response": "",
+                "no_attributes": "",
+            })
+        resp.raise_for_status()
+        rows = resp.json()
         out = []
-        for row in rows:
-            t, v = stamped(row), _to_float(row.get("state"))
+        for row in rows[0] if rows else []:
+            t = _epoch(row.get("last_updated") or row.get("last_changed"))
+            v = _to_float(row.get("state"))
             if t is not None and v is not None:
                 out.append({"t": t, "v": v})
         return out
-
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            climate_resp, sensor_resp = await asyncio.gather(
-                client.get(endpoint, headers=headers, params={
-                    "filter_entity_id": _SAUNA_ID,
-                    "significant_changes_only": "0",
-                }),
-                client.get(endpoint, headers=headers, params={
-                    "filter_entity_id": sensors,
-                    "significant_changes_only": "0",
-                    "minimal_response": "",
-                    "no_attributes": "",
-                }),
-            )
-        climate_resp.raise_for_status()
-        sensor_resp.raise_for_status()
-        climate_rows = climate_resp.json()
-        sensor_rows = sensor_resp.json()
-        climate: list[dict[str, Any]] = []
-        fan = "off"
-        for row in climate_rows[0] if climate_rows else []:
-            fan = (row.get("attributes") or {}).get("fan_mode") or fan
-            t = stamped(row)
-            if t is not None:
-                climate.append({"t": t, "s": row.get("state"), "fan": fan})
-        # Only the first row of each minimal list carries its entity id.
-        by_entity = {rows[0].get("entity_id"): rows for rows in sensor_rows if rows}
-        return {
-            "climate": climate,
-            "thermostat": numbers(by_entity.get(_SAUNA_THERMOSTAT_TEMP) or []),
-            "room": numbers(by_entity.get(_SAUNA_ROOM_TEMP) or []),
-        }
     except (httpx.HTTPError, ValueError, TypeError, AttributeError, KeyError) as e:
         logger.warning("HA sauna history unavailable: %s", e)
         return None
@@ -1365,10 +1282,16 @@ async def fetch_and_shape(settings: TerminalSettings) -> Optional[dict[str, Any]
         not in _CYCLE_IDLE_STATES | _CYCLE_NO_READING
     ]
 
-    async def _sauna_history() -> Optional[dict[str, list[dict[str, Any]]]]:
+    async def _sauna_history() -> Optional[list[dict[str, float]]]:
         if (state_index.get(_SAUNA_ID) or {}).get("state") != "heat":
             return None
-        return await fetch_ha_sauna_history(url, token)
+        forecast = (state_index.get(_SAUNA_FORECAST) or {}).get("attributes") or {}
+        started = _epoch(forecast.get("session_start"))
+        if started is None:
+            return None
+        return await fetch_ha_sauna_history(
+            url, token, datetime.fromtimestamp(started, tz=timezone.utc),
+        )
 
     async def _cycle_history() -> Optional[dict[str, list[dict[str, Any]]]]:
         return await fetch_ha_cycle_history(url, token, cycling) if cycling else None

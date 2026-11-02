@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
 import os
 import sys
 from datetime import datetime, timezone
@@ -40,6 +41,18 @@ from backend.services.eink.pillow.draw import Box, assert_box_clean  # noqa: E40
 
 
 # ── Test data ─────────────────────────────────────────────────────────
+
+# Samples of Home Assistant's sensor.sauna_heat_forecast, from its own model.
+_SAUNA_SAMPLES = os.path.join(ROOT, "backend", "tests", "fixtures", "sauna_heat_forecast.json")
+
+
+def _sauna_forecast(**attributes) -> dict:
+    """The one-hour session that ends before it's ready, as the card reads it."""
+    with open(_SAUNA_SAMPLES) as f:
+        sample = json.load(f)["short_session"]
+    sample["attributes"].update(attributes)
+    now = datetime.fromisoformat(sample["attributes"]["computed_at"]).timestamp()
+    return sauna_forecast.from_sensor(sample, [], now)
 
 
 def _base_state() -> dict:
@@ -89,11 +102,7 @@ def _sauna_state(base: dict) -> dict:
     out["sauna"] = {
         "mode": "heat", "current": 127, "target": 185, "duration": 60,
         "heaters": 3, "door": False, "roomTemp": 84, "roomHumidity": 19,
-        "forecast": sauna_forecast.forecast_heating(
-            thermostat=127, room=84, outdoor=45, target=185, elements=3,
-            session=None, session_minutes=60, timer_end=None,
-            now=datetime(2026, 5, 5, 22, 0, tzinfo=timezone.utc).timestamp(),
-        ),
+        "forecast": _sauna_forecast(),
     }
     out["washer"] = {
         "status": "rinse", "operation": "cycle",
@@ -144,10 +153,25 @@ def _single_activity_states(base: dict) -> dict:
         "feature_sauna": only(sauna={
             "mode": "heat", "current": 127, "target": 185, "duration": 60, "heaters": 3,
             "door": True, "roomTemp": 84, "roomHumidity": 99,
-            "forecast": sauna_forecast.forecast_heating(
-                thermostat=127, room=84, outdoor=45, target=185, elements=3, session=None,
-                session_minutes=60, timer_end=None, now=now,
-            ),
+            "forecast": _sauna_forecast(),
+        }),
+        # The widest fan cell: the auto fan had its one try and no run happened.
+        "feature_sauna_fan_skipped": only(sauna={
+            "mode": "heat", "current": 127, "target": 185, "duration": 60, "heaters": 3,
+            "door": True, "roomTemp": 84, "roomHumidity": 99,
+            "forecast": _sauna_forecast(fan_state="skipped", fan_at=None, fan_in_minutes=None),
+        }),
+        # The longest fan lines, once the session no longer ends first.
+        "feature_sauna_auto_fan_planned": only(sauna={
+            "mode": "heat", "current": 127, "target": 185, "duration": 180, "heaters": 3,
+            "door": True, "roomTemp": 84, "roomHumidity": 99,
+            "forecast": _sauna_forecast(session_ends_before_ready_at=None),
+        }),
+        "feature_sauna_auto_fan_due": only(sauna={
+            "mode": "heat", "current": 127, "target": 185, "duration": 180, "heaters": 3,
+            "door": True, "roomTemp": 84, "roomHumidity": 99,
+            "forecast": _sauna_forecast(session_ends_before_ready_at=None, fan_state="due",
+                                        fan_in_minutes=0),
         }),
         "feature_pool": only(pool={
             "operation": "heating", "current": 61, "target": 104, "air": -12, "heating": True,

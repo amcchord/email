@@ -718,6 +718,8 @@ def sauna_forecast_copy(view: "ApplianceView", forecast: dict, ctx: "RenderConte
     if forecast["fan_state"] == "running":
         return (pre, tail, f"In {forecast['ready_in']}. Evening out the room; "
                            f"fan has {forecast['fan_note']}.")
+    if forecast["fan_state"] == "due" and forecast.get("fan_auto"):
+        return (pre, tail, f"In {forecast['ready_in']}. The fan starts itself any minute.")
     if forecast["fan_state"] == "due":
         return (pre, tail, f"In {forecast['ready_in']}. Run the fan now, 10 min on Medium.")
     return (pre, tail, _safe_format(_rotate(_SAUNA_DECKS, seed, slot), fields))
