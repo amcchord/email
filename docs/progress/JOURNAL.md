@@ -3,6 +3,26 @@
 Newest entries go first. Keep entries concise and factual. Never include
 secrets, email contents, OAuth tokens, or raw private production data.
 
+## 2026-11-01 — Sauna icon redrawn as the SaunaLife Cube
+
+- Requested: confirm the Editorial release was live, make the sauna icon look like the
+  house's Cube, then commit and deploy. Branch `claude/eink-editorial-polish`, commit
+  `2ebb461`.
+- Change: the icon now has the rounded black frame, cedar reveal, glass door between two
+  windows, benches, and heater. Heat waves rise from the heater, one per lit element, and
+  none when no element is on; the old icon wrongly drew one at zero.
+- Verification: 1239 backend passed, 75 skipped, and the 4 known Day Ahead pixel-pin
+  failures. All layout audits clean. No frontend change, so no frontend run.
+- Production: live clean at `a32a48c`, fast-forwarded to `2ebb461`, no migration or
+  dependency change. Restarted only `mailapp`. To roll back, reset the checkout to
+  `a32a48c` as `mailapp` and restart `mailapp`.
+- Result: `/api/health` 200 locally and publicly, all five services active, no automatic
+  restarts. The sauna card rendered in both palettes from made-up readings on the deployed
+  code. In the 4 minutes after the restart, `mailapp` logged 24 `variant=bw` terminal
+  requests, all 200, with no terminal non-200s, 5xx responses, or tracebacks.
+- Not exercised: the icon on a physical panel or during a real sauna session.
+- Next: judge the icon on the panel at the next sauna session.
+
 ## 2026-11-01 — Editorial single-activity card polish
 
 - Requested: an icon and a more detailed progress meter when one activity is on the

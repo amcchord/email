@@ -15,11 +15,11 @@ the pause.
 
 ## Baseline
 
-- Production runtime is `a32a48c682088fa9f40803e5b6edf250575e0945` as of 2026-11-01.
-  Editorial's single-activity card now has a phase-aware icon, a meter from real
-  readings, and rotating copy (see D-057). Only `mailapp` restarted. No card has been
-  seen on a physical panel or with a real running appliance, including the real
-  cycle-history response; the house was calm at release.
+- Production runtime is `2ebb46122fc6e92170e176c8c92a98b9bfe775b7` as of 2026-11-02 UTC.
+  Editorial's single-activity card has a phase-aware icon, a meter from real readings,
+  and rotating copy (see D-057), and its sauna icon is now the house's SaunaLife Cube.
+  Only `mailapp` restarted. No card has been seen on a physical panel or with a real
+  running appliance, including the real cycle-history response.
 - The API restart fix went live at `0e8ff23738363093c804e5b1ddfd13e5b35f02c2`.
   API restarts now take a few seconds and hold requests instead of returning 502, so
   they should not fail a terminal check-in (see D-056). Verified with a real stream
