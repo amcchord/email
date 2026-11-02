@@ -175,7 +175,8 @@ icon (`icons.py`), a meter (`meters.py`), and rotating copy (`flavor.py`). Two
 active appliances still get co-leads, and three or more a lead with briefs.
 
 - **Icons** show the current phase: the washer's drum changes with wash, rinse,
-  and spin, and the sauna stove has one heat wave per lit element.
+  and spin, and the sauna is the house's SaunaLife Cube, with one heat wave per lit
+  element rising from its heater.
 - **Meters** draw only reported values. Laundry progress is elapsed time over
   elapsed plus remaining, from a status history (`fetch_ha_cycle_history`) that is
   read only while a machine runs. If that history is missing or can't see the

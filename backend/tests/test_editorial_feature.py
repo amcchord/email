@@ -514,12 +514,14 @@ def test_icons_stay_in_their_square_and_use_pure_ink(kind, phase):
 
 
 def test_sauna_icon_shows_a_wave_per_lit_element():
-    def inked(phase):
-        img = Image.new("RGB", (icons.ICON_SIZE, 30), (255, 255, 255))
+    def waves(phase):
+        """White runs across a row through the waves, inside the door's glass."""
+        img = Image.new("RGB", (icons.ICON_SIZE, icons.ICON_SIZE), (255, 255, 255))
         icons.draw_icon(img, 0, 0, kind="sauna", phase=phase, ink=(0, 0, 0), fill=(0, 0, 0))
-        return img.convert("L").histogram()[0]
+        return img.crop((36, 25, 50, 34)).convert("L").histogram()[255]
 
-    assert inked("1") < inked("2") < inked("3")
+    assert waves("0") < waves("1") < waves("2") < waves("3")
+    assert waves("") == waves("3")
 
 
 def test_view_builders_stay_compatible_with_the_shared_shape():

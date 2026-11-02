@@ -1,7 +1,7 @@
 """Pixel-drawn appliance icons for Editorial's single-activity card.
 
 Each icon shows what the appliance is doing now, not just what it is: the washer's
-drum changes with the phase, and the sauna stove has one heat wave per lit element.
+drum changes with the phase, and the sauna's heater has one heat wave per lit element.
 Everything is drawn at 1x with no anti-aliasing, so it survives the panel encoders.
 Flat shading is Bayer and gradients are Atkinson, as in the Swiss design (D-055).
 """
@@ -192,36 +192,66 @@ def _draw_dishwasher(img, draw, x, y, ink, fill, phase) -> None:
     draw.rectangle([(x + 13, y + 70), (x + 69, y + 70)], fill=ink)
 
 
-def _heat_line(draw, cx: int, y0: int, y1: int, ink: RGB) -> None:
-    points = [(round(cx + 4 * math.sin((y - y0) * 2 * math.pi / 18)), y)
+def _heat_line(draw, cx: int, y0: int, y1: int, halo: RGB) -> None:
+    """A white wave with a solid halo, so it stays a clean line on the tinted glass."""
+    points = [(round(cx + 1.4 * math.sin((y - y0) * 2 * math.pi / 9)), y)
               for y in range(y0, y1 + 1)]
-    draw.line(points, fill=ink, width=3, joint="curve")
+    draw.line(points, fill=halo, width=3)
+    draw.line(points, fill=_WHITE)
+
+
+def _sauna_bench(draw, x: int, y: int, *, wall: int, front: int) -> None:
+    """A bench seen through a side window: backrest at the outer wall, seat, frame."""
+    step = 1 if front > wall else -1
+    for slat_y in (31, 34, 37):
+        draw.line([(x + wall, y + slat_y), (x + wall + 5 * step, y + slat_y)], fill=_WHITE)
+    draw.rectangle([(x + min(wall, front), y + 42), (x + max(wall, front), y + 44)], fill=_WHITE)
+    leg = front - 3 * step
+    draw.rectangle([(x + min(leg, leg + step), y + 45), (x + max(leg, leg + step), y + 65)],
+                   fill=_WHITE)
+    draw.line([(x + wall, y + 56), (x + leg, y + 56)], fill=_WHITE)
+    draw.line([(x + leg, y + 62), (x + leg - 5 * step, y + 56)], fill=_WHITE)
 
 
 def _draw_sauna(img, draw, x, y, ink, fill, phase) -> None:
-    # A wave per lit element, so the icon reports the same fact as the card.
+    """The SaunaLife Cube at the house: a rounded black frame around a cedar reveal,
+    a glass door between two windows, and benches and the heater visible inside.
+    """
+    # Plinth and outer frame.
+    draw.rectangle([(x + 16, y + 76), (x + 67, y + 82)], fill=ink)
+    draw.rounded_rectangle([(x + 1, y + 1), (x + 82, y + 78)], radius=18, fill=ink)
+    # The cedar reveal: a pale band with board joints, deepest along the deck.
+    draw.rounded_rectangle([(x + 6, y + 6), (x + 77, y + 73)], radius=14, fill=_WHITE)
+    for tx in range(16, 70, 5):
+        draw.line([(x + tx, y + 69), (x + tx, y + 73)], fill=ink)
+    # The black glazing frame, sitting high in the reveal so the deck shows below it.
+    draw.rounded_rectangle([(x + 8, y + 8), (x + 75, y + 69)], radius=12, fill=ink)
+    # Tinted glass: the two windows, with their outer corners following the frame.
+    mask = Image.new("L", (ICON_SIZE, ICON_SIZE), 0)
+    glass = ImageDraw.Draw(mask)
+    glass.rounded_rectangle([(11, 11), (29, 66)], radius=9, fill=255,
+                            corners=(True, False, False, True))
+    glass.rounded_rectangle([(54, 11), (72, 66)], radius=9, fill=255,
+                            corners=(False, True, True, False))
+    glass.rectangle([(33, 15), (50, 66)], fill=255)
+    img.paste(_WHITE, (x, y), mask)
+    bayer_dither(img, (x, y), mask.point(lambda v: 14 * 255 // 16 if v else 0), fill)
+    _sauna_bench(draw, x, y, wall=11, front=29)
+    _sauna_bench(draw, x, y, wall=72, front=54)
+    # Inside the door: heater on its shelf, stones on top, and a heat wave per lit element.
+    draw.rectangle([(x + 33, y + 47), (x + 50, y + 48)], fill=_WHITE)
+    for sx, sy in ((37, 45), (41, 44), (45, 44), (39, 42), (43, 42)):
+        draw.ellipse([(x + sx - 2, y + sy - 1), (x + sx + 2, y + sy + 1)], fill=_WHITE, outline=ink)
+    draw.rectangle([(x + 36, y + 49), (x + 47, y + 56)], fill=ink)
+    draw.rectangle([(x + 37, y + 57), (x + 46, y + 59)], fill=_WHITE)
     elements = max(0, min(3, int(phase) if phase.isdigit() else 3))
-    for i, cx in enumerate((26, 42, 58)[:3]):
-        if i < elements or elements == 0 and i == 1:
-            _heat_line(draw, x + cx, y + 2, y + 32, ink)
-    # Stones heaped on the stove.
-    for sx, sy, rx, ry in ((18, 39, 8, 5), (33, 36, 9, 6), (50, 36, 9, 6), (65, 39, 8, 5),
-                           (26, 44, 9, 5), (42, 44, 10, 5), (58, 44, 9, 5)):
-        draw.ellipse([(x + sx - rx, y + sy - ry), (x + sx + rx, y + sy + ry)],
-                     fill=_WHITE, outline=ink, width=2)
-    # The stove: tone that deepens toward the hot end at the top.
-    w, h = 62, 28
-    tone = Image.new("L", (w, h), 0)
-    for py in range(h):
-        level = int(215 * (1 - py / (h - 1)) ** 1.4)
-        tone.paste(level, (0, py, w, py + 1))
-    atkinson_dither(img, (x + 11, y + 50), tone, fill)
-    draw.rectangle([(x + 10, y + 49), (x + 73, y + 78)], outline=ink, width=3)
-    draw.rectangle([(x + 16, y + 78), (x + 22, y + 83)], fill=ink)
-    draw.rectangle([(x + 61, y + 78), (x + 67, y + 83)], fill=ink)
-    # Guard rail, clear of the tone so it stays a clean line.
-    draw.rectangle([(x + 27, y + 62), (x + 56, y + 71)], fill=_WHITE, outline=ink, width=2)
-    draw.rectangle([(x + 34, y + 66), (x + 49, y + 67)], fill=ink)
+    for cx in (37, 41, 45)[:elements]:
+        _heat_line(draw, x + cx + 1, y + 19, y + 39, fill)
+    # Door hardware: the pull at the left, two hinges at the right.
+    draw.rectangle([(x + 33, y + 34), (x + 37, y + 38)], fill=ink)
+    draw.rectangle([(x + 33, y + 35), (x + 36, y + 37)], fill=_WHITE)
+    for hy in (22, 60):
+        draw.rectangle([(x + 47, y + hy), (x + 50, y + hy + 1)], fill=_WHITE)
 
 
 def _draw_pool(img, draw, x, y, ink, fill, phase) -> None:
