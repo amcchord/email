@@ -5,8 +5,9 @@ secrets, email contents, OAuth tokens, or raw private production data.
 
 ## 2026-11-02 — Sauna forecast read from Home Assistant's sensor
 
-- Requested: move the sauna forecast to the Home Assistant side. Branch
-  `claude/sauna-forecast-sensor`. The HomeAssistant project's session had already
+- Requested: move the sauna forecast to the Home Assistant side, then commit and deploy.
+  Branch `claude/sauna-forecast-sensor`, commit `06b260a`. The HomeAssistant project's
+  session had already
   published `sensor.sauna_heat_forecast` (its `4115162`, live at 06:44 local, model
   `2026-11-02.1`), so this change is the Email half.
 - Cause: the D-054 port dated from November 1. Home Assistant then moved the fan plan to
@@ -22,9 +23,18 @@ secrets, email contents, OAuth tokens, or raw private production data.
 - Verification: 1240 backend passed, 75 skipped, and the 4 known Day Ahead pixel-pin
   failures. All layout audits clean, including three new sauna fan cases. No frontend
   change, so no frontend run.
-- Production: none yet. Not exercised: the live sensor through the Email app, or a real
-  session on a panel.
-- Next: commit and deploy on request, then check a live render while the sauna heats.
+- Production: live clean at `2ebb461`, fast-forwarded to `06b260a` at 12:03 UTC, no
+  migration or dependency change. Restarted only `mailapp`; hourly snippets don't use the
+  sauna data, so the workers were left alone. To roll back, reset the checkout to
+  `2ebb461` as `mailapp` and restart `mailapp`.
+- Result: `/api/health` 200 locally and publicly, all five services active, no automatic
+  restarts. Read through the deployed code, the live sensor had every contract key,
+  model `2026-11-02.1` and a `computed_at` 20 seconds old. The sauna was off, so the card
+  correctly had no forecast; both palettes rendered (123 ms bw, 54 ms six). In the 4.5
+  minutes after the restart, `mailapp` logged 24 `variant=bw` terminal requests, all 200,
+  with no terminal non-200s, 5xx responses, tracebacks or sauna warnings.
+- Not exercised: the heating path on a real session, or any card on a physical panel.
+- Next: check the sauna card during the next session.
 
 ## 2026-11-01 — Sauna icon redrawn as the SaunaLife Cube
 

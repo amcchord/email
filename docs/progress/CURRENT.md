@@ -1,6 +1,6 @@
 # Current Status
 
-Last updated: 2026-11-01
+Last updated: 2026-11-02
 
 ## Active Objective
 
@@ -15,11 +15,14 @@ the pause.
 
 ## Baseline
 
-- Production runtime is `2ebb46122fc6e92170e176c8c92a98b9bfe775b7` as of 2026-11-02 UTC.
-  Editorial's single-activity card has a phase-aware icon, a meter from real readings,
+- Production runtime is `06b260a2ecb15d0111537277c032367b6f13474b` as of 2026-11-02
+  12:03 UTC. The sauna forecast now comes from Home Assistant's
+  `sensor.sauna_heat_forecast`, and the screens keep no model (D-058). The sensor is
+  live and reads correctly; the heating path has not yet run on a real session.
+- Editorial's single-activity card has a phase-aware icon, a meter from real readings,
   and rotating copy (see D-057), and its sauna icon is now the house's SaunaLife Cube.
-  Only `mailapp` restarted. No card has been seen on a physical panel or with a real
-  running appliance, including the real cycle-history response.
+  No card has been seen on a physical panel or with a real running appliance,
+  including the real cycle-history response.
 - The API restart fix went live at `0e8ff23738363093c804e5b1ddfd13e5b35f02c2`.
   API restarts now take a few seconds and hold requests instead of returning 502, so
   they should not fail a terminal check-in (see D-056). Verified with a real stream
@@ -29,7 +32,7 @@ the pause.
   temperatures plus today's coffee cups, and the time appears only in the
   masthead. A Home Assistant failure now renders "No news from the house" with
   dashes instead of the calm edition and false zeros. The sauna card shows the
-  heat-up forecast, ported from the Home Assistant panel. Hourly
+  heat-up forecast (now read from Home Assistant; see above). Hourly
   quotes/observations use Claude Opus 5.5 at extra-high effort. Only `mailapp`,
   `mailworker`, and `mailworker-cron` restarted; health and services passed.
   The forecast has not yet been seen on a real heating session on the panel.
